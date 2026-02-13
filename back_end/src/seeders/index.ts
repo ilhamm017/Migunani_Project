@@ -1,9 +1,11 @@
-import sequelize from '../config/database';
 import bcrypt from 'bcrypt';
-import User from '../models/User';
-import Category from '../models/Category';
-import Product from '../models/Product';
-import Supplier from '../models/Supplier';
+import {
+    sequelize,
+    User,
+    Category,
+    Product,
+    Supplier
+} from '../models';
 
 async function seedDatabase() {
     try {
@@ -11,7 +13,17 @@ async function seedDatabase() {
 
         // Sync database (create tables)
         console.log('📊 Syncing database...');
-        await sequelize.sync({ force: true }); // WARNING: This will drop all tables!
+        const isMySql = sequelize.getDialect() === 'mysql';
+        if (isMySql) {
+            await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+        }
+        try {
+            await sequelize.sync({ force: true }); // WARNING: This will drop all tables!
+        } finally {
+            if (isMySql) {
+                await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
+            }
+        }
         console.log('✅ Database synced\n');
 
         // Seed Users (one account per role)
