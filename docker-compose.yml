@@ -1,0 +1,90 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: migunani_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
+      MYSQL_DATABASE: ${DB_NAME:-migunani_motor_db}
+      MYSQL_USER: ${DB_USER:-migunani}
+      MYSQL_PASSWORD: ${DB_PASS:-password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 25s
+    networks:
+      - migunani_network
+
+  back_end:
+    build:
+      context: ./back_end
+      dockerfile: Dockerfile
+    container_name: migunani_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 5000
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-migunani}
+      DB_PASS: ${DB_PASS:-password}
+      DB_NAME: ${DB_NAME:-migunani_motor_db}
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      WA_SESSION_PATH: /app/.wwebjs_auth
+      WA_CHROME_PATH: /usr/bin/chromium
+      WA_AUTO_INIT: ${WA_AUTO_INIT:-true}
+      WA_AUTO_RECONNECT: ${WA_AUTO_RECONNECT:-true}
+      WA_PROTOCOL_TIMEOUT_MS: ${WA_PROTOCOL_TIMEOUT_MS:-120000}
+      WA_INIT_STUCK_MS: ${WA_INIT_STUCK_MS:-45000}
+      WA_RECONNECT_BASE_DELAY_MS: ${WA_RECONNECT_BASE_DELAY_MS:-5000}
+      WA_RECONNECT_MAX_DELAY_MS: ${WA_RECONNECT_MAX_DELAY_MS:-60000}
+      IMPORT_LOCAL_PATH_ENABLED: ${IMPORT_LOCAL_PATH_ENABLED:-false}
+      IMPORT_LOCAL_PATH_ALLOWLIST: ${IMPORT_LOCAL_PATH_ALLOWLIST:-}
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    volumes:
+      - backend_uploads:/app/uploads
+      - wa_auth:/app/.wwebjs_auth
+      - wa_cache:/app/.wwebjs_cache
+    networks:
+      - migunani_network
+
+  front_end:
+    build:
+      context: ./front_end
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://back_end:5000/api/v1}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}
+    container_name: migunani_frontend
+    restart: unless-stopped
+    depends_on:
+      back_end:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://back_end:5000/api/v1}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - migunani_network
+
+volumes:
+  mysql_data:
+  backend_uploads:
+  wa_auth:
+  wa_cache:
+
+networks:
+  migunani_network:
+    driver: bridge

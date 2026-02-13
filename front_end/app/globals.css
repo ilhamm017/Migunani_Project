@@ -1,0 +1,295 @@
+/* Google Fonts - Inter (main UI) and JetBrains Mono (technical elements) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@import "tailwindcss";
+
+:root {
+  /* WMS PRO Design System - Emerald & Slate Scheme */
+
+  /* Primary - Emerald (Trust & Operational Precision) */
+  --brand-primary: #10b981;
+  --brand-primary-hover: #059669;
+  --brand-primary-light: #34d399;
+
+  /* Slate - Base Colors (Elegant Contrast) */
+  --slate-50: #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+
+  /* Semantic Colors */
+  --color-warning: #f59e0b;
+  /* Amber - COD, Low Stock */
+  --color-warning-light: #fbbf24;
+  --color-danger: #ef4444;
+  /* Rose - Out of Stock, Critical */
+  --color-danger-light: #f87171;
+  --color-success: #10b981;
+  /* Emerald - Success states */
+  --color-info: #3b82f6;
+  /* Blue - Info */
+
+  /* Light Theme */
+  --background: #ffffff;
+  --foreground: var(--slate-900);
+  --muted: var(--slate-100);
+  --muted-foreground: var(--slate-500);
+  --border: var(--slate-200);
+  --card-bg: #ffffff;
+
+  /* Touch-friendly spacing (minimum 44px per mobile guidelines) */
+  --touch-target: 44px;
+  --touch-target-lg: 56px;
+
+  /* Soft Shadows for Depth & Elevation */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.07), 0 4px 6px -4px rgb(0 0 0 / 0.07);
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.05);
+
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.2);
+  --backdrop-blur: blur(12px);
+  color-scheme: light;
+}
+
+@theme inline {
+  /* Color System */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--brand-primary);
+  --color-secondary: var(--color-warning);
+  --color-accent: var(--brand-primary);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-card: var(--card-bg);
+
+  /* Semantic colors for Tailwind */
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-danger);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+
+  /* Touch-friendly minimum sizes */
+  --min-h-touch: var(--touch-target);
+  --min-h-touch-lg: var(--touch-target-lg);
+
+  /* Mobile-first breakpoints */
+  --breakpoint-sm: 640px;
+  /* Mobile landscape */
+  --breakpoint-md: 768px;
+  /* Tablet */
+  --breakpoint-lg: 1024px;
+  /* Desktop */
+  --breakpoint-xl: 1280px;
+  /* Large desktop */
+
+  /* Typography - Inter for UI, JetBrains Mono for technical */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Typography scale (9px - 24px as per design guide) */
+  --text-xs: 0.5625rem;
+  /* 9px - technical labels */
+  --text-sm: 0.75rem;
+  /* 12px - small text */
+  --text-base: 1rem;
+  /* 16px - base */
+  --text-lg: 1.125rem;
+  /* 18px - emphasis */
+  --text-xl: 1.25rem;
+  /* 20px - headings */
+  --text-2xl: 1.5rem;
+  /* 24px - main titles */
+
+  /* Spacing scale - 4px increments */
+  --spacing-1: 0.25rem;
+  /* 4px */
+  --spacing-2: 0.5rem;
+  /* 8px */
+  --spacing-3: 0.75rem;
+  /* 12px */
+  --spacing-4: 1rem;
+  /* 16px */
+  --spacing-5: 1.25rem;
+  /* 20px */
+  --spacing-6: 1.5rem;
+  /* 24px */
+  --spacing-8: 2rem;
+  /* 32px */
+  --spacing-10: 2.5rem;
+  /* 40px */
+  --spacing-12: 3rem;
+  /* 48px */
+
+  /* Border radius - Card-based UI (2xl-3xl) */
+  --radius-sm: 0.375rem;
+  /* 6px - small elements */
+  --radius-md: 0.5rem;
+  /* 8px - buttons, inputs */
+  --radius-lg: 0.75rem;
+  /* 12px - medium cards */
+  --radius-xl: 1rem;
+  /* 16px - large cards */
+  --radius-2xl: 1rem;
+  /* 16px - card standard */
+  --radius-3xl: 1.5rem;
+  /* 24px - prominent cards */
+  --radius-full: 9999px;
+  /* full rounding */
+}
+
+/* Base styles */
+body {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 45%, #eef2ff 100%);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  /* Base 16px for mobile readability */
+
+  /* Mobile optimizations */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch-friendly defaults */
+button,
+a,
+[role="button"] {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+  touch-action: manipulation;
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+}
+
+button:active,
+a:active,
+[role="button"]:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a,
+  [role="button"] {
+    transition: none;
+  }
+
+  button:active,
+  a:active,
+  [role="button"]:active {
+    transform: none;
+  }
+}
+
+/* Smooth scrolling - Kuudere: smooth but not excessive */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Better focus states for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+/* Utility classes for WMS PRO Design */
+
+/* Technical text (SKU, Order ID, Barcode) */
+.text-technical {
+  font-family: var(--font-mono);
+  letter-spacing: 0.025em;
+}
+
+/* Card components with design system */
+.card-wms {
+  background: var(--card-bg);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border);
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  border: 1px solid var(--glass-border);
+}
+
+/* Smooth transitions - Kuudere philosophy */
+.transition-smooth {
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Haptic feedback simulation */
+.haptic-press {
+  transition: transform 100ms ease-out;
+}
+
+.haptic-press:active {
+  transform: scale(0.95);
+}
+
+/* Status badges */
+.badge-success {
+  background: var(--color-success);
+  color: white;
+}
+
+.badge-warning {
+  background: var(--color-warning);
+  color: white;
+}
+
+.badge-danger {
+  background: var(--color-danger);
+  color: white;
+}
+
+/* Horizontal scroll chips (for filters/tabs) */
+.scroll-chips {
+  display: flex;
+  gap: var(--spacing-2);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scroll-chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* Sticky elements with glassmorphism */
+.sticky-glass {
+  position: sticky;
+  background: var(--glass-bg);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+}
+
+/* Soft elevation for floating elements */
+.elevation-sm {
+  box-shadow: var(--shadow-sm);
+}
+
+.elevation-md {
+  box-shadow: var(--shadow-md);
+}
+
+.elevation-lg {
+  box-shadow: var(--shadow-lg);
+}

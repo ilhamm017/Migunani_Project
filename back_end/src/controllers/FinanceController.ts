@@ -1,0 +1,571 @@
+import { Request, Response } from 'express';
+import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize } from '../models';
+import { Op } from 'sequelize';
+
+type ExpenseDetail = {
+    key: string;
+    value: string;
+};
+
+type ParsedExpenseNote = {
+    text: string;
+    details: ExpenseDetail[];
+};
+
+const DEFAULT_EXPENSE_LABELS = [
+    { name: 'Listrik', description: 'Tagihan listrik dan utilitas' },
+    { name: 'Gaji Pegawai', description: 'Payroll dan tunjangan karyawan' },
+    { name: 'Ongkir', description: 'Biaya pengiriman atau logistik' },
+];
+
+const toSafeText = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    return value.trim();
+};
+
+const normalizeExpenseDetails = (details: unknown): ExpenseDetail[] => {
+    if (!Array.isArray(details)) return [];
+
+    return details
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const raw = item as { key?: unknown; value?: unknown };
+            const key = toSafeText(raw.key);
+            const value = toSafeText(raw.value);
+            if (!key && !value) return null;
+            return { key, value };
+        })
+        .filter((item): item is ExpenseDetail => item !== null);
+};
+
+const parseExpenseNote = (note: unknown): ParsedExpenseNote => {
+    const fallbackText = typeof note === 'string' ? note : '';
+    if (typeof note !== 'string' || !note.trim()) {
+        return { text: fallbackText, details: [] };
+    }
+
+    try {
+        const parsed = JSON.parse(note) as { text?: unknown; details?: unknown };
+        return {
+            text: toSafeText(parsed.text),
+            details: normalizeExpenseDetails(parsed.details),
+        };
+    } catch {
+        return { text: note, details: [] };
+    }
+};
+
+const buildExpenseNote = (note: unknown, details: unknown): string => {
+    const text = toSafeText(note);
+    const normalizedDetails = normalizeExpenseDetails(details);
+    if (!text && normalizedDetails.length === 0) {
+        return '';
+    }
+    return JSON.stringify({ text, details: normalizedDetails });
+};
+
+const ensureDefaultExpenseLabels = async () => {
+    const labelCount = await ExpenseLabel.count();
+    if (labelCount > 0) return;
+
+    const expenseCount = await Expense.count();
+    if (expenseCount > 0) return;
+
+    for (const item of DEFAULT_EXPENSE_LABELS) {
+        await ExpenseLabel.findOrCreate({
+            where: { name: item.name },
+            defaults: item
+        });
+    }
+};
+
+const AR_ORDER_STATUS_FILTER = { [Op.notIn]: ['canceled', 'expired'] as string[] };
+
+const buildAccountsReceivableInclude = (extraOrderWhere: Record<string, unknown> = {}) => ([
+    {
+        model: Order,
+        where: { status: AR_ORDER_STATUS_FILTER, ...extraOrderWhere },
+        attributes: ['id', 'customer_id', 'customer_name', 'source', 'status', 'total_amount', 'createdAt', 'updatedAt', 'expiry_date'],
+        include: [
+            {
+                model: User,
+                as: 'Customer',
+                attributes: ['id', 'name', 'email', 'whatsapp_number'],
+                required: false
+            },
+            {
+                model: User,
+                as: 'Courier',
+                attributes: ['id', 'name', 'whatsapp_number'],
+                required: false
+            },
+            {
+                model: OrderItem,
+                attributes: ['id', 'qty', 'price_at_purchase', 'cost_at_purchase'],
+                include: [{
+                    model: Product,
+                    attributes: ['id', 'sku', 'name'],
+                    required: false
+                }],
+                required: false
+            }
+        ]
+    },
+    {
+        model: User,
+        as: 'Verifier',
+        attributes: ['id', 'name', 'email'],
+        required: false
+    }
+]);
+
+const mapAccountsReceivableRows = (invoices: Invoice[]) => {
+    const nowMs = Date.now();
+    return invoices.map((invoice) => {
+        const plainInvoice = invoice.get({ plain: true }) as any;
+        const order = plainInvoice.Order || {};
+        const customer = order.Customer || null;
+        const courier = order.Courier || null;
+        const verifier = plainInvoice.Verifier || null;
+        const orderItems = Array.isArray(order.OrderItems) ? order.OrderItems : [];
+
+        const orderCreatedAtRaw = order.createdAt || plainInvoice.createdAt;
+        const orderCreatedAtMs = orderCreatedAtRaw ? new Date(orderCreatedAtRaw).getTime() : nowMs;
+        const agingDays = Math.max(0, Math.floor((nowMs - orderCreatedAtMs) / (24 * 60 * 60 * 1000)));
+
+        const totalAmount = Number(order.total_amount || 0);
+        const amountPaid = Number(plainInvoice.amount_paid || 0);
+        const amountDue = Math.max(0, totalAmount - amountPaid);
+
+        const items = orderItems.map((item: any) => {
+            const qty = Number(item.qty || 0);
+            const priceAtPurchase = Number(item.price_at_purchase || 0);
+            return {
+                id: item.id,
+                qty,
+                price_at_purchase: priceAtPurchase,
+                cost_at_purchase: Number(item.cost_at_purchase || 0),
+                subtotal: qty * priceAtPurchase,
+                product: item.Product ? {
+                    id: item.Product.id,
+                    sku: item.Product.sku,
+                    name: item.Product.name
+                } : null
+            };
+        });
+
+        return {
+            id: plainInvoice.id,
+            invoice_number: plainInvoice.invoice_number,
+            payment_method: plainInvoice.payment_method,
+            payment_status: plainInvoice.payment_status,
+            payment_proof_url: plainInvoice.payment_proof_url,
+            amount_paid: amountPaid,
+            change_amount: Number(plainInvoice.change_amount || 0),
+            createdAt: plainInvoice.createdAt,
+            updatedAt: plainInvoice.updatedAt,
+            verified_at: plainInvoice.verified_at,
+            aging_days: agingDays,
+            amount_due: amountDue,
+            order: {
+                id: order.id || null,
+                customer_id: order.customer_id || null,
+                customer_name: order.customer_name || customer?.name || 'Customer',
+                source: order.source || null,
+                status: order.status || null,
+                total_amount: totalAmount,
+                createdAt: order.createdAt || null,
+                updatedAt: order.updatedAt || null,
+                expiry_date: order.expiry_date || null,
+                customer: customer ? {
+                    id: customer.id,
+                    name: customer.name,
+                    email: customer.email,
+                    whatsapp_number: customer.whatsapp_number
+                } : null,
+                courier: courier ? {
+                    id: courier.id,
+                    name: courier.name,
+                    whatsapp_number: courier.whatsapp_number
+                } : null,
+                items
+            },
+            verifier: verifier ? {
+                id: verifier.id,
+                name: verifier.name,
+                email: verifier.email
+            } : null
+        };
+    });
+};
+
+// --- Verification ---
+export const verifyPayment = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params; // Order ID
+        const { action } = req.body; // 'approve' | 'reject'
+        const verifierId = req.user!.id;
+        const verifierRole = req.user!.role;
+
+        if (!['admin_finance', 'super_admin'].includes(verifierRole)) {
+            await t.rollback();
+            return res.status(403).json({ message: 'Hanya admin finance atau super admin yang boleh verifikasi pembayaran' });
+        }
+
+        if (action !== 'approve' && action !== 'reject') {
+            await t.rollback();
+            return res.status(400).json({ message: 'Invalid action' });
+        }
+
+        const invoice = await Invoice.findOne({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice not found' });
+        }
+
+        const order = await Order.findByPk(String(id), {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        if (action === 'approve') {
+            if (!invoice.payment_proof_url) {
+                await t.rollback();
+                return res.status(400).json({ message: 'Bukti transfer belum tersedia untuk diverifikasi' });
+            }
+
+            if (invoice.payment_status === 'paid') {
+                await t.rollback();
+                return res.status(409).json({ message: 'Pembayaran sudah pernah di-approve' });
+            }
+
+            await invoice.update({
+                payment_status: 'paid',
+                verified_by: verifierId,
+                verified_at: new Date()
+            }, { transaction: t });
+
+            // Update Order Status to Processing (or Shipped if digital/instant, but let's say Processing)
+            await order.update({ status: 'processing' }, { transaction: t });
+
+        } else {
+            // If rejected, maybe reset proof url? or just status 'unpaid'? 
+            // Or set order status to 'pending' (waiting payment again)
+            await invoice.update({
+                payment_status: 'unpaid',
+                payment_proof_url: null, // Force re-upload
+                verified_by: null,
+                verified_at: null
+            }, { transaction: t });
+            await order.update({ status: 'waiting_payment' }, { transaction: t });
+        }
+
+        await t.commit();
+        res.json({ message: `Payment ${action}d` });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error verifying payment', error });
+    }
+};
+
+// --- Expenses ---
+export const getExpenses = async (req: Request, res: Response) => {
+    try {
+        const { page = 1, limit = 10, startDate, endDate, category } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        const whereClause: any = {};
+        if (startDate && endDate) {
+            whereClause.date = {
+                [Op.between]: [new Date(startDate as string), new Date(endDate as string)]
+            };
+        }
+        if (typeof category === 'string' && category.trim()) {
+            whereClause.category = category.trim();
+        }
+
+        const expenses = await Expense.findAndCountAll({
+            where: whereClause,
+            limit: Number(limit),
+            offset: Number(offset),
+            order: [['date', 'DESC']]
+        });
+
+        const rows = expenses.rows.map((row) => {
+            const plain = row.get({ plain: true }) as any;
+            const parsed = parseExpenseNote(plain.note);
+            return {
+                ...plain,
+                note: parsed.text,
+                details: parsed.details,
+            };
+        });
+
+        res.json({
+            total: expenses.count,
+            totalPages: Math.ceil(expenses.count / Number(limit)),
+            currentPage: Number(page),
+            expenses: rows
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching expenses', error });
+    }
+};
+
+export const createExpense = async (req: Request, res: Response) => {
+    try {
+        const { category, amount, date, note, details } = req.body;
+        const userId = req.user!.id;
+
+        const safeCategory = toSafeText(category);
+        const numericAmount = Number(amount);
+        if (!safeCategory) {
+            return res.status(400).json({ message: 'Kategori wajib diisi' });
+        }
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+            return res.status(400).json({ message: 'Amount harus lebih besar dari 0' });
+        }
+
+        const expense = await Expense.create({
+            category: safeCategory,
+            amount: numericAmount,
+            date: date || new Date(),
+            note: buildExpenseNote(note, details),
+            created_by: userId
+        });
+
+        const plain = expense.get({ plain: true }) as any;
+        const parsed = parseExpenseNote(plain.note);
+        res.status(201).json({
+            message: 'Expense created',
+            expense: {
+                ...plain,
+                note: parsed.text,
+                details: parsed.details,
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error creating expense', error });
+    }
+};
+
+export const getExpenseLabels = async (_req: Request, res: Response) => {
+    try {
+        await ensureDefaultExpenseLabels();
+        const labels = await ExpenseLabel.findAll({
+            order: [['name', 'ASC']]
+        });
+        res.json({ labels });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching expense labels', error });
+    }
+};
+
+export const createExpenseLabel = async (req: Request, res: Response) => {
+    try {
+        const name = toSafeText(req.body?.name);
+        const description = toSafeText(req.body?.description);
+
+        if (!name) {
+            return res.status(400).json({ message: 'Nama label wajib diisi' });
+        }
+
+        const existingLabels = await ExpenseLabel.findAll({ attributes: ['name'] });
+        const hasDuplicate = existingLabels.some((item) => item.name.toLowerCase() === name.toLowerCase());
+        if (hasDuplicate) {
+            return res.status(409).json({ message: 'Label sudah ada' });
+        }
+
+        const label = await ExpenseLabel.create({
+            name,
+            description: description || null
+        });
+        res.status(201).json({ message: 'Label created', label });
+    } catch (error) {
+        res.status(500).json({ message: 'Error creating expense label', error });
+    }
+};
+
+export const updateExpenseLabel = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ message: 'ID label tidak valid' });
+        }
+
+        const label = await ExpenseLabel.findByPk(id);
+        if (!label) {
+            return res.status(404).json({ message: 'Label tidak ditemukan' });
+        }
+
+        const nextName = toSafeText(req.body?.name);
+        const description = toSafeText(req.body?.description);
+        if (!nextName) {
+            return res.status(400).json({ message: 'Nama label wajib diisi' });
+        }
+
+        const existingLabels = await ExpenseLabel.findAll({
+            where: { id: { [Op.ne]: id } },
+            attributes: ['name']
+        });
+        const hasDuplicate = existingLabels.some((item) => item.name.toLowerCase() === nextName.toLowerCase());
+        if (hasDuplicate) {
+            return res.status(409).json({ message: 'Nama label sudah digunakan' });
+        }
+
+        await label.update({
+            name: nextName,
+            description: description || null
+        });
+        res.json({ message: 'Label updated', label });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating expense label', error });
+    }
+};
+
+export const deleteExpenseLabel = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ message: 'ID label tidak valid' });
+        }
+
+        const label = await ExpenseLabel.findByPk(id);
+        if (!label) {
+            return res.status(404).json({ message: 'Label tidak ditemukan' });
+        }
+
+        await label.destroy();
+        res.json({ message: 'Label deleted' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error deleting expense label', error });
+    }
+};
+
+// --- Reports ---
+export const getAccountsReceivable = async (req: Request, res: Response) => {
+    try {
+        // AR = Invoices with payment_status != 'paid' AND Order status != canceled/expired
+        const ar = await Invoice.findAll({
+            where: {
+                payment_status: { [Op.ne]: 'paid' } // unpaid, cod_pending
+            },
+            include: buildAccountsReceivableInclude(),
+            order: [['createdAt', 'ASC']] // Oldest first
+        });
+
+        const rows = mapAccountsReceivableRows(ar);
+
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching AR', error });
+    }
+};
+
+export const getAccountsReceivableDetail = async (req: Request, res: Response) => {
+    try {
+        const invoiceId = String(req.params.id || '').trim();
+        if (!invoiceId) {
+            return res.status(400).json({ message: 'invoice id wajib diisi' });
+        }
+
+        const invoice = await Invoice.findOne({
+            where: {
+                id: invoiceId,
+                payment_status: { [Op.ne]: 'paid' }
+            },
+            include: buildAccountsReceivableInclude()
+        });
+
+        if (!invoice) {
+            return res.status(404).json({ message: 'Data piutang tidak ditemukan' });
+        }
+
+        const [row] = mapAccountsReceivableRows([invoice]);
+        return res.json(row);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching AR detail', error });
+    }
+};
+
+export const getProfitAndLoss = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+
+        const dateFilter: any = {};
+        if (startDate && endDate) {
+            dateFilter[Op.between] = [new Date(startDate as string), new Date(endDate as string)];
+        }
+
+        // 1. Revenue (Completed Sales)
+        // Orders where status = completed? Or just Paid invoices?
+        // Revenue is recognized when delivered or when paid?
+        // Simple PnL: Sales (Paid Invoices) - COGS - Expenses
+
+        const sales = await Invoice.sum('amount_paid', {
+            where: {
+                payment_status: 'paid',
+                verified_at: dateFilter // Using verified_at instead of updatedAt
+            }
+        }) || 0;
+
+        // 2. COGS (Cost of Goods Sold)
+        // Need to join OrderItem -> Order -> Invoice
+        // Difficult to sum across join directly with Sequelize sum helper cleanly on filtered join.
+        // Let's use raw query or findAll logic.
+        // For PnL scale, Raw Query is better for aggregation.
+
+        // Approach: Find all Paid Orders in date range. Sum their OrderItems.cost_at_purchase * qty.
+        // Let's stick to Sequelize logic for consistency, might be slower but safer type-wise.
+
+        const paidOrders = await Order.findAll({
+            include: [{
+                model: Invoice,
+                where: { payment_status: 'paid', verified_at: dateFilter }
+            }, {
+                model: OrderItem
+            }]
+        });
+
+        let cogs = 0;
+        paidOrders.forEach(order => {
+            if (order.OrderItems) { // OrderItems logic isn't strictly typed on instance by default in all setups, but here we included it
+                // OrderItems is usually loaded as array. 
+                (order as any).OrderItems.forEach((item: any) => {
+                    cogs += (Number(item.cost_at_purchase) * Number(item.qty));
+                });
+            }
+        });
+
+        // 3. Expenses
+        const opex = await Expense.sum('amount', {
+            where: {
+                date: dateFilter
+            }
+        }) || 0;
+
+        const grossProfit = Number(sales) - cogs;
+        const netProfit = grossProfit - Number(opex);
+
+        res.json({
+            period: { startDate, endDate },
+            revenue: Number(sales),
+            cogs,
+            gross_profit: grossProfit,
+            expenses: Number(opex),
+            net_profit: netProfit
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: 'Error calculating P&L', error });
+    }
+};
