@@ -44,6 +44,20 @@ docker compose up -d --build
 docker-compose up -d --build
 ```
 
+Jika ingin sekaligus auto-run seeder saat startup pertama:
+
+```bash
+# Compose v2
+docker compose --profile seed up -d --build
+
+# Compose v1 (fallback)
+docker-compose --profile seed up -d --build
+```
+
+Catatan:
+- Service `seed` akan jalan sekali lalu exit.
+- Seeder melakukan reset data (`force: true`), jadi jangan dipakai di production.
+
 ## 4. Cek Status Container
 
 ```bash
@@ -85,6 +99,7 @@ docker compose exec back_end node dist/seeders/index.js || docker-compose exec b
 
 Catatan:
 - Seeder melakukan reset data (`force: true`), jangan jalankan di data production.
+- Alternatif auto-run saat startup: pakai `--profile seed` di langkah 3.
 
 ## 8. Perintah Operasional Harian
 
@@ -158,4 +173,3 @@ Lalu restart backend:
 ```bash
 docker compose restart back_end || docker-compose restart back_end
 ```
-

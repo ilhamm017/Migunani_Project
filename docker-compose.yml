@@ -73,9 +73,35 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://back_end:5000/api/v1}
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}
       HOSTNAME: 0.0.0.0
-      PORT: 3000
+      PORT: 3500
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3500}:3500"
+    networks:
+      - migunani_network
+
+  seed:
+    build:
+      context: ./back_end
+      dockerfile: Dockerfile
+    container_name: migunani_seed
+    profiles: ["seed"]
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-migunani}
+      DB_PASS: ${DB_PASS:-password}
+      DB_NAME: ${DB_NAME:-migunani_motor_db}
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      WA_SESSION_PATH: /app/.wwebjs_auth
+      WA_CHROME_PATH: /usr/bin/chromium
+      WA_AUTO_INIT: "false"
+      WA_AUTO_RECONNECT: "false"
+      IMPORT_LOCAL_PATH_ENABLED: ${IMPORT_LOCAL_PATH_ENABLED:-false}
+      IMPORT_LOCAL_PATH_ALLOWLIST: ${IMPORT_LOCAL_PATH_ALLOWLIST:-}
+    command: ["node", "dist/seeders/index.js"]
     networks:
       - migunani_network
 
