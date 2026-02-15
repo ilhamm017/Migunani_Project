@@ -29,7 +29,7 @@ const formatRemaining = (dueAt: string | Date | null | undefined): string => {
 };
 
 export default function AdminIssueOrdersPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -38,10 +38,9 @@ export default function AdminIssueOrdersPage() {
   const load = async (searchValue: string) => {
     try {
       setLoading(true);
-      const res = await api.orders.getAllAdmin({
-        page: 1,
-        limit: 300,
+      const res = await api.admin.orderManagement.getAll({
         status: 'hold',
+        limit: 100,
         search: searchValue || undefined,
       });
 

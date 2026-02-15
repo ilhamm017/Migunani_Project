@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { TrendingUp, Package, ShoppingCart, MessageSquare, ArrowRight, ScanLine, CreditCard } from 'lucide-react';
+import { TrendingUp, Package, ShoppingCart, MessageSquare, ArrowRight, ScanLine, CreditCard, Search } from 'lucide-react';
 import ProductCard from '@/components/product/ProductCard';
 import ProductGrid from '@/components/product/ProductGrid';
 import { useCartStore } from '@/store/cartStore';
 import { api } from '@/lib/api';
+import { useEffect, useState } from 'react';
 
 const combinedStats = [
   { label: 'Produk', value: '120+', color: 'bg-emerald-500', trend: 'Tersedia', icon: Package },
@@ -14,55 +15,41 @@ const combinedStats = [
   { label: 'Chat', value: '24/7', color: 'bg-indigo-500', trend: 'Online', icon: MessageSquare },
 ];
 
-const featuredProducts = [
-  {
-    id: '1',
-    name: 'Ban Motor Tubeless 80/90-17',
-    price: 250000,
-    stock: 15,
-    imageUrl: '/images/products/ban.jpg',
-  },
-  {
-    id: '2',
-    name: 'Oli Mesin Synthetic 1L',
-    price: 85000,
-    stock: 30,
-    imageUrl: '/images/products/oli.jpg',
-  },
-  {
-    id: '3',
-    name: 'Kampas Rem Depan Honda',
-    price: 45000,
-    stock: 0,
-    imageUrl: '/images/products/kampas.jpg',
-  },
-  {
-    id: '4',
-    name: 'Lampu LED Motor H4',
-    price: 120000,
-    stock: 8,
-    imageUrl: '/images/products/lampu.jpg',
-  },
-];
-
 export default function MemberHome() {
+  const [products, setProducts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
 
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        const res = await api.catalog.getProducts({ limit: 4 });
+        setProducts(res.data?.products || []);
+      } catch (error) {
+        console.error('Failed to load featured products:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
   const handleAddToCart = async (productId: string) => {
-    const product = featuredProducts.find((p) => p.id === productId);
+    const product = products.find((p) => String(p.id) === String(productId));
     if (!product) return;
 
     addItem({
-      id: productId,
-      productId,
+      id: String(product.id),
+      productId: String(product.id),
       productName: product.name,
-      price: product.price,
+      price: Number(product.price),
       quantity: 1,
-      imageUrl: product.imageUrl,
+      imageUrl: product.image_url,
     });
 
     try {
-      await api.cart.addToCart({ productId, quantity: 1 });
+      await api.cart.addToCart({ productId: String(product.id), quantity: 1 });
     } catch (error) {
       console.error('Failed to add to cart:', error);
     }
@@ -96,15 +83,30 @@ export default function MemberHome() {
           </Link>
         </div>
 
-        <ProductGrid>
-          {featuredProducts.map((product) => (
-            <ProductCard
-              key={product.id}
-              {...product}
-              onAddToCart={handleAddToCart}
-            />
-          ))}
-        </ProductGrid>
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-10 opacity-50">
+            <Search className="animate-spin text-emerald-500 mb-2" size={20} />
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Memuat Produk...</p>
+          </div>
+        ) : products.length === 0 ? (
+          <div className="text-center py-10 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+            <p className="text-xs font-bold text-slate-400">Belum ada produk unggulan.</p>
+          </div>
+        ) : (
+          <ProductGrid>
+            {products.map((product) => (
+              <ProductCard
+                key={product.id}
+                id={String(product.id)}
+                name={product.name}
+                price={Number(product.price)}
+                imageUrl={product.image_url}
+                stock={Number(product.stock_quantity)}
+                onAddToCart={handleAddToCart}
+              />
+            ))}
+          </ProductGrid>
+        )}
       </section>
 
       <section className="bg-gradient-to-br from-slate-800 via-slate-800 to-emerald-900 rounded-[32px] p-6 text-white shadow-xl border border-slate-700/40">
@@ -141,3 +143,4 @@ export default function MemberHome() {
     </div>
   );
 }
+

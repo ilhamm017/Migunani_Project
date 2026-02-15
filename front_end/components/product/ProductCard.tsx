@@ -52,11 +52,6 @@ export default function ProductCard({
                             Habis
                         </div>
                     )}
-                    {isLowStock && !isOutOfStock && (
-                        <div className="absolute top-2 right-2 bg-amber-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">
-                            Sisa {stock}
-                        </div>
-                    )}
                 </div>
 
                 <div className="p-3">
@@ -73,8 +68,8 @@ export default function ProductCard({
                     {/* Add to Cart Button */}
                     <button
                         className={`w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 ${isOutOfStock
-                                ? 'bg-slate-100 text-slate-500'
-                                : 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
+                            ? 'bg-slate-100 text-slate-500'
+                            : 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
                             }`}
                         disabled={isOutOfStock}
                         onClick={(e) => {

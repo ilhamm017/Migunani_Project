@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { Op } from 'sequelize';
 import { User } from '../models';
+import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
 
 const STAFF_ROLES = ['admin_gudang', 'admin_finance', 'kasir', 'driver'] as const;
 
@@ -68,22 +69,26 @@ export const createStaff = async (req: Request, res: Response) => {
     try {
         const name = normalizeText(req.body?.name);
         const email = normalizeEmail(req.body?.email);
-        const whatsappNumber = normalizeText(req.body?.whatsapp_number);
+        const whatsappNumber = normalizeWhatsappNumber(req.body?.whatsapp_number);
         const role = normalizeText(req.body?.role) as (typeof STAFF_ROLES)[number];
         const rawPassword = normalizeText(req.body?.password);
 
-        if (!name || !whatsappNumber || !role || !STAFF_ROLES.includes(role)) {
+        if (!name || !role || !STAFF_ROLES.includes(role)) {
             return res.status(400).json({
-                message: 'Field wajib: name, whatsapp_number, dan role (admin_gudang/admin_finance/kasir/driver)'
+                message: 'Field wajib: name dan role (admin_gudang/admin_finance/kasir/driver)'
             });
+        }
+        if (!whatsappNumber) {
+            return res.status(400).json({ message: 'Nomor WhatsApp wajib dan harus valid' });
         }
 
         if (!rawPassword || rawPassword.length < 6) {
             return res.status(400).json({ message: 'Password minimal 6 karakter' });
         }
 
-        const conflictConditions: Array<{ whatsapp_number: string } | { email: string }> = [
-            { whatsapp_number: whatsappNumber }
+        const whatsappCandidates = getWhatsappLookupCandidates(whatsappNumber);
+        const conflictConditions: Array<Record<string, unknown>> = [
+            { whatsapp_number: { [Op.in]: whatsappCandidates } }
         ];
         if (email) {
             conflictConditions.push({ email });
@@ -152,8 +157,8 @@ export const updateStaff = async (req: Request, res: Response) => {
         }
 
         if (typeof req.body?.whatsapp_number === 'string') {
-            const whatsappNumber = normalizeText(req.body?.whatsapp_number);
-            if (!whatsappNumber) return res.status(400).json({ message: 'Nomor WhatsApp tidak boleh kosong' });
+            const whatsappNumber = normalizeWhatsappNumber(req.body?.whatsapp_number);
+            if (!whatsappNumber) return res.status(400).json({ message: 'Nomor WhatsApp tidak valid' });
             updates.whatsapp_number = whatsappNumber;
         }
 
@@ -189,9 +194,10 @@ export const updateStaff = async (req: Request, res: Response) => {
         const nextWhatsapp = typeof updates.whatsapp_number === 'string'
             ? updates.whatsapp_number
             : target.whatsapp_number;
+        const nextWhatsappCandidates = getWhatsappLookupCandidates(nextWhatsapp);
 
-        const conflictConditions: Array<{ email: string } | { whatsapp_number: string }> = [
-            { whatsapp_number: nextWhatsapp }
+        const conflictConditions: Array<Record<string, unknown>> = [
+            { whatsapp_number: { [Op.in]: nextWhatsappCandidates } }
         ];
         if (nextEmail) {
             conflictConditions.push({ email: nextEmail });

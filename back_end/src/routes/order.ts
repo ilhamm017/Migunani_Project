@@ -13,8 +13,9 @@ router.get('/:id', authenticateToken, OrderController.getOrderDetails);
 router.post('/:id/proof', authenticateToken, upload.single('proof'), OrderController.uploadPaymentProof);
 
 // Admin Routes
-router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance'), OrderController.getAllOrders);
-router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance'), OrderController.getDeliveryEmployees);
-router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), OrderController.updateOrderStatus);
+router.get('/admin/stats', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getDashboardStats);
+router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getAllOrders);
+router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getDeliveryEmployees);
+router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.updateOrderStatus);
 
 export default router;

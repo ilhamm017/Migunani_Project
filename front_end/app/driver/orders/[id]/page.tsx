@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Upload } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowLeft, MessageCircle, Upload } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -47,26 +48,106 @@ export default function DriverOrderDetailPage() {
     }
   };
 
+  const reportIncomplete = async () => {
+    const note = prompt('Apa yang kurang/bermasalah? (Contoh: Busi kurang 2 pcs)');
+    if (!note) return;
+
+    try {
+      setLoading(true);
+      await api.driver.reportIssue(orderId, note);
+      alert('Masalah telah dilaporkan ke Admin Gudang.');
+      router.push('/driver');
+    } catch (error) {
+      console.error('Report issue failed:', error);
+      alert('Gagal melaporkan masalah.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const customer = order?.Customer || {};
+
   return (
     <div className="p-6 space-y-5">
       <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
 
-      <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm space-y-4">
-        <h1 className="text-xl font-black text-slate-900">Detail Pengiriman #{orderId}</h1>
-        <p className="text-sm text-slate-600">Status: {order?.status || '-'}</p>
-        <p className="text-sm text-slate-600">Customer: {order?.customer_name || '-'}</p>
-
-        <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Upload Foto Bukti Serah Terima</label>
-          <input type="file" accept="image/*" onChange={(e) => setProof(e.target.files?.[0] || null)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm" />
+      <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm space-y-6">
+        <div>
+          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Tugas Pengiriman</p>
+          <h1 className="text-2xl font-black text-slate-900 leading-none">Order #{orderId}</h1>
         </div>
 
-        <button onClick={complete} disabled={loading} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-sm uppercase shadow-lg shadow-emerald-200 disabled:opacity-50">
-          <Upload size={14} className="inline mr-2" />
-          {loading ? 'Mengirim...' : 'Konfirmasi COD & Selesai'}
-        </button>
+        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-slate-500 font-bold uppercase">Status</span>
+            <span className="text-xs font-black text-slate-900 uppercase bg-white px-2 py-1 rounded-lg border border-slate-200">
+              {order?.status || 'SHIPPED'}
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-slate-500 font-bold uppercase">Customer</span>
+            <span className="text-xs font-black text-slate-900 uppercase">
+              {order?.customer_name || '-'}
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-slate-500 font-bold uppercase">Metode</span>
+            <span className="text-xs font-black text-slate-900 uppercase">
+              {order?.Invoice?.payment_method || 'COD'}
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+            Bukti Foto (Wajib jika Selesai)
+          </label>
+          <div className="relative group">
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => setProof(e.target.files?.[0] || null)}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+            />
+            <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 group-hover:border-emerald-300 rounded-3xl p-8 bg-slate-50 group-hover:bg-emerald-50/30 transition-all">
+              <Upload size={24} className="text-slate-400 group-hover:text-emerald-500 mb-2" />
+              <p className="text-xs font-bold text-slate-500 group-hover:text-emerald-700">
+                {proof ? proof.name : 'Klik untuk Ambil Foto Bukti'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 pt-2">
+          {customer.id ? (
+            <Link
+              href={`/driver/chat?userId=${encodeURIComponent(String(customer.id))}&phone=${encodeURIComponent(String(customer.whatsapp_number || ''))}`}
+              className="w-full py-4 bg-slate-900 text-white rounded-[24px] font-black text-xs uppercase inline-flex items-center justify-center gap-2"
+            >
+              <MessageCircle size={16} />
+              Hubungi Customer (Chat App)
+            </Link>
+          ) : null}
+
+          <button
+            onClick={complete}
+            disabled={loading || !proof}
+            className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-black text-sm uppercase shadow-xl shadow-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 disabled:shadow-none"
+          >
+            {loading ? 'Processing...' : 'Selesai & Serahkan Uang'}
+          </button>
+
+          <button
+            onClick={reportIncomplete}
+            disabled={loading}
+            className="w-full py-4 bg-white border-2 border-slate-200 text-rose-600 rounded-[24px] font-black text-xs uppercase hover:bg-rose-50 hover:border-rose-200 transition-all"
+          >
+            Lapor Barang Kurang / Bermasalah
+          </button>
+        </div>
       </div>
     </div>
   );

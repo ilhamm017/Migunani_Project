@@ -3,11 +3,11 @@ export function getDashboardPathByRole(role?: string | null): string {
     case 'super_admin':
       return '/admin';
     case 'admin_gudang':
-      return '/admin/inventory';
+      return '/admin';
     case 'admin_finance':
       return '/admin/finance';
     case 'kasir':
-      return '/admin/pos';
+      return '/admin/sales';
     case 'driver':
       return '/driver';
     default:

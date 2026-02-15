@@ -8,7 +8,11 @@ import dotenv from 'dotenv';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
-import { sequelize, ChatSession, Message } from './models';
+import { sequelize, ChatSession, ChatThread } from './models';
+import { normalizeWhatsappNumber } from './utils/whatsappNumber';
+import { createThreadMessage, resolveThreadForIncomingWebSocket } from './services/ChatThreadService';
+import { ensureChatThreadSchema } from './services/chatSchema';
+import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadService';
 
 dotenv.config();
 
@@ -90,9 +94,7 @@ io.on('connection', (socket) => {
             const incomingGuestId = typeof payload.guest_id === 'string' && payload.guest_id.trim()
                 ? payload.guest_id.trim()
                 : undefined;
-            const incomingWhatsappNumber = typeof payload.whatsapp_number === 'string' && payload.whatsapp_number.trim()
-                ? payload.whatsapp_number.trim()
-                : undefined;
+            const incomingWhatsappNumber = normalizeWhatsappNumber(payload.whatsapp_number);
 
             if (!rawBody && !rawAttachmentUrl) return;
             if (rawAttachmentUrl && !CHAT_ATTACHMENT_URL_REGEX.test(rawAttachmentUrl)) return;
@@ -102,65 +104,64 @@ io.on('connection', (socket) => {
 
             let session = null as any;
             const sessionId = typeof payload.session_id === 'string' ? payload.session_id : null;
+            let directThread = null as any;
             if (sessionId) {
                 session = await ChatSession.findByPk(sessionId);
-            }
-
-            if (session) {
-                const hasSessionOwnerUser = typeof session.user_id === 'string' && session.user_id.trim().length > 0;
-                if (hasSessionOwnerUser) {
-                    if (!incomingUserId || session.user_id !== incomingUserId) {
-                        session = null;
+                if (!session) {
+                    directThread = await ChatThread.findByPk(sessionId);
+                    if (directThread) {
+                        const threadCustomerId = String(directThread.customer_user_id || '').trim();
+                        const external = String(directThread.external_whatsapp_number || '').trim();
+                        const guestAllowed = external.startsWith('webguest:') && incomingGuestId && external === `webguest:${incomingGuestId}`;
+                        const userAllowed = !threadCustomerId || (incomingUserId && incomingUserId === threadCustomerId);
+                        if (!guestAllowed && !userAllowed) {
+                            directThread = null;
+                        }
                     }
-                } else if (typeof session.whatsapp_number === 'string' && session.whatsapp_number.startsWith('web-')) {
-                    if (!incomingGuestId || session.whatsapp_number !== `web-${incomingGuestId}`) {
-                        session = null;
-                    }
-                } else {
-                    // Legacy session tanpa owner yang jelas dianggap tidak valid untuk reuse public.
-                    session = null;
                 }
             }
 
-            if (!session) {
-                const identity = incomingWhatsappNumber || `web-${incomingGuestId || socket.id}`;
-
-                session = await ChatSession.create({
-                    user_id: incomingUserId,
-                    whatsapp_number: identity,
-                    platform: 'web',
-                    is_bot_active: false,
-                    last_message_at: new Date()
-                });
-            } else {
-                const updates: any = { last_message_at: new Date() };
-                if (!session.user_id && incomingUserId) {
-                    updates.user_id = incomingUserId;
-                }
-                await session.update(updates);
-            }
-
-            const saved = await Message.create({
-                session_id: session.id,
-                sender_type: 'customer',
-                sender_id: incomingUserId,
-                body,
-                attachment_url: attachmentUrl,
-                is_read: false,
-                created_via: 'system'
+            const thread = directThread || await resolveThreadForIncomingWebSocket({
+                session,
+                incomingUserId,
+                incomingGuestId,
+                incomingWhatsappNumber: incomingWhatsappNumber || undefined
             });
 
-            socket.emit('client:session', { session_id: session.id });
+            const saved = await createThreadMessage({
+                threadId: thread.id,
+                sessionId: session?.id || thread.id,
+                senderType: 'customer',
+                senderId: incomingUserId,
+                body,
+                attachmentUrl,
+                channel: 'app',
+                isRead: false,
+                deliveryState: 'sent'
+            });
+
+            socket.emit('client:session', { session_id: thread.id });
+            io.emit('chat:thread_message', {
+                thread_id: thread.id,
+                channel: 'app',
+                body: saved.body,
+                attachment_url: saved.attachment_url,
+                sender: 'customer',
+                sender_id: incomingUserId,
+                timestamp: saved.createdAt
+            });
             io.emit('chat:message', {
-                session_id: session.id,
+                session_id: thread.id,
+                thread_id: thread.id,
                 platform: 'web',
                 body: saved.body,
                 attachment_url: saved.attachment_url,
                 sender: 'customer',
+                sender_id: incomingUserId,
                 timestamp: saved.createdAt
             });
             io.emit('chat:alert', {
-                sessionId: session.id,
+                sessionId: thread.id,
                 platform: 'web',
                 message: 'New web chat message'
             });
@@ -176,18 +177,25 @@ import authRoutes from './routes/auth';
 import orderRoutes from './routes/order';
 import cartRoutes from './routes/cart';
 import financeRoutes from './routes/finance';
-import posRoutes from './routes/pos';
+// import posRoutes from './routes/pos';
 import driverRoutes from './routes/driver';
 import chatRoutes from './routes/chat';
 import whatsappRoutes from './routes/whatsapp';
 import staffRoutes from './routes/staff';
+import stockOpnameRoutes from './routes/stockOpname';
+import allocationRoutes from './routes/allocation';
+import returRoutes from './routes/retur';
+import customerRoutes from './routes/customer';
+import shippingMethodRoutes from './routes/shippingMethod';
+import discountVoucherRoutes from './routes/discountVoucher';
 
+// Routes
 // Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/cart', cartRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/admin/finance', financeRoutes);
-app.use('/api/v1/pos', posRoutes);
+// app.use('/api/v1/pos', posRoutes); // Removed
 app.use('/api/v1/driver', driverRoutes);
 app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
@@ -196,6 +204,12 @@ import catalogRoutes from './routes/catalog';
 
 app.use('/api/v1/catalog', catalogRoutes); // Public Product Catalog
 app.use('/api/v1', inventoryRoutes); // /api/v1/products, /api/v1/admin/inventory...
+app.use('/api/v1/inventory/audit', stockOpnameRoutes);
+app.use('/api/v1/allocation', allocationRoutes);
+app.use('/api/v1/retur', returRoutes);
+app.use('/api/v1/admin/customers', customerRoutes);
+app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
+app.use('/api/v1/admin/discount-vouchers', discountVoucherRoutes);
 
 app.get('/', (req, res) => {
     res.send('Migunani Motor Backend Running');
@@ -207,8 +221,11 @@ const waAutoInit = process.env.WA_AUTO_INIT !== 'false';
 
 const ORDER_STATUS_ENUM_VALUES = [
     'pending',
+    'waiting_invoice',
     'waiting_payment',
-    'processing',
+    'ready_to_ship',
+    'allocated',
+    'partially_fulfilled',
     'debt_pending',
     'shipped',
     'delivered',
@@ -231,7 +248,8 @@ const ensureOrderStatusEnumReady = async () => {
         ) as any;
 
         const columnType = rows?.[0]?.columnType || '';
-        if (typeof columnType === 'string' && columnType.includes('debt_pending')) return;
+        // Check if new statuses exist. If 'allocated' is missing, we need to run ALTER.
+        if (typeof columnType === 'string' && columnType.includes('allocated') && columnType.includes('partially_fulfilled')) return;
 
         const enumValuesSql = ORDER_STATUS_ENUM_VALUES.map((value) => `'${value}'`).join(', ');
         await sequelize.query(
@@ -239,6 +257,7 @@ const ensureOrderStatusEnumReady = async () => {
              MODIFY COLUMN status ENUM(${enumValuesSql})
              NOT NULL DEFAULT 'pending'`
         );
+        console.log('Order status enum updated: added allocated & partially_fulfilled');
         console.log('Order status enum updated: added debt_pending');
     } catch (error) {
         console.error('Failed to ensure orders.status enum includes debt_pending:', error);
@@ -249,18 +268,36 @@ const ensureOrderStatusEnumReady = async () => {
 const startServer = async () => {
     try {
         await sequelize.authenticate();
-        await sequelize.sync();
+        try {
+            await sequelize.sync({ alter: false });
+        } catch (e) {
+            console.error('Sync error (ignored to keep server running):', e);
+        }
         await ensureOrderStatusEnumReady();
-        console.log('Database connected and synchronized');
+        await ensureOrderStatusEnumReady();
+        await ensureChatThreadSchema();
+        await backfillLegacyChatSessionsToThreads();
+        console.log('Database connected and synchronized successfully (indexes & order status fixed)');
 
         httpServer.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
         });
 
         if (waAutoInit) {
-            startWhatsappClient().catch((error) => {
-                console.error('WhatsApp initialization failed (API tetap jalan):', error);
-            });
+            // Check if we have a valid session in DB
+            const { Setting } = require('./models');
+            const waSession = await Setting.findByPk('whatsapp_session');
+            const sessionData = waSession?.value;
+            const isPreviouslyConnected = sessionData?.status === 'CONNECTED';
+
+            if (isPreviouslyConnected) {
+                console.log('[WA] Previous session found, attempting auto-reconnect...');
+                startWhatsappClient().catch((error) => {
+                    console.error('WhatsApp auto-reconnect failed:', error);
+                });
+            } else {
+                console.log('[WA] No active session found. Manual start required via Admin Dashboard.');
+            }
         } else {
             console.log('WhatsApp auto init disabled (WA_AUTO_INIT=false)');
         }

@@ -24,6 +24,7 @@ export default function UploadProofPage() {
       const form = new FormData();
       form.append('proof', file);
       await api.orders.uploadPaymentProof(orderId, form);
+      alert('Bukti transfer berhasil dikirim. Menunggu verifikasi admin finance.');
       router.push(`/orders/${orderId}`);
     } catch (error) {
       console.error('Upload failed:', error);

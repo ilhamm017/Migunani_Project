@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Package, ShoppingBag, ArrowRight, Clock, CheckCircle2, Truck } from 'lucide-react';
+import { Package, ShoppingBag, ArrowRight, Clock, CheckCircle2, Truck, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
@@ -165,6 +165,12 @@ export default function OrdersPage() {
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-center mb-0.5">
                                         <p className="text-[10px] font-bold text-slate-400 uppercase truncate">{order.id}</p>
+                                        {order.Returs && order.Returs.length > 0 && (
+                                            <div className="flex items-center gap-1 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-lg">
+                                                <RotateCcw size={8} />
+                                                <span className="text-[8px] font-black uppercase">Retur</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <h4 className="text-xs font-bold text-slate-900">Invoice: {order.Invoice?.invoice_number || '-'}</h4>
                                     <p className="text-[10px] font-bold text-slate-500 mt-0.5">{visual.label}</p>

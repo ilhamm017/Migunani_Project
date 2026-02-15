@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
@@ -35,45 +35,74 @@ export default function OrderDetailPage() {
   const statusView = useMemo(() => {
     const status = order?.status || 'pending';
 
-    if (status === 'waiting_payment') {
+    if (status === 'pending') {
       return {
         icon: Clock3,
-        label: 'Menunggu Verifikasi Pembayaran',
+        label: 'pending (Menunggu Review Admin)',
+        className: 'text-orange-700 bg-orange-50'
+      };
+    }
+    if (status === 'waiting_invoice') {
+      return {
+        icon: Clock3,
+        label: 'waiting_invoice (Menunggu Invoice)',
+        className: 'text-blue-700 bg-blue-50'
+      };
+    }
+    if (status === 'ready_to_ship') {
+      return {
+        icon: CheckCircle2,
+        label: 'ready_to_ship (Siap Dikirim)',
+        className: 'text-emerald-700 bg-emerald-50'
+      };
+    }
+    if (status === 'allocated') {
+      return {
+        icon: CheckCircle2,
+        label: 'allocated (Stok Dialokasikan)',
+        className: 'text-teal-700 bg-teal-50'
+      };
+    }
+    if (status === 'partially_fulfilled') {
+      return {
+        icon: AlertCircle,
+        label: 'partially_fulfilled (Stok Tersedia Sebagian)',
+        className: 'text-amber-700 bg-amber-50'
+      };
+    }
+    if (status === 'waiting_payment') {
+      const hasProof = !!order?.Invoice?.payment_proof_url;
+      return {
+        icon: Clock3,
+        label: hasProof ? 'waiting_payment (Bukti Terkirim — Menunggu Verifikasi)' : 'waiting_payment (Invoice Terbit — Menunggu Pembayaran)',
         className: 'text-amber-700 bg-amber-50'
       };
     }
     if (status === 'debt_pending') {
       return {
         icon: Clock3,
-        label: 'Utang Belum Lunas',
+        label: 'debt_pending (Utang Belum Lunas)',
         className: 'text-amber-700 bg-amber-50'
-      };
-    }
-    if (status === 'pending') {
-      return {
-        icon: AlertCircle,
-        label: 'Menunggu Pembayaran',
-        className: 'text-orange-700 bg-orange-50'
       };
     }
     if (status === 'processing') {
       return {
         icon: Clock3,
-        label: 'Sedang Diproses Gudang',
+        label: 'processing (Sedang Diproses Gudang)',
         className: 'text-blue-700 bg-blue-50'
       };
     }
     if (['completed', 'delivered'].includes(status)) {
-      return { icon: CheckCircle2, label: 'Pesanan Selesai', className: 'text-emerald-600 bg-emerald-50' };
+      return { icon: CheckCircle2, label: 'completed / delivered (Pesanan Selesai)', className: 'text-emerald-600 bg-emerald-50' };
     }
     if (status === 'shipped') {
-      return { icon: Truck, label: 'Sedang Dikirim', className: 'text-blue-600 bg-blue-50' };
+      return { icon: Truck, label: 'shipped (Sedang Dikirim)', className: 'text-blue-600 bg-blue-50' };
     }
     if (status === 'hold') {
-      return { icon: PauseCircle, label: 'Pesanan Bermasalah (Barang Kurang)', className: 'text-violet-700 bg-violet-50' };
+      return { icon: PauseCircle, label: 'hold (Pesanan Bermasalah)', className: 'text-violet-700 bg-violet-50' };
     }
     if (status === 'canceled' || status === 'expired') {
-      return { icon: XCircle, label: 'Pesanan Dibatalkan', className: 'text-rose-700 bg-rose-50' };
+      return { icon: XCircle, label: 'canceled / expired (Pesanan Dibatalkan)', className: 'text-rose-700 bg-rose-50' };
     }
     return { icon: Clock3, label: 'Status Pesanan', className: 'text-slate-700 bg-slate-100' };
   }, [order?.status]);
@@ -151,17 +180,70 @@ export default function OrderDetailPage() {
           </div>
         )}
 
+        {order.Returs && order.Returs.length > 0 && (
+          <div className="bg-amber-50 border border-amber-100 rounded-[24px] p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <RotateCcw size={16} className="text-amber-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-amber-700">Informasi Retur</h3>
+            </div>
+            {order.Returs.map((retur: any) => (
+              <div key={retur.id} className="bg-white/50 rounded-xl p-3 border border-amber-200">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-[11px] font-black text-slate-800">
+                      Retur {retur.qty} unit
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Diajukan: {formatDateTime(retur.createdAt)}</p>
+                  </div>
+                  <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full border ${retur.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                    retur.status === 'rejected' ? 'bg-rose-50 text-rose-700 border-rose-100' :
+                      'bg-amber-100 text-amber-700 border-amber-200'
+                    }`}>
+                    {retur.status}
+                  </span>
+                </div>
+                {retur.admin_response && (
+                  <p className="text-[10px] text-amber-700 mt-2 italic font-medium">"{retur.admin_response}"</p>
+                )}
+              </div>
+            ))}
+            <Link href="/retur" className="block text-center py-2 bg-amber-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-700 transition-colors">
+              Lihat Detail & Lacak Semua Retur
+            </Link>
+          </div>
+        )}
+
         <div className="space-y-2">
           <h2 className="text-sm font-bold text-slate-900">Item Pesanan</h2>
-          {(order.OrderItems || []).map((item: any) => (
-            <div key={item.id} className="flex justify-between items-center bg-slate-50 rounded-2xl px-4 py-3">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
-                <p className="text-xs text-slate-500">Qty: {item.qty}</p>
+          {(order.OrderItems || []).map((item: any) => {
+            const allocation = order.Allocations?.find((a: any) => a.product_id === item.product_id);
+            const sentQty = allocation ? allocation.allocated_qty : 0;
+            const isPartial = sentQty < item.qty;
+
+            return (
+              <div key={item.id} className="flex justify-between items-center bg-slate-50 rounded-2xl px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
+                  <div className="flex gap-4 mt-1">
+                    <p className="text-xs text-slate-500">Dipesan: <span className="font-bold text-slate-700">{item.qty}</span></p>
+                    {['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status) ? (
+                      <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
+                        Dialokasikan: {sentQty}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-bold text-slate-900">{formatCurrency(Number(item.price_at_purchase || 0) * Number(item.qty || 0))}</p>
+                  {isPartial && ['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status) && (
+                    <p className="text-[10px] text-amber-600 font-bold">
+                      {item.qty - sentQty} Belum Tersedia
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-sm font-bold text-slate-900">{formatCurrency(Number(item.price_at_purchase || 0) * Number(item.qty || 0))}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="bg-slate-900 rounded-3xl p-4 text-white flex justify-between items-center">
@@ -174,9 +256,16 @@ export default function OrderDetailPage() {
           <button onClick={handleDownloadInvoice} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
             <Download size={14} /> Invoice PDF
           </button>
-          <Link href={`/orders/${order.id}/upload-proof`} className="py-3 bg-emerald-600 text-white rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
-            <Upload size={14} /> Upload Bukti
-          </Link>
+          {order.status === 'waiting_payment' && !order.Invoice?.payment_proof_url && (
+            <Link href={`/orders/${order.id}/upload-proof`} className="py-3 bg-emerald-600 text-white rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
+              <Upload size={14} /> Upload Bukti
+            </Link>
+          )}
+          {['delivered', 'completed'].includes(order.status) && (
+            <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">
+              <AlertCircle size={14} /> Ajukan Retur
+            </Link>
+          )}
         </div>
       </div>
     </div>

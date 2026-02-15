@@ -37,18 +37,18 @@ export default function ProductDetailPage() {
         setLoading(true);
         const res = await api.catalog.getProductById(productId);
         const p = res.data;
-          setProduct({
-            id: String(p.id),
-            name: p.name,
-            sku: p.sku,
-            price: Number(p.price || 0),
-            stock_quantity: Number(p.stock_quantity || 0),
-            description: p.description,
-            unit: p.unit,
-            category_name: Array.isArray(p.Categories) && p.Categories.length > 0
-              ? p.Categories.map((item: any) => item?.name).filter(Boolean).join(', ')
-              : p.Category?.name,
-          });
+        setProduct({
+          id: String(p.id),
+          name: p.name,
+          sku: p.sku,
+          price: Number(p.price || 0),
+          stock_quantity: Number(p.stock_quantity || 0),
+          description: p.description,
+          unit: p.unit,
+          category_name: Array.isArray(p.Categories) && p.Categories.length > 0
+            ? p.Categories.map((item: any) => item?.name).filter(Boolean).join(', ')
+            : p.Category?.name,
+        });
       } catch (error) {
         console.error('Failed to load product detail:', error);
         setProduct(null);
@@ -137,9 +137,11 @@ export default function ProductDetailPage() {
             <p className="text-[11px] text-slate-500">Harga</p>
             <p className="text-sm font-black text-emerald-700">{tierPriceText}</p>
           </div>
-          <div className="bg-slate-50 rounded-2xl p-3">
-            <p className="text-[11px] text-slate-500">Stok Tersedia</p>
-            <p className="text-sm font-black text-slate-900">{product.stock_quantity ?? 0} {product.unit || 'pcs'}</p>
+          <div className="bg-slate-50 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
+            <p className="text-[11px] text-slate-500">Status Stok</p>
+            <p className={`text-sm font-black ${outOfStock ? 'text-rose-600' : 'text-emerald-700'}`}>
+              {outOfStock ? 'Stok Habis' : 'Tersedia'}
+            </p>
           </div>
         </div>
 

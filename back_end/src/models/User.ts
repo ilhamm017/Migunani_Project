@@ -9,9 +9,11 @@ interface UserAttributes {
     whatsapp_number: string;
     role: 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     status: 'active' | 'banned';
+    debt: number;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id'> { }
+
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'debt'> { }
 
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
     declare id: string;
@@ -21,6 +23,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
     declare whatsapp_number: string;
     declare role: 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     declare status: 'active' | 'banned';
+    declare debt: number;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -62,16 +65,15 @@ User.init(
             type: DataTypes.ENUM('active', 'banned'),
             defaultValue: 'active',
         },
+        debt: {
+            type: DataTypes.DECIMAL(15, 2),
+            defaultValue: 0,
+            allowNull: false,
+        },
     },
     {
         sequelize,
         tableName: 'users',
-        indexes: [
-            {
-                unique: true,
-                fields: ['whatsapp_number']
-            }
-        ]
     }
 );
 

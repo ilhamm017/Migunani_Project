@@ -1,179 +1,38 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { API_BASE_URL, api } from '@/lib/api';
-import { Eye, EyeOff } from 'lucide-react';
+import { MessageCircle, ArrowLeft } from 'lucide-react';
 
 export default function RegisterPage() {
-    const router = useRouter();
-
-    const [formData, setFormData] = useState({
-        name: '',
-        email: '',
-        phone: '',
-        password: '',
-        confirmPassword: '',
-    });
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const [showPassword, setShowPassword] = useState(false);
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
-
-        if (formData.password !== formData.confirmPassword) {
-            setError('Password tidak cocok');
-            return;
-        }
-
-        setLoading(true);
-
-        try {
-            await api.auth.register({
-                name: formData.name,
-                email: formData.email,
-                phone: formData.phone,
-                password: formData.password,
-            });
-
-            router.push('/auth/login?registered=true');
-        } catch (err: any) {
-            if (!err?.response) {
-                setError(`Gagal terhubung ke server. Cek backend dan proxy API (${API_BASE_URL}).`);
-            } else {
-                setError(err.response?.data?.message || `Registrasi gagal (HTTP ${err.response?.status}).`);
-            }
-            console.error('Register error:', err?.response?.status, err?.response?.data || err?.message);
-        } finally {
-            setLoading(false);
-        }
-    };
+    const whatsappNumber = '6281234567890'; // Replace with actual superadmin number from env if available
+    const message = encodeURIComponent('Halo Admin, saya ingin mendaftar akun baru untuk aplikasi Migunani Motor.');
 
     return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-            <div className="w-full max-w-md">
-                {/* Brand Header */}
-                <div className="text-center mb-10">
-                    <h1 className="text-2xl font-black tracking-tight italic text-emerald-600">MIGUNANI MOTOR</h1>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Suku cadang terpercaya</p>
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+            <div className="bg-white max-w-md w-full rounded-3xl p-8 shadow-sm text-center border border-slate-100">
+                <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <MessageCircle size={32} />
                 </div>
 
-                {/* Register Card */}
-                <div className="bg-white rounded-[40px] shadow-2xl p-8 space-y-6">
-                    <div className="text-center">
-                        <h2 className="text-xl font-black text-slate-900">Daftar Akun</h2>
-                        <p className="text-[11px] text-slate-400 mt-1">Buat akun untuk mulai berbelanja</p>
-                    </div>
+                <h1 className="text-2xl font-black text-slate-900 mb-2">Pendaftaran Akun</h1>
+                <p className="text-slate-600 mb-8">
+                    Untuk menjaga keamanan dan validitas data, pendaftaran akun baru wajib melalui verifikasi Admin via WhatsApp.
+                </p>
 
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        {error && (
-                            <div className="p-3 bg-rose-50 text-rose-500 rounded-2xl text-[11px] font-bold text-center">
-                                {error}
-                            </div>
-                        )}
+                <a
+                    href={`https://wa.me/${whatsappNumber}?text=${message}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block w-full bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-emerald-100"
+                >
+                    Hubungi Admin via WhatsApp
+                </a>
 
-                        <div className="space-y-2">
-                            <label htmlFor="name" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                Nama Lengkap
-                            </label>
-                            <input
-                                id="name"
-                                type="text"
-                                required
-                                value={formData.name}
-                                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                className="w-full bg-slate-50 border-none rounded-2xl py-3.5 px-4 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all shadow-inner"
-                                placeholder="John Doe"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor="email" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                Email
-                            </label>
-                            <input
-                                id="email"
-                                type="email"
-                                required
-                                value={formData.email}
-                                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                className="w-full bg-slate-50 border-none rounded-2xl py-3.5 px-4 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all shadow-inner"
-                                placeholder="nama@email.com"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor="phone" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                Nomor WhatsApp
-                            </label>
-                            <input
-                                id="phone"
-                                type="tel"
-                                required
-                                value={formData.phone}
-                                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                                className="w-full bg-slate-50 border-none rounded-2xl py-3.5 px-4 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all shadow-inner"
-                                placeholder="6281234567890"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor="password" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                Password
-                            </label>
-                            <div className="relative">
-                                <input
-                                    id="password"
-                                    type={showPassword ? 'text' : 'password'}
-                                    required
-                                    value={formData.password}
-                                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                    className="w-full bg-slate-50 border-none rounded-2xl py-3.5 px-4 pr-12 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all shadow-inner"
-                                    placeholder="••••••••"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"
-                                >
-                                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor="confirmPassword" className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                Konfirmasi Password
-                            </label>
-                            <input
-                                id="confirmPassword"
-                                type="password"
-                                required
-                                value={formData.confirmPassword}
-                                onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                                className="w-full bg-slate-50 border-none rounded-2xl py-3.5 px-4 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all shadow-inner"
-                                placeholder="••••••••"
-                            />
-                        </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl text-xs uppercase shadow-lg shadow-emerald-200 active:scale-95 transition-all disabled:opacity-50"
-                        >
-                            {loading ? 'Memproses...' : 'Daftar'}
-                        </button>
-
-                        <div className="text-center text-[11px] text-slate-400">
-                            Sudah punya akun?{' '}
-                            <Link href="/auth/login" className="text-emerald-600 font-bold">
-                                Login di sini
-                            </Link>
-                        </div>
-                    </form>
+                <div className="mt-8 pt-6 border-t border-slate-100">
+                    <Link href="/auth/login" className="text-slate-500 hover:text-slate-800 text-sm font-bold inline-flex items-center gap-2">
+                        <ArrowLeft size={16} />
+                        Kembali ke Login
+                    </Link>
                 </div>
             </div>
         </div>

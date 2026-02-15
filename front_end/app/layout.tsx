@@ -3,7 +3,9 @@ import "./globals.css";
 import Header from "@/components/layout/Header";
 import BottomNav from "@/components/layout/BottomNav";
 import AdminBottomNav from "@/components/layout/AdminBottomNav";
+import DriverBottomNav from "@/components/layout/DriverBottomNav";
 import WebChatWidget from "@/components/chat/WebChatWidget";
+import IncomingChatNotifier from "@/components/chat/IncomingChatNotifier";
 import HydrationProvider from "@/components/providers/HydrationProvider";
 
 export const metadata: Metadata = {
@@ -31,7 +33,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id" suppressHydrationWarning>
-      <body className="antialiased min-h-screen bg-slate-50 pb-24 font-sans text-slate-900 select-none">
+      <body className="antialiased min-h-screen bg-slate-50 pb-24 [--admin-bottom-nav-height:5rem] font-sans text-slate-900 select-none">
         <HydrationProvider>
           <Header />
           <main>
@@ -39,7 +41,9 @@ export default function RootLayout({
           </main>
           <BottomNav />
           <AdminBottomNav />
+          <DriverBottomNav />
           <WebChatWidget />
+          <IncomingChatNotifier />
         </HydrationProvider>
       </body>
     </html>

@@ -104,6 +104,8 @@ export const api = {
             from_cart?: boolean;
             payment_method?: 'transfer_manual' | 'cod' | 'cash_store';
             items?: Array<{ product_id: string; qty: number }>;
+            customer_id?: string; // Optional for admin manual order
+            shipping_method_code?: string;
         }) => apiClient.post('/orders/checkout', data),
         getMyOrders: (params?: { page?: number; limit?: number; status?: string }) =>
             apiClient.get('/orders/my-orders', { params }),
@@ -112,27 +114,132 @@ export const api = {
             apiClient.post(`/orders/${orderId}/proof`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
-        getAllAdmin: (params?: {
-            page?: number;
-            limit?: number;
-            status?: string;
-            search?: string;
-            startDate?: string;
-            endDate?: string;
-        }) =>
-            apiClient.get('/orders/admin/list', { params }),
-        getCouriers: () => apiClient.get('/orders/admin/couriers'),
-        updateStatusAdmin: (id: string, data: {
-            status: string;
-            courier_id?: string;
-            issue_type?: 'shortage';
-            issue_note?: string;
-        }) =>
-            apiClient.patch(`/orders/admin/${id}/status`, data),
     },
 
-    // Admin - Inventory
+    // Allocation (Admin)
+    allocation: {
+        getPending: (params?: { scope?: 'shortage' | 'all' }) =>
+            apiClient.get('/allocation/pending', { params }),
+        getByProduct: (productId: string) => apiClient.get(`/allocation/product/${productId}`),
+        getDetail: (id: string) => apiClient.get(`/allocation/${id}`),
+        allocate: (id: string, items: Array<{ product_id: string; qty: number }>) =>
+            apiClient.post(`/allocation/${id}`, { items }),
+        cancelBackorder: (id: string, reason: string) =>
+            apiClient.post(`/allocation/${id}/cancel-backorder`, { reason }),
+    },
+
+    // Retur (Customer & Admin)
+    retur: {
+        request: (data: FormData) => apiClient.post('/retur/request', data, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        }),
+        getMyReturs: () => apiClient.get('/retur/my'),
+        getAll: (status?: string) => apiClient.get('/retur/all', { params: { status } }),
+        updateStatus: (id: string, data: {
+            status: string;
+            admin_response?: string;
+            courier_id?: string;
+            refund_amount?: number;
+            is_back_to_stock?: boolean;
+        }) => apiClient.put(`/retur/${id}/status`, data),
+        disburse: (id: string, note?: string) => apiClient.post(`/retur/${id}/disburse`, { note }),
+    },
+
+    // Admin
     admin: {
+        customers: {
+            search: (query: string, params?: { status?: 'all' | 'active' | 'banned'; limit?: number }) =>
+                apiClient.get('/admin/customers/search', { params: { search: query, ...params } }),
+            getAll: (params?: {
+                page?: number;
+                limit?: number;
+                search?: string;
+                status?: 'all' | 'active' | 'banned';
+            }) => apiClient.get('/admin/customers', { params }),
+            getById: (id: string) => apiClient.get(`/admin/customers/${id}`),
+            getOrders: (id: string, params?: {
+                page?: number;
+                limit?: number;
+                scope?: 'all' | 'open';
+                status?: string;
+            }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
+            updateStatus: (id: string, data: {
+                status: 'active' | 'banned';
+                halt_open_orders?: boolean;
+            }) => apiClient.patch(`/admin/customers/${id}/status`, data),
+            sendOtp: (data: { whatsapp_number: string }) =>
+                apiClient.post('/admin/customers/otp/send', data),
+            create: (data: {
+                name: string;
+                whatsapp_number: string;
+                otp_code: string;
+                email?: string;
+                tier?: 'regular' | 'gold' | 'platinum';
+            }) => apiClient.post('/admin/customers/create', data),
+            updateTier: (id: string, tier: 'regular' | 'gold' | 'platinum') =>
+                apiClient.patch(`/admin/customers/${id}/tier`, { tier }),
+        },
+        shippingMethods: {
+            getAll: (params?: { active_only?: boolean }) =>
+                apiClient.get('/admin/shipping-methods', { params }),
+            create: (data: {
+                code?: string;
+                name: string;
+                fee: number;
+                is_active?: boolean;
+                sort_order?: number;
+            }) => apiClient.post('/admin/shipping-methods', data),
+            update: (code: string, data: {
+                name?: string;
+                fee?: number;
+                is_active?: boolean;
+                sort_order?: number;
+            }) => apiClient.patch(`/admin/shipping-methods/${encodeURIComponent(code)}`, data),
+            remove: (code: string) => apiClient.delete(`/admin/shipping-methods/${encodeURIComponent(code)}`),
+        },
+        discountVouchers: {
+            getAll: (params?: { active_only?: boolean; available_only?: boolean }) =>
+                apiClient.get('/admin/discount-vouchers', { params }),
+            create: (data: {
+                code: string;
+                discount_pct: number;
+                max_discount_rupiah: number;
+                starts_at?: string;
+                expires_at?: string;
+                valid_days?: number;
+                usage_limit: number;
+                is_active?: boolean;
+            }) => apiClient.post('/admin/discount-vouchers', data),
+            update: (code: string, data: {
+                discount_pct?: number;
+                max_discount_rupiah?: number;
+                starts_at?: string;
+                expires_at?: string;
+                valid_days?: number;
+                usage_limit?: number;
+                is_active?: boolean;
+            }) => apiClient.patch(`/admin/discount-vouchers/${encodeURIComponent(code)}`, data),
+            remove: (code: string) => apiClient.delete(`/admin/discount-vouchers/${encodeURIComponent(code)}`),
+        },
+        orderManagement: {
+            getAll: (params?: {
+                page?: number;
+                limit?: number;
+                status?: string;
+                search?: string;
+                startDate?: string;
+                endDate?: string;
+            }) =>
+                apiClient.get('/orders/admin/list', { params }),
+            getStats: () => apiClient.get('/orders/admin/stats'),
+            getCouriers: () => apiClient.get('/orders/admin/couriers'),
+            updateStatus: (id: string, data: {
+                status: string;
+                courier_id?: string;
+                issue_type?: 'shortage';
+                issue_note?: string;
+            }) => apiClient.patch(`/orders/admin/${id}/status`, data),
+        },
         inventory: {
             getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive' }) =>
                 apiClient.get('/admin/products', { params }),
@@ -156,6 +263,12 @@ export const api = {
                 }),
             createProduct: (data: any) => apiClient.post('/admin/products', data),
             updateProduct: (id: string, data: any) => apiClient.put(`/admin/products/${id}`, data),
+            updateTierPricing: (
+                id: string,
+                data: { regular_price: number; gold_price: number; platinum_price: number }
+            ) => apiClient.patch(`/admin/products/${id}/tier-pricing`, data),
+            updateTierDiscountBulk: (data: { gold_discount_pct: number; premium_discount_pct: number; status?: 'active' | 'inactive' | 'all' }) =>
+                apiClient.patch('/admin/products/tier-pricing/bulk-discount', data),
             uploadProductImage: (formData: FormData) =>
                 apiClient.post('/admin/products/upload-image', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
@@ -178,23 +291,16 @@ export const api = {
                 apiClient.post('/admin/inventory/import/commit', { rows }),
             importFromPath: (filePath: string) =>
                 apiClient.post('/admin/inventory/import-from-path', { file_path: filePath }),
-        },
-        orders: {
-            getAll: (params?: {
-                page?: number;
-                limit?: number;
-                status?: string;
-                search?: string;
-                startDate?: string;
-                endDate?: string;
-            }) =>
-                apiClient.get('/orders/admin/list', { params }),
-            updateStatus: (id: string, data: {
-                status: string;
-                courier_id?: string;
-                issue_type?: 'shortage';
-                issue_note?: string;
-            }) => apiClient.patch(`/orders/admin/${id}/status`, data),
+            getMutations: (productId: string) =>
+                apiClient.get(`/admin/inventory/mutation/${productId}`),
+
+            // Audit
+            getAudits: () => apiClient.get('/inventory/audit'),
+            startAudit: (data: { notes?: string }) => apiClient.post('/inventory/audit', data),
+            getAuditDetail: (id: string) => apiClient.get(`/inventory/audit/${id}`),
+            auditItem: (id: string, data: { product_id: string; physical_qty: number }) =>
+                apiClient.post(`/inventory/audit/${id}/item`, data),
+            finishAudit: (id: string) => apiClient.post(`/inventory/audit/${id}/finish`),
         },
         finance: {
             getExpenses: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string; category?: string }) =>
@@ -215,12 +321,17 @@ export const api = {
                 apiClient.put(`/admin/finance/expense-labels/${id}`, data),
             deleteExpenseLabel: (id: number) =>
                 apiClient.delete(`/admin/finance/expense-labels/${id}`),
+            issueInvoice: (orderId: string) =>
+                apiClient.post(`/admin/finance/orders/${orderId}/issue-invoice`),
             verifyPayment: (orderId: string, action: 'approve' | 'reject') =>
                 apiClient.patch(`/admin/finance/orders/${orderId}/verify`, { action }),
             getAR: () => apiClient.get('/admin/finance/ar'),
             getARById: (invoiceId: string) => apiClient.get(`/admin/finance/ar/${invoiceId}`),
             getPnL: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/pnl', { params }),
+            getDriverCodList: () => apiClient.get('/admin/finance/driver-cod'),
+            verifyDriverCod: (data: { driver_id: string; order_ids: string[]; amount_received: number }) =>
+                apiClient.post('/admin/finance/driver-cod/verify', data),
         },
         staff: {
             getAll: () => apiClient.get('/admin/staff'),
@@ -246,7 +357,42 @@ export const api = {
 
     // Chat
     chat: {
-        getSessions: () => apiClient.get('/chat/sessions'),
+        getThreads: (params?: {
+            scope?: 'staff_dm' | 'staff_customer' | 'support_omni' | 'wa_lead';
+            q?: string;
+            cursor?: string;
+            limit?: number;
+        }) => apiClient.get('/chat/threads', { params }),
+        openThread: (data: {
+            target_user_id?: string;
+            mode: 'staff_dm' | 'staff_customer' | 'support';
+        }) => apiClient.post('/chat/threads/open', data),
+        getThreadMessages: (threadId: string, params?: { cursor?: string; limit?: number }) =>
+            apiClient.get(`/chat/threads/${threadId}/messages`, { params }),
+        sendThreadMessage: (threadId: string, data: {
+            message?: string;
+            attachment?: File | null;
+            quoted_message_id?: string;
+            channel?: 'app' | 'whatsapp';
+        }) => {
+            const formData = new FormData();
+            const trimmedMessage = typeof data.message === 'string' ? data.message.trim() : '';
+            if (trimmedMessage) formData.append('message', trimmedMessage);
+            if (data.attachment) formData.append('attachment', data.attachment);
+            if (data.quoted_message_id) formData.append('quoted_message_id', data.quoted_message_id);
+            if (data.channel) formData.append('channel', data.channel);
+            return apiClient.post(`/chat/threads/${threadId}/messages`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+        },
+        markThreadRead: (threadId: string) => apiClient.post(`/chat/threads/${threadId}/read`),
+        getThreadContacts: (params?: {
+            type?: 'staff' | 'customer_contextual';
+            q?: string;
+            limit?: number;
+        }) => apiClient.get('/chat/contacts', { params }),
+        searchContacts: (q: string, limit = 20) => apiClient.get('/chat/contacts', { params: { q, limit } }),
+        getSessions: (params?: { user_id?: string; platform?: 'web' | 'whatsapp' }) => apiClient.get('/chat/sessions', { params }),
         getMessages: (sessionId: string) => apiClient.get(`/chat/sessions/${sessionId}/messages`),
         replyToChat: (sessionId: string, data: { message?: string; attachment?: File | null }) => {
             const formData = new FormData();
@@ -265,6 +411,9 @@ export const api = {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
         },
+        getMyWebSession: () => apiClient.get('/chat/web/session/me'),
+        getMyWebSessions: () => apiClient.get('/chat/web/sessions/me'),
+        getMyWebSessionByStaff: (staffId: string) => apiClient.get('/chat/web/session/by-staff', { params: { staff_id: staffId } }),
         getWebMessages: (sessionId: string, guestId?: string, userId?: string, limit = 200) =>
             apiClient.get('/chat/web/messages', {
                 params: {
@@ -299,12 +448,18 @@ export const api = {
 
     // Driver
     driver: {
-        getOrders: (params?: { status?: string }) => apiClient.get('/driver/orders', { params }),
+        getOrders: (params?: { status?: string; startDate?: string; endDate?: string }) => apiClient.get('/driver/orders', { params }),
         completeOrder: (orderId: string, formData: FormData) =>
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
+        reportIssue: (orderId: string, note: string) =>
+            apiClient.post(`/driver/orders/${orderId}/issue`, { note }),
         getWallet: () => apiClient.get('/driver/wallet'),
+        getReturs: () => apiClient.get('/driver/retur'),
+        getReturById: (returId: string) => apiClient.get(`/driver/retur/${returId}`),
+        updateReturStatus: (returId: string, status: 'picked_up' | 'handed_to_warehouse') =>
+            apiClient.patch(`/driver/retur/${returId}/status`, { status }),
     },
 
     // WhatsApp

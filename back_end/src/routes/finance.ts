@@ -15,11 +15,16 @@ router.put('/expense-labels/:id', authorizeRoles('super_admin', 'admin_finance')
 router.delete('/expense-labels/:id', authorizeRoles('super_admin', 'admin_finance'), FinanceController.deleteExpenseLabel);
 
 // Verification (Admin Finance)
+router.post('/orders/:id/issue-invoice', authorizeRoles('super_admin', 'admin_finance'), FinanceController.issueInvoice);
 router.patch('/orders/:id/verify', authorizeRoles('super_admin', 'admin_finance'), FinanceController.verifyPayment);
 
 // Reports (Super Admin, Owner - assuming Owner has super_admin/admin_finance role or separate)
 router.get('/ar', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountsReceivable);
 router.get('/ar/:id', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountsReceivableDetail);
 router.get('/pnl', authorizeRoles('super_admin'), FinanceController.getProfitAndLoss);
+
+// Driver COD Deposit
+router.get('/driver-cod', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getDriverCodList);
+router.post('/driver-cod/verify', authorizeRoles('super_admin', 'admin_finance'), FinanceController.verifyDriverCod);
 
 export default router;

@@ -7,8 +7,9 @@ const WEB_CHAT_GUEST_KEY = 'web_chat_guest_id';
 interface User {
     id: string;
     name: string;
-    email: string;
+    email?: string | null;
     role: string;
+    whatsapp_number?: string;
     phone?: string;
 }
 

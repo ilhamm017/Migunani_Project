@@ -7,18 +7,48 @@ import ProductCategory from './ProductCategory';
 import Supplier from './Supplier';
 import StockMutation from './StockMutation';
 import PurchaseOrder from './PurchaseOrder';
+import PurchaseOrderItem from './PurchaseOrderItem';
 import Order from './Order';
 import OrderItem from './OrderItem';
 import Invoice from './Invoice';
 import OrderIssue from './OrderIssue';
 import ChatSession from './ChatSession';
 import Message from './Message';
+import ChatThread from './ChatThread';
+import ChatThreadMember from './ChatThreadMember';
 import Expense from './Expense';
 import ExpenseLabel from './ExpenseLabel';
 import Cart from './Cart';
 import CartItem from './CartItem';
 import Shift from './Shift';
 import Setting from './Setting';
+import StockOpname from './StockOpname';
+import StockOpnameItem from './StockOpnameItem';
+import OrderAllocation from './OrderAllocation';
+import Retur from './Retur';
+
+// Stock Opname
+StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
+StockOpnameItem.belongsTo(StockOpname, { foreignKey: 'opname_id' });
+
+StockOpnameItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(StockOpnameItem, { foreignKey: 'product_id' });
+
+StockOpname.belongsTo(User, { foreignKey: 'admin_id', as: 'Creator' });
+User.hasMany(StockOpname, { foreignKey: 'admin_id' });
+
+// Retur
+Retur.belongsTo(Order, { foreignKey: 'order_id' });
+Order.hasMany(Retur, { foreignKey: 'order_id' });
+
+Retur.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasMany(Retur, { foreignKey: 'product_id' });
+
+Retur.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+User.hasMany(Retur, { foreignKey: 'created_by' });
+
+Retur.belongsTo(User, { foreignKey: 'courier_id', as: 'Courier' });
+User.hasMany(Retur, { foreignKey: 'courier_id', as: 'CourierReturs' });
 
 // User & Auth
 User.hasOne(CustomerProfile, { foreignKey: 'user_id' });
@@ -77,6 +107,12 @@ OrderItem.belongsTo(Order, { foreignKey: 'order_id' });
 Product.hasMany(OrderItem, { foreignKey: 'product_id' });
 OrderItem.belongsTo(Product, { foreignKey: 'product_id' });
 
+Order.hasMany(OrderAllocation, { foreignKey: 'order_id', as: 'Allocations' });
+OrderAllocation.belongsTo(Order, { foreignKey: 'order_id' });
+
+OrderAllocation.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(OrderAllocation, { foreignKey: 'product_id' });
+
 Order.hasOne(Invoice, { foreignKey: 'order_id' });
 Invoice.belongsTo(Order, { foreignKey: 'order_id' });
 
@@ -102,12 +138,30 @@ Message.belongsTo(ChatSession, { foreignKey: 'session_id' });
 User.hasMany(Message, { foreignKey: 'sender_id' });
 Message.belongsTo(User, { foreignKey: 'sender_id' });
 
+ChatThread.hasMany(ChatThreadMember, { foreignKey: 'thread_id', as: 'Members' });
+ChatThreadMember.belongsTo(ChatThread, { foreignKey: 'thread_id' });
+
+User.hasMany(ChatThreadMember, { foreignKey: 'user_id', as: 'ThreadMemberships' });
+ChatThreadMember.belongsTo(User, { foreignKey: 'user_id' });
+
+ChatThread.hasMany(Message, { foreignKey: 'thread_id', as: 'ThreadMessages' });
+Message.belongsTo(ChatThread, { foreignKey: 'thread_id' });
+
+User.hasMany(ChatThread, { foreignKey: 'customer_user_id', as: 'CustomerOmniThreads' });
+ChatThread.belongsTo(User, { foreignKey: 'customer_user_id', as: 'CustomerUser' });
+
 // Finance
 User.hasMany(Expense, { foreignKey: 'created_by' });
 Expense.belongsTo(User, { foreignKey: 'created_by' });
 
 User.hasMany(PurchaseOrder, { foreignKey: 'created_by' });
 PurchaseOrder.belongsTo(User, { foreignKey: 'created_by' });
+
+PurchaseOrder.hasMany(PurchaseOrderItem, { foreignKey: 'purchase_order_id', as: 'Items' });
+PurchaseOrderItem.belongsTo(PurchaseOrder, { foreignKey: 'purchase_order_id' });
+
+PurchaseOrderItem.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasMany(PurchaseOrderItem, { foreignKey: 'product_id' });
 
 export {
     sequelize,
@@ -119,16 +173,23 @@ export {
     Supplier,
     StockMutation,
     PurchaseOrder,
+    PurchaseOrderItem,
     Order,
     OrderItem,
     Invoice,
     OrderIssue,
     ChatSession,
+    ChatThread,
+    ChatThreadMember,
     Message,
     Expense,
     ExpenseLabel,
     Cart,
     CartItem,
     Shift,
-    Setting
+    Setting,
+    StockOpname,
+    StockOpnameItem,
+    OrderAllocation,
+    Retur
 };

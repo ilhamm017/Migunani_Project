@@ -48,7 +48,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
   const load = async (params?: { search?: string; startDate?: string; endDate?: string }) => {
     try {
       setLoading(true);
-      const res = await api.orders.getAllAdmin({
+      const res = await api.admin.orderManagement.getAll({
         page: 1,
         limit: 100,
         status: activeStatus,

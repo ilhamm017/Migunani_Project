@@ -33,8 +33,8 @@ const uploadProductImageMiddleware = (req: Request, res: Response, next: NextFun
 // router.get('/products', InventoryController.getProducts); -> Now protected or internal
 // router.get('/products/:sku', InventoryController.getProductBySku);
 
-// Protected Routes (Admin/Gudang)
-router.get('/admin/products', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getProducts);
+// Protected Routes (Admin/Gudang + role operasional order intake)
+router.get('/admin/products', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProducts);
 router.get('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getCategories);
 router.post('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createCategory);
 router.put('/admin/categories/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.updateCategory);
@@ -44,9 +44,12 @@ router.post('/admin/suppliers', authenticateToken, authorizeRoles('super_admin',
 router.put('/admin/suppliers/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.updateSupplier);
 router.delete('/admin/suppliers/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.deleteSupplier);
 router.post('/admin/products', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createProduct);
+router.patch('/admin/products/tier-pricing/bulk-discount', authenticateToken, authorizeRoles('super_admin', 'kasir'), InventoryController.bulkUpdateTierDiscounts);
 router.put('/admin/products/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.updateProduct);
+router.patch('/admin/products/:id/tier-pricing', authenticateToken, authorizeRoles('super_admin', 'kasir'), InventoryController.updateProductTierPricing);
 router.post('/admin/products/upload-image', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadProductImageMiddleware, InventoryController.uploadProductImage);
 router.post('/admin/inventory/mutation', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createStockMutation);
+router.get('/admin/inventory/mutation/:productId', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getProductMutations);
 router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createPurchaseOrder);
 router.post('/admin/inventory/import/preview', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImport.single('file'), InventoryController.previewProductsImportFromUpload);
 router.post('/admin/inventory/import/commit', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.commitProductsImport);

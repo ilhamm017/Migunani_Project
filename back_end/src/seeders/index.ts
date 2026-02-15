@@ -34,48 +34,71 @@ async function seedDatabase() {
             password: string;
             whatsapp_number: string;
             role: 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
+            debt?: number;
         }> = [
                 {
-                    name: 'Super Admin Migunani',
+                    name: 'Super Admin Migunani/Owner',
                     email: 'superadmin@migunani.com',
                     password: 'superadmin123',
                     whatsapp_number: '6281111111101',
                     role: 'super_admin'
                 },
                 {
-                    name: 'Admin Gudang Migunani',
+                    name: 'Admin Gudang',
                     email: 'gudang@migunani.com',
                     password: 'gudang123',
                     whatsapp_number: '6281111111102',
                     role: 'admin_gudang'
                 },
                 {
-                    name: 'Admin Finance Migunani',
+                    name: 'Admin Finance',
                     email: 'finance@migunani.com',
                     password: 'finance123',
                     whatsapp_number: '6281111111103',
                     role: 'admin_finance'
                 },
                 {
-                    name: 'Kasir Migunani',
+                    name: 'Kasir Utama',
                     email: 'kasir@migunani.com',
                     password: 'kasir123',
                     whatsapp_number: '6281111111104',
                     role: 'kasir'
                 },
                 {
-                    name: 'Driver Migunani',
-                    email: 'driver@migunani.com',
+                    name: 'Driver Budi',
+                    email: 'driver1@migunani.com',
                     password: 'driver123',
                     whatsapp_number: '6281111111105',
                     role: 'driver'
                 },
                 {
-                    name: 'Customer Test',
-                    email: 'customer@migunani.com',
+                    name: 'Driver Joko',
+                    email: 'driver2@migunani.com',
+                    password: 'driver123',
+                    whatsapp_number: '6281111111109',
+                    role: 'driver'
+                },
+                {
+                    name: 'Customer Andi',
+                    email: 'customer1@migunani.com',
                     password: 'customer123',
                     whatsapp_number: '6281111111106',
                     role: 'customer'
+                },
+                {
+                    name: 'Customer Siti',
+                    email: 'customer2@migunani.com',
+                    password: 'customer123',
+                    whatsapp_number: '6281111111107',
+                    role: 'customer'
+                },
+                {
+                    name: 'Bengkel Maju Jaya (Customer)',
+                    email: 'bengkel@migunani.com',
+                    password: 'customer123',
+                    whatsapp_number: '6281111111108',
+                    role: 'customer',
+                    debt: 500000 // Simulasi utang awal
                 },
             ];
 
@@ -88,6 +111,7 @@ async function seedDatabase() {
                 whatsapp_number: userSeed.whatsapp_number,
                 role: userSeed.role,
                 status: 'active',
+                debt: userSeed.debt || 0
             });
         }
 

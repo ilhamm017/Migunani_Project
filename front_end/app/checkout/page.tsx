@@ -60,6 +60,7 @@ export default function CheckoutPage() {
 
       clearCart();
       const orderId = res.data?.order_id;
+      alert('Pesanan berhasil dikirim! Pesanan Anda sedang menunggu review dari admin gudang.');
       if (orderId) {
         router.push(`/orders/${orderId}`);
       } else {

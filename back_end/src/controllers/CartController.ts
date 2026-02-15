@@ -54,12 +54,6 @@ export const addToCart = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Product not found' });
         }
 
-        // Check stock availability (optional here, definitely at checkout)
-        if (product.stock_quantity < qty) {
-            await t.rollback();
-            return res.status(400).json({ message: 'Insufficient stock' });
-        }
-
         const cart = await getOrCreateCart(userId, t);
 
         const existingItem = await CartItem.findOne({
@@ -102,12 +96,6 @@ export const updateCartItem = async (req: Request, res: Response) => {
         if (qty <= 0) {
             await item.destroy();
         } else {
-            // Check stock again?
-            const product = await Product.findByPk(item.product_id);
-            if (product && product.stock_quantity < qty) {
-                return res.status(400).json({ message: 'Insufficient stock' });
-            }
-
             await item.update({ qty });
         }
 

@@ -1,285 +1,143 @@
-# Migunani Motor - Sistem Omnichannel dengan WhatsApp Integration
+# Migunani Motor - Sistem Omnichannel Sparepart Motor
 
-> **Full-stack application** untuk manajemen toko suku cadang motor dengan integrasi WhatsApp, POS system, dan e-commerce.
+Aplikasi full-stack untuk operasional toko suku cadang motor: e-commerce, inventory, POS, finance, driver, dan chat omnichannel (Web + WhatsApp).
 
-## 🏗️ Tech Stack
+## Dokumen Utama
+
+- Panduan menyeluruh aplikasi: `GUIDE_APLIKASI_MIGUNANI_MOTOR.md`
+- Onboarding cepat developer: `ONBOARDING_DEVELOPER.md`
+- Kontrak API (aktual): `back_end/docs/API_Contract.md`
+- Daftar halaman frontend (aktual): `front_end/PAGE_LIST.md`
+- Catatan migrasi SQL manual: `back_end/sql/README.md`
+
+## Tech Stack
 
 ### Backend
-- **Framework**: Express.js + TypeScript
-- **Database**: MySQL 8.0 (Docker)
-- **ORM**: Sequelize
-- **Real-time**: Socket.io
-- **WhatsApp**: whatsapp-web.js
-- **Auth**: JWT + bcrypt
+
+- Express.js + TypeScript
+- Sequelize + MySQL 8
+- Socket.io
+- whatsapp-web.js
+- JWT + bcrypt
 
 ### Frontend
-- **Framework**: Next.js 14 (App Router)
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS v4 (Mobile-First)
-- **State**: Zustand
-- **Real-time**: Socket.io Client
 
-## 🚀 Quick Start
+- Next.js App Router + TypeScript
+- Tailwind CSS v4
+- Zustand
+- Socket.io Client
 
-Panduan lengkap Docker Compose tersedia di:
-- `DOCKER_COMPOSE_TUTORIAL.md`
+## Menjalankan Aplikasi
 
-### Prerequisites
-- Node.js 18+
-- Docker & Docker Compose
-- npm/yarn/pnpm
+### Opsi A - Full Docker Compose
 
-### 1. Clone & Install Dependencies
+Cocok untuk menjalankan semua service dalam container.
 
 ```bash
-# Install root dependencies (concurrently)
-npm install
-
-# Install backend dependencies
-cd back_end
-npm install
-
-# Install frontend dependencies
-cd ../front_end
-npm install
-cd ..
-```
-
-### 2. Setup Environment Variables
-
-```bash
-# Copy environment example
 cp .env.example .env
-
-# Edit .env if needed (default values should work)
+docker-compose up -d --build
 ```
 
-### 3. Start Everything (One Command!)
+Akses:
+
+- Frontend: `http://localhost:3500`
+- Backend API: `http://localhost:5000`
+- MySQL: `localhost:3306`
+
+### Opsi B - Dev Lokal + MySQL Docker (direkomendasikan saat coding)
+
+Cocok untuk hot reload backend/frontend di mesin lokal.
 
 ```bash
-# Option 1: Using bash script
-./start.sh
+cp .env.example .env
+npm install
+cd back_end && npm install && cd ..
+cd front_end && npm install && cd ..
 
-# Option 2: Using npm
-npm start
+docker-compose up -d mysql
+npm run dev
 ```
 
-This will:
-1. Start MySQL database in Docker
-2. Wait for database to be ready
-3. Ask if you want to run seeder (recommended for first time)
-4. Start backend (port 5000) and frontend (port 3000) concurrently
+Akses:
 
-### 4. Access the Application
+- Frontend (Next dev): `http://localhost:3000`
+- Backend API (local dev): `http://localhost:5000`
+- MySQL: `localhost:3306`
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:5000
-- **MySQL**: localhost:3306
+## Seeder Data
 
-### 5. Login
+Seeder akan reset database (`sequelize.sync({ force: true })`) dan mengisi data awal.
 
-#### Admin Account
-- Email: `admin@migunani.com`
-- Password: `admin123`
-- Role: `super_admin`
-
-#### Customer Account
-- Email: `customer@migunani.com`
-- Password: `customer123`
-- Role: `customer`
-
-## 📋 Available Scripts
-
-### Root Level
-```bash
-npm run dev              # Run backend + frontend concurrently
-npm run dev:backend      # Run backend only
-npm run dev:frontend     # Run frontend only
-npm run docker:up        # Start Docker database
-npm run docker:down      # Stop Docker database
-npm run docker:logs      # View MySQL logs
-npm run seed             # Run database seeder
-npm run setup            # Docker up + wait + seed
-npm start                # Full startup (docker + dev)
-```
-
-### Bash Scripts
-```bash
-./start.sh               # Start everything (interactive)
-./stop.sh                # Stop Docker database
-```
-
-## 🗂️ Project Structure
-
-```
-Migunani_Motor_Project/
-├── back_end/                 # Express.js backend
-│   ├── src/
-│   │   ├── config/          # Database config
-│   │   ├── controllers/     # Request handlers
-│   │   ├── middleware/      # Auth middleware
-│   │   ├── models/          # Sequelize models
-│   │   ├── routes/          # API routes
-│   │   ├── seeders/         # Database seeders
-│   │   ├── services/        # WhatsApp service
-│   │   └── server.ts        # Entry point
-│   └── package.json
-├── front_end/               # Next.js frontend
-│   ├── app/                 # App Router pages
-│   ├── components/          # React components
-│   ├── lib/                 # Utilities & API client
-│   ├── store/               # Zustand stores
-│   └── package.json
-├── docker-compose.yml       # Docker setup
-├── start.sh                 # Startup script
-├── stop.sh                  # Stop script
-└── package.json             # Root package (concurrently)
-```
-
-## 🗄️ Database
-
-### Docker MySQL
-
-MySQL 8.0 running in Docker container:
-- **Container**: `migunani_motor_db`
-- **Port**: 3306
-- **Database**: `migunani_motor_db`
-- **User**: `root`
-- **Password**: `password` (change in production!)
-
-### Data Seeder
-
-Database seeder creates:
-- **2 Users** (1 admin, 1 customer)
-- **7 Categories** (Ban, Oli, Kampas Rem, Lampu, Aki, Filter, Suku Cadang Mesin)
-- **3 Suppliers**
-- **18 Products** dengan harga dan stok realistis
-
-Run seeder:
 ```bash
 npm run seed
 ```
 
-> **Note**: Seeder akan menghapus semua data existing (`force: true`). Hati-hati di production!
+Akun default dari seeder:
 
-## 📱 Features
+- `superadmin@migunani.com` / `superadmin123` (`super_admin`)
+- `gudang@migunani.com` / `gudang123` (`admin_gudang`)
+- `finance@migunani.com` / `finance123` (`admin_finance`)
+- `kasir@migunani.com` / `kasir123` (`kasir`)
+- `driver@migunani.com` / `driver123` (`driver`)
+- `customer@migunani.com` / `customer123` (`customer`)
 
-### Customer Features
-- ✅ Product catalog dengan search & filter
-- ✅ Shopping cart
-- ✅ Checkout & payment proof upload
-- ✅ Order tracking
-- ✅ WhatsApp chat dengan bot
-- ⬜ Mobile-optimized UI
+## Struktur Proyek
 
-### Admin Features
-- ✅ Dashboard statistics
-- ✅ Inventory management
-- ✅ Order management
-- ✅ WhatsApp chat admin panel
-- ✅ POS system
-- ✅ Finance reporting
-- ⬜ Driver assignment
+```text
+Migunani_Motor_Project/
+├── back_end/
+│   ├── src/
+│   │   ├── config/
+│   │   ├── controllers/
+│   │   ├── middleware/
+│   │   ├── models/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   └── server.ts
+│   ├── docs/
+│   └── sql/
+├── front_end/
+│   ├── app/
+│   ├── components/
+│   ├── lib/
+│   └── store/
+├── docker-compose.yml
+├── GUIDE_APLIKASI_MIGUNANI_MOTOR.md
+└── ONBOARDING_DEVELOPER.md
+```
 
-## 🔌 API Endpoints
+## Script Penting
 
-### Public
-- `GET /api/v1/catalog` - Get products
-- `GET /api/v1/catalog/:id` - Get product detail
+### Root
 
-### Auth
-- `POST /api/v1/auth/register` - Register
-- `POST /api/v1/auth/login` - Login
+```bash
+npm run dev
+npm run docker:up
+npm run docker:down
+npm run docker:logs
+npm run seed
+```
 
-### Cart (Auth Required)
-- `GET /api/v1/cart` - Get cart
-- `POST /api/v1/cart` - Add to cart
-- `PATCH /api/v1/cart/item/:id` - Update quantity
-- `DELETE /api/v1/cart/item/:id` - Remove item
+### Backend
 
-### Orders (Auth Required)
-- `POST /api/v1/orders/checkout` - Create order
-- `GET /api/v1/orders/my-orders` - Get my orders
-- `GET /api/v1/orders/:id` - Get order detail
-- `POST /api/v1/orders/:id/proof` - Upload payment proof
-
-### Admin (Admin Role Required)
-- `GET /api/v1/admin/inventory/products` - Get all products
-- `GET /api/v1/admin/list` - Get all orders
-- `PATCH /api/v1/admin/:id/status` - Update order status
-- `GET /api/v1/chat/sessions` - Get chat sessions
-- ... and more
-
-## 🛠️ Development
-
-### Running Backend Only
 ```bash
 cd back_end
 npm run dev
+npm run build
+npm run start
 ```
-Backend runs on http://localhost:5000
 
-### Running Frontend Only
+### Frontend
+
 ```bash
 cd front_end
 npm run dev
-```
-Frontend runs on http://localhost:3000
-
-### Viewing Database
-```bash
-# Connect to MySQL
-docker exec -it migunani_motor_db mysql -u root -ppassword migunani_motor_db
-
-# Or view logs
-npm run docker:logs
+npm run build
+npm run start
 ```
 
-## 🐛 Troubleshooting
+## Catatan Penting
 
-### Database Connection Error
-```bash
-# Restart Docker database
-npm run docker:down
-npm run docker:up
-
-# Wait and retry
-sleep 10
-npm run seed
-```
-
-### Port Already in Use
-```bash
-# Find process using port 3000 or 5000
-lsof -i :3000
-lsof -i :5000
-
-# Kill process
-kill -9 <PID>
-```
-
-### WhatsApp QR Code
-Backend will show QR code in terminal on first run. Scan with WhatsApp to connect.
-
-## 📚 Next Steps
-
-1. ✅ Frontend kerangka (mobile-first)
-2. ✅ Docker database setup
-3. ✅ Database seeder
-4. ⬜ Implement remaining frontend pages (cart, checkout, admin)
-5. ⬜ Add image upload functionality
-6. ⬜ WhatsApp chat widget
-7. ⬜ PWA configuration
-8. ⬜ Production deployment
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow the mobile-first approach for frontend development.
-
-## 📄 License
-
-© 2026 Migunani Motor. All rights reserved.
-
----
-
-**Need help?** Check the README files in `back_end/` and `front_end/` directories for more details.
+- Endpoint frontend diarahkan ke backend lewat Next rewrite (`/api/*`).
+- Beberapa migrasi masih manual SQL, cek `back_end/sql/README.md`.
+- Untuk pemahaman modul dan gap implementasi, gunakan `GUIDE_APLIKASI_MIGUNANI_MOTOR.md` sebagai sumber utama.

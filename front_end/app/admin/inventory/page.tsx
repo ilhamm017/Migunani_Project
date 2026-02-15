@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Camera, Loader2, Pencil, Save, Upload, X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -152,6 +151,7 @@ const optimizeImageForUpload = async (file: File): Promise<File> => {
 
 export default function InventoryAdminPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang']);
+  const canEditRegularPrice = false;
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -387,7 +387,7 @@ export default function InventoryAdminPage() {
     }
 
     const basePrice = Number(form.base_price);
-    const price = Number(form.price);
+    const price = canEditRegularPrice ? Number(form.price) : Number(selectedProduct.price || 0);
     const stockQuantity = Number(form.stock_quantity);
     const minStock = Number(form.min_stock);
     const categoryId = Number(form.category_id);
@@ -427,14 +427,13 @@ export default function InventoryAdminPage() {
     setIsSaving(true);
     setMessage('');
     try {
-      await api.admin.inventory.updateProduct(selectedProduct.id, {
+      const payload: Record<string, unknown> = {
         sku: form.sku.trim(),
         name: form.name.trim(),
         barcode: form.barcode.trim() || null,
         description: form.description.trim() || null,
         image_url: form.image_url.trim() || null,
         base_price: basePrice,
-        price,
         unit: form.unit.trim() || 'Pcs',
         min_stock: minStock,
         category_id: categoryId,
@@ -442,7 +441,12 @@ export default function InventoryAdminPage() {
         keterangan: form.keterangan.trim() || null,
         tipe_modal: form.tipe_modal.trim() || null,
         total_modal: totalModal,
-      });
+      };
+      if (canEditRegularPrice) {
+        payload.price = price;
+      }
+
+      await api.admin.inventory.updateProduct(selectedProduct.id, payload);
 
       const delta = stockQuantity - Number(selectedProduct.stock_quantity || 0);
       if (delta !== 0) {
@@ -468,27 +472,14 @@ export default function InventoryAdminPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm">
-        <h1 className="text-xl font-black text-slate-900">Admin Gudang</h1>
-        <p className="text-sm text-slate-600 mt-1">Kelola data produk, stok, harga, gambar, dan informasi inventori.</p>
-      </div>
-
+    <div className="p-4 space-y-4">
       {message && (
         <div className={`rounded-2xl border p-3 text-sm ${messageType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
           {message}
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Link href="/admin/inventory" className="bg-slate-900 border border-slate-900 rounded-2xl p-4 text-sm font-bold text-white">Daftar Produk</Link>
-        <Link href="/admin/inventory/categories" className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800">Manajemen Kategori</Link>
-        <Link href="/admin/inventory/suppliers" className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800">Manajemen Supplier</Link>
-        <Link href="/admin/inventory/import" className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800">Import Excel/CSV</Link>
-        <Link href="/admin/inventory/scanner" className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800">Scanner SKU</Link>
-        <Link href="/admin/inventory/purchase-order" className="bg-white border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800">Purchase Order</Link>
-      </div>
-
+      {/* Product List Card */}
       <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <h2 className="text-sm font-black text-slate-900">Daftar Produk ({totalProducts})</h2>
@@ -526,36 +517,81 @@ export default function InventoryAdminPage() {
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-500">
                 {hasSearchedProduct ? 'Produk tidak ditemukan.' : 'Belum ada hasil pencarian.'}
               </div>
-            ) : products.map((product) => {
-              const categoryLabel = product.Categories && product.Categories.length > 0
-                ? product.Categories.map((item) => item.name).join(', ')
-                : (product.Category?.name || '-');
-              return (
-                <div key={product.id} className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_120px_auto] md:items-center gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900 truncate">{product.name}</p>
-                  <p className="text-xs text-slate-500 truncate">
-                    SKU: {product.sku || '-'} • {categoryLabel} • Harga: Rp {Number(product.price || 0).toLocaleString('id-ID')}
-                  </p>
-                </div>
-                <div className="md:text-right">
-                  <p className="text-xs font-bold text-slate-700">Stok: {product.stock_quantity ?? 0}</p>
-                  <p className={`text-[11px] font-bold ${product.status === 'active' ? 'text-emerald-700' : 'text-slate-500'}`}>
-                    {product.status === 'active' ? 'Aktif' : 'Nonaktif'}
-                  </p>
-                </div>
-                <div className="flex md:justify-end">
-                  <button
-                    onClick={() => openEditor(product)}
-                    className="inline-flex w-full md:w-24 justify-center items-center gap-1 rounded-lg bg-slate-900 text-white text-xs font-bold px-3 py-2"
-                  >
-                    <Pencil size={12} />
-                    Edit
-                  </button>
-                </div>
-                </div>
-              );
-            })}
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-slate-700 bg-slate-100 uppercase font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-3 w-16">Img</th>
+                      <th className="px-4 py-3">SKU</th>
+                      <th className="px-4 py-3">Nama Produk</th>
+                      <th className="px-4 py-3">Kategori</th>
+                      <th className="px-4 py-3 text-right">Harga Beli</th>
+                      <th className="px-4 py-3 text-right">Harga Jual</th>
+                      <th className="px-4 py-3 text-center">Stok</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                      <th className="px-4 py-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-200">
+                    {products.map((product) => {
+                      const categoryLabel = product.Categories && product.Categories.length > 0
+                        ? product.Categories.map((item) => item.name).join(', ')
+                        : (product.Category?.name || '-');
+
+                      return (
+                        <tr key={product.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="w-10 h-10 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
+                              {product.image_url ? (
+                                <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-slate-400">
+                                  <Camera size={16} />
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs">{product.sku}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-900">{product.name}</td>
+                          <td className="px-4 py-3 text-slate-600">{categoryLabel}</td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {Number(product.base_price || 0).toLocaleString('id-ID')}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-slate-900">
+                            {Number(product.price || 0).toLocaleString('id-ID')}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-1 rounded-lg text-xs font-bold ${(product.stock_quantity || 0) <= (product.min_stock || 0)
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-slate-100 text-slate-700'
+                              }`}>
+                              {product.stock_quantity ?? 0}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${product.status === 'active'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-100 text-slate-500'
+                              }`}>
+                              {product.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => openEditor(product)}
+                              className="inline-flex items-center justify-center p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-900 hover:text-white transition-colors"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -578,11 +614,10 @@ export default function InventoryAdminPage() {
                   key={page}
                   type="button"
                   onClick={() => setCurrentPage(page)}
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold ${
-                    page === currentPage
-                      ? 'border-slate-900 bg-slate-900 text-white'
-                      : 'border-slate-200 text-slate-700'
-                  }`}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold ${page === currentPage
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 text-slate-700'
+                    }`}
                 >
                   {page}
                 </button>
@@ -615,7 +650,19 @@ export default function InventoryAdminPage() {
                 <label className="space-y-1"><span className="text-slate-600">Barcode</span><input value={form.barcode} onChange={(e) => updateForm('barcode', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
                 <label className="space-y-1"><span className="text-slate-600">Unit</span><input value={form.unit} onChange={(e) => updateForm('unit', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
                 <label className="space-y-1"><span className="text-slate-600">Harga Beli</span><input type="number" value={form.base_price} onChange={(e) => updateForm('base_price', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
-                <label className="space-y-1"><span className="text-slate-600">Harga Jual</span><input type="number" value={form.price} onChange={(e) => updateForm('price', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
+                <label className="space-y-1">
+                  <span className="text-slate-600">Harga Jual</span>
+                  <input
+                    type="number"
+                    value={form.price}
+                    onChange={(e) => updateForm('price', e.target.value)}
+                    disabled={!canEditRegularPrice}
+                    className={`w-full border rounded-lg px-3 py-2 ${canEditRegularPrice ? 'border-slate-200' : 'border-slate-200 bg-slate-100 text-slate-500'}`}
+                  />
+                  {!canEditRegularPrice && (
+                    <p className="text-[11px] text-slate-500">Harga jual/tier dikelola oleh Admin Sales/Kasir.</p>
+                  )}
+                </label>
                 <label className="space-y-1"><span className="text-slate-600">Stok (akan disesuaikan via mutasi)</span><input type="number" value={form.stock_quantity} onChange={(e) => updateForm('stock_quantity', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
                 <label className="space-y-1"><span className="text-slate-600">Min Stock</span><input type="number" value={form.min_stock} onChange={(e) => updateForm('min_stock', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2" /></label>
                 <label className="space-y-1">

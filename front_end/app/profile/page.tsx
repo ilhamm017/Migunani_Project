@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { User, LogOut, MapPin, Phone, Mail, ChevronRight, Settings, HelpCircle, Shield, ArrowRight, Sparkles } from 'lucide-react';
+import { User, LogOut, MapPin, Phone, Mail, ChevronRight, Settings, HelpCircle, Shield, ArrowRight, Sparkles, RotateCcw } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 
 export default function ProfilePage() {
@@ -60,6 +60,7 @@ export default function ProfilePage() {
         : 'U';
 
     const menuItems = [
+        { icon: RotateCcw, label: 'Status Retur', desc: 'Lacak pengembalian barang Anda', href: '/retur' },
         { icon: User, label: 'Edit Profil', desc: 'Ubah nama, foto profil', href: '#' },
         { icon: MapPin, label: 'Alamat Saya', desc: 'Kelola alamat pengiriman', href: '#' },
         { icon: Shield, label: 'Keamanan', desc: 'Password, verifikasi', href: '#' },
@@ -118,7 +119,7 @@ export default function ProfilePage() {
                         <Phone size={16} className="text-slate-400 shrink-0" />
                         <div className="flex-1 min-w-0">
                             <p className="text-[9px] font-bold text-slate-400 uppercase">Telepon</p>
-                            <p className="text-xs font-bold text-slate-900">{user.phone || '-'}</p>
+                            <p className="text-xs font-bold text-slate-900">{user.whatsapp_number || user.phone || '-'}</p>
                         </div>
                     </div>
                 </div>

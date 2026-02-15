@@ -5,7 +5,7 @@ import { useRequireRoles } from '@/lib/guards';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
 
 export default function BroadcastPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_finance', 'admin_gudang', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'kasir']);
   const [title, setTitle] = useState('Promo Akhir Pekan');
   const [message, setMessage] = useState('Diskon 10% untuk semua oli hingga Minggu.');
   const [history, setHistory] = useState<Array<{ title: string; message: string; at: string }>>([]);

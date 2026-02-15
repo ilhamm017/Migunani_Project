@@ -11,9 +11,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
 
+const getPersistApi = () => (useAuthStore as any).persist;
+
 export default function WhatsappConfigPage() {
   const { user, isAuthenticated } = useAuthStore();
-  const canManageWhatsapp = !!user && ['super_admin', 'admin_gudang'].includes(user.role);
+  const [hydrated, setHydrated] = useState(() => {
+    const persistApi = getPersistApi();
+    return persistApi?.hasHydrated?.() ?? false;
+  });
+  const canManageWhatsapp = !!user && ['super_admin', 'kasir'].includes(user.role);
   const [status, setStatus] = useState<string>('STOPPED');
   const [qr, setQr] = useState<string | null>(null);
   const [waMeta, setWaMeta] = useState<{
@@ -28,12 +34,29 @@ export default function WhatsappConfigPage() {
   const router = useRouter();
 
   useEffect(() => {
+    const persistApi = getPersistApi();
+    if (!persistApi) {
+      setHydrated(true);
+      return;
+    }
+
+    const unsub = persistApi.onFinishHydration?.(() => setHydrated(true));
+    setHydrated(persistApi.hasHydrated?.() ?? true);
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
     if (!isAuthenticated) {
       router.push('/auth/login');
       return;
     }
 
-    if (user && !['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(user.role)) {
+    if (user && !['super_admin', 'kasir'].includes(user.role)) {
       router.push('/');
       return;
     }
@@ -61,7 +84,7 @@ export default function WhatsappConfigPage() {
       socket.off('wa:ready');
       socket.off('wa:status');
     };
-  }, [isAuthenticated, user, router]);
+  }, [hydrated, isAuthenticated, user, router]);
 
   const fetchStatus = async (silent = false) => {
     try {
@@ -118,7 +141,7 @@ export default function WhatsappConfigPage() {
     }
   };
 
-  if (!isAuthenticated) return null;
+  if (!hydrated || !isAuthenticated) return null;
 
   const reconnectSeconds = Math.ceil((waMeta.reconnect_in_ms || 0) / 1000);
 
@@ -133,7 +156,7 @@ export default function WhatsappConfigPage() {
 
       <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
         <p className="text-sm text-blue-900">
-          Semua percakapan customer (web + WhatsApp) ditangani di menu <b>Inbox Web + WA</b>.
+          Kanal WhatsApp dikelola oleh <b>Super Admin</b> dan <b>Admin Pemasaran</b> (role kasir). Role operasional lain hanya memakai chat aplikasi.
         </p>
       </div>
 

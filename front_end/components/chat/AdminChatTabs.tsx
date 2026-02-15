@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { MessageSquare, RadioTower, Megaphone } from 'lucide-react';
+import { useAuthStore } from '@/store/authStore';
 
 const tabs = [
   { href: '/admin/chat', label: 'Inbox Web + WA', icon: MessageSquare },
@@ -12,6 +13,12 @@ const tabs = [
 
 export default function AdminChatTabs() {
   const pathname = usePathname();
+  const { user } = useAuthStore();
+  const canAccessWhatsappChannel = ['super_admin', 'kasir'].includes(user?.role || '');
+  const visibleTabs = tabs.filter((tab) => {
+    if (tab.href === '/admin/chat') return true;
+    return canAccessWhatsappChannel;
+  });
 
   const isActive = (href: string) => {
     if (href === '/admin/chat') {
@@ -23,7 +30,7 @@ export default function AdminChatTabs() {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-2 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const Icon = tab.icon;
           const active = isActive(tab.href);
 

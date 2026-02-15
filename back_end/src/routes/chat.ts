@@ -67,19 +67,34 @@ const uploadAttachmentMiddleware = (req: Request, res: Response, next: NextFunct
 // Public endpoint for customer web widget attachment upload
 router.post('/web/attachment', uploadAttachmentMiddleware, ChatController.uploadWebAttachment);
 router.get('/web/messages', ChatController.getWebMessages);
+router.get('/web/session/me', authenticateToken, ChatController.getMyWebSession);
+router.get('/web/sessions/me', authenticateToken, ChatController.getMyWebSessions);
+router.get('/web/session/by-staff', authenticateToken, ChatController.getMyWebSessionByStaff);
 
 router.use(authenticateToken); // Admin only mostly
 
+router.get('/threads', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'), ChatController.getThreads);
+router.post('/threads/open', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'), ChatController.openChatThread);
+router.get('/threads/:threadId/messages', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'), ChatController.getThreadMessagesV2);
+router.post(
+    '/threads/:threadId/messages',
+    authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'),
+    uploadAttachmentMiddleware,
+    ChatController.sendThreadMessage
+);
+router.post('/threads/:threadId/read', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'), ChatController.markThreadRead);
+router.get('/contacts', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'), ChatController.getThreadContacts);
+
 // List Chats (Admin)
-router.get('/sessions', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), ChatController.getSessions);
+router.get('/sessions', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver'), ChatController.getSessions);
 
 // Get Messages
-router.get('/sessions/:id/messages', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), ChatController.getMessages);
+router.get('/sessions/:id/messages', authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver'), ChatController.getMessages);
 
 // Reply
 router.post(
     '/sessions/:id/reply',
-    authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'),
+    authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver'),
     uploadAttachmentMiddleware,
     ChatController.replyToChat
 );

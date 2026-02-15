@@ -125,7 +125,7 @@ npm start
 - `/admin/inventory` - Inventory management
 - `/admin/orders` - Order management
 - `/admin/finance` - Finance & reporting
-- `/admin/pos` - POS system
+- `/admin/sales` - Customer service & order intake
 - `/admin/chat` - WhatsApp chat management
 
 ## 🎨 Design System

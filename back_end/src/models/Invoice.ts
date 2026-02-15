@@ -6,7 +6,7 @@ interface InvoiceAttributes {
     order_id: string; // UUID
     invoice_number: string;
     payment_method: 'transfer_manual' | 'cod' | 'cash_store';
-    payment_status: 'unpaid' | 'paid' | 'cod_pending';
+    payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
     amount_paid: number;
     change_amount: number;
     payment_proof_url?: string | null;
@@ -21,7 +21,7 @@ class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implem
     declare order_id: string;
     declare invoice_number: string;
     declare payment_method: 'transfer_manual' | 'cod' | 'cash_store';
-    declare payment_status: 'unpaid' | 'paid' | 'cod_pending';
+    declare payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
     declare amount_paid: number;
     declare change_amount: number;
     declare payment_proof_url: string | null;
@@ -53,7 +53,7 @@ Invoice.init(
             allowNull: false,
         },
         payment_status: {
-            type: DataTypes.ENUM('unpaid', 'paid', 'cod_pending'),
+            type: DataTypes.ENUM('unpaid', 'paid', 'cod_pending', 'draft'),
             defaultValue: 'unpaid',
         },
         amount_paid: {

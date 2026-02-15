@@ -293,3 +293,144 @@ html {
 .elevation-lg {
   box-shadow: var(--shadow-lg);
 }
+
+/* Warehouse unified theme */
+.warehouse-theme {
+  position: relative;
+  background:
+    radial-gradient(1200px 420px at 0% -10%, rgb(16 185 129 / 0.12), transparent 60%),
+    radial-gradient(900px 360px at 100% -10%, rgb(59 130 246 / 0.09), transparent 55%),
+    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 45%, #eef7f3 100%);
+}
+
+.warehouse-theme::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgb(15 23 42 / 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(15 23 42 / 0.02) 1px, transparent 1px);
+  background-size: 24px 24px;
+  opacity: 0.35;
+}
+
+.warehouse-theme > * {
+  position: relative;
+}
+
+.warehouse-page {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .warehouse-page {
+    padding: 1.5rem;
+  }
+}
+
+.warehouse-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 10px;
+  font-weight: 900;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.25rem;
+}
+
+.warehouse-title {
+  color: #0f172a;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.warehouse-subtitle {
+  color: #64748b;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-top: 0.25rem;
+}
+
+.warehouse-panel {
+  background: rgb(255 255 255 / 0.86);
+  border: 1px solid rgb(148 163 184 / 0.25);
+  box-shadow: 0 20px 36px -30px rgb(15 23 42 / 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.warehouse-screen {
+  margin: 0.75rem;
+  border-radius: 1.25rem;
+  border: 1px solid rgb(148 163 184 / 0.2);
+  background: rgb(248 250 252 / 0.55);
+  box-shadow: 0 20px 36px -30px rgb(15 23 42 / 0.45);
+}
+
+.warehouse-screen-fill {
+  height: calc(100% - 1.5rem);
+}
+
+.warehouse-screen-flush-bottom {
+  margin-bottom: 0;
+}
+
+.warehouse-screen-fill.warehouse-screen-flush-bottom {
+  height: calc(100% - 0.75rem);
+}
+
+.warehouse-screen-edge-to-edge {
+  margin-top: 0;
+  margin-left: 0;
+  margin-right: 0;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.warehouse-screen-fill.warehouse-screen-edge-to-edge {
+  height: 100%;
+}
+
+@media (min-width: 768px) {
+  .warehouse-screen {
+    margin: 1rem 1.25rem 1.25rem;
+    border-radius: 1.5rem;
+  }
+
+  .warehouse-screen-fill {
+    height: calc(100% - 2.25rem);
+  }
+
+  .warehouse-screen-fill.warehouse-screen-flush-bottom {
+    height: calc(100% - 1rem);
+  }
+
+  .warehouse-screen-edge-to-edge {
+    margin-top: 0;
+    margin-left: 0;
+    margin-right: 0;
+    border-radius: 0;
+  }
+
+  .warehouse-screen-fill.warehouse-screen-edge-to-edge {
+    height: 100%;
+  }
+}
+
+.warehouse-theme :where(.bg-white) {
+  background-color: rgb(255 255 255 / 0.86);
+}
+
+.warehouse-theme :where(.border-slate-200) {
+  border-color: rgb(148 163 184 / 0.28);
+}

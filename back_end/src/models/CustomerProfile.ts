@@ -3,7 +3,8 @@ import sequelize from '../config/database';
 
 interface CustomerProfileAttributes {
     user_id: string;
-    tier: 'regular' | 'premium' | 'gold' | 'platinum';
+    tier: 'regular' | 'gold' | 'platinum';
+    credit_limit: number;
     points: number;
     saved_addresses: any[]; // JSON
 }
@@ -12,7 +13,8 @@ interface CustomerProfileCreationAttributes extends Optional<CustomerProfileAttr
 
 class CustomerProfile extends Model<CustomerProfileAttributes, CustomerProfileCreationAttributes> implements CustomerProfileAttributes {
     declare user_id: string;
-    declare tier: 'regular' | 'premium' | 'gold' | 'platinum';
+    declare tier: 'regular' | 'gold' | 'platinum';
+    declare credit_limit: number;
     declare points: number;
     declare saved_addresses: any[];
 
@@ -31,8 +33,13 @@ CustomerProfile.init(
             }
         },
         tier: {
-            type: DataTypes.ENUM('regular', 'premium', 'gold', 'platinum'),
+            type: DataTypes.ENUM('regular', 'gold', 'platinum'),
             defaultValue: 'regular',
+        },
+        credit_limit: {
+            type: DataTypes.DECIMAL(15, 2),
+            defaultValue: 0,
+            allowNull: false,
         },
         points: {
             type: DataTypes.INTEGER,

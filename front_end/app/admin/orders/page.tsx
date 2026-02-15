@@ -4,7 +4,7 @@ import { useRequireRoles } from '@/lib/guards';
 import AdminOrdersListView from '@/components/orders/AdminOrdersListView';
 
 export default function AdminOrdersPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   if (!allowed) return null;
 
   return (
@@ -15,4 +15,3 @@ export default function AdminOrdersPage() {
     />
   );
 }
-

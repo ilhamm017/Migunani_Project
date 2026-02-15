@@ -12,6 +12,7 @@ interface ProductAttributes {
     price: number;
     unit: string;
     stock_quantity: number;
+    allocated_quantity: number;
     min_stock: number;
     category_id: number;
     status: 'active' | 'inactive';
@@ -20,9 +21,11 @@ interface ProductAttributes {
     varian_harga?: unknown | null;
     grosir?: unknown | null;
     total_modal?: number | null;
+    bin_location?: string | null;
+    vehicle_compatibility?: string | null;
 }
 
-interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'status' | 'barcode' | 'description' | 'image_url' | 'base_price' | 'price' | 'unit' | 'stock_quantity' | 'min_stock' | 'keterangan' | 'tipe_modal' | 'varian_harga' | 'grosir' | 'total_modal'> { }
+interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'status' | 'barcode' | 'description' | 'image_url' | 'base_price' | 'price' | 'unit' | 'stock_quantity' | 'allocated_quantity' | 'min_stock' | 'keterangan' | 'tipe_modal' | 'varian_harga' | 'grosir' | 'total_modal'> { }
 
 class Product extends Model<ProductAttributes, ProductCreationAttributes> implements ProductAttributes {
     declare id: string;
@@ -35,6 +38,7 @@ class Product extends Model<ProductAttributes, ProductCreationAttributes> implem
     declare price: number;
     declare unit: string;
     declare stock_quantity: number;
+    declare allocated_quantity: number;
     declare min_stock: number;
     declare category_id: number;
     declare status: 'active' | 'inactive';
@@ -43,6 +47,8 @@ class Product extends Model<ProductAttributes, ProductCreationAttributes> implem
     declare varian_harga: unknown | null;
     declare grosir: unknown | null;
     declare total_modal: number | null;
+    declare bin_location: string | null;
+    declare vehicle_compatibility: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -92,6 +98,10 @@ Product.init(
             type: DataTypes.INTEGER,
             defaultValue: 0,
         },
+        allocated_quantity: {
+            type: DataTypes.INTEGER,
+            defaultValue: 0,
+        },
         min_stock: {
             type: DataTypes.INTEGER,
             defaultValue: 5,
@@ -122,6 +132,14 @@ Product.init(
         },
         total_modal: {
             type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+        },
+        bin_location: {
+            type: DataTypes.STRING(50),
+            allowNull: true,
+        },
+        vehicle_compatibility: {
+            type: DataTypes.TEXT,
             allowNull: true,
         },
     },

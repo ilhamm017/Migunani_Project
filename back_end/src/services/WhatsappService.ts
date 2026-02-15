@@ -1,9 +1,15 @@
 import { Client, Message as WaMessage, MessageMedia } from 'whatsapp-web.js';
 import fs from 'fs';
 import path from 'path';
-import { User, ChatSession, Message, Order, Product, sequelize } from '../models'; // Import models
+import { User, ChatSession, Message, Order } from '../models';
 import { Op } from 'sequelize';
 import { io } from '../server'; // Import IO for socket events
+import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
+import {
+    createThreadMessage,
+    resolveThreadForIncomingWhatsapp,
+    resolveThreadForLegacySession
+} from './ChatThreadService';
 
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
 
@@ -131,37 +137,67 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
         const contact = await msg.getContact();
         const chat = await msg.getChat();
         const senderNumber = contact.number; // e.g. 628123456789
+        const normalizedSenderNumber = normalizeWhatsappNumber(senderNumber);
         const isGroup = chat.isGroup;
 
         if (isGroup) return; // Ignore groups for now
+        if (!normalizedSenderNumber) return;
 
-        console.log(`📩 Message from ${senderNumber}: ${msg.body}`);
+        console.log(`📩 Message from ${normalizedSenderNumber}: ${msg.body}`);
+        const whatsappCandidates = getWhatsappLookupCandidates(normalizedSenderNumber);
 
         // 1. Find or Create User (Customer)
         // We need to match by whatsapp_number.
         // Note: whatsapp-web.js uses '628...' format. Our DB should store same.
 
-        let user = await User.findOne({ where: { whatsapp_number: senderNumber } });
+        let user = await User.findOne({
+            where: { whatsapp_number: { [Op.in]: whatsappCandidates } }
+        });
 
         // If user doesn't exist, maybe create a temporary 'Guest' user or just proceed without User ID?
         // ChatSession needs User ID? Schema says User ID is Nullable.
 
-        // 2. Find or Create Chat Session
-        let session = await ChatSession.findOne({
-            where: { whatsapp_number: senderNumber, platform: 'whatsapp' }
-        });
+        // 2. Find or Create Chat Session (khusus kanal WhatsApp)
+        let session: ChatSession | null = null;
+        if (user?.id) {
+            session = await ChatSession.findOne({
+                where: {
+                    user_id: user.id,
+                    platform: 'whatsapp'
+                },
+                order: [['last_message_at', 'DESC']]
+            });
+        }
+        if (!session) {
+            session = await ChatSession.findOne({
+                where: {
+                    whatsapp_number: { [Op.in]: whatsappCandidates },
+                    platform: 'whatsapp'
+                },
+                order: [['last_message_at', 'DESC']]
+            });
+        }
 
         if (!session) {
             session = await ChatSession.create({
                 user_id: user ? user.id : undefined, // user.id can be string or undefined. UUID
-                whatsapp_number: senderNumber,
+                whatsapp_number: normalizedSenderNumber,
                 platform: 'whatsapp',
                 is_bot_active: true,
                 last_message_at: new Date()
             });
         } else {
             // Update last active
-            await session.update({ last_message_at: new Date() });
+            const updates: Partial<{ last_message_at: Date; whatsapp_number: string; user_id: string }> = {
+                last_message_at: new Date()
+            };
+            if (!session.user_id && user?.id) {
+                updates.user_id = user.id;
+            }
+            if (session.whatsapp_number !== normalizedSenderNumber) {
+                updates.whatsapp_number = normalizedSenderNumber;
+            }
+            await session.update(updates);
 
             // Logic: If expired (> 120 mins), re-enable bot?
             // This logic is usually handled by Cron or Check here.
@@ -171,22 +207,41 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
             }
         }
 
+        const thread = await resolveThreadForIncomingWhatsapp({
+            normalizedWhatsappNumber: normalizedSenderNumber,
+            user
+        });
+
         // 3. Save Message to DB
-        await Message.create({
-            session_id: session.id,
-            sender_type: 'customer',
-            sender_id: user?.id,
+        const saved = await createThreadMessage({
+            threadId: thread.id,
+            sessionId: session.id,
+            senderType: 'customer',
+            senderId: user?.id,
             body: msg.body,
-            is_read: false,
-            created_via: 'wa_mobile_sync'
+            channel: 'whatsapp',
+            isRead: false,
+            deliveryState: 'sent',
+            createdVia: 'wa_mobile_sync'
         });
 
         // 4. Emit to Socket (for Admin Dashboard)
-        io.emit('chat:message', {
-            session_id: session.id,
+        io.emit('chat:thread_message', {
+            thread_id: thread.id,
+            channel: 'whatsapp',
             body: msg.body,
             sender: 'customer',
-            timestamp: new Date()
+            sender_id: saved.sender_id || user?.id || undefined,
+            timestamp: saved.createdAt
+        });
+        io.emit('chat:message', {
+            session_id: thread.id,
+            thread_id: thread.id,
+            platform: 'whatsapp',
+            body: msg.body,
+            sender: 'customer',
+            sender_id: saved.sender_id || user?.id || undefined,
+            timestamp: saved.createdAt
         });
 
         // 5. Bot Logic
@@ -208,6 +263,10 @@ export const handleAdminReply = async (client: Client, sessionId: string, payloa
     try {
         const session = await ChatSession.findByPk(sessionId);
         if (!session) throw new Error('Session not found');
+        const normalizedSessionNumber = normalizeWhatsappNumber(session.whatsapp_number);
+        if (!normalizedSessionNumber) {
+            throw new Error('Nomor WhatsApp pada sesi tidak valid.');
+        }
         const textBody = typeof payload.body === 'string' ? payload.body.trim() : '';
         const attachmentUrl = typeof payload.attachmentUrl === 'string' ? payload.attachmentUrl.trim() : '';
 
@@ -217,7 +276,10 @@ export const handleAdminReply = async (client: Client, sessionId: string, payloa
         const persistedBody = textBody || ATTACHMENT_FALLBACK_BODY;
 
         // Send via WhatsApp
-        const chatId = `${session.whatsapp_number}@c.us`;
+        const chatId = `${normalizedSessionNumber}@c.us`;
+        if (session.whatsapp_number !== normalizedSessionNumber) {
+            await session.update({ whatsapp_number: normalizedSessionNumber });
+        }
         if (attachmentUrl) {
             const absolutePath = path.resolve(process.cwd(), attachmentUrl.replace(/^\/+/, ''));
             if (!fs.existsSync(absolutePath)) {
@@ -235,12 +297,20 @@ export const handleAdminReply = async (client: Client, sessionId: string, payloa
             last_message_at: new Date()
         });
 
+        const thread = await resolveThreadForLegacySession(session);
+
         // Save to DB
-        await createAdminMessageWithFallback({
-            session_id: session.id,
-            sender_id: payload.adminId,
+        await createThreadMessage({
+            threadId: thread.id,
+            sessionId: session.id,
+            senderType: 'admin',
+            senderId: payload.adminId,
             body: persistedBody,
-            attachment_url: attachmentUrl || undefined
+            attachmentUrl: attachmentUrl || undefined,
+            channel: 'whatsapp',
+            isRead: false,
+            deliveryState: 'delivered',
+            createdVia: 'admin_panel'
         });
 
         return { success: true };

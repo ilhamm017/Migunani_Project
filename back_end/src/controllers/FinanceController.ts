@@ -199,6 +199,71 @@ const mapAccountsReceivableRows = (invoices: Invoice[]) => {
     });
 };
 
+// --- Issue Invoice (Finance step: waiting_invoice → waiting_payment or ready_to_ship) ---
+export const issueInvoice = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params; // Order ID
+        const userRole = req.user!.role;
+
+        if (!['admin_finance', 'super_admin'].includes(userRole)) {
+            await t.rollback();
+            return res.status(403).json({ message: 'Hanya admin finance yang boleh menerbitkan invoice' });
+        }
+
+        const order = await Order.findByPk(String(id), {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        if (order.status !== 'waiting_invoice') {
+            await t.rollback();
+            return res.status(400).json({ message: `Order status '${order.status}' tidak bisa diterbitkan invoice. Harus 'waiting_invoice'.` });
+        }
+
+        const invoice = await Invoice.findOne({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice not found' });
+        }
+
+        const paymentMethod = invoice.payment_method;
+
+        if (paymentMethod === 'transfer_manual') {
+            // Transfer: issue invoice → customer pays → finance verifies
+            await invoice.update({ payment_status: 'unpaid' }, { transaction: t });
+            await order.update({ status: 'waiting_payment' }, { transaction: t });
+        } else if (paymentMethod === 'cod' || paymentMethod === 'cash_store') {
+            // COD/Cash: skip waiting_payment → go straight to ready_to_ship
+            await invoice.update({ payment_status: 'cod_pending' }, { transaction: t });
+            await order.update({ status: 'ready_to_ship' }, { transaction: t });
+        } else {
+            // Fallback: treat as transfer
+            await invoice.update({ payment_status: 'unpaid' }, { transaction: t });
+            await order.update({ status: 'waiting_payment' }, { transaction: t });
+        }
+
+        await t.commit();
+        res.json({
+            message: paymentMethod === 'cod' || paymentMethod === 'cash_store'
+                ? 'Invoice COD diterbitkan. Order siap dikirim.'
+                : 'Invoice diterbitkan. Menunggu pembayaran customer.',
+            next_status: order.status
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error issuing invoice', error });
+    }
+};
+
 // --- Verification ---
 export const verifyPayment = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -238,7 +303,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
 
         if (action === 'approve') {
-            if (!invoice.payment_proof_url) {
+            const isNoProofMethod = ['cod', 'cash_store'].includes(invoice.payment_method);
+
+            if (!isNoProofMethod && !invoice.payment_proof_url) {
                 await t.rollback();
                 return res.status(400).json({ message: 'Bukti transfer belum tersedia untuk diverifikasi' });
             }
@@ -254,8 +321,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 verified_at: new Date()
             }, { transaction: t });
 
-            // Update Order Status to Processing (or Shipped if digital/instant, but let's say Processing)
-            await order.update({ status: 'processing' }, { transaction: t });
+            // Transition logic based on current status
+            if (order.status === 'delivered' && (invoice.payment_method === 'cod' || invoice.payment_method === 'cash_store')) {
+                // COD Settlement: Driver already delivered & uploaded proof, now Finance confirms cash receipt
+                await order.update({ status: 'completed' }, { transaction: t });
+            } else {
+                // Standard flow: Payment verified → Ready to Ship
+                // (Only if not already shipped/delivered/completed to avoid regression)
+                if (['waiting_payment', 'waiting_invoice'].includes(order.status)) {
+                    await order.update({ status: 'ready_to_ship' }, { transaction: t });
+                }
+            }
 
         } else {
             // If rejected, maybe reset proof url? or just status 'unpaid'? 
@@ -454,7 +530,7 @@ export const deleteExpenseLabel = async (req: Request, res: Response) => {
 // --- Reports ---
 export const getAccountsReceivable = async (req: Request, res: Response) => {
     try {
-        // AR = Invoices with payment_status != 'paid' AND Order status != canceled/expired
+        // 1. Get AR from Invoices (payment_status != 'paid')
         const ar = await Invoice.findAll({
             where: {
                 payment_status: { [Op.ne]: 'paid' } // unpaid, cod_pending
@@ -463,9 +539,54 @@ export const getAccountsReceivable = async (req: Request, res: Response) => {
             order: [['createdAt', 'ASC']] // Oldest first
         });
 
-        const rows = mapAccountsReceivableRows(ar);
+        const invoiceRows = mapAccountsReceivableRows(ar);
 
-        res.json(rows);
+        // 2. Get Driver Debts (User.debt > 0)
+        const debtors = await User.findAll({
+            where: {
+                role: 'driver',
+                debt: { [Op.gt]: 0 }
+            },
+            attributes: ['id', 'name', 'whatsapp_number', 'debt', 'updatedAt']
+        });
+
+        const driverRows = debtors.map(driver => {
+            const debt = Number(driver.debt || 0);
+            const updatedAtMs = new Date(driver.updatedAt).getTime();
+            const agingDays = Math.max(0, Math.floor((Date.now() - updatedAtMs) / (24 * 60 * 60 * 1000)));
+
+            return {
+                id: `debt-${driver.id}`,
+                invoice_number: `UTANG-DRIVER-${driver.name.toUpperCase().replace(/\s+/g, '-')}`,
+                payment_method: 'cod_settlement',
+                payment_status: 'debt',
+                payment_proof_url: null,
+                amount_paid: 0,
+                amount_due: debt,
+                aging_days: agingDays,
+                createdAt: driver.updatedAt,
+                updatedAt: driver.updatedAt,
+                verified_at: null,
+                order: {
+                    id: 'DEBT',
+                    customer_name: `Driver: ${driver.name}`,
+                    source: 'offline',
+                    status: 'active',
+                    total_amount: debt,
+                    createdAt: driver.updatedAt,
+                    updatedAt: driver.updatedAt,
+                    expiry_date: null,
+                    customer: {
+                        id: driver.id,
+                        name: driver.name,
+                        whatsapp_number: driver.whatsapp_number
+                    },
+                    items: []
+                }
+            };
+        });
+
+        res.json([...invoiceRows, ...driverRows]);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching AR', error });
     }
@@ -476,6 +597,58 @@ export const getAccountsReceivableDetail = async (req: Request, res: Response) =
         const invoiceId = String(req.params.id || '').trim();
         if (!invoiceId) {
             return res.status(400).json({ message: 'invoice id wajib diisi' });
+        }
+
+        // Handle pseudo-ID for driver debt
+        if (invoiceId.startsWith('debt-')) {
+            const driverId = invoiceId.replace('debt-', '');
+            const driver = await User.findOne({
+                where: {
+                    id: driverId,
+                    role: 'driver',
+                    debt: { [Op.gt]: 0 }
+                },
+                attributes: ['id', 'name', 'whatsapp_number', 'debt', 'updatedAt']
+            });
+
+            if (!driver) {
+                return res.status(404).json({ message: 'Data piutang driver tidak ditemukan' });
+            }
+
+            const debt = Number(driver.debt || 0);
+            const updatedAtMs = new Date(driver.updatedAt).getTime();
+            const agingDays = Math.max(0, Math.floor((Date.now() - updatedAtMs) / (24 * 60 * 60 * 1000)));
+
+            const row = {
+                id: invoiceId,
+                invoice_number: `UTANG-DRIVER-${driver.name.toUpperCase().replace(/\s+/g, '-')}`,
+                payment_method: 'cod_settlement',
+                payment_status: 'debt',
+                payment_proof_url: null,
+                amount_paid: 0,
+                amount_due: debt,
+                aging_days: agingDays,
+                createdAt: driver.updatedAt,
+                updatedAt: driver.updatedAt,
+                verified_at: null,
+                order: {
+                    id: 'DEBT',
+                    customer_name: `Driver: ${driver.name}`,
+                    source: 'offline',
+                    status: 'active',
+                    total_amount: debt,
+                    createdAt: driver.updatedAt,
+                    updatedAt: driver.updatedAt,
+                    expiry_date: null,
+                    customer: {
+                        id: driver.id,
+                        name: driver.name,
+                        whatsapp_number: driver.whatsapp_number
+                    },
+                    items: []
+                }
+            };
+            return res.json(row);
         }
 
         const invoice = await Invoice.findOne({
@@ -567,5 +740,195 @@ export const getProfitAndLoss = async (req: Request, res: Response) => {
 
     } catch (error) {
         res.status(500).json({ message: 'Error calculating P&L', error });
+    }
+};
+
+// --- Driver COD Deposit ---
+
+export const getDriverCodList = async (req: Request, res: Response) => {
+    try {
+        // 1. Get drivers with debt > 0
+        const debtors = await User.findAll({
+            where: {
+                role: 'driver',
+                debt: { [Op.gt]: 0 }
+            },
+            attributes: ['id', 'name', 'whatsapp_number', 'debt']
+        });
+
+        // 2. Get pending invoices
+        const invoices = await Invoice.findAll({
+            where: { payment_status: 'cod_pending' },
+            include: [{
+                model: Order,
+                include: [{
+                    model: User,
+                    as: 'Courier',
+                    attributes: ['id', 'name', 'whatsapp_number', 'debt']
+                }, {
+                    model: User,
+                    as: 'Customer',
+                    attributes: ['id', 'name']
+                }]
+            }]
+        });
+
+        const grouped: Record<string, any> = {};
+
+        // Initialize from debtors
+        debtors.forEach(driver => {
+            grouped[driver.id] = {
+                driver: {
+                    id: driver.id,
+                    name: driver.name,
+                    whatsapp_number: driver.whatsapp_number,
+                    debt: Number(driver.debt || 0)
+                },
+                orders: [],
+                total_pending: 0
+            };
+        });
+
+        // Merge/Add from invoices
+        invoices.forEach((inv) => {
+            const order = (inv as any).Order;
+            const courier = order?.Courier;
+
+            if (!courier) return;
+
+            if (!grouped[courier.id]) {
+                grouped[courier.id] = {
+                    driver: {
+                        id: courier.id,
+                        name: courier.name,
+                        whatsapp_number: courier.whatsapp_number,
+                        debt: Number(courier.debt || 0)
+                    },
+                    orders: [],
+                    total_pending: 0
+                };
+            }
+
+            const amount = Number(order.total_amount || 0);
+            grouped[courier.id].orders.push({
+                id: order.id,
+                order_number: order.id,
+                customer_name: order.Customer?.name || 'Customer',
+                total_amount: amount,
+                created_at: order.createdAt
+            });
+            grouped[courier.id].total_pending += amount;
+        });
+
+        res.json(Object.values(grouped));
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching driver COD list', error });
+    }
+};
+
+export const verifyDriverCod = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { driver_id, order_ids = [], amount_received } = req.body;
+        const verifierId = req.user!.id;
+
+        if (!driver_id) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Driver ID required' });
+        }
+
+        const received = Number(amount_received);
+        if (isNaN(received) || received < 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Jumlah uang tidak valid' });
+        }
+
+        if ((!order_ids || order_ids.length === 0) && received === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Tidak ada order dipilih dan tidak ada pembayaran.' });
+        }
+
+        let invoices: any[] = [];
+        let totalExpected = 0;
+
+        if (order_ids && order_ids.length > 0) {
+            const pendingInvoices = await Invoice.findAll({
+                where: {
+                    payment_status: 'cod_pending'
+                },
+                include: [{
+                    model: Order,
+                    where: {
+                        id: { [Op.in]: order_ids },
+                        courier_id: driver_id
+                    }
+                }],
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            if (pendingInvoices.length !== order_ids.length) {
+                await t.rollback();
+                return res.status(409).json({ message: 'Beberapa pesanan tidak ditemukan atau statusnya bukan COD Pending' });
+            }
+
+            invoices = pendingInvoices;
+            invoices.forEach((inv: any) => {
+                totalExpected += Number(inv.Order.total_amount || 0);
+            });
+        }
+
+        const diff = received - totalExpected;
+        // diff < 0 : Shortage -> Driver Debt increases
+        // diff > 0 : Surplus -> Driver Debt decreases (pay off)
+
+        const driver = await User.findByPk(driver_id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!driver) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Driver tidak ditemukan' });
+        }
+
+        const previousDebt = Number(driver.debt || 0);
+        const newDebt = previousDebt - diff;
+
+        await driver.update({ debt: newDebt }, { transaction: t });
+
+        if (invoices.length > 0) {
+            // Update Invoices -> Paid
+            await Invoice.update({
+                payment_status: 'paid',
+                verified_at: new Date(),
+                verified_by: verifierId
+            }, {
+                where: { id: { [Op.in]: invoices.map(i => i.id) } },
+                transaction: t
+            });
+
+            // Update Orders -> Completed
+            await Order.update({
+                status: 'completed'
+            }, {
+                where: { id: { [Op.in]: order_ids } },
+                transaction: t
+            });
+        }
+
+        await t.commit();
+
+        res.json({
+            message: 'Setoran COD berhasil dikonfirmasi',
+            summary: {
+                total_expected: totalExpected,
+                received: received,
+                shortage: diff < 0 ? Math.abs(diff) : 0,
+                surplus: diff > 0 ? diff : 0,
+                driver_debt_before: previousDebt,
+                driver_debt_after: newDebt
+            }
+        });
+
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error verifying driver COD', error });
     }
 };

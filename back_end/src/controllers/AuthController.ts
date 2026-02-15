@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { Op, UniqueConstraintError, ValidationError } from 'sequelize';
 import { User, CustomerProfile, sequelize } from '../models';
 import { generateToken } from '../middleware/authMiddleware';
+import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
 
 export const register = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -10,17 +11,18 @@ export const register = async (req: Request, res: Response) => {
         const { name, email, password, whatsapp_number } = req.body;
         const normalizedName = typeof name === 'string' ? name.trim() : '';
         const normalizedEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null;
-        const normalizedWhatsapp = typeof whatsapp_number === 'string' ? whatsapp_number.trim() : '';
+        const normalizedWhatsapp = normalizeWhatsappNumber(whatsapp_number);
 
         // Validation
         if (!normalizedName || !password || !normalizedWhatsapp) {
             await t.rollback();
-            return res.status(400).json({ message: 'Name, password, and WhatsApp number are required' });
+            return res.status(400).json({ message: 'Name, password, and valid WhatsApp number are required' });
         }
 
         // Check existing
-        const conflictConditions: Array<{ email: string } | { whatsapp_number: string }> = [
-            { whatsapp_number: normalizedWhatsapp },
+        const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
+        const conflictConditions: Array<Record<string, unknown>> = [
+            { whatsapp_number: { [Op.in]: whatsappCandidates } },
         ];
         if (normalizedEmail) {
             conflictConditions.push({ email: normalizedEmail });
@@ -46,13 +48,15 @@ export const register = async (req: Request, res: Response) => {
             password: hashedPassword,
             whatsapp_number: normalizedWhatsapp,
             role: 'customer', // Default role
-            status: 'active'
+            status: 'active',
+            debt: 0
         }, { transaction: t });
 
         // Create Profile
         await CustomerProfile.create({
             user_id: user.id,
             tier: 'regular',
+            credit_limit: 0,
             points: 0,
             saved_addresses: []
         }, { transaction: t });
@@ -67,7 +71,9 @@ export const register = async (req: Request, res: Response) => {
             user: {
                 id: user.id,
                 name: user.name,
-                role: user.role
+                role: user.role,
+                email: user.email,
+                whatsapp_number: user.whatsapp_number
             }
         });
 
@@ -90,15 +96,21 @@ export const register = async (req: Request, res: Response) => {
 export const login = async (req: Request, res: Response) => {
     try {
         const { email, whatsapp_number, password } = req.body;
+        const normalizedEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : '';
+        const normalizedWhatsapp = normalizeWhatsappNumber(whatsapp_number);
 
         // Allow login by Email OR WhatsApp
-        if (!password || (!email && !whatsapp_number)) {
+        if (!password || (!normalizedEmail && !normalizedWhatsapp)) {
             return res.status(400).json({ message: 'Password and Email/WhatsApp are required' });
         }
 
         const whereClause: any = {};
-        if (email) whereClause.email = email;
-        else if (whatsapp_number) whereClause.whatsapp_number = whatsapp_number;
+        if (normalizedEmail) {
+            whereClause.email = normalizedEmail;
+        } else if (normalizedWhatsapp) {
+            const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
+            whereClause.whatsapp_number = { [Op.in]: whatsappCandidates };
+        }
 
         const user = await User.findOne({ where: whereClause });
 
@@ -124,7 +136,9 @@ export const login = async (req: Request, res: Response) => {
                 id: user.id,
                 name: user.name,
                 role: user.role,
-                tier: 'regular' // Ideally fetch from profile, but skipped for brevity
+                tier: 'regular', // Ideally fetch from profile, but skipped for brevity
+                email: user.email,
+                whatsapp_number: user.whatsapp_number
             }
         });
 
