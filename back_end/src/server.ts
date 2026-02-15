@@ -333,7 +333,19 @@ const ensureReturStatusEnumReady = async () => {
 
 const startServer = async () => {
     try {
-        await sequelize.authenticate();
+        let retries = 10;
+        while (retries) {
+            try {
+                await sequelize.authenticate();
+                console.log('Database connection established successfully.');
+                break;
+            } catch (err) {
+                console.log(`Database connection failed. Retries left: ${retries}. Retrying in 5 seconds...`);
+                retries -= 1;
+                await new Promise(res => setTimeout(res, 5000));
+                if (retries === 0) throw err;
+            }
+        }
         try {
             await sequelize.sync({ alter: false });
         } catch (e) {
