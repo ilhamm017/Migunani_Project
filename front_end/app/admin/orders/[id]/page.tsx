@@ -306,7 +306,10 @@ export default function AdminOrderDetailPage() {
                       )}
                     </div>
                     <p className="text-sm font-black text-slate-900">
-                      {formatCurrency(Number(item.price_at_purchase || 0) * Number(item.qty || 0))}
+                      {formatCurrency(
+                        Number(item.price_at_purchase || 0) *
+                        Number((['pending', 'canceled'].includes(order.status) ? item.qty : allocQty) || 0)
+                      )}
                     </p>
                   </div>
                 );

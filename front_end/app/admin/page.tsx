@@ -34,23 +34,33 @@ export default function AdminOverviewPage() {
         ]);
 
         const stats = statsRes.data || {};
+        const pendingAllocCount = Number(stats.pending || 0);
 
         let actionableCount = 0;
         if (user?.role === 'admin_finance') {
           // Finance tasks: issue invoice, verify transfer, verify COD settlement
           actionableCount = Number(stats.waiting_invoice || 0) + Number(stats.waiting_payment || 0) + Number(stats.delivered || 0);
         } else if (user?.role === 'admin_gudang') {
-          // Warehouse tasks: allocate pending, ship ready_to_ship
-          actionableCount = Number(stats.pending || 0) + Number(stats.ready_to_ship || 0);
+          // Warehouse tasks: ship ready_to_ship (Allocation moved to sales)
+          actionableCount = Number(stats.ready_to_ship || 0);
+        } else if (user?.role === 'kasir') {
+          // Kasir tasks: Allocate pending orders
+          actionableCount = pendingAllocCount;
         } else {
           // Super admin / Others: any order that isn't finished or canceled
-          actionableCount = Number(stats.pending || 0) + Number(stats.waiting_invoice || 0) + Number(stats.waiting_payment || 0) + Number(stats.delivered || 0);
+          actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0) + Number(stats.waiting_payment || 0) + Number(stats.delivered || 0);
         }
 
         let outOfStockCount = 0;
-        if (user?.role === 'admin_gudang') {
-          const [pendingRes, processingRes, allocatedRes, productsRes, retursRes, auditsRes] = await Promise.all([
-            api.admin.orderManagement.getAll({ status: 'pending', limit: 1 }).catch(() => ({ data: { total: 0 } })),
+        const newWarehouseBadges: Record<string, number> = {};
+
+        // Badges for Kasir (Allocation)
+        if (user?.role === 'kasir' || user?.role === 'super_admin') {
+          newWarehouseBadges['/admin/warehouse/allocation'] = pendingAllocCount;
+        }
+
+        if (user?.role === 'admin_gudang' || user?.role === 'super_admin') {
+          const [processingRes, allocatedRes, productsRes, retursRes, auditsRes] = await Promise.all([
             api.admin.orderManagement.getAll({ status: 'processing', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.inventory.getProducts({ limit: 100 }).catch(() => ({ data: { products: [] } })),
@@ -58,7 +68,6 @@ export default function AdminOverviewPage() {
             api.admin.inventory.getAudits().catch(() => ({ data: [] })),
           ]);
 
-          const pendingAllocation = Number(pendingRes.data?.total || 0);
           const processingOrders = Number(processingRes.data?.total || 0);
           const allocatedOrders = Number(allocatedRes.data?.total || 0);
           const readyToShipOrders = Number(stats.ready_to_ship || 0);
@@ -76,16 +85,17 @@ export default function AdminOverviewPage() {
           const audits = Array.isArray(auditsRes.data) ? auditsRes.data : [];
           const openAuditCount = audits.filter((audit: any) => String(audit?.status || '').toLowerCase() === 'open').length;
 
-          setWarehouseCardBadges({
-            '/admin/warehouse/allocation': pendingAllocation,
+          // Merge updates
+          Object.assign(newWarehouseBadges, {
+            '/admin/warehouse/allocation': pendingAllocCount, // Explicitly set again to be sure
             '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders,
             '/admin/warehouse/helper': processingOrders,
             '/admin/warehouse/retur': pendingReturActions,
             '/admin/warehouse/audit': openAuditCount,
           });
-        } else {
-          setWarehouseCardBadges({});
         }
+
+        setWarehouseCardBadges(newWarehouseBadges);
 
         setSummary({
           pendingOrders: actionableCount,
