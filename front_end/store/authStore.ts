@@ -30,15 +30,15 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
             login: (token, user) => {
                 if (typeof window !== 'undefined') {
-                    localStorage.setItem('token', token);
+                    sessionStorage.setItem('token', token);
                 }
                 set({ token, user, isAuthenticated: true });
             },
             logout: () => {
                 if (typeof window !== 'undefined') {
-                    localStorage.removeItem('token');
-                    localStorage.removeItem(WEB_CHAT_SESSION_KEY);
-                    localStorage.removeItem(WEB_CHAT_GUEST_KEY);
+                    sessionStorage.removeItem('token');
+                    sessionStorage.removeItem(WEB_CHAT_SESSION_KEY);
+                    sessionStorage.removeItem(WEB_CHAT_GUEST_KEY);
                     window.dispatchEvent(new CustomEvent('webchat:close'));
                 }
                 set({ token: null, user: null, isAuthenticated: false });
@@ -49,6 +49,16 @@ export const useAuthStore = create<AuthState>()(
         }),
         {
             name: 'auth-storage',
+            storage: {
+                getItem: (name) => {
+                    const str = sessionStorage.getItem(name);
+                    return str ? JSON.parse(str) : null;
+                },
+                setItem: (name, value) => {
+                    sessionStorage.setItem(name, JSON.stringify(value));
+                },
+                removeItem: (name) => sessionStorage.removeItem(name),
+            },
             skipHydration: true, // Fix hydration mismatch
         }
     )

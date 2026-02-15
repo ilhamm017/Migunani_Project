@@ -337,6 +337,50 @@ export const allocateOrder = async (req: Request, res: Response) => {
             })
             .filter(Boolean);
 
+        // --- Manage Order Issues (Shortage Tracking) ---
+        const hasShortage = backorderItems.length > 0;
+        const now = new Date();
+
+        if (hasShortage) {
+            // Create or update open shortage issue
+            const existingIssue = await OrderIssue.findOne({
+                where: { order_id: id, issue_type: 'shortage', status: 'open' },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            const shortageNote = (backorderItems as Array<{ product_id: string; shortage: number }>).map(b => `${b.product_id}: kurang ${b.shortage}`).join(', ');
+
+            if (existingIssue) {
+                await existingIssue.update({ note: shortageNote }, { transaction: t });
+            } else {
+                const dueAt = new Date(now.getTime() + (48 * 60 * 60 * 1000)); // Default 48h SLA
+                await OrderIssue.create({
+                    order_id: id,
+                    issue_type: 'shortage',
+                    status: 'open',
+                    note: shortageNote,
+                    due_at: dueAt,
+                    created_by: req.user?.id || null
+                }, { transaction: t });
+            }
+        } else {
+            // Resolve any open shortage issues
+            const openIssues = await OrderIssue.findAll({
+                where: { order_id: id, issue_type: 'shortage', status: 'open' },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            for (const issue of openIssues) {
+                await issue.update({
+                    status: 'resolved',
+                    resolved_at: now,
+                    resolved_by: req.user?.id || null
+                }, { transaction: t });
+            }
+        }
+
         await t.commit();
         res.json({
             message: 'Alokasi berhasil',

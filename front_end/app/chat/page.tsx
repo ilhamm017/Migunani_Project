@@ -206,7 +206,7 @@ export default function CustomerChatPage() {
       if (!resolvedSessionId) return '';
 
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(SESSION_KEY, resolvedSessionId);
+        window.sessionStorage.setItem(SESSION_KEY, resolvedSessionId);
       }
       setSessionId(resolvedSessionId);
       if (selectSession) {
@@ -252,7 +252,7 @@ export default function CustomerChatPage() {
       const status = Number(error?.response?.status || 0);
       if (status === 403 || status === 404) {
         if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(SESSION_KEY);
+          window.sessionStorage.removeItem(SESSION_KEY);
         }
         setSessionId('');
         setSelectedSessionId('');
@@ -290,7 +290,7 @@ export default function CustomerChatPage() {
         if (activeSessionId) {
           setSessionId(activeSessionId);
           if (typeof window !== 'undefined') {
-            window.localStorage.setItem(SESSION_KEY, activeSessionId);
+            window.sessionStorage.setItem(SESSION_KEY, activeSessionId);
           }
         }
       }
@@ -344,10 +344,10 @@ export default function CustomerChatPage() {
       setHistoryLoading(false);
 
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(SESSION_KEY);
+        window.sessionStorage.removeItem(SESSION_KEY);
         if (!currentUserId) {
           const nextGuestId = `guest-${Math.random().toString(36).slice(2, 10)}`;
-          window.localStorage.setItem(GUEST_KEY, nextGuestId);
+          window.sessionStorage.setItem(GUEST_KEY, nextGuestId);
           setGuestId(nextGuestId);
         }
       }
@@ -359,10 +359,10 @@ export default function CustomerChatPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const savedSession = window.localStorage.getItem(SESSION_KEY) || '';
-    const savedGuest = window.localStorage.getItem(GUEST_KEY) || `guest-${Math.random().toString(36).slice(2, 10)}`;
-    if (!window.localStorage.getItem(GUEST_KEY)) {
-      window.localStorage.setItem(GUEST_KEY, savedGuest);
+    const savedSession = window.sessionStorage.getItem(SESSION_KEY) || '';
+    const savedGuest = window.sessionStorage.getItem(GUEST_KEY) || `guest-${Math.random().toString(36).slice(2, 10)}`;
+    if (!window.sessionStorage.getItem(GUEST_KEY)) {
+      window.sessionStorage.setItem(GUEST_KEY, savedGuest);
     }
 
     setSessionId(savedSession);
@@ -417,7 +417,7 @@ export default function CustomerChatPage() {
       setSessionId(payload.session_id);
       setSelectedSessionId(payload.session_id);
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(SESSION_KEY, payload.session_id);
+        window.sessionStorage.setItem(SESSION_KEY, payload.session_id);
       }
     };
 

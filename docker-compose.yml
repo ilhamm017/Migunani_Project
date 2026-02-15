@@ -1,6 +1,7 @@
 services:
   mysql:
     image: mysql:8.0
+    platform: linux/amd64
     container_name: migunani_mysql
     restart: unless-stopped
     environment:

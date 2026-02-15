@@ -76,7 +76,7 @@ export default function WebChatWidget() {
       if (!resolvedSessionId) return '';
 
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(SESSION_KEY, resolvedSessionId);
+        window.sessionStorage.setItem(SESSION_KEY, resolvedSessionId);
       }
       setSessionId(resolvedSessionId);
       return resolvedSessionId;
@@ -111,11 +111,11 @@ export default function WebChatWidget() {
       setHistoryLoading(false);
 
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(SESSION_KEY);
+        window.sessionStorage.removeItem(SESSION_KEY);
 
         if (!currentUserId) {
           const nextGuestId = `guest-${Math.random().toString(36).slice(2, 10)}`;
-          window.localStorage.setItem(GUEST_KEY, nextGuestId);
+          window.sessionStorage.setItem(GUEST_KEY, nextGuestId);
           setGuestId(nextGuestId);
         }
       }
@@ -127,10 +127,10 @@ export default function WebChatWidget() {
   useEffect(() => {
     if (hidden || typeof window === 'undefined') return;
 
-    const savedSession = window.localStorage.getItem(SESSION_KEY) || '';
-    const savedGuest = window.localStorage.getItem(GUEST_KEY) || `guest-${Math.random().toString(36).slice(2, 10)}`;
-    if (!window.localStorage.getItem(GUEST_KEY)) {
-      window.localStorage.setItem(GUEST_KEY, savedGuest);
+    const savedSession = window.sessionStorage.getItem(SESSION_KEY) || '';
+    const savedGuest = window.sessionStorage.getItem(GUEST_KEY) || `guest-${Math.random().toString(36).slice(2, 10)}`;
+    if (!window.sessionStorage.getItem(GUEST_KEY)) {
+      window.sessionStorage.setItem(GUEST_KEY, savedGuest);
     }
 
     setSessionId(savedSession);
@@ -141,7 +141,7 @@ export default function WebChatWidget() {
     const onSession = (payload: { session_id?: string }) => {
       if (!payload?.session_id) return;
       setSessionId(payload.session_id);
-      window.localStorage.setItem(SESSION_KEY, payload.session_id);
+      window.sessionStorage.setItem(SESSION_KEY, payload.session_id);
     };
 
     const onChatMessage = (payload: ChatEventPayload) => {
@@ -231,7 +231,7 @@ export default function WebChatWidget() {
         const status = Number(error?.response?.status || 0);
         if (status === 403 || status === 404) {
           if (typeof window !== 'undefined') {
-            window.localStorage.removeItem(SESSION_KEY);
+            window.sessionStorage.removeItem(SESSION_KEY);
           }
           if (isMounted) {
             setSessionId('');
@@ -366,9 +366,8 @@ export default function WebChatWidget() {
                             href={message.attachmentUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${
-                              isCustomer ? 'bg-emerald-500/40 text-white' : 'bg-slate-100 text-slate-700'
-                            }`}
+                            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${isCustomer ? 'bg-emerald-500/40 text-white' : 'bg-slate-100 text-slate-700'
+                              }`}
                           >
                             <FileText size={12} />
                             Lihat lampiran

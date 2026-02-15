@@ -214,11 +214,17 @@ export default function OrderDetailPage() {
         )}
 
         <div className="space-y-2">
+
           <h2 className="text-sm font-bold text-slate-900">Item Pesanan</h2>
           {(order.OrderItems || []).map((item: any) => {
             const allocation = order.Allocations?.find((a: any) => a.product_id === item.product_id);
-            const sentQty = allocation ? allocation.allocated_qty : 0;
-            const isPartial = sentQty < item.qty;
+            const sentQty = allocation ? Number(allocation.allocated_qty || 0) : 0;
+
+            // Check if status implies allocation has happened
+            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status);
+
+            const isPartial = isAllocatedStatus && sentQty < item.qty;
+            const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
 
             return (
               <div key={item.id} className="flex justify-between items-center bg-slate-50 rounded-2xl px-4 py-3">
@@ -226,7 +232,7 @@ export default function OrderDetailPage() {
                   <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
                   <div className="flex gap-4 mt-1">
                     <p className="text-xs text-slate-500">Dipesan: <span className="font-bold text-slate-700">{item.qty}</span></p>
-                    {['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status) ? (
+                    {isAllocatedStatus ? (
                       <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
                         Dialokasikan: {sentQty}
                       </p>
@@ -234,10 +240,10 @@ export default function OrderDetailPage() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-slate-900">{formatCurrency(Number(item.price_at_purchase || 0) * Number(item.qty || 0))}</p>
-                  {isPartial && ['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status) && (
+                  <p className="text-sm font-bold text-slate-900">{formatCurrency(effectivePrice)}</p>
+                  {isPartial && isAllocatedStatus && (
                     <p className="text-[10px] text-amber-600 font-bold">
-                      {item.qty - sentQty} Belum Tersedia
+                      {item.qty - sentQty} Belum Tersedia (Backorder)
                     </p>
                   )}
                 </div>

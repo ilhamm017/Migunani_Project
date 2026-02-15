@@ -14,7 +14,7 @@ export const apiClient = axios.create({
 // Request interceptor - add auth token
 apiClient.interceptors.request.use(
     (config) => {
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
@@ -32,10 +32,10 @@ apiClient.interceptors.response.use(
         if (error.response?.status === 401) {
             // Unauthorized - clear token and redirect to login
             if (typeof window !== 'undefined') {
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
-                localStorage.removeItem('web_chat_session_id');
-                localStorage.removeItem('web_chat_guest_id');
+                sessionStorage.removeItem('token');
+                sessionStorage.removeItem('user');
+                sessionStorage.removeItem('web_chat_session_id');
+                sessionStorage.removeItem('web_chat_guest_id');
                 window.dispatchEvent(new CustomEvent('webchat:close'));
                 window.location.href = '/auth/login';
             }
