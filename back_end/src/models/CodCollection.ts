@@ -3,7 +3,7 @@ import sequelize from '../config/database';
 
 interface CodCollectionAttributes {
     id: number;
-    invoice_id: number;
+    invoice_id: string; // UUID
     driver_id: string; // UUID
     settlement_id: number | null;
     amount: number;
@@ -14,7 +14,7 @@ interface CodCollectionCreationAttributes extends Optional<CodCollectionAttribut
 
 class CodCollection extends Model<CodCollectionAttributes, CodCollectionCreationAttributes> implements CodCollectionAttributes {
     declare id: number;
-    declare invoice_id: number;
+    declare invoice_id: string;
     declare driver_id: string;
     declare settlement_id: number | null;
     declare amount: number;
@@ -32,7 +32,7 @@ CodCollection.init(
             primaryKey: true,
         },
         invoice_id: {
-            type: DataTypes.BIGINT,
+            type: DataTypes.UUID,
             allowNull: false,
             references: {
                 model: 'invoices',
