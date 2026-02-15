@@ -247,7 +247,14 @@ const ensureOrderStatusEnumReady = async () => {
                AND COLUMN_NAME = 'status'`
         ) as any;
 
-        const columnType = rows?.[0]?.columnType || '';
+        const statusColumn = rows?.[0];
+        if (!statusColumn) {
+            // Fresh/partial schema bootstrap: skip enum alter until orders.status exists.
+            console.warn('Skip order status enum update: orders.status column not found yet');
+            return;
+        }
+
+        const columnType = statusColumn.columnType || '';
         // Check if new statuses exist. If 'allocated' is missing, we need to run ALTER.
         if (typeof columnType === 'string' && columnType.includes('allocated') && columnType.includes('partially_fulfilled')) return;
 
@@ -257,10 +264,9 @@ const ensureOrderStatusEnumReady = async () => {
              MODIFY COLUMN status ENUM(${enumValuesSql})
              NOT NULL DEFAULT 'pending'`
         );
-        console.log('Order status enum updated: added allocated & partially_fulfilled');
-        console.log('Order status enum updated: added debt_pending');
+        console.log('Order status enum updated: ensured latest values');
     } catch (error) {
-        console.error('Failed to ensure orders.status enum includes debt_pending:', error);
+        console.error('Failed to ensure orders.status enum values:', error);
         throw error;
     }
 };
@@ -273,7 +279,6 @@ const startServer = async () => {
         } catch (e) {
             console.error('Sync error (ignored to keep server running):', e);
         }
-        await ensureOrderStatusEnumReady();
         await ensureOrderStatusEnumReady();
         await ensureChatThreadSchema();
         await backfillLegacyChatSessionsToThreads();
