@@ -25,6 +25,7 @@ type ChatSessionRow = {
     attachment_url?: string;
     sender_type?: 'customer' | 'admin' | string;
     is_read?: boolean;
+    sender_id?: string;
   }>;
 };
 
