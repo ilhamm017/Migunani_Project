@@ -65,7 +65,8 @@ export const logout = async (req: Request, res: Response) => {
 
 export const connect = async (req: Request, res: Response) => {
     try {
-        const result = await startWhatsappClient();
+        const force = req.body?.force === true || req.body?.force === 'true';
+        const result = await startWhatsappClient({ force });
         res.json(result);
     } catch (error) {
         res.status(500).json({ message: 'Error starting WhatsApp client', error });

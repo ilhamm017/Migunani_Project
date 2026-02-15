@@ -9,6 +9,7 @@ const chromeExecutablePath = process.env.WA_CHROME_PATH;
 const autoReconnectEnabled = process.env.WA_AUTO_RECONNECT !== 'false';
 const reconnectBaseDelayMs = Number(process.env.WA_RECONNECT_BASE_DELAY_MS || 5000);
 const reconnectMaxDelayMs = Number(process.env.WA_RECONNECT_MAX_DELAY_MS || 60000);
+const cleanProfileLocksBeforeInit = process.env.WA_CLEAN_PROFILE_LOCKS !== 'false';
 
 const waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: process.env.WA_SESSION_PATH }),
@@ -116,6 +117,57 @@ const isInitializeStuck = () => {
     return (Date.now() - initializeStartedAt) > stuckInitTimeoutMs;
 };
 
+const getSessionDir = () => {
+    const waSessionPath = process.env.WA_SESSION_PATH || './.wwebjs_auth';
+    return path.resolve(process.cwd(), waSessionPath);
+};
+
+const removeFileIfExists = async (filePath: string) => {
+    try {
+        await fs.access(filePath);
+    } catch {
+        return false;
+    }
+
+    try {
+        await fs.rm(filePath, { force: true });
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const clearChromiumProfileLocks = async () => {
+    if (!cleanProfileLocksBeforeInit) return;
+
+    const sessionDir = getSessionDir();
+    let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+
+    try {
+        entries = await fs.readdir(sessionDir, { withFileTypes: true });
+    } catch {
+        return;
+    }
+
+    const lockFileNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    const removedPaths: string[] = [];
+
+    for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith('session-')) continue;
+
+        const profilePath = path.join(sessionDir, entry.name);
+        for (const lockFileName of lockFileNames) {
+            const target = path.join(profilePath, lockFileName);
+            const removed = await removeFileIfExists(target);
+            if (removed) removedPaths.push(target);
+        }
+    }
+
+    if (removedPaths.length > 0) {
+        console.warn(`[WA] removed ${removedPaths.length} stale chromium profile lock artifact(s)`);
+    }
+};
+
 export const startWhatsappClient = async (options: { force?: boolean } = {}) => {
     const force = options.force === true;
     console.log(`[WA] connect requested force=${force} status=${clientStatus}`);
@@ -149,6 +201,8 @@ export const startWhatsappClient = async (options: { force?: boolean } = {}) => 
             ...getWhatsappDiagnostics()
         };
     }
+
+    await clearChromiumProfileLocks();
 
     clientStatus = 'INITIALIZING';
     latestQr = null;
@@ -196,8 +250,7 @@ export const resetWhatsappSession = async () => {
         console.warn('WhatsApp destroy skipped:', error);
     }
 
-    const waSessionPath = process.env.WA_SESSION_PATH || './.wwebjs_auth';
-    const sessionDir = path.resolve(process.cwd(), waSessionPath);
+    const sessionDir = getSessionDir();
     await fs.rm(sessionDir, { recursive: true, force: true });
 
     latestQr = null;
