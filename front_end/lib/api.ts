@@ -173,7 +173,8 @@ export const api = {
                 name: string;
                 whatsapp_number: string;
                 otp_code: string;
-                email?: string;
+                email: string;
+                password: string;
                 tier?: 'regular' | 'gold' | 'platinum';
             }) => apiClient.post('/admin/customers/create', data),
             updateTier: (id: string, tier: 'regular' | 'gold' | 'platinum') =>

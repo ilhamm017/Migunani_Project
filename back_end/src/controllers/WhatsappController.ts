@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getQr, getStatus, startWhatsappClient } from '../services/whatsappClient';
+import { getQr, getStatus, getWhatsappDiagnostics, startWhatsappClient } from '../services/whatsappClient';
 import waClient from '../services/whatsappClient';
 
 const setNoCacheHeaders = (res: Response) => {
@@ -13,25 +13,28 @@ export const getQrCode = (req: Request, res: Response) => {
     setNoCacheHeaders(res);
     const qr = getQr();
     const status = getStatus();
+    const meta = getWhatsappDiagnostics();
+
+    // If QR is available, always return it even when status races during init.
+    if (qr) {
+        return res.status(200).json({ status: 'SCAN_NEEDED', qr, meta });
+    }
 
     if (status === 'STOPPED') {
         return res.status(200).json({
             status,
             message: 'WhatsApp belum dijalankan. Klik Connect WhatsApp terlebih dahulu.',
-            qr: null
+            qr: null,
+            meta
         });
     }
 
     // If connected, no QR needed
     if (status === 'READY') {
-        return res.status(200).json({ status: 'CONNECTED', message: 'Client is ready', qr: null });
+        return res.status(200).json({ status: 'CONNECTED', message: 'Client is ready', qr: null, meta });
     }
 
-    if (!qr) {
-        return res.status(200).json({ status: status, message: 'Waiting for QR code generation...', qr: null });
-    }
-
-    res.json({ status: 'SCAN_NEEDED', qr });
+    res.status(200).json({ status, message: 'Waiting for QR code generation...', qr: null, meta });
 };
 
 import { Setting } from '../models';
@@ -39,6 +42,7 @@ import { Setting } from '../models';
 export const getClientStatus = async (req: Request, res: Response) => {
     setNoCacheHeaders(res);
     const status = getStatus();
+    const meta = getWhatsappDiagnostics();
     let info = null;
 
     if (status === 'READY') {
@@ -51,7 +55,7 @@ export const getClientStatus = async (req: Request, res: Response) => {
         }
     }
 
-    res.json({ status, info });
+    res.json({ status, info, meta });
 };
 
 export const logout = async (req: Request, res: Response) => {
@@ -65,7 +69,7 @@ export const logout = async (req: Request, res: Response) => {
 
 export const connect = async (req: Request, res: Response) => {
     try {
-        const force = req.body?.force === true || req.body?.force === 'true';
+        const force = req.body?.force === true;
         const result = await startWhatsappClient({ force });
         res.json(result);
     } catch (error) {

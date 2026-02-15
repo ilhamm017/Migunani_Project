@@ -20,6 +20,7 @@ export default function SalesMemberCreatePage() {
   const [name, setName] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [tier, setTier] = useState<TierType>('regular');
   const [otp, setOtp] = useState('');
   const [sendingOtp, setSendingOtp] = useState(false);
@@ -57,6 +58,18 @@ export default function SalesMemberCreatePage() {
       setError('Nomor WhatsApp wajib diisi.');
       return;
     }
+    if (!email.trim()) {
+      setError('Email wajib diisi.');
+      return;
+    }
+    if (!password.trim()) {
+      setError('Password wajib diisi.');
+      return;
+    }
+    if (password.trim().length < 6) {
+      setError('Password minimal 6 karakter.');
+      return;
+    }
     if (!/^\d{6}$/.test(otp.trim())) {
       setError('Kode OTP harus 6 digit.');
       return;
@@ -70,7 +83,8 @@ export default function SalesMemberCreatePage() {
         name: name.trim(),
         whatsapp_number: whatsapp.trim(),
         otp_code: otp.trim(),
-        email: email.trim() || undefined,
+        email: email.trim(),
+        password: password.trim(),
         tier,
       });
 
@@ -78,6 +92,7 @@ export default function SalesMemberCreatePage() {
       setName('');
       setWhatsapp('');
       setEmail('');
+      setPassword('');
       setOtp('');
       setTier('regular');
       setOtpSent(false);
@@ -133,7 +148,14 @@ export default function SalesMemberCreatePage() {
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email (opsional)"
+            placeholder="Email (wajib)"
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password akun customer (min. 6 karakter)"
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
           />
           <select

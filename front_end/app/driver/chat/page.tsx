@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, RefreshCw, Search, Send } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -39,7 +39,7 @@ type ChatContactRow = {
   role?: string;
 };
 
-export default function DriverChatPage() {
+function DriverChatContent() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
   const { user } = useAuthStore();
   const router = useRouter();
@@ -473,5 +473,13 @@ export default function DriverChatPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DriverChatPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading chat...</div>}>
+      <DriverChatContent />
+    </Suspense>
   );
 }
