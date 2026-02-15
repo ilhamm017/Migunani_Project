@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize } from '../models';
+import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod } from '../models';
 import { Op } from 'sequelize';
+import { JournalService } from '../services/JournalService';
 
 type ExpenseDetail = {
     key: string;
@@ -321,6 +322,56 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 verified_at: new Date()
             }, { transaction: t });
 
+            // --- Create Journal Entries for Sales & COGS ---
+            const totalAmount = Number(order.total_amount);
+
+            // 1. Journal Sales (Kas/Bank vs Penjualan)
+            const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
+            const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
+            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+
+            if (paymentAcc && revenueAcc) {
+                await JournalService.createEntry({
+                    description: `Penjualan Order #${order.id} - ${invoice.invoice_number}`,
+                    reference_type: 'order',
+                    reference_id: order.id.toString(),
+                    created_by: verifierId,
+                    lines: [
+                        { account_id: paymentAcc.id, debit: totalAmount, credit: 0 },
+                        { account_id: revenueAcc.id, debit: 0, credit: totalAmount }
+                    ]
+                }, t);
+            }
+
+            // 2. Journal COGS (HPP vs Persediaan)
+            const orderItems = await OrderItem.findAll({ where: { order_id: order.id }, transaction: t });
+            const allocations = await OrderAllocation.findAll({ where: { order_id: order.id }, transaction: t });
+
+            let totalCost = 0;
+            orderItems.forEach(item => {
+                const alloc = allocations.find(a => a.product_id === item.product_id);
+                const allocQty = alloc ? Number(alloc.allocated_qty || 0) : 0;
+                totalCost += Number(item.cost_at_purchase || 0) * allocQty;
+            });
+
+            if (totalCost > 0) {
+                const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+                const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+
+                if (hppAcc && inventoryAcc) {
+                    await JournalService.createEntry({
+                        description: `HPP untuk Order #${order.id}`,
+                        reference_type: 'order',
+                        reference_id: order.id.toString(),
+                        created_by: verifierId,
+                        lines: [
+                            { account_id: hppAcc.id, debit: totalCost, credit: 0 },
+                            { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
+                        ]
+                    }, t);
+                }
+            }
+
             // Transition logic based on current status
             if (order.status === 'delivered' && (invoice.payment_method === 'cod' || invoice.payment_method === 'cash_store')) {
                 // COD Settlement: Driver already delivered & uploaded proof, now Finance confirms cash receipt
@@ -350,6 +401,108 @@ export const verifyPayment = async (req: Request, res: Response) => {
     } catch (error) {
         try { await t.rollback(); } catch { }
         res.status(500).json({ message: 'Error verifying payment', error });
+    }
+};
+
+export const voidPayment = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params; // Invoice ID or Order ID? Let's use Invoice ID for precision
+        const userId = req.user!.id;
+
+        const invoice = await Invoice.findByPk(String(id), { include: [Order], transaction: t, lock: t.LOCK.UPDATE });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice not found' });
+        }
+
+        if (invoice.payment_status !== 'paid') {
+            await t.rollback();
+            return res.status(400).json({ message: 'Invoice belum dibayar/status bukan paid.' });
+        }
+
+        // 1. Find the Journal related to this payment
+        // We look for journal with reference_type='order' and reference_id=order_id created closely?
+        // Or we just create a reversal based on invoice amount.
+        // Better: Re-calculate what the journal WAS (Sales + COGS) and reverse it.
+        // Since we don't store journal_id on invoice, we construct the reversal.
+
+        const order = (invoice as any).Order;
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Associated Order not found' });
+        }
+
+        // REVERSE SALES JOURNAL
+        const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
+        const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
+        const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+
+        if (paymentAcc && revenueAcc) {
+            await JournalService.createEntry({
+                description: `[VOID/REVERSAL] Penjualan Order #${order.id} - ${invoice.invoice_number}`,
+                reference_type: 'order_reversal',
+                reference_id: order.id.toString(),
+                created_by: userId,
+                lines: [
+                    { account_id: paymentAcc.id, debit: 0, credit: Number(invoice.amount_paid) }, // Credit Cash
+                    { account_id: revenueAcc.id, debit: Number(invoice.amount_paid), credit: 0 }  // Debit Revenue
+                ]
+            }, t);
+        }
+
+        // REVERSE COGS JOURNAL
+        // Recalculate COGS
+        const orderItems = await OrderItem.findAll({ where: { order_id: order.id }, transaction: t });
+        const allocations = await OrderAllocation.findAll({ where: { order_id: order.id }, transaction: t }); // Allocations might be gone if shipped? No, allocs refer to stock.
+
+        // If order was completed/shipped, COGS was booked.
+        // We assume COGS was booked when 'paid' status was verified.
+
+        let totalCost = 0;
+        orderItems.forEach(item => {
+            const alloc = allocations.find((a: any) => a.product_id === item.product_id);
+            const allocQty = alloc ? Number(alloc.allocated_qty || 0) : Number(item.qty); // Fallback to qty if alloc missing (e.g. historical)
+            totalCost += Number(item.cost_at_purchase || 0) * allocQty;
+        });
+
+        if (totalCost > 0) {
+            const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+            const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+
+            if (hppAcc && inventoryAcc) {
+                await JournalService.createEntry({
+                    description: `[VOID/REVERSAL] HPP Order #${order.id}`,
+                    reference_type: 'order_reversal',
+                    reference_id: order.id.toString(),
+                    created_by: userId,
+                    lines: [
+                        { account_id: hppAcc.id, debit: 0, credit: totalCost }, // Credit HPP (Reduce Expense)
+                        { account_id: inventoryAcc.id, debit: totalCost, credit: 0 } // Debit Inventory (Increase Asset)
+                    ]
+                }, t);
+            }
+        }
+
+        // 2. Reset Invoice
+        await invoice.update({
+            payment_status: 'unpaid',
+            amount_paid: 0,
+            verified_at: null,
+            verified_by: null
+        }, { transaction: t });
+
+        // 3. Reset Order Status
+        if (order.status !== 'canceled') {
+            await order.update({ status: 'waiting_payment' }, { transaction: t });
+        }
+
+        await t.commit();
+        res.json({ message: 'Pembayaran berhasil di-void (Reversed)' });
+
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error voiding payment', error });
     }
 };
 
@@ -398,41 +551,163 @@ export const getExpenses = async (req: Request, res: Response) => {
 };
 
 export const createExpense = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
     try {
-        const { category, amount, date, note, details } = req.body;
+        const { category, amount, date, note, details, payment_method } = req.body;
         const userId = req.user!.id;
 
         const safeCategory = toSafeText(category);
         const numericAmount = Number(amount);
         if (!safeCategory) {
+            await t.rollback();
             return res.status(400).json({ message: 'Kategori wajib diisi' });
         }
         if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+            await t.rollback();
             return res.status(400).json({ message: 'Amount harus lebih besar dari 0' });
+        }
+
+        if (!req.file) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Attachment/Bukti pengeluaran wajib diupload' });
+        }
+
+        let parsedDetails = details;
+        if (typeof details === 'string') {
+            try {
+                parsedDetails = JSON.parse(details);
+            } catch (e) {
+                // Ignore, use as is or empty
+            }
         }
 
         const expense = await Expense.create({
             category: safeCategory,
             amount: numericAmount,
             date: date || new Date(),
-            note: buildExpenseNote(note, details),
+            note: buildExpenseNote(note, parsedDetails),
+            status: 'requested',
+            attachment_url: req.file.path,
             created_by: userId
-        });
+        }, { transaction: t });
 
-        const plain = expense.get({ plain: true }) as any;
-        const parsed = parseExpenseNote(plain.note);
-        res.status(201).json({
-            message: 'Expense created',
-            expense: {
-                ...plain,
-                note: parsed.text,
-                details: parsed.details,
-            }
-        });
+        // No journal entry at creation - moved to payment
+
+        await t.commit();
+        res.status(201).json(expense);
+
     } catch (error) {
+        try { await t.rollback(); } catch { }
         res.status(500).json({ message: 'Error creating expense', error });
     }
 };
+
+export const approveExpense = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params as { id: string };
+        const userId = req.user!.id;
+
+        const expense = await Expense.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!expense) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Expense not found' });
+        }
+
+        if (expense.status !== 'requested') {
+            await t.rollback();
+            return res.status(400).json({ message: `Expense status is ${expense.status}, cannot approve` });
+        }
+
+        await expense.update({
+            status: 'approved',
+            approved_by: userId,
+            approved_at: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+        res.json({ message: 'Expense approved', expense });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error approving expense', error });
+    }
+};
+
+export const payExpense = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params as { id: string };
+        const { account_id } = req.body;
+        const userId = req.user!.id;
+
+        const expense = await Expense.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!expense) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Expense not found' });
+        }
+
+        if (expense.status !== 'approved') {
+            await t.rollback();
+            return res.status(400).json({ message: `Expense must be approved before payment. Current status: ${expense.status}` });
+        }
+
+        if (!account_id) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Account ID (source of funds) is required' });
+        }
+
+        const paymentAcc = await Account.findByPk(account_id, { transaction: t });
+        if (!paymentAcc) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Payment account not found' });
+        }
+
+        await expense.update({
+            status: 'paid',
+            account_id: account_id,
+            paid_at: new Date()
+        }, { transaction: t });
+
+        // --- Create Journal Entry (Expense vs Cash/Bank) ---
+        // Map category to COA code
+        let expenseAccountCode = '5300'; // Default: Operasional
+        const catLower = expense.category.toLowerCase();
+        // Simple mapping based on keywords, ideally stored in config or ExpenseLabel
+        if (catLower.includes('gaji')) expenseAccountCode = '5200';
+        else if (catLower.includes('listrik') || catLower.includes('utility')) expenseAccountCode = '5300'; // Or specific code
+        else if (catLower.includes('transport') || catLower.includes('ongkir')) expenseAccountCode = '5500';
+        else if (catLower.includes('hpp') || catLower.includes('modal')) expenseAccountCode = '5100';
+        else if (catLower.includes('refund')) expenseAccountCode = '4100-REFUND'; // Example, handle carefully
+
+        let expenseAcc = await Account.findOne({ where: { code: expenseAccountCode }, transaction: t });
+
+        // Fallback if specific account not found, use General Expense (5900 if created?) or just keep 5300
+        if (!expenseAcc) {
+            expenseAcc = await Account.findOne({ where: { code: '5300' }, transaction: t });
+        }
+
+        if (expenseAcc) {
+            await JournalService.createEntry({
+                description: `Expense Payment: ${expense.category} - ${expense.note || ''}`,
+                reference_type: 'expense',
+                reference_id: expense.id.toString(),
+                created_by: userId,
+                date: new Date(),
+                lines: [
+                    { account_id: expenseAcc.id, debit: Number(expense.amount), credit: 0 },
+                    { account_id: paymentAcc.id, debit: 0, credit: Number(expense.amount) }
+                ]
+            }, t);
+        }
+
+        await t.commit();
+        res.json({ message: 'Expense paid', expense });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error paying expense', error });
+    }
+};
+
 
 export const getExpenseLabels = async (_req: Request, res: Response) => {
     try {
@@ -894,13 +1169,45 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         await driver.update({ debt: newDebt }, { transaction: t });
 
         if (invoices.length > 0) {
+            // New logic: Find pending CodCollections for these invoices
+            const invoiceIds = invoices.map(i => i.id);
+            const collections = await CodCollection.findAll({
+                where: {
+                    invoice_id: { [Op.in]: invoiceIds },
+                    driver_id: driver_id,
+                    status: 'collected'
+                },
+                transaction: t
+            });
+
+            const collectionSum = collections.reduce((acc, c) => acc + Number(c.amount), 0);
+
+            // Create Settlement
+            const settlement = await CodSettlement.create({
+                driver_id: driver_id,
+                total_amount: received,
+                received_by: verifierId,
+                settled_at: new Date()
+            }, { transaction: t });
+
+            // Mark collections as settled
+            if (collections.length > 0) {
+                await CodCollection.update({
+                    status: 'settled',
+                    settlement_id: settlement.id
+                }, {
+                    where: { id: { [Op.in]: collections.map(c => c.id) } },
+                    transaction: t
+                });
+            }
+
             // Update Invoices -> Paid
             await Invoice.update({
                 payment_status: 'paid',
                 verified_at: new Date(),
                 verified_by: verifierId
             }, {
-                where: { id: { [Op.in]: invoices.map(i => i.id) } },
+                where: { id: { [Op.in]: invoiceIds } },
                 transaction: t
             });
 
@@ -911,6 +1218,89 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 where: { id: { [Op.in]: order_ids } },
                 transaction: t
             });
+
+            // --- Journal Entry for Settlement (Cash vs Piutang vs Revenue) ---
+            // 1. Revenue & Payment
+            if (totalExpected > 0 || received > 0) {
+                const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
+                const piutangAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
+                const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+
+                if (cashAcc && piutangAcc && revenueAcc) {
+                    const journalLines: any[] = [];
+
+                    // a. Cash Received
+                    if (received > 0) {
+                        journalLines.push({ account_id: cashAcc.id, debit: received, credit: 0 });
+                    }
+
+                    // b. Revenue Recognized (Full Order Amount)
+                    if (totalExpected > 0) {
+                        journalLines.push({ account_id: revenueAcc.id, debit: 0, credit: totalExpected });
+                    }
+
+                    // c. Difference (Piutang Driver)
+                    // diff = received - totalExpected
+                    // If diff < 0 (Shortage): received < total. Need Debit Piutang (Driver owes us).
+                    // If diff > 0 (Surplus): received > total. Need Credit Piutang (Driver pays debt).
+                    if (diff < 0) {
+                        journalLines.push({ account_id: piutangAcc.id, debit: Math.abs(diff), credit: 0 });
+                    } else if (diff > 0) {
+                        journalLines.push({ account_id: piutangAcc.id, debit: 0, credit: diff });
+                    }
+
+                    if (journalLines.length >= 2) {
+                        await JournalService.createEntry({
+                            description: `Setoran COD Settlement #${settlement.id} (Driver: ${driver.name})`,
+                            reference_type: 'cod_settlement',
+                            reference_id: settlement.id.toString(),
+                            created_by: verifierId,
+                            lines: journalLines
+                        }, t);
+                    }
+                }
+
+                // 2. COGS (HPP vs Inventory)
+                if (invoices.length > 0) {
+                    // Collect Order IDs
+                    const settledOrderIds = invoices.map(inv => inv.Order.id);
+
+                    // Fetch items & allocations for these orders
+                    const orderItems = await OrderItem.findAll({
+                        where: { order_id: { [Op.in]: settledOrderIds } },
+                        include: [],
+                        transaction: t
+                    });
+                    // Note: OrderAllocations might be gone if we cleared them? 
+                    // Usually we keep them or move to 'shipped'. Assuming OrderAllocation persists or we use item.cost_at_purchase directly.
+                    // The COGS logic in verifyPayment used allocations to verify quantity, but items have qty too.
+                    // Let's rely on OrderItem cost_at_purchase * qty.
+                    // IMPORTANT: cost_at_purchase is stored on OrderItem.
+
+                    let totalCost = 0;
+                    orderItems.forEach(item => {
+                        totalCost += Number(item.cost_at_purchase || 0) * Number(item.qty || 0);
+                    });
+
+                    if (totalCost > 0) {
+                        const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+                        const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+
+                        if (hppAcc && inventoryAcc) {
+                            await JournalService.createEntry({
+                                description: `HPP untuk COD Settlement #${settlement.id}`,
+                                reference_type: 'cod_settlement',
+                                reference_id: settlement.id.toString(),
+                                created_by: verifierId,
+                                lines: [
+                                    { account_id: hppAcc.id, debit: totalCost, credit: 0 },
+                                    { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
+                                ]
+                            }, t);
+                        }
+                    }
+                }
+            }
         }
 
         await t.commit();
@@ -924,11 +1314,130 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 surplus: diff > 0 ? diff : 0,
                 driver_debt_before: previousDebt,
                 driver_debt_after: newDebt
-            }
+            },
+            settlement: invoices.length > 0 ? 'created' : 'skipped'
         });
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error verifying driver COD', error });
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        res.status(500).json({ message: 'Error verifying driver COD', error: errMsg });
+    }
+};
+
+// --- Journals ---
+export const getJournals = async (req: Request, res: Response) => {
+    try {
+        const { page = 1, limit = 50, startDate, endDate } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+
+        const where: any = {};
+        if (startDate && endDate) {
+            where.date = { [Op.between]: [startDate, endDate] };
+        }
+
+        const journals = await Journal.findAndCountAll({
+            where,
+            include: [{ model: JournalLine, as: 'Lines', include: [{ model: Account, as: 'Account' }] }],
+            limit: Number(limit),
+            offset: Number(offset),
+            order: [['date', 'DESC'], ['id', 'DESC']]
+        });
+
+        res.json({
+            total: journals.count,
+            totalPages: Math.ceil(journals.count / Number(limit)),
+            currentPage: Number(page),
+            journals: journals.rows
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching journals', error });
+    }
+};
+
+// --- Accounting Periods & Adjustments ---
+
+export const getAccountingPeriods = async (req: Request, res: Response) => {
+    try {
+        const periods = await AccountingPeriod.findAll({
+            order: [['year', 'DESC'], ['month', 'DESC']]
+        });
+        res.json(periods);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching periods', error });
+    }
+};
+
+export const closeAccountingPeriod = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { month, year } = req.body;
+        const userId = req.user!.id;
+
+        if (!month || !year) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Month dan Year wajib diisi' });
+        }
+
+        const [period, created] = await AccountingPeriod.findOrCreate({
+            where: { month, year },
+            defaults: {
+                month,
+                year,
+                is_closed: true,
+                closed_at: new Date(),
+                closed_by: userId
+            },
+            transaction: t
+        });
+
+        if (!created && period.is_closed) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Periode sudah ditutup sebelumnya' });
+        }
+
+        if (!created) {
+            await period.update({
+                is_closed: true,
+                closed_at: new Date(),
+                closed_by: userId
+            }, { transaction: t });
+        }
+
+        await t.commit();
+        res.json({ message: `Periode ${month}/${year} berhasil ditutup`, period });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error closing period', error });
+    }
+};
+
+export const createAdjustmentJournal = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { date, description, lines } = req.body;
+        const userId = req.user!.id;
+
+        if (!lines || !Array.isArray(lines) || lines.length < 2) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Journal adjustment minimal 2 baris (Debit/Credit)' });
+        }
+
+        // Use createAdjustmentEntry which bypasses period lock enforcement 
+        // OR enforces strict "Adjustment Only" logic
+        const journal = await JournalService.createAdjustmentEntry({
+            date: date ? new Date(date) : new Date(),
+            description: `[ADJUSTMENT] ${description}`,
+            reference_type: 'adjustment', // Custom type
+            created_by: userId,
+            lines
+        }, t);
+
+        await t.commit();
+        res.status(201).json({ message: 'Adjustment journal created', journal });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        res.status(500).json({ message: 'Error creating adjustment', error: msg });
     }
 };

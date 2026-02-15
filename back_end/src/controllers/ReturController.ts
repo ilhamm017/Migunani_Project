@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
-import { Retur, Order, Product, User, sequelize, OrderItem, Expense } from '../models';
+import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account } from '../models';
 import { Op } from 'sequelize';
+import { JournalService } from '../services/JournalService';
 
 // --- Customer Endpoints ---
 
@@ -220,9 +221,39 @@ export const updateReturStatus = async (req: Request, res: Response) => {
         if (nextStatus === 'completed' && is_back_to_stock === true) {
             const product = await Product.findByPk(retur.product_id, { transaction: t, lock: t.LOCK.UPDATE });
             if (product) {
+                const oldStock = Number(product.stock_quantity);
+                const returnQty = Number(retur.qty);
                 await product.update({
-                    stock_quantity: Number(product.stock_quantity) + Number(retur.qty)
+                    stock_quantity: oldStock + returnQty
                 }, { transaction: t });
+
+                // --- Journal for Return to Stock (Persediaan vs HPP Reversal) ---
+                // Find cost at purchase for this product in this order
+                const orderItem = await OrderItem.findOne({
+                    where: { order_id: retur.order_id, product_id: retur.product_id },
+                    transaction: t
+                });
+
+                const unitCost = Number(orderItem?.cost_at_purchase || product.base_price || 0);
+                const totalCost = unitCost * returnQty;
+
+                if (totalCost > 0) {
+                    const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+                    const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+
+                    if (inventoryAcc && hppAcc) {
+                        await JournalService.createEntry({
+                            description: `Retur Barang ke Stok (Order #${retur.order_id.slice(0, 8)})`,
+                            reference_type: 'retur_stock',
+                            reference_id: retur.id,
+                            created_by: req.user!.id,
+                            lines: [
+                                { account_id: inventoryAcc.id, debit: totalCost, credit: 0 },
+                                { account_id: hppAcc.id, debit: 0, credit: totalCost }
+                            ]
+                        }, t);
+                    }
+                }
             }
         }
 
@@ -286,13 +317,30 @@ export const disburseRefund = async (req: Request, res: Response) => {
         // Let's assume standard import at top.
         // I will add imports in a separate call if needed.
 
-        await Expense.create({
+        const expense = await Expense.create({
             category: 'Refund Retur',
             amount: refundAmount,
             date: new Date(),
             note: expenseNote,
             created_by: adminId
         }, { transaction: t });
+
+        // --- Create Journal Entry for Refund ---
+        const refundAcc = await Account.findOne({ where: { code: '5400' }, transaction: t });
+        const paymentAcc = await Account.findOne({ where: { code: '1101' }, transaction: t }); // Default to Kas for refund
+
+        if (refundAcc && paymentAcc) {
+            await JournalService.createEntry({
+                description: expenseNote,
+                reference_type: 'retur_refund',
+                reference_id: retur.id,
+                created_by: adminId,
+                lines: [
+                    { account_id: refundAcc.id, debit: refundAmount, credit: 0 },
+                    { account_id: paymentAcc.id, debit: 0, credit: refundAmount }
+                ]
+            }, t);
+        }
 
         // Update Retur
         await retur.update({

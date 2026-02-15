@@ -333,6 +333,10 @@ export const api = {
             getDriverCodList: () => apiClient.get('/admin/finance/driver-cod'),
             verifyDriverCod: (data: { driver_id: string; order_ids: string[]; amount_received: number }) =>
                 apiClient.post('/admin/finance/driver-cod/verify', data),
+            voidInvoice: (invoiceId: string) => apiClient.post(`/invoices/${invoiceId}/void`),
+            getPeriods: () => apiClient.get('/periods'),
+            closePeriod: (data: { month: number; year: number }) => apiClient.post('/periods/close', data),
+            getJournals: (params?: { page?: number; limit?: number }) => apiClient.get('/journals', { params }),
         },
         staff: {
             getAll: () => apiClient.get('/admin/staff'),

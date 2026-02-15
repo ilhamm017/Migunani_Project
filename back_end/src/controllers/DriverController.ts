@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur } from '../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, Account, OrderAllocation } from '../models';
+import { JournalService } from '../services/JournalService';
 import { Op } from 'sequelize';
 
 export const getAssignedOrders = async (req: Request, res: Response) => {
@@ -91,13 +92,76 @@ export const completeDelivery = async (req: Request, res: Response) => {
                 amount_paid: amountToCollect, // Assume full payment collected by driver
             }, { transaction: t });
 
-            // 2. Increment driver's debt (Utang ke Finance)
+            // 2. Create COD Collection Record
             if (amountToCollect > 0) {
+                await CodCollection.create({
+                    invoice_id: Number(invoice.id),
+                    driver_id: userId,
+                    amount: amountToCollect,
+                    status: 'collected'
+                }, { transaction: t });
+
+                // 3. Increment driver's debt (Utang ke Finance)
                 await User.increment('debt', {
                     by: amountToCollect,
                     where: { id: userId },
                     transaction: t
                 });
+            }
+        }
+
+        // --- Journal Entry for Delivery (Revenue Recognition) ---
+        // Even if not COD, delivery usually triggers revenue recognition in accrual basis?
+        // But per request "Saat settlement: Kas(D), Piutang(K)", implying previously it was Piutang(D), Revenue(K).
+        // For COD, when delivered -> Piutang (Driver holds money) vs Revenue.
+
+        const totalAmount = Number(order.total_amount);
+        const piutangCode = invoice.payment_method === 'cod' ? '1103' : null; // 1103 = Piutang Usaha (or specialized Piutang COD)
+
+        if (piutangCode && totalAmount > 0) {
+            const piutangAcc = await Account.findOne({ where: { code: piutangCode }, transaction: t });
+            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+
+            if (piutangAcc && revenueAcc) {
+                await JournalService.createEntry({
+                    description: `Penjualan COD Order #${order.id} (Delivered)`,
+                    reference_type: 'order',
+                    reference_id: order.id.toString(),
+                    created_by: userId,
+                    lines: [
+                        { account_id: piutangAcc.id, debit: totalAmount, credit: 0 },
+                        { account_id: revenueAcc.id, debit: 0, credit: totalAmount }
+                    ]
+                }, t);
+            }
+
+            // COGS Journal
+            const orderItems = await OrderItem.findAll({ where: { order_id: order.id }, transaction: t });
+            const allocations = await OrderAllocation.findAll({ where: { order_id: order.id }, transaction: t });
+
+            let totalCost = 0;
+            orderItems.forEach(item => {
+                const alloc = allocations.find(a => a.product_id === item.product_id);
+                const allocQty = alloc ? Number(alloc.allocated_qty || 0) : 0;
+                totalCost += Number(item.cost_at_purchase || 0) * allocQty;
+            });
+
+            if (totalCost > 0) {
+                const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+                const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+
+                if (hppAcc && inventoryAcc) {
+                    await JournalService.createEntry({
+                        description: `HPP untuk Order #${order.id}`,
+                        reference_type: 'order',
+                        reference_id: order.id.toString(),
+                        created_by: userId, // Driver triggers this
+                        lines: [
+                            { account_id: hppAcc.id, debit: totalCost, credit: 0 },
+                            { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
+                        ]
+                    }, t);
+                }
             }
         }
 

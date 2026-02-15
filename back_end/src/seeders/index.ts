@@ -4,7 +4,8 @@ import {
     User,
     Category,
     Product,
-    Supplier
+    Supplier,
+    Account
 } from '../models';
 
 async function seedDatabase() {
@@ -148,6 +149,37 @@ async function seedDatabase() {
             { name: 'UD Maju Jaya', contact: '081234567892', address: 'Surabaya' },
         ]);
         console.log(`✅ ${suppliers.length} suppliers created\n`);
+
+        // Seed Accounts (Chart of Accounts)
+        console.log('💳 Seeding accounts...');
+        const accountsData = [
+            // ASSET
+            { code: '1101', name: 'Kas', type: 'asset' },
+            { code: '1102', name: 'Bank', type: 'asset' },
+            { code: '1300', name: 'Persediaan', type: 'asset' },
+            // LIABILITY
+            { code: '2100', name: 'Hutang Supplier', type: 'liability' },
+            // EQUITY
+            { code: '3100', name: 'Modal', type: 'equity' },
+            { code: '3200', name: 'Laba Ditahan', type: 'equity' },
+            // REVENUE
+            { code: '4100', name: 'Penjualan', type: 'revenue' },
+            // EXPENSE
+            { code: '5100', name: 'HPP', type: 'expense' },
+            { code: '5200', name: 'Gaji', type: 'expense' },
+            { code: '5300', name: 'Operasional', type: 'expense' },
+            { code: '5400', name: 'Refund', type: 'expense' },
+            { code: '5500', name: 'Transport', type: 'expense' },
+        ];
+
+        for (const acc of accountsData) {
+            await Account.create({
+                ...acc,
+                type: acc.type as any,
+                is_active: true
+            });
+        }
+        console.log(`✅ ${accountsData.length} accounts created\n`);
 
         // Seed Products
         console.log('📦 Seeding products...');
@@ -380,6 +412,7 @@ async function seedDatabase() {
         console.log(`   - Users: ${userSeeds.length} (semua role)`);
         console.log(`   - Categories: ${categories.length}`);
         console.log(`   - Suppliers: ${suppliers.length}`);
+        console.log(`   - Accounts: ${accountsData.length}`);
         console.log(`   - Products: ${products.length}`);
         console.log('\n🔐 Login Credentials:');
         userSeeds.forEach((userSeed) => {

@@ -26,6 +26,15 @@ import StockOpname from './StockOpname';
 import StockOpnameItem from './StockOpnameItem';
 import OrderAllocation from './OrderAllocation';
 import Retur from './Retur';
+import Account from './Account';
+import Journal from './Journal';
+import JournalLine from './JournalLine';
+import CodCollection from './CodCollection';
+import CodSettlement from './CodSettlement';
+import SupplierInvoice from './SupplierInvoice';
+import SupplierPayment from './SupplierPayment';
+import Backorder from './Backorder';
+import AccountingPeriod from './AccountingPeriod';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -151,14 +160,49 @@ User.hasMany(ChatThread, { foreignKey: 'customer_user_id', as: 'CustomerOmniThre
 ChatThread.belongsTo(User, { foreignKey: 'customer_user_id', as: 'CustomerUser' });
 
 // Finance
+AccountingPeriod.belongsTo(User, { foreignKey: 'closed_by', as: 'ClosedBy' });
+
 User.hasMany(Expense, { foreignKey: 'created_by' });
 Expense.belongsTo(User, { foreignKey: 'created_by' });
+
+Expense.belongsTo(User, { as: 'Approver', foreignKey: 'approved_by' });
+User.hasMany(Expense, { foreignKey: 'approved_by', as: 'ApprovedExpenses' });
+
+Expense.belongsTo(Account, { foreignKey: 'account_id', as: 'SourceAccount' });
+// Account.hasMany(Expense, { foreignKey: 'account_id' }); // Optional
 
 User.hasMany(PurchaseOrder, { foreignKey: 'created_by' });
 PurchaseOrder.belongsTo(User, { foreignKey: 'created_by' });
 
 PurchaseOrder.hasMany(PurchaseOrderItem, { foreignKey: 'purchase_order_id', as: 'Items' });
 PurchaseOrderItem.belongsTo(PurchaseOrder, { foreignKey: 'purchase_order_id' });
+
+// Accounts
+Account.belongsTo(Account, { foreignKey: 'parent_id', as: 'Parent' });
+Account.hasMany(Account, { foreignKey: 'parent_id', as: 'Children' });
+
+// Journals
+Journal.hasMany(JournalLine, { foreignKey: 'journal_id', as: 'Lines' });
+JournalLine.belongsTo(Journal, { foreignKey: 'journal_id' });
+
+JournalLine.belongsTo(Account, { foreignKey: 'account_id', as: 'Account' });
+Account.hasMany(JournalLine, { foreignKey: 'account_id' });
+
+Journal.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+User.hasMany(Journal, { foreignKey: 'created_by' });
+
+// COD System
+CodCollection.belongsTo(Invoice, { foreignKey: 'invoice_id' });
+Invoice.hasOne(CodCollection, { foreignKey: 'invoice_id' });
+
+CodCollection.belongsTo(User, { foreignKey: 'driver_id', as: 'Driver' });
+User.hasMany(CodCollection, { foreignKey: 'driver_id', as: 'Collections' });
+
+CodSettlement.hasMany(CodCollection, { foreignKey: 'settlement_id', as: 'Collections' });
+CodCollection.belongsTo(CodSettlement, { foreignKey: 'settlement_id' });
+
+CodSettlement.belongsTo(User, { foreignKey: 'driver_id', as: 'Driver' });
+CodSettlement.belongsTo(User, { foreignKey: 'received_by', as: 'Receiver' });
 
 PurchaseOrderItem.belongsTo(Product, { foreignKey: 'product_id' });
 Product.hasMany(PurchaseOrderItem, { foreignKey: 'product_id' });
@@ -191,5 +235,14 @@ export {
     StockOpname,
     StockOpnameItem,
     OrderAllocation,
-    Retur
+    Retur,
+    Account,
+    Journal,
+    JournalLine,
+    CodCollection,
+    CodSettlement,
+    SupplierInvoice,
+    SupplierPayment,
+    Backorder,
+    AccountingPeriod
 };

@@ -3,7 +3,8 @@ import ExcelJS from 'exceljs';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
-import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize } from '../models';
+import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../models';
+import { JournalService } from '../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 
 const ALLOWED_IMPORT_EXTENSIONS = new Set(['.xlsx', '.xls', '.csv']);
@@ -1848,6 +1849,116 @@ export const createPurchaseOrder = async (req: Request, res: Response) => {
     } catch (error) {
         await t.rollback();
         res.status(500).json({ message: 'Error creating PO', error });
+    }
+};
+
+
+export const createSupplierInvoice = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { purchase_order_id, invoice_number, total, due_date } = req.body;
+        const userId = req.user!.id;
+
+        const po = await PurchaseOrder.findByPk(purchase_order_id, { transaction: t });
+        if (!po) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Purchase Order not found' });
+        }
+
+        const supplierInvoice = await SupplierInvoice.create({
+            supplier_id: po.supplier_id,
+            purchase_order_id: po.id,
+            invoice_number,
+            total: Number(total),
+            due_date: new Date(due_date),
+            status: 'unpaid',
+            created_by: userId
+        }, { transaction: t });
+
+        // --- Journal: Persediaan (D) vs Hutang Supplier (K) ---
+        // Note: Assuming inventory value increases when invoice is received/acknowledged.
+        const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+        const apAcc = await Account.findOne({ where: { code: '2100' }, transaction: t }); // Hutang Supplier
+
+        if (inventoryAcc && apAcc) {
+            await JournalService.createEntry({
+                description: `Tagihan Supplier #${supplierInvoice.invoice_number} (PO #${po.id})`,
+                reference_type: 'supplier_invoice',
+                reference_id: supplierInvoice.id.toString(),
+                created_by: userId,
+                lines: [
+                    { account_id: inventoryAcc.id, debit: Number(total), credit: 0 },
+                    { account_id: apAcc.id, debit: 0, credit: Number(total) }
+                ]
+            }, t);
+        }
+
+        await t.commit();
+        res.status(201).json(supplierInvoice);
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error creating supplier invoice', error });
+    }
+};
+
+export const paySupplierInvoice = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { invoice_id, amount, account_id, note } = req.body;
+        const userId = req.user!.id;
+
+        const invoice = await SupplierInvoice.findByPk(invoice_id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice not found' });
+        }
+
+        const paymentAmount = Number(amount);
+        if (paymentAmount <= 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Jumlah pembayaran tidak valid' });
+        }
+
+        const payments = await SupplierPayment.findAll({ where: { supplier_invoice_id: invoice_id }, transaction: t });
+        const paidTotal = payments.reduce((sum, p) => sum + Number(p.amount), 0);
+
+        const payment = await SupplierPayment.create({
+            supplier_invoice_id: invoice.id,
+            amount: paymentAmount,
+            account_id,
+            paid_at: new Date(),
+            note,
+            created_by: userId
+        }, { transaction: t });
+
+        const newPaidTotal = paidTotal + paymentAmount;
+        if (newPaidTotal >= Number(invoice.total)) {
+            await invoice.update({ status: 'paid' }, { transaction: t });
+        }
+
+        // --- Journal: Hutang Supplier (D) vs Kas/Bank (K) ---
+        const apAcc = await Account.findOne({ where: { code: '2100' }, transaction: t });
+        const paymentAcc = await Account.findByPk(account_id, { transaction: t }); // 1101 or 1102
+
+        if (apAcc && paymentAcc) {
+            await JournalService.createEntry({
+                description: `Pembayaran Tagihan Supplier #${invoice.invoice_number} (Payment #${payment.id})`,
+                reference_type: 'supplier_payment',
+                reference_id: payment.id.toString(),
+                created_by: userId,
+                lines: [
+                    { account_id: apAcc.id, debit: paymentAmount, credit: 0 },
+                    { account_id: paymentAcc.id, debit: 0, credit: paymentAmount }
+                ]
+            }, t);
+        }
+
+        await t.commit();
+        res.json({ message: 'Pembayaran berhasil', payment });
+
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Error paying supplier invoice', error });
     }
 };
 

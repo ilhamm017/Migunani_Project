@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, OrderAllocation, Product, sequelize, User, Invoice, OrderIssue } from '../models';
+import { Order, OrderItem, OrderAllocation, Product, sequelize, User, Invoice, OrderIssue, Backorder } from '../models';
 
 const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 const TERMINAL_ORDER_STATUSES = ['completed', 'canceled', 'expired'] as const;
@@ -337,10 +337,47 @@ export const allocateOrder = async (req: Request, res: Response) => {
             })
             .filter(Boolean);
 
-        // --- Manage Order Issues (Shortage Tracking) ---
+        // --- Manage Backorders & Order Issues ---
         const hasShortage = backorderItems.length > 0;
         const now = new Date();
 
+        // 1. Update Backorder Records
+        for (const oi of orderItems) {
+            const alloc = allocations.find(a => a.product_id === oi.product_id);
+            const allocQty = alloc ? alloc.allocated_qty : 0;
+            const shortageRaw = oi.qty - allocQty;
+            const shortage = shortageRaw > 0 ? shortageRaw : 0;
+
+            const [backorder, created] = await Backorder.findOrCreate({
+                where: { order_item_id: oi.id },
+                defaults: {
+                    order_item_id: oi.id,
+                    qty_pending: shortage,
+                    status: 'waiting_stock'
+                },
+                transaction: t
+            });
+
+            if (shortage > 0) {
+                // If backorder exists or just created, ensure status and qty
+                if (!created || backorder.qty_pending !== shortage) {
+                    await backorder.update({
+                        qty_pending: shortage,
+                        status: 'waiting_stock' // Re-open if it was canceled/fulfilled but now has shortage?
+                    }, { transaction: t });
+                }
+            } else {
+                // No shortage -> Fulfilled
+                if (backorder.status !== 'fulfilled' && backorder.status !== 'canceled') {
+                    await backorder.update({
+                        qty_pending: 0,
+                        status: 'fulfilled'
+                    }, { transaction: t });
+                }
+            }
+        }
+
+        // 2. Manage Order Issues (Legacy Shortage Tracking - Optional but good for visibility)
         if (hasShortage) {
             // Create or update open shortage issue
             const existingIssue = await OrderIssue.findOne({
@@ -449,6 +486,18 @@ export const cancelBackorder = async (req: Request, res: Response) => {
                     stock_quantity: Number(product.stock_quantity || 0) + allocatedQty,
                     allocated_quantity: Math.max(0, Number(product.allocated_quantity || 0) - allocatedQty),
                 }, { transaction: t });
+            }
+        }
+
+        // --- Update Backorder Records Status to canceled ---
+        for (const item of orderItems) {
+            const backorder = await Backorder.findOne({
+                where: { order_item_id: item.id },
+                transaction: t
+            });
+
+            if (backorder) {
+                await backorder.update({ status: 'canceled', notes: `Reason: ${reason}` }, { transaction: t });
             }
         }
 

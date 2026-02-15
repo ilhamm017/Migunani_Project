@@ -188,6 +188,7 @@ import returRoutes from './routes/retur';
 import customerRoutes from './routes/customer';
 import shippingMethodRoutes from './routes/shippingMethod';
 import discountVoucherRoutes from './routes/discountVoucher';
+import accountRoutes from './routes/accounts';
 
 // Routes
 // Routes
@@ -210,6 +211,7 @@ app.use('/api/v1/retur', returRoutes);
 app.use('/api/v1/admin/customers', customerRoutes);
 app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
 app.use('/api/v1/admin/discount-vouchers', discountVoucherRoutes);
+app.use('/api/v1/admin/accounts', accountRoutes);
 
 app.get('/', (req, res) => {
     res.send('Migunani Motor Backend Running');

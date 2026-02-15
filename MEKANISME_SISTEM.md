@@ -27,17 +27,36 @@ Pencatatan pemasukan **tidak dilakukan secara manual**, melainkan otomatis dari 
 3.  **Perhitungan**: Total dari kolom `amount_paid` pada invoice yang valid.
 
 ### B. Pengeluaran (Expenses)
-Pengeluaran dicatat secara **manual** oleh Admin Finance melalui menu "Expenses".
+Pengeluaran dicatat melalui flow 2 tahap: **Requested -> Approved -> Paid**.
 
-1.  **Input Data**:
-    *   **Kategori**: Listrik, Gaji Pegawai, Operasional, Bensin, dll.
-    *   **Nominal**: Jumlah uang keluar.
-    *   **Tanggal**: Tanggal transaksi.
-    *   **Catatan**: Detail keperluan.
-2.  **Dampak**: Mengurangi Net Profit secara langsung pada periode tersebut.
+1.  **Request (Pengajuan)**:
+    *   Admin menginput pengajuan biaya.
+    *   Data wajib: Kategori, Nominal, Tanggal, Catatan, **Attachment** (Bukti Foto/Nota).
+    *   Status: `requested`. Belum muncul di laporan keuangan.
 
-### C. Laporan Laba Rugi (Profit & Loss)
-Sistem menghitung profitabilitas secara *real-time* dengan rumus:
+2.  **Approve (Persetujuan)**:
+    *   Super Admin / Finance Manager menyetujui pengajuan.
+    *   Status: `approved`. Masih belum mengurangi kas.
+
+3.  **Payment (Pembayaran)**:
+    *   Finance melakukan pembayaran (Transfer/Kas Keluar).
+    *   Data wajib: **Account ID** (Sumber Dana: Kas/Bank).
+    *   Status: `paid`.
+    *   **Dampak Akuntansi**: Terbentuk Jurnal (Debit: Beban, Kredit: Kas/Bank).
+
+46: 
+47: ### C. Periode Akuntansi (Accounting Periods)
+48: **Period Lock** diterapkan untuk mencegah perubahan data pada periode yang sudah ditutup.
+49: 
+50: 1.  **Close Period**: 
+51:     *   Dilakukan oleh Super Admin/Finance setiap akhir bulan.
+52:     *   Setelah close, **tidak ada transaksi** (Jurnal/Expense/Order) yang bisa diedit/dihapus pada periode tersebut.
+53: 2.  **Adjustment Journal**:
+54:     *   Jika ada koreksi pada periode tertutup, hanya boleh dilakukan via **Adjustment Journal**.
+55:     *   Ditandai khusus sebagai [ADJUSTMENT].
+56: 
+57: ### D. Laporan Laba Rugi (Profit & Loss)
+58: Sistem menghitung profitabilitas secara *real-time* dengan rumus:
 
 1.  **Revenue (Omzet)**: Total uang masuk dari pesanan lunas.
 2.  **COGS (HPP)**: Harga modal barang (`cost_at_purchase`) dari barang yang *terjual* (bukan barang yang dibeli untuk stok).

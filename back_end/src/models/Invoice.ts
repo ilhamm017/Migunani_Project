@@ -80,6 +80,13 @@ Invoice.init(
     {
         sequelize,
         tableName: 'invoices',
+        hooks: {
+            beforeDestroy: (instance) => {
+                if (instance.payment_status === 'paid' || instance.payment_status === 'cod_pending') {
+                    throw new Error('Invoice yang sudah dibayar/pending tidak boleh dihapus.');
+                }
+            }
+        },
         indexes: [
             {
                 unique: true,

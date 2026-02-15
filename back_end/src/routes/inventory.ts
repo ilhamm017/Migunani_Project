@@ -60,4 +60,8 @@ router.post('/admin/inventory/import-from-path', authenticateToken, authorizeRol
 router.get('/admin/inventory/scan', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.scanProduct);
 router.get('/admin/inventory/scan/:sku', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.scanProduct);
 
+// Supplier Invoices
+router.post('/admin/finance/supplier-invoice', authenticateToken, authorizeRoles('super_admin', 'admin_finance'), InventoryController.createSupplierInvoice);
+router.post('/admin/finance/supplier-invoice/pay', authenticateToken, authorizeRoles('super_admin', 'admin_finance'), InventoryController.paySupplierInvoice);
+
 export default router;
