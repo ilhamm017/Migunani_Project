@@ -95,7 +95,7 @@ export const completeDelivery = async (req: Request, res: Response) => {
             // 2. Create COD Collection Record
             if (amountToCollect > 0) {
                 await CodCollection.create({
-                    invoice_id: Number(invoice.id),
+                    invoice_id: invoice.id,
                     driver_id: userId,
                     amount: amountToCollect,
                     status: 'collected'
