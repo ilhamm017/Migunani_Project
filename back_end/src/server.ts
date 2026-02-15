@@ -349,7 +349,7 @@ const startServer = async () => {
             }
         }
         try {
-            await sequelize.sync({ alter: false });
+            await sequelize.sync({ alter: true });
         } catch (e) {
             console.error('Sync error (ignored to keep server running):', e);
         }
