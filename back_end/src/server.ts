@@ -235,6 +235,28 @@ const ORDER_STATUS_ENUM_VALUES = [
     'hold'
 ];
 
+const RETUR_STATUS_ENUM_VALUES = [
+    'pending',
+    'approved',
+    'pickup_assigned',
+    'picked_up',
+    'handed_to_warehouse',
+    'received',
+    'completed',
+    'rejected'
+];
+
+const parseEnumValuesFromColumnType = (columnTypeRaw: unknown): string[] => {
+    const columnType = String(columnTypeRaw || '');
+    const values: string[] = [];
+    const regex = /'((?:[^'\\]|\\.)*)'/g;
+    let match: RegExpExecArray | null = null;
+    while ((match = regex.exec(columnType)) !== null) {
+        values.push(match[1].replace(/\\'/g, "'"));
+    }
+    return values;
+};
+
 const ensureOrderStatusEnumReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -271,6 +293,44 @@ const ensureOrderStatusEnumReady = async () => {
     }
 };
 
+const ensureReturStatusEnumReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
+    try {
+        const [rows] = await sequelize.query(
+            `SELECT COLUMN_TYPE AS columnType
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'returs'
+               AND COLUMN_NAME = 'status'`
+        ) as any;
+
+        const statusColumn = rows?.[0];
+        if (!statusColumn) {
+            console.warn('Skip retur status enum update: returs.status column not found yet');
+            return;
+        }
+
+        const currentValues = parseEnumValuesFromColumnType(statusColumn.columnType);
+        const missingRequired = RETUR_STATUS_ENUM_VALUES.filter((value) => !currentValues.includes(value));
+        if (missingRequired.length === 0) return;
+
+        // Keep any legacy values already in DB to avoid ALTER failure from existing rows.
+        const mergedValues = Array.from(new Set([...currentValues, ...RETUR_STATUS_ENUM_VALUES]));
+        const enumValuesSql = mergedValues.map((value) => `'${value.replace(/'/g, "\\'")}'`).join(', ');
+
+        await sequelize.query(
+            `ALTER TABLE returs
+             MODIFY COLUMN status ENUM(${enumValuesSql})
+             NOT NULL DEFAULT 'pending'`
+        );
+        console.log(`Retur status enum updated: added [${missingRequired.join(', ')}]`);
+    } catch (error) {
+        console.error('Failed to ensure returs.status enum values:', error);
+        throw error;
+    }
+};
+
 const startServer = async () => {
     try {
         await sequelize.authenticate();
@@ -280,9 +340,10 @@ const startServer = async () => {
             console.error('Sync error (ignored to keep server running):', e);
         }
         await ensureOrderStatusEnumReady();
+        await ensureReturStatusEnumReady();
         await ensureChatThreadSchema();
         await backfillLegacyChatSessionsToThreads();
-        console.log('Database connected and synchronized successfully (indexes & order status fixed)');
+        console.log('Database connected and synchronized successfully (schema enum checks applied)');
 
         httpServer.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);

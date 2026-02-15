@@ -55,6 +55,7 @@ export default function CheckoutPage() {
       const res = await api.orders.checkout({
         from_cart: false,
         payment_method: paymentMethod,
+        shipping_method_code: shippingMethod,
         items: payloadItems,
       });
 
@@ -66,9 +67,10 @@ export default function CheckoutPage() {
       } else {
         router.push('/orders');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Checkout failed:', error);
-      alert('Checkout gagal. Pastikan produk valid dan stok tersedia.');
+      const backendMessage = error?.response?.data?.message;
+      alert(backendMessage || 'Checkout gagal. Pastikan produk valid dan stok tersedia.');
     } finally {
       setLoading(false);
     }

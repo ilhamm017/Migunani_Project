@@ -7,6 +7,10 @@ import { resolveShippingMethodByCode } from './ShippingMethodController';
 const DELIVERY_EMPLOYEE_ROLES = ['driver'] as const;
 const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold'] as const;
 const ISSUE_SLA_HOURS = 48;
+const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
+type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
+type NormalizedCheckoutItem = { product_id: string; qty: number };
+type CheckoutShippingMethod = { code: string; name: string; fee: number };
 
 const GENERIC_CUSTOMER_NAMES = new Set([
     'customer',
@@ -112,6 +116,117 @@ const toFiniteNumber = (value: unknown): number | null => {
     return parsed;
 };
 
+const normalizeCheckoutItems = (value: unknown): NormalizedCheckoutItem[] | null => {
+    if (!Array.isArray(value)) return null;
+    const normalized: NormalizedCheckoutItem[] = [];
+
+    for (const rawItem of value) {
+        if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return null;
+        const item = rawItem as Record<string, unknown>;
+        const productId = typeof item.product_id === 'string' ? item.product_id.trim() : '';
+        const qty = Number(item.qty);
+
+        if (!productId) return null;
+        if (!Number.isInteger(qty) || qty <= 0) return null;
+
+        normalized.push({
+            product_id: productId,
+            qty
+        });
+    }
+
+    return normalized;
+};
+
+const generateInvoiceNumber = (orderId: string, now = new Date()): string => {
+    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const uniquePart = String(orderId || '')
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .toUpperCase()
+        .slice(0, 12);
+    return `INV/${datePart}/${uniquePart || Date.now().toString().slice(-8)}`;
+};
+
+const normalizeShippingMethodCode = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+};
+
+const FALLBACK_SHIPPING_METHODS: Record<string, CheckoutShippingMethod> = {
+    kurir_reguler: { code: 'kurir_reguler', name: 'Kurir Reguler', fee: 12000 },
+    same_day: { code: 'same_day', name: 'Same Day', fee: 25000 },
+    pickup: { code: 'pickup', name: 'Ambil di Toko', fee: 0 }
+};
+
+const resolveShippingMethodForCheckout = async (codeRaw: unknown): Promise<CheckoutShippingMethod | null> => {
+    const code = normalizeShippingMethodCode(codeRaw);
+    if (!code) return null;
+
+    try {
+        const configured = await resolveShippingMethodByCode(code);
+        if (configured) {
+            return {
+                code: String(configured.code),
+                name: String(configured.name || configured.code),
+                fee: Math.max(0, Number(configured.fee || 0))
+            };
+        }
+    } catch {
+        // Fallback handles cases where settings storage isn't ready yet.
+    }
+
+    return FALLBACK_SHIPPING_METHODS[code] || null;
+};
+
+let cachedInitialInvoiceStatus: 'draft' | 'unpaid' | null = null;
+
+const parseEnumValuesFromColumnType = (columnTypeRaw: unknown): string[] => {
+    const columnType = String(columnTypeRaw || '');
+    const values: string[] = [];
+    const regex = /'((?:[^'\\]|\\.)*)'/g;
+    let match: RegExpExecArray | null = null;
+    while ((match = regex.exec(columnType)) !== null) {
+        values.push(match[1].replace(/\\'/g, "'"));
+    }
+    return values;
+};
+
+const resolveInitialInvoiceStatus = async (): Promise<'draft' | 'unpaid'> => {
+    if (cachedInitialInvoiceStatus) return cachedInitialInvoiceStatus;
+    if (sequelize.getDialect() !== 'mysql') {
+        cachedInitialInvoiceStatus = 'draft';
+        return cachedInitialInvoiceStatus;
+    }
+
+    try {
+        const [rows] = await sequelize.query(
+            `SELECT COLUMN_TYPE AS columnType
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'invoices'
+               AND COLUMN_NAME = 'payment_status'`
+        ) as any;
+
+        const paymentStatusColumn = rows?.[0];
+        if (!paymentStatusColumn?.columnType) {
+            cachedInitialInvoiceStatus = 'unpaid';
+            return cachedInitialInvoiceStatus;
+        }
+
+        const enumValues = parseEnumValuesFromColumnType(paymentStatusColumn.columnType);
+        cachedInitialInvoiceStatus = enumValues.includes('draft') ? 'draft' : 'unpaid';
+        return cachedInitialInvoiceStatus;
+    } catch {
+        cachedInitialInvoiceStatus = 'unpaid';
+        return cachedInitialInvoiceStatus;
+    }
+};
+
 const resolveTierPriceFromVariant = (basePrice: number, tier: string, variantRaw: unknown): number => {
     if (tier === 'regular') return basePrice;
 
@@ -170,9 +285,19 @@ export const checkout = async (req: Request, res: Response) => {
             targetCustomerId = customer_id;
         }
 
-        let finalItems = items;
+        const useCart = from_cart === true || String(from_cart || '').toLowerCase() === 'true';
+        const requestedPaymentMethod = typeof payment_method === 'string'
+            ? payment_method.trim().toLowerCase()
+            : '';
+        if (requestedPaymentMethod && !ALLOWED_PAYMENT_METHODS.includes(requestedPaymentMethod as CheckoutPaymentMethod)) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Metode pembayaran tidak valid' });
+        }
+        const resolvedPaymentMethod: CheckoutPaymentMethod = (requestedPaymentMethod || 'transfer_manual') as CheckoutPaymentMethod;
 
-        if (from_cart) {
+        let finalItems = normalizeCheckoutItems(items);
+
+        if (useCart) {
             // Cart Logic assumes targetCustomerId is the one with the cart? 
             // Usually admins won't use 'from_cart' for others unless we pass cart_id.
             // Let's assume admins only use 'items' array.
@@ -189,11 +314,16 @@ export const checkout = async (req: Request, res: Response) => {
             // Map CartItems to standard items format
             finalItems = cart.CartItems.map((ci: any) => ({
                 product_id: ci.product_id,
-                qty: ci.qty
+                qty: Number(ci.qty)
             }));
-        } else if (!items || items.length === 0) {
+        } else if (!finalItems || finalItems.length === 0) {
             await t.rollback();
             return res.status(400).json({ message: 'Cart is empty' });
+        }
+
+        if (!finalItems || finalItems.length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Item checkout tidak valid' });
         }
 
         let totalAmount = 0;
@@ -257,8 +387,9 @@ export const checkout = async (req: Request, res: Response) => {
             });
         }
 
-        const selectedShippingMethod = await resolveShippingMethodByCode(shipping_method_code);
-        if (shipping_method_code && !selectedShippingMethod) {
+        const requestedShippingCode = normalizeShippingMethodCode(shipping_method_code);
+        const selectedShippingMethod = await resolveShippingMethodForCheckout(requestedShippingCode);
+        if (requestedShippingCode && !selectedShippingMethod) {
             await t.rollback();
             return res.status(400).json({ message: 'Metode pengiriman tidak valid atau tidak aktif' });
         }
@@ -291,13 +422,14 @@ export const checkout = async (req: Request, res: Response) => {
         }
 
         // Create Invoice
-        const invoiceNumber = `INV/${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}/${Date.now().toString().slice(-4)}`;
+        const invoiceNumber = generateInvoiceNumber(order.id);
+        const initialPaymentStatus = await resolveInitialInvoiceStatus();
 
         await Invoice.create({
             order_id: order.id,
             invoice_number: invoiceNumber,
-            payment_method: payment_method || 'transfer_manual',
-            payment_status: 'draft',
+            payment_method: resolvedPaymentMethod,
+            payment_status: initialPaymentStatus,
             amount_paid: 0,
             change_amount: 0
         }, { transaction: t });
@@ -305,7 +437,13 @@ export const checkout = async (req: Request, res: Response) => {
         if (pointsEarned > 0) {
             if (customerProfile) {
                 customerPointsBalance += pointsEarned;
-                await customerProfile.update({ points: customerPointsBalance }, { transaction: t });
+                await CustomerProfile.update(
+                    { points: customerPointsBalance },
+                    {
+                        where: { user_id: targetCustomerId },
+                        transaction: t
+                    }
+                );
             } else {
                 await CustomerProfile.create({
                     user_id: targetCustomerId,
@@ -321,7 +459,7 @@ export const checkout = async (req: Request, res: Response) => {
         await t.commit();
 
         // If successful and from_cart, clear the cart
-        if (from_cart) {
+        if (useCart) {
             const cart = await Cart.findOne({ where: { user_id: targetCustomerId } });
             if (cart) {
                 await CartItem.destroy({ where: { cart_id: cart.id } });
@@ -342,6 +480,7 @@ export const checkout = async (req: Request, res: Response) => {
         });
 
     } catch (error) {
+        console.error('Checkout failed:', error);
         // t.rollback() is handled by each return or here if error matches
         // Actually, if we return inside try, we explicitly rollback. 
         // If error thrown, we rollback here.

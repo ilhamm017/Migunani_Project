@@ -316,6 +316,18 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
         });
     } catch (error) {
         try { await t.rollback(); } catch { }
+        const err: any = error;
+        const detail = String(err?.original?.sqlMessage || err?.message || '');
+        const enumMismatch = detail.includes("Data truncated for column 'status'")
+            || detail.includes("Incorrect enum value")
+            || detail.includes("Unknown column 'status'")
+            || detail.includes("Column 'status'");
+        if (enumMismatch) {
+            return res.status(409).json({
+                message: 'Status retur belum sinkron di database. Restart backend untuk sinkronisasi enum status retur.',
+                detail
+            });
+        }
         return res.status(500).json({ message: 'Error updating retur task status', error });
     }
 };
