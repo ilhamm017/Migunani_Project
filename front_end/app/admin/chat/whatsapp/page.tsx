@@ -146,7 +146,7 @@ export default function WhatsappConfigPage() {
   const reconnectSeconds = Math.ceil((waMeta.reconnect_in_ms || 0) / 1000);
 
   return (
-    <div className="container mx-auto p-4 max-w-5xl py-10 min-h-[80vh] space-y-4">
+    <div className="container mx-auto max-w-5xl p-3 sm:p-4 py-4 sm:py-6 lg:py-8 min-h-[calc(100vh-var(--admin-header-height,72px))] space-y-4">
       <div>
         <h1 className="text-3xl font-bold text-gray-900 leading-tight">Konfigurasi WhatsApp</h1>
         <p className="text-gray-500 mt-1">Halaman ini khusus untuk mengelola koneksi WhatsApp.</p>
@@ -160,7 +160,7 @@ export default function WhatsappConfigPage() {
         </p>
       </div>
 
-      <div className="grid gap-8 md:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
         <Card className="shadow-xl border-none bg-gradient-to-br from-white to-gray-50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-500 uppercase tracking-wider">
@@ -265,8 +265,8 @@ export default function WhatsappConfigPage() {
             </div>
             <CardContent className="p-8">
               <div className="flex flex-col items-center gap-6">
-                <div className="bg-white p-6 rounded-2xl shadow border border-slate-200">
-                  <QRCodeSVG value={qr} size={220} />
+                <div className="bg-white p-4 sm:p-6 rounded-2xl shadow border border-slate-200">
+                  <QRCodeSVG value={qr} size={200} />
                 </div>
                 <p className="text-sm text-slate-600 text-center">
                   Buka WhatsApp di HP, pilih <b>Linked Devices</b>, lalu scan QR ini.

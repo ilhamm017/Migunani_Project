@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { Op, Transaction } from 'sequelize';
 import { User, CustomerProfile, Order, Invoice, OrderAllocation, Product, sequelize } from '../models';
 import bcrypt from 'bcrypt';
-import { randomBytes, randomInt } from 'crypto';
+import { randomInt } from 'crypto';
 import waClient, { getStatus as getWhatsappStatus } from '../services/whatsappClient';
 import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
 
@@ -20,6 +20,7 @@ const ALLOWED_TIERS = ['regular', 'gold', 'platinum'] as const;
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const OTP_MAX_VERIFY_ATTEMPTS = 5;
+const MIN_CUSTOMER_PASSWORD_LENGTH = 6;
 
 type CustomerOtpSession = {
     code: string;
@@ -57,6 +58,8 @@ const normalizeEmail = (value: unknown): string | null => {
     const email = value.trim().toLowerCase();
     return email || null;
 };
+
+const isValidEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
 const cleanupOtpSessions = () => {
     const now = Date.now();
@@ -145,6 +148,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         const normalizedWhatsapp = normalizeWhatsappNumber(req.body?.whatsapp_number);
         const otpCode = typeof req.body?.otp_code === 'string' ? req.body.otp_code.trim() : '';
         const email = normalizeEmail(req.body?.email);
+        const password = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
         const tier = normalizeTier(req.body?.tier);
 
         if (!name) {
@@ -158,6 +162,18 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         if (!/^\d{6}$/.test(otpCode)) {
             await t.rollback();
             return res.status(400).json({ message: 'Kode OTP harus 6 digit' });
+        }
+        if (!email) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Email wajib diisi' });
+        }
+        if (!isValidEmail(email)) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Format email tidak valid' });
+        }
+        if (!password || password.length < MIN_CUSTOMER_PASSWORD_LENGTH) {
+            await t.rollback();
+            return res.status(400).json({ message: `Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter` });
         }
 
         const otpSession = customerOtpMap.get(normalizedWhatsapp);
@@ -200,8 +216,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             return res.status(409).json({ message: 'Email atau nomor WhatsApp sudah terdaftar' });
         }
 
-        const randomPassword = randomBytes(12).toString('base64url');
-        const hashedPassword = await bcrypt.hash(randomPassword, 10);
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const user = await User.create({
             name,

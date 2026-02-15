@@ -497,7 +497,7 @@ export default function AdminOverviewPage() {
         </p>
       </div>
 
-      <div className="grid grid-flow-col grid-rows-2 auto-cols-[minmax(240px,1fr)] gap-3 overflow-x-auto pb-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
         {[
           { href: '/admin/warehouse', title: 'Admin Gudang (Advanced)', desc: 'Dashboard, Kanban, Picker Helper, Alokasi', icon: Warehouse },
           { href: '/admin/warehouse/stok', title: 'Data Grid Inventori', desc: 'Manajemen produk, stok, & update massal', icon: Boxes },
@@ -518,12 +518,12 @@ export default function AdminOverviewPage() {
         ].map((m) => {
           const Icon = m.icon;
           return (
-            <Link key={m.href} href={m.href} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-emerald-300 transition-colors">
+            <Link key={m.href} href={m.href} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-emerald-300 transition-colors min-w-0">
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
                   <Icon size={18} />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
                   <p className="text-xs text-slate-600 mt-1">{m.desc}</p>
                 </div>
