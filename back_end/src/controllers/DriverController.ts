@@ -83,9 +83,22 @@ export const completeDelivery = async (req: Request, res: Response) => {
 
         // Handle COD logic
         if (invoice.payment_method === 'cod') {
+            const amountToCollect = Number(order.total_amount || 0);
+
+            // 1. Update invoice status & record validation
             await invoice.update({
                 payment_status: 'cod_pending', // Money with driver
+                amount_paid: amountToCollect, // Assume full payment collected by driver
             }, { transaction: t });
+
+            // 2. Increment driver's debt (Utang ke Finance)
+            if (amountToCollect > 0) {
+                await User.increment('debt', {
+                    by: amountToCollect,
+                    where: { id: userId },
+                    transaction: t
+                });
+            }
         }
 
         // Save delivery proof photo to order (separate from payment proof)

@@ -8,17 +8,36 @@ services:
       MYSQL_DATABASE: ${DB_NAME:-migunani_motor_db}
       MYSQL_USER: ${DB_USER:-migunani}
       MYSQL_PASSWORD: ${DB_PASS:-password}
+      TZ: Asia/Jakarta
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-password}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u${DB_USER:-migunani}", "-p${DB_PASS:-password}"]
       interval: 10s
       timeout: 5s
       retries: 15
       start_period: 25s
+    networks:
+      - migunani_network
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: migunani_pma
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: ${DB_USER:-migunani}
+      PMA_PASSWORD: ${DB_PASS:-password}
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "${PMA_PORT:-8080}:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
     networks:
       - migunani_network
 
@@ -48,6 +67,7 @@ services:
       WA_RECONNECT_MAX_DELAY_MS: ${WA_RECONNECT_MAX_DELAY_MS:-60000}
       IMPORT_LOCAL_PATH_ENABLED: ${IMPORT_LOCAL_PATH_ENABLED:-false}
       IMPORT_LOCAL_PATH_ALLOWLIST: ${IMPORT_LOCAL_PATH_ALLOWLIST:-}
+      TZ: Asia/Jakarta
     ports:
       - "${BACKEND_PORT:-5000}:5000"
     volumes:
@@ -62,7 +82,9 @@ services:
       context: ./front_end
       dockerfile: Dockerfile
       args:
+        # Internal URL for SSR/Rewrites
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://back_end:5000/api/v1}
+        # External URL for Client-side WebSocket
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}
     container_name: migunani_frontend
     restart: unless-stopped
@@ -74,6 +96,7 @@ services:
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}
       HOSTNAME: 0.0.0.0
       PORT: 3500
+      TZ: Asia/Jakarta
     ports:
       - "${FRONTEND_PORT:-3500}:3500"
     networks:
@@ -101,6 +124,7 @@ services:
       WA_AUTO_RECONNECT: "false"
       IMPORT_LOCAL_PATH_ENABLED: ${IMPORT_LOCAL_PATH_ENABLED:-false}
       IMPORT_LOCAL_PATH_ALLOWLIST: ${IMPORT_LOCAL_PATH_ALLOWLIST:-}
+      TZ: Asia/Jakarta
     command: ["node", "dist/seeders/index.js"]
     networks:
       - migunani_network

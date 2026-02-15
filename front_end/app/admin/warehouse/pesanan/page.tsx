@@ -28,26 +28,8 @@ interface KanbanColumn {
 
 const KANBAN_COLUMNS: KanbanColumn[] = [
     {
-        key: 'pending',
-        label: 'pending (Pesanan Masuk)',
-        color: 'text-blue-700',
-        bgColor: 'bg-blue-50',
-        borderColor: 'border-blue-200',
-        headerBg: 'bg-blue-100',
-        dotColor: 'bg-blue-500',
-    },
-    {
-        key: 'waiting_payment',
-        label: 'waiting_payment (Menunggu Bayar)',
-        color: 'text-amber-700',
-        bgColor: 'bg-amber-50',
-        borderColor: 'border-amber-200',
-        headerBg: 'bg-amber-100',
-        dotColor: 'bg-amber-500',
-    },
-    {
-        key: 'processing',
-        label: 'processing (Sedang Disiapkan)',
+        key: 'ready_to_ship',
+        label: 'Siap Dikirim / Packing',
         color: 'text-purple-700',
         bgColor: 'bg-purple-50',
         borderColor: 'border-purple-200',
@@ -56,7 +38,7 @@ const KANBAN_COLUMNS: KanbanColumn[] = [
     },
     {
         key: 'shipped',
-        label: 'shipped (Siap Kirim)',
+        label: 'Dalam Pengiriman',
         color: 'text-emerald-700',
         bgColor: 'bg-emerald-50',
         borderColor: 'border-emerald-200',
@@ -67,9 +49,7 @@ const KANBAN_COLUMNS: KanbanColumn[] = [
 
 // Map kanban column keys to API statuses
 const STATUS_MAP_TO_API: Record<string, string> = {
-    pending: 'pending',
-    waiting_payment: 'waiting_payment',
-    processing: 'processing',
+    ready_to_ship: 'ready_to_ship',
     shipped: 'shipped',
 };
 
@@ -86,7 +66,7 @@ export default function WarehouseKanbanPage() {
         try {
             setLoading(true);
             // Fetch orders for each relevant status
-            const statuses = ['pending', 'waiting_payment', 'processing', 'shipped'];
+            const statuses = ['ready_to_ship', 'shipped'];
             const results = await Promise.all(
                 statuses.map(status =>
                     api.admin.orderManagement.getAll({ status, limit: 50 })

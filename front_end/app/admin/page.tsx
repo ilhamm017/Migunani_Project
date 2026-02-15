@@ -139,6 +139,14 @@ export default function AdminOverviewPage() {
         tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white',
       },
       {
+        href: '/admin/orders/allocation',
+        title: 'Alokasi Order',
+        desc: 'Alokasi stok pesanan masuk.',
+        icon: ClipboardCheck,
+        tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white',
+        badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0
+      },
+      {
         href: '/admin/chat',
         title: 'Customer Service Chat',
         desc: 'Balas chat Web dan WhatsApp dari satu inbox.',
@@ -341,7 +349,8 @@ export default function AdminOverviewPage() {
   if (user?.role === 'admin_gudang') {
     const warehouseMenus = [
       { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Kelola stok produk', icon: Boxes, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
-      { href: '/admin/warehouse/allocation', title: 'Alokasi Order', desc: 'Alokasi stok pesanan', icon: ClipboardCheck, tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0 },
+      // Allocation moved to Sales
+
       { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order', icon: ClipboardList, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
       { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Validasi retur masuk', icon: RotateCcw, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
       { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang', icon: UserCheck, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
@@ -395,30 +404,30 @@ export default function AdminOverviewPage() {
             <p className="text-[10px] font-bold text-slate-400">11 modul</p>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
-          {warehouseMenus.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="group relative rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 hover:bg-white hover:border-emerald-300 hover:shadow-md transition-all h-full"
-              >
-                {Number(item.badge || 0) > 0 && (
-                  <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
-                    {Number(item.badge) > 99 ? '99+' : Number(item.badge)}
-                  </span>
-                )}
-                <div className="flex items-start justify-between gap-2">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all ${item.tone}`}>
-                    <Icon size={18} />
+            {warehouseMenus.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="group relative rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 hover:bg-white hover:border-emerald-300 hover:shadow-md transition-all h-full"
+                >
+                  {Number(item.badge || 0) > 0 && (
+                    <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
+                      {Number(item.badge) > 99 ? '99+' : Number(item.badge)}
+                    </span>
+                  )}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all ${item.tone}`}>
+                      <Icon size={18} />
+                    </div>
+                    <span className="text-[9px] font-black uppercase tracking-wide text-slate-400 group-hover:text-emerald-700">Buka</span>
                   </div>
-                  <span className="text-[9px] font-black uppercase tracking-wide text-slate-400 group-hover:text-emerald-700">Buka</span>
-                </div>
-                <h3 className="font-black text-[12px] text-slate-900 leading-snug mt-3">{item.title}</h3>
-                <p className="text-[10px] text-slate-500 mt-1 leading-snug">{item.desc}</p>
-              </Link>
-            );
-          })}
+                  <h3 className="font-black text-[12px] text-slate-900 leading-snug mt-3">{item.title}</h3>
+                  <p className="text-[10px] text-slate-500 mt-1 leading-snug">{item.desc}</p>
+                </Link>
+              );
+            })}
           </div>
         </div>
       </div>

@@ -16,6 +16,7 @@ export default function DriverOrderDetailPage() {
   const [order, setOrder] = useState<any>(null);
   const [proof, setProof] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -38,7 +39,7 @@ export default function DriverOrderDetailPage() {
       const form = new FormData();
       if (proof) form.append('proof', proof);
       await api.driver.completeOrder(orderId, form);
-      alert('Pengiriman selesai, COD dikonfirmasi.');
+      alert('Pengiriman selesai.');
       router.push('/driver');
     } catch (error) {
       console.error('Complete delivery failed:', error);
@@ -133,11 +134,11 @@ export default function DriverOrderDetailPage() {
           ) : null}
 
           <button
-            onClick={complete}
+            onClick={() => setIsConfirmOpen(true)}
             disabled={loading || !proof}
             className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-black text-sm uppercase shadow-xl shadow-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 disabled:shadow-none"
           >
-            {loading ? 'Processing...' : 'Selesai & Serahkan Uang'}
+            {loading ? 'Processing...' : 'Konfirmasi Selesai'}
           </button>
 
           <button
@@ -149,6 +150,54 @@ export default function DriverOrderDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {
+        isConfirmOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4">
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Upload size={32} />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Konfirmasi Serah Terima</h3>
+                <p className="text-sm text-slate-500 leading-relaxed">
+                  Pastikan barang sudah diterima dengan baik oleh customer & foto bukti sudah sesuai.
+                </p>
+              </div>
+
+              {order?.Invoice?.payment_method === 'cod' && (
+                <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-center space-y-1">
+                  <p className="text-xs font-bold text-orange-600 uppercase tracking-wide">Tagihan COD</p>
+                  <p className="text-2xl font-black text-slate-900">
+                    Rp {Number(order.total_amount || 0).toLocaleString('id-ID')}
+                  </p>
+                  <p className="text-[10px] text-orange-700 font-medium">
+                    Wajib terima uang tunai dari customer!
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  onClick={() => setIsConfirmOpen(false)}
+                  className="py-3 px-4 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                  disabled={loading}
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={complete}
+                  disabled={loading}
+                  className="py-3 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
+                >
+                  {loading ? 'Memproses...' : 'Ya, Selesai'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
     </div>
   );
 }

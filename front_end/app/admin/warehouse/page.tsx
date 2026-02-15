@@ -17,7 +17,6 @@ export default function WarehouseLandingPage() {
     const router = useRouter();
     const { user } = useAuthStore();
     const [summary, setSummary] = useState({
-        pendingAllocation: 0,
         unfulfilled: 0,
         lowStock: 0,
         readyToShip: 0
@@ -36,8 +35,7 @@ export default function WarehouseLandingPage() {
         const loadStats = async () => {
             try {
                 // Fetch stats relevant to warehouse
-                const [pendingRes, processingRes, allocatedRes, productsRes] = await Promise.all([
-                    api.admin.orderManagement.getAll({ status: 'pending', limit: 1 }),
+                const [processingRes, allocatedRes, productsRes] = await Promise.all([
                     api.admin.orderManagement.getAll({ status: 'processing', limit: 1 }),
                     api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }),
                     api.admin.inventory.getProducts({ limit: 100 }) // Simple check for low stock
@@ -48,7 +46,6 @@ export default function WarehouseLandingPage() {
                 ).length;
 
                 setSummary({
-                    pendingAllocation: Number(pendingRes.data?.total || 0),
                     unfulfilled: Number(processingRes.data?.total || 0),
                     readyToShip: Number(allocatedRes.data?.total || 0),
                     lowStock: lowStockCount
@@ -65,16 +62,8 @@ export default function WarehouseLandingPage() {
 
     if (user?.role === 'admin_gudang') return null;
 
+
     const managementTools = [
-        {
-            href: '/admin/warehouse/allocation',
-            label: 'Alokasi Order',
-            desc: 'Review & alokasi stok pesanan baru',
-            icon: ClipboardCheck,
-            color: 'text-orange-600',
-            bg: 'bg-orange-50',
-            border: 'border-orange-100'
-        },
         {
             href: '/admin/warehouse/pesanan',
             label: 'Kanban Board',
@@ -165,14 +154,7 @@ export default function WarehouseLandingPage() {
 
             {/* Core Stats Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard
-                    icon={Clock}
-                    label="Perlu Alokasi"
-                    value={summary.pendingAllocation}
-                    color="orange"
-                    loading={loading}
-                    href="/admin/warehouse/allocation"
-                />
+
                 <StatCard
                     icon={TrendingDown}
                     label="Stok Menipis"

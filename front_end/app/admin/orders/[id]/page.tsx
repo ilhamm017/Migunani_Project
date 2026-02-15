@@ -268,9 +268,9 @@ export default function AdminOrderDetailPage() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-sm font-black text-slate-900">Item Pesanan</p>
-            {canUpdateStatus && ['pending', 'partially_fulfilled', 'waiting_payment', 'hold'].includes(order.status) && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
+            {canUpdateStatus && ['pending', 'partially_fulfilled', 'waiting_payment', 'hold'].includes(order.status) && ['kasir', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
               <Link
-                href={`/admin/warehouse/allocation/${order.id}`}
+                href={`/admin/orders/allocation/${order.id}`}
                 className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors"
               >
                 Proses Alokasi →
@@ -339,10 +339,10 @@ export default function AdminOrderDetailPage() {
         <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
           <p className="text-sm font-black text-slate-900">Aksi Order</p>
 
-          {/* Step 1: Gudang — Alokasi (pending) */}
-          {order.status === 'pending' && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
+          {/* Step 1: Kasir — Alokasi (pending) */}
+          {order.status === 'pending' && ['kasir', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
             <Link
-              href={`/admin/warehouse/allocation/${order.id}`}
+              href={`/admin/orders/allocation/${order.id}`}
               className="block w-full text-center px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors"
             >
               Proses Alokasi Stok →

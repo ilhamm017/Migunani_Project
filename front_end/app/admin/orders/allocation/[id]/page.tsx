@@ -200,7 +200,7 @@ export default function AllocationDetailPage() {
 
             await api.allocation.allocate(id as string, items);
             alert('Alokasi berhasil disimpan!');
-            router.push('/admin/warehouse/allocation');
+            router.push('/admin/orders/allocation');
         } catch (error) {
             alert('Gagal menyimpan alokasi');
         }
@@ -222,7 +222,7 @@ export default function AllocationDetailPage() {
             alert('Backorder / pre-order berhasil dibatalkan.');
             setShowCancelDialog(false);
             setCancelReason('');
-            router.push('/admin/warehouse/allocation');
+            router.push('/admin/orders/allocation');
         } catch (error: any) {
             const message = error?.response?.data?.message || 'Gagal membatalkan backorder / pre-order.';
             alert(message);
@@ -238,15 +238,15 @@ export default function AllocationDetailPage() {
         <div className="warehouse-page">
             <div>
                 <div className="warehouse-breadcrumb">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
+                    <Link href="/admin/orders" className="hover:text-emerald-500 transition-colors">Orders</Link>
                     <span>/</span>
-                    <Link href="/admin/warehouse/allocation" className="hover:text-emerald-500 transition-colors">Order Allocation</Link>
+                    <Link href="/admin/orders/allocation" className="hover:text-emerald-500 transition-colors">Allocation</Link>
                     <span>/</span>
                     <span className="text-slate-900">Proses</span>
                 </div>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                        <Link href="/admin/warehouse/allocation" className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
+                        <Link href="/admin/orders/allocation" className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
                             <ArrowLeft size={18} className="text-slate-700" />
                         </Link>
                         <div>

@@ -58,9 +58,9 @@ export default function AllocationListPage() {
         <div className="warehouse-page">
             <div>
                 <div className="warehouse-breadcrumb">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
+                    <Link href="/admin/orders" className="hover:text-emerald-500 transition-colors">Orders</Link>
                     <span>/</span>
-                    <span className="text-slate-900">Order Allocation</span>
+                    <span className="text-slate-900">Allocation</span>
                 </div>
                 <h1 className="warehouse-title">Alokasi Stok Order</h1>
                 <p className="warehouse-subtitle">Alokasikan stok untuk pesanan yang masuk sebelum diproses ke tim picker atau pengiriman.</p>
@@ -136,8 +136,8 @@ export default function AllocationListPage() {
                                                     ${order.status === 'waiting_invoice' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
                                                         order.status === 'waiting_payment' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
                                                             order.status === 'ready_to_ship' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                                                        order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
-                                                            'bg-slate-50 text-slate-700 border border-slate-100'}
+                                                                order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
+                                                                    'bg-slate-50 text-slate-700 border border-slate-100'}
                                                 `}>
                                                     {order.status}
                                                 </span>
@@ -168,7 +168,7 @@ export default function AllocationListPage() {
                                         </td>
                                         <td className="px-6 py-4">
                                             <Link
-                                                href={`/admin/warehouse/allocation/${order.id}`}
+                                                href={`/admin/orders/allocation/${order.id}`}
                                                 className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canProcess
                                                     ? 'text-white bg-blue-600 hover:bg-blue-700'
                                                     : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
