@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, FileText, Paperclip, RefreshCw, Search, ShoppingCart, Star, X } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
@@ -53,7 +53,7 @@ type ChatContactRow = {
   role?: string;
 };
 
-export default function AdminChatInboxPage() {
+function AdminChatInboxContent() {
   const { user, isAuthenticated } = useAuthStore();
   const [hydrated, setHydrated] = useState(() => {
     const persistApi = getPersistApi();
@@ -793,5 +793,13 @@ export default function AdminChatInboxPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function AdminChatInboxPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading chat...</div>}>
+      <AdminChatInboxContent />
+    </Suspense>
   );
 }

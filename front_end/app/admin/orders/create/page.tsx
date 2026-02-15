@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal } from 'lucide-react';
@@ -32,7 +32,7 @@ type ShippingMethodOption = {
     sort_order?: number;
 };
 
-export default function ManualOrderPage() {
+function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
     const router = useRouter();
@@ -768,5 +768,13 @@ export default function ManualOrderPage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function ManualOrderPage() {
+    return (
+        <Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading order form...</div>}>
+            <ManualOrderContent />
+        </Suspense>
     );
 }
