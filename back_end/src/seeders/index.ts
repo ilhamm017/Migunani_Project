@@ -7,6 +7,68 @@ import {
     Supplier,
     Account
 } from '../models';
+import { acquireSchemaLock, SchemaLockError } from '../utils/schemaLock';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isDeadlockError = (error: any): boolean => {
+    const code = error?.parent?.code || error?.original?.code || error?.code;
+    return code === 'ER_LOCK_DEADLOCK';
+};
+
+const isSchemaLockBusyError = (error: any): boolean => {
+    return error instanceof SchemaLockError && error.code === 'SCHEMA_LOCK_TIMEOUT';
+};
+
+const syncWithForceRetry = async () => {
+    const isMySql = sequelize.getDialect() === 'mysql';
+    const maxAttempts = 5;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        let schemaLock: Awaited<ReturnType<typeof acquireSchemaLock>> | null = null;
+        try {
+            schemaLock = await acquireSchemaLock(sequelize, { timeoutSec: 10 });
+            console.log(`[SchemaLock] Acquired '${schemaLock.lockName}' for seeding`);
+
+            if (isMySql) {
+                await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+            }
+            await sequelize.sync({ force: true }); // WARNING: This will drop all tables!
+            return;
+        } catch (error) {
+            lastError = error;
+            if ((isDeadlockError(error) || isSchemaLockBusyError(error)) && attempt < maxAttempts) {
+                const delayMs = attempt * 2000;
+                const reason = isSchemaLockBusyError(error)
+                    ? 'Schema lock busy'
+                    : 'Deadlock during seed sync';
+                console.warn(`${reason} (attempt ${attempt}/${maxAttempts}). Retrying in ${delayMs}ms...`);
+                await sleep(delayMs);
+                continue;
+            }
+            throw error;
+        } finally {
+            if (isMySql) {
+                try {
+                    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
+                } catch {
+                    // Ignore FK reset errors during retries; next attempt will retry sync.
+                }
+            }
+            if (schemaLock) {
+                try {
+                    await schemaLock.release();
+                    console.log(`[SchemaLock] Released '${schemaLock.lockName}' for seeding`);
+                } catch (releaseError) {
+                    console.warn('[SchemaLock] Failed to release seeding lock:', releaseError);
+                }
+            }
+        }
+    }
+
+    throw lastError || new Error('Failed to sync database for seeding');
+};
 
 async function seedDatabase() {
     try {
@@ -14,17 +76,7 @@ async function seedDatabase() {
 
         // Sync database (create tables)
         console.log('📊 Syncing database...');
-        const isMySql = sequelize.getDialect() === 'mysql';
-        if (isMySql) {
-            await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
-        }
-        try {
-            await sequelize.sync({ force: true }); // WARNING: This will drop all tables!
-        } finally {
-            if (isMySql) {
-                await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
-            }
-        }
+        await syncWithForceRetry();
         console.log('✅ Database synced\n');
 
         // Seed Users (one account per role)

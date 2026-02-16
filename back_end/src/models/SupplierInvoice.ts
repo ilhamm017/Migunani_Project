@@ -36,7 +36,7 @@ SupplierInvoice.init(
             primaryKey: true,
         },
         supplier_id: {
-            type: DataTypes.BIGINT,
+            type: DataTypes.INTEGER,
             allowNull: false,
             references: {
                 model: 'suppliers',

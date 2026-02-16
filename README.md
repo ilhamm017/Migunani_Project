@@ -35,12 +35,12 @@ Cocok untuk menjalankan semua service dalam container.
 
 ```bash
 cp .env.example .env
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 Akses:
 
-- Frontend: `http://localhost:3500`
+- Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:5000`
 - MySQL: `localhost:3306`
 
@@ -54,7 +54,7 @@ npm install
 cd back_end && npm install && cd ..
 cd front_end && npm install && cd ..
 
-docker-compose up -d mysql
+docker compose up -d mysql
 npm run dev
 ```
 
@@ -69,7 +69,8 @@ Akses:
 Seeder akan reset database (`sequelize.sync({ force: true })`) dan mengisi data awal.
 
 ```bash
-npm run seed
+# aman: hentikan backend dulu, jalankan seed one-off, lalu nyalakan backend lagi
+npm run docker:seed
 ```
 
 Akun default dari seeder:
@@ -115,6 +116,8 @@ npm run dev
 npm run docker:up
 npm run docker:down
 npm run docker:logs
+npm run docker:seed
+npm run docker:bootstrap
 npm run seed
 ```
 
@@ -141,3 +144,4 @@ npm run start
 - Endpoint frontend diarahkan ke backend lewat Next rewrite (`/api/*`).
 - Beberapa migrasi masih manual SQL, cek `back_end/sql/README.md`.
 - Untuk pemahaman modul dan gap implementasi, gunakan `GUIDE_APLIKASI_MIGUNANI_MOTOR.md` sebagai sumber utama.
+- Jangan jalankan seeder paralel dengan backend (`seed` dan backend sama-sama mengubah schema).

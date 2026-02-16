@@ -32,7 +32,7 @@ Nilai default sudah bisa dipakai untuk local. Jika perlu, edit:
 - `MYSQL_PORT`
 - `JWT_SECRET`
 
-## 3. Build dan Jalankan Semua Service
+## 3. Build dan Jalankan Service Harian (tanpa seed)
 
 Gunakan salah satu:
 
@@ -44,19 +44,8 @@ docker compose up -d --build
 docker-compose up -d --build
 ```
 
-Jika ingin sekaligus auto-run seeder saat startup pertama:
-
-```bash
-# Compose v2
-docker compose --profile seed up -d --build
-
-# Compose v1 (fallback)
-docker-compose --profile seed up -d --build
-```
-
 Catatan:
-- Service `seed` akan jalan sekali lalu exit.
-- Seeder melakukan reset data (`force: true`), jadi jangan dipakai di production.
+- **Jangan jalankan `seed` bersamaan dengan `back_end`**, karena keduanya melakukan schema sync.
 
 ## 4. Cek Status Container
 
@@ -94,14 +83,32 @@ Jika Anda ubah port di `.env`, sesuaikan URL-nya.
 Jika ingin isi data dummy (admin/customer/kategori/produk), jalankan:
 
 ```bash
-docker compose exec back_end node dist/seeders/index.js || docker-compose exec back_end node dist/seeders/index.js
+# 1) stop backend dulu agar tidak race dengan seed
+docker compose stop back_end || docker-compose stop back_end
+
+# 2) jalankan seed one-off
+docker compose --profile seed run --rm seed || docker-compose --profile seed run --rm seed
+
+# 3) nyalakan backend lagi
+docker compose up -d back_end || docker-compose up -d back_end
 ```
 
 Catatan:
 - Seeder melakukan reset data (`force: true`), jangan jalankan di data production.
-- Alternatif auto-run saat startup: pakai `--profile seed` di langkah 3.
+- Hindari `docker compose --profile seed up ...` karena akan ikut menyalakan backend/frontend dan rawan deadlock.
 
-## 8. Perintah Operasional Harian
+## 8. Bootstrap Bersih (reset total dev)
+
+Gunakan ini jika schema sudah kacau atau startup loop:
+
+```bash
+docker compose down -v || docker-compose down -v
+docker compose up -d mysql || docker-compose up -d mysql
+docker compose --profile seed run --rm seed || docker-compose --profile seed run --rm seed
+docker compose up -d back_end front_end || docker-compose up -d back_end front_end
+```
+
+## 9. Perintah Operasional Harian
 
 ```bash
 # Stop service (container tetap ada)
@@ -120,7 +127,7 @@ docker compose down || docker-compose down
 docker compose down -v || docker-compose down -v
 ```
 
-## 9. Troubleshooting Cepat
+## 10. Troubleshooting Cepat
 
 ### A. Port bentrok (`already allocated`)
 
@@ -156,7 +163,9 @@ docker compose logs -f mysql || docker-compose logs -f mysql
 
 ```bash
 docker compose down -v || docker-compose down -v
-docker compose up -d --build || docker-compose up -d --build
+docker compose up -d mysql || docker-compose up -d mysql
+docker compose --profile seed run --rm seed || docker-compose --profile seed run --rm seed
+docker compose up -d back_end front_end || docker-compose up -d back_end front_end
 ```
 
 ### C. WhatsApp tidak auto-connect

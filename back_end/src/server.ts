@@ -13,6 +13,7 @@ import { normalizeWhatsappNumber } from './utils/whatsappNumber';
 import { createThreadMessage, resolveThreadForIncomingWebSocket } from './services/ChatThreadService';
 import { ensureChatThreadSchema } from './services/chatSchema';
 import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadService';
+import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
 
 dotenv.config();
 
@@ -259,6 +260,88 @@ const parseEnumValuesFromColumnType = (columnTypeRaw: unknown): string[] => {
     return values;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const runStartupStep = async (name: string, fn: () => Promise<void>) => {
+    const startedAt = Date.now();
+    console.log(`[Startup] ${name}...`);
+    await fn();
+    console.log(`[Startup] ${name} done (${Date.now() - startedAt}ms)`);
+};
+
+const isDeadlockError = (error: any): boolean => {
+    const code = error?.parent?.code || error?.original?.code || error?.code;
+    return code === 'ER_LOCK_DEADLOCK';
+};
+
+const tableExists = async (tableName: string): Promise<boolean> => {
+    const [rows] = await sequelize.query(
+        `SELECT 1
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = :tableName
+         LIMIT 1`,
+        {
+            replacements: { tableName }
+        }
+    ) as any;
+
+    return Array.isArray(rows) && rows.length > 0;
+};
+
+const ensureCriticalTablesReady = async () => {
+    const criticalTables = ['users', 'orders'];
+
+    let missingTables: string[] = [];
+    for (const tableName of criticalTables) {
+        const exists = await tableExists(tableName);
+        if (!exists) missingTables.push(tableName);
+    }
+
+    if (missingTables.length === 0) return;
+
+    console.warn(`Missing critical tables after alter sync: ${missingTables.join(', ')}. Running create-missing sync fallback.`);
+    await sequelize.sync();
+
+    const stillMissing: string[] = [];
+    for (const tableName of criticalTables) {
+        const exists = await tableExists(tableName);
+        if (!exists) stillMissing.push(tableName);
+    }
+
+    if (stillMissing.length > 0) {
+        throw new Error(`Critical tables are still missing after fallback sync: ${stillMissing.join(', ')}`);
+    }
+};
+
+const syncDatabaseWithRetry = async () => {
+    const maxAttempts = 3;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            await sequelize.sync({ alter: true });
+            await ensureCriticalTablesReady();
+            return;
+        } catch (error) {
+            lastError = error;
+            if (isDeadlockError(error) && attempt < maxAttempts) {
+                const delayMs = 1000 * attempt;
+                console.warn(`Database sync deadlock on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms...`);
+                await sleep(delayMs);
+                continue;
+            }
+
+            console.error('Alter sync failed; attempting create-missing sync fallback:', error);
+            await sequelize.sync();
+            await ensureCriticalTablesReady();
+            return;
+        }
+    }
+
+    throw lastError || new Error('Database synchronization failed');
+};
+
 const ensureOrderStatusEnumReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -348,15 +431,35 @@ const startServer = async () => {
                 if (retries === 0) throw err;
             }
         }
+        let schemaLock: Awaited<ReturnType<typeof acquireSchemaLock>> | null = null;
         try {
-            await sequelize.sync({ alter: true });
-        } catch (e) {
-            console.error('Sync error (ignored to keep server running):', e);
+            console.log('[SchemaLock] Waiting to acquire schema lock...');
+            schemaLock = await acquireSchemaLock(sequelize);
+            console.log(`[SchemaLock] Acquired '${schemaLock.lockName}'`);
+
+            await runStartupStep('Database sync', syncDatabaseWithRetry);
+            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
+            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
+            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
+        } catch (error: any) {
+            if (error instanceof SchemaLockError && error.code === 'SCHEMA_LOCK_TIMEOUT') {
+                throw new Error(
+                    `Schema lock busy. Another schema operation is running. (${error.message})`
+                );
+            }
+            throw error;
+        } finally {
+            if (schemaLock) {
+                try {
+                    await schemaLock.release();
+                    console.log(`[SchemaLock] Released '${schemaLock.lockName}'`);
+                } catch (releaseError) {
+                    console.warn('[SchemaLock] Failed to release lock:', releaseError);
+                }
+            }
         }
-        await ensureOrderStatusEnumReady();
-        await ensureReturStatusEnumReady();
-        await ensureChatThreadSchema();
-        await backfillLegacyChatSessionsToThreads();
+
         console.log('Database connected and synchronized successfully (schema enum checks applied)');
 
         httpServer.listen(PORT, () => {

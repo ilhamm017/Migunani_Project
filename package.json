@@ -8,11 +8,13 @@
         "dev:backend": "cd back_end && npm run dev",
         "dev:frontend:wait": "bash -lc 'until (echo > /dev/tcp/127.0.0.1/5000) >/dev/null 2>&1; do echo \"[wait] backend belum siap di :5000\"; sleep 1; done; npm run dev:frontend'",
         "dev:frontend": "cd front_end && npm run dev",
-        "docker:up": "docker-compose up -d",
-        "docker:down": "docker-compose down",
-        "docker:logs": "docker-compose logs -f mysql",
+        "docker:up": "docker compose up -d",
+        "docker:down": "docker compose down",
+        "docker:logs": "docker compose logs -f mysql",
+        "docker:seed": "bash -lc 'docker compose stop back_end >/dev/null 2>&1 || true; docker compose --profile seed run --rm seed; docker compose up -d back_end'",
+        "docker:bootstrap": "bash -lc 'docker compose down -v && docker compose up -d mysql && docker compose --profile seed run --rm seed && docker compose up -d back_end front_end'",
         "seed": "cd back_end && npm run seed",
-        "setup": "npm run docker:up && sleep 10 && npm run seed",
+        "setup": "npm run docker:bootstrap",
         "start": "npm run docker:up && npm run dev"
     },
     "keywords": [
@@ -26,5 +28,9 @@
     "license": "ISC",
     "devDependencies": {
         "concurrently": "^9.1.2"
+    },
+    "dependencies": {
+        "ts-node": "^10.9.2",
+        "typescript": "^5.9.3"
     }
 }
