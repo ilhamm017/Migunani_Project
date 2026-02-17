@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import fs from 'fs';
 import { authenticateToken as authenticate, authorizeRoles as requireRole } from '../middleware/authMiddleware';
 import * as ReturController from '../controllers/ReturController';
 import multer from 'multer';
@@ -9,7 +10,12 @@ const router = Router();
 // Multer Config
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/retur/'); // Ensure this directory exists
+        const userId = req.user?.id || 'anonymous';
+        const dest = path.join('uploads', String(userId), 'retur');
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+        }
+        cb(null, dest);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);

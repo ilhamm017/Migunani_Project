@@ -8,7 +8,7 @@ import AdminOrdersListView from '@/components/orders/AdminOrdersListView';
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
   waiting_payment: 'Waiting Payment',
-  processing: 'Processing',
+  waiting_admin_verification: 'Waiting Admin Verification',
   debt_pending: 'Utang Belum Lunas',
   shipped: 'Shipped',
   delivered: 'Delivered',

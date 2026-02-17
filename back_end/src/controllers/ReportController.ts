@@ -22,6 +22,7 @@ const getJournalBalance = async (
         include: [
             {
                 model: Account,
+                as: 'Account',
                 where: whereAccount,
                 attributes: []
             },
@@ -142,7 +143,7 @@ export const getCashFlow = async (req: Request, res: Response) => {
 
         const openingLines = await JournalLine.findAll({
             include: [
-                { model: Account, where: accWhere, attributes: [] },
+                { model: Account, as: 'Account', where: accWhere, attributes: [] },
                 { model: Journal, where: { date: { [Op.lt]: start } }, attributes: [] }
             ],
             attributes: [
@@ -157,7 +158,7 @@ export const getCashFlow = async (req: Request, res: Response) => {
         // 2. Period Movements
         const periodLines = await JournalLine.findAll({
             include: [
-                { model: Account, where: accWhere, attributes: [] },
+                { model: Account, as: 'Account', where: accWhere, attributes: [] },
                 { model: Journal, where: { date: { [Op.between]: [start, end] } }, attributes: [] }
             ],
             attributes: [

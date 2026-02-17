@@ -7,7 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 
 export default function WarehouseDashboardLayout({ children }: { children: React.ReactNode }) {
-    const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
+    const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
     const pathname = usePathname();
 
     const hasInternalPageScroll =
@@ -37,7 +37,7 @@ export default function WarehouseDashboardLayout({ children }: { children: React
     if (!allowed) return null;
 
     return (
-        <div className="warehouse-theme pt-2 h-[calc(100dvh-var(--admin-header-height,72px)-var(--admin-bottom-nav-height,5rem)-0.5rem)] flex flex-col overflow-hidden">
+        <div className="warehouse-theme h-[calc(100dvh-var(--admin-header-height,72px)-var(--admin-bottom-nav-height,5rem)-0.5rem)] flex flex-col overflow-hidden">
             {/* Top Header Bar */}
             <header className="z-20 bg-slate-900/95 text-white shadow-lg backdrop-blur">
                 <div className="flex items-center justify-between px-4 md:px-6 py-3">

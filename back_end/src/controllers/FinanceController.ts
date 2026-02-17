@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod } from '../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../services/JournalService';
+import { io } from '../server';
+
 
 type ExpenseDetail = {
     key: string;
@@ -253,6 +255,8 @@ export const issueInvoice = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        io.emit('admin:refresh_badges');
+
         res.json({
             message: paymentMethod === 'cod' || paymentMethod === 'cash_store'
                 ? 'Invoice COD diterbitkan. Order siap dikirim.'
@@ -379,7 +383,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
             } else {
                 // Standard flow: Payment verified → Ready to Ship
                 // (Only if not already shipped/delivered/completed to avoid regression)
-                if (['waiting_payment', 'waiting_invoice'].includes(order.status)) {
+                if (['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(order.status)) {
                     await order.update({ status: 'ready_to_ship' }, { transaction: t });
                 }
             }
@@ -397,6 +401,8 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        io.emit('admin:refresh_badges');
+
         res.json({ message: `Payment ${action}d` });
     } catch (error) {
         try { await t.rollback(); } catch { }
@@ -498,6 +504,8 @@ export const voidPayment = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        io.emit('admin:refresh_badges');
+
         res.json({ message: 'Pembayaran berhasil di-void (Reversed)' });
 
     } catch (error) {
@@ -1164,7 +1172,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         }
 
         const previousDebt = Number(driver.debt || 0);
-        const newDebt = previousDebt - diff;
+        const newDebt = previousDebt - received;
 
         await driver.update({ debt: newDebt }, { transaction: t });
 
@@ -1232,21 +1240,9 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                     // a. Cash Received
                     if (received > 0) {
                         journalLines.push({ account_id: cashAcc.id, debit: received, credit: 0 });
-                    }
 
-                    // b. Revenue Recognized (Full Order Amount)
-                    if (totalExpected > 0) {
-                        journalLines.push({ account_id: revenueAcc.id, debit: 0, credit: totalExpected });
-                    }
-
-                    // c. Difference (Piutang Driver)
-                    // diff = received - totalExpected
-                    // If diff < 0 (Shortage): received < total. Need Debit Piutang (Driver owes us).
-                    // If diff > 0 (Surplus): received > total. Need Credit Piutang (Driver pays debt).
-                    if (diff < 0) {
-                        journalLines.push({ account_id: piutangAcc.id, debit: Math.abs(diff), credit: 0 });
-                    } else if (diff > 0) {
-                        journalLines.push({ account_id: piutangAcc.id, debit: 0, credit: diff });
+                        // b. Reduce Piutang (Clearing the balance created at Delivery)
+                        journalLines.push({ account_id: piutangAcc.id, debit: 0, credit: received });
                     }
 
                     if (journalLines.length >= 2) {

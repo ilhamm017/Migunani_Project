@@ -59,7 +59,6 @@ export const useAuthStore = create<AuthState>()(
                 },
                 removeItem: (name) => sessionStorage.removeItem(name),
             },
-            skipHydration: true, // Fix hydration mismatch
         }
     )
 );

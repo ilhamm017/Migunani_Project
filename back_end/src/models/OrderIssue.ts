@@ -4,7 +4,7 @@ import sequelize from '../config/database';
 interface OrderIssueAttributes {
     id: string;
     order_id: string;
-    issue_type: 'shortage';
+    issue_type: 'shortage' | 'missing_item';
     status: 'open' | 'resolved';
     note: string | null;
     due_at: Date;
@@ -18,7 +18,7 @@ interface OrderIssueCreationAttributes extends Optional<OrderIssueAttributes, 'i
 class OrderIssue extends Model<OrderIssueAttributes, OrderIssueCreationAttributes> implements OrderIssueAttributes {
     declare id: string;
     declare order_id: string;
-    declare issue_type: 'shortage';
+    declare issue_type: 'shortage' | 'missing_item';
     declare status: 'open' | 'resolved';
     declare note: string | null;
     declare due_at: Date;
@@ -42,7 +42,7 @@ OrderIssue.init(
             allowNull: false,
         },
         issue_type: {
-            type: DataTypes.ENUM('shortage'),
+            type: DataTypes.ENUM('shortage', 'missing_item'),
             allowNull: false,
         },
         status: {

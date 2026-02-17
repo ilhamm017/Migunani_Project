@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { getSocket } from '@/lib/socket';
+
 
 type UseAdminActionBadgesParams = {
   enabled: boolean;
@@ -15,6 +17,15 @@ type DashboardStats = {
   waiting_payment?: number | string;
   delivered?: number | string;
   ready_to_ship?: number | string;
+  waiting_admin_verification?: number | string;
+  allocated?: number | string;
+  partially_fulfilled?: number | string;
+  debt_pending?: number | string;
+  shipped?: number | string;
+  hold?: number | string;
+  completed?: number | string;
+  canceled?: number | string;
+  expired?: number | string;
 };
 
 type FinanceCardBadges = {
@@ -45,14 +56,43 @@ const toNumber = (value: unknown): number => {
 };
 
 const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => {
+  // Finance cares about invoices to issue, payments to verify, and deliveries to complete
   if (role === 'admin_finance') {
-    return toNumber(stats.waiting_invoice) + toNumber(stats.waiting_payment) + toNumber(stats.delivered);
+    return (
+      toNumber(stats.waiting_invoice) +
+      toNumber(stats.waiting_admin_verification) +
+      toNumber(stats.delivered) +
+      toNumber(stats.debt_pending)
+    );
   }
+  // Gudang cares about new orders to pick and ready items to ship
   if (role === 'admin_gudang') {
-    return toNumber(stats.pending) + toNumber(stats.ready_to_ship);
+    return (
+      toNumber(stats.pending) +
+      toNumber(stats.ready_to_ship) +
+      toNumber(stats.allocated) +
+      toNumber(stats.partially_fulfilled)
+    );
   }
+  // Kasir/Admin is responsible for initial allocation
+  if (role === 'kasir') {
+    return toNumber(stats.pending) + toNumber(stats.waiting_payment);
+  }
+  // Super Admin sees everything that requires action
   if (role === 'super_admin') {
-    return toNumber(stats.pending) + toNumber(stats.waiting_invoice) + toNumber(stats.waiting_payment) + toNumber(stats.delivered);
+    return (
+      toNumber(stats.pending) +
+      toNumber(stats.waiting_invoice) +
+      toNumber(stats.waiting_payment) +
+      toNumber(stats.ready_to_ship) +
+      toNumber(stats.waiting_admin_verification) +
+      toNumber(stats.delivered) +
+      toNumber(stats.allocated) +
+      toNumber(stats.partially_fulfilled) +
+      toNumber(stats.debt_pending) +
+      toNumber(stats.shipped) +
+      toNumber(stats.hold)
+    );
   }
   return 0;
 };
@@ -87,7 +127,7 @@ export const useAdminActionBadges = ({
 
   useEffect(() => {
     const normalizedRole = String(role || '').trim();
-    const shouldLoad = enabled && ['super_admin', 'admin_gudang', 'admin_finance'].includes(normalizedRole);
+    const shouldLoad = enabled && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
 
     if (!shouldLoad) {
       setBadges(ZERO_BADGES);
@@ -116,10 +156,10 @@ export const useAdminActionBadges = ({
         orderBadgeCount: resolveOrderBadgeCount(stats, normalizedRole),
         financeCardBadges: needFinanceCounts
           ? {
-              verifyPayment: toNumber(stats.waiting_payment),
-              codSettlement: countPendingCodSettlements(codRows),
-              refundRetur: countPendingReturRefunds(returRows),
-            }
+            verifyPayment: toNumber(stats.waiting_admin_verification),
+            codSettlement: countPendingCodSettlements(codRows),
+            refundRetur: countPendingReturRefunds(returRows),
+          }
           : ZERO_FINANCE_BADGES,
       };
 
@@ -128,7 +168,17 @@ export const useAdminActionBadges = ({
       }
     };
 
+
     void loadBadges();
+
+    // Socket.io Real-time integration
+    const socket = getSocket();
+    const onSocketRefresh = () => {
+      console.log('[Socket] Refreshing badges due to admin:refresh_badges');
+      void loadBadges();
+    };
+
+    socket.on('admin:refresh_badges', onSocketRefresh);
 
     const timer = window.setInterval(() => {
       void loadBadges();
@@ -149,6 +199,7 @@ export const useAdminActionBadges = ({
 
     return () => {
       isMounted = false;
+      socket.off('admin:refresh_badges', onSocketRefresh);
       window.clearInterval(timer);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);

@@ -1,9 +1,26 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
 import * as DriverController from '../controllers/DriverController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
-import multer from 'multer';
 
-const upload = multer({ dest: 'uploads/proofs/' }); // Temp config
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const userId = req.user?.id || 'anonymous';
+            const dest = path.join('uploads', String(userId), 'proofs');
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+            }
+            cb(null, dest);
+        },
+        filename: (req, file, cb) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, 'proof-' + uniqueSuffix + path.extname(file.originalname));
+        }
+    })
+});
 const router = Router();
 
 router.use(authenticateToken);

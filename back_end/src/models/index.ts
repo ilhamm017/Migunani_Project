@@ -113,6 +113,9 @@ Order.belongsTo(User, { foreignKey: 'courier_id', as: 'Courier' });
 Order.hasMany(OrderItem, { foreignKey: 'order_id', onDelete: 'CASCADE' });
 OrderItem.belongsTo(Order, { foreignKey: 'order_id' });
 
+Order.hasMany(Order, { foreignKey: 'parent_order_id', as: 'Children' });
+Order.belongsTo(Order, { foreignKey: 'parent_order_id', as: 'Parent' });
+
 Product.hasMany(OrderItem, { foreignKey: 'product_id' });
 OrderItem.belongsTo(Product, { foreignKey: 'product_id' });
 

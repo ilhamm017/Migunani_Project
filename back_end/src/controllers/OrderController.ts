@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
 import { Order, OrderIssue, OrderItem, Product, Invoice, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur } from '../models';
 import { Op } from 'sequelize';
+import { generateInvoiceNumber, resolveInitialInvoiceStatus } from '../utils/invoice';
 import { resolveShippingMethodByCode } from './ShippingMethodController';
+import waClient, { getStatus as getWaStatus } from '../services/whatsappClient';
+import { io } from '../server';
+
 
 // --- Customer Endpoints ---
 const DELIVERY_EMPLOYEE_ROLES = ['driver'] as const;
-const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold'] as const;
+const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
 const ISSUE_SLA_HOURS = 48;
 const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
 type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
@@ -57,7 +61,16 @@ const resolveEmployeeDisplayName = (userLike: any): string => {
 
 const getActiveIssue = (orderLike: any) => {
     const issues = Array.isArray(orderLike?.Issues) ? orderLike.Issues : [];
-    return issues.find((issue: any) => issue?.status === 'open') || null;
+    const openIssue = issues.find((issue: any) => issue?.status === 'open');
+    if (!openIssue) return null;
+
+    // Ignore internal shortages unless order is explicitly on HOLD.
+    // This distinguishes "Allocation Shortfalls" from "Real Problems" (Missing Items/Complaints).
+    if (openIssue.issue_type === 'shortage' && orderLike.status !== 'hold') {
+        return null;
+    }
+
+    return openIssue;
 };
 
 const withOrderTrackingFields = (orderLike: any) => {
@@ -138,14 +151,6 @@ const normalizeCheckoutItems = (value: unknown): NormalizedCheckoutItem[] | null
     return normalized;
 };
 
-const generateInvoiceNumber = (orderId: string, now = new Date()): string => {
-    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-    const uniquePart = String(orderId || '')
-        .replace(/[^a-zA-Z0-9]/g, '')
-        .toUpperCase()
-        .slice(0, 12);
-    return `INV/${datePart}/${uniquePart || Date.now().toString().slice(-8)}`;
-};
 
 const normalizeShippingMethodCode = (value: unknown): string => {
     if (typeof value !== 'string') return '';
@@ -183,49 +188,8 @@ const resolveShippingMethodForCheckout = async (codeRaw: unknown): Promise<Check
     return FALLBACK_SHIPPING_METHODS[code] || null;
 };
 
-let cachedInitialInvoiceStatus: 'draft' | 'unpaid' | null = null;
 
-const parseEnumValuesFromColumnType = (columnTypeRaw: unknown): string[] => {
-    const columnType = String(columnTypeRaw || '');
-    const values: string[] = [];
-    const regex = /'((?:[^'\\]|\\.)*)'/g;
-    let match: RegExpExecArray | null = null;
-    while ((match = regex.exec(columnType)) !== null) {
-        values.push(match[1].replace(/\\'/g, "'"));
-    }
-    return values;
-};
 
-const resolveInitialInvoiceStatus = async (): Promise<'draft' | 'unpaid'> => {
-    if (cachedInitialInvoiceStatus) return cachedInitialInvoiceStatus;
-    if (sequelize.getDialect() !== 'mysql') {
-        cachedInitialInvoiceStatus = 'draft';
-        return cachedInitialInvoiceStatus;
-    }
-
-    try {
-        const [rows] = await sequelize.query(
-            `SELECT COLUMN_TYPE AS columnType
-             FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE()
-               AND TABLE_NAME = 'invoices'
-               AND COLUMN_NAME = 'payment_status'`
-        ) as any;
-
-        const paymentStatusColumn = rows?.[0];
-        if (!paymentStatusColumn?.columnType) {
-            cachedInitialInvoiceStatus = 'unpaid';
-            return cachedInitialInvoiceStatus;
-        }
-
-        const enumValues = parseEnumValuesFromColumnType(paymentStatusColumn.columnType);
-        cachedInitialInvoiceStatus = enumValues.includes('draft') ? 'draft' : 'unpaid';
-        return cachedInitialInvoiceStatus;
-    } catch {
-        cachedInitialInvoiceStatus = 'unpaid';
-        return cachedInitialInvoiceStatus;
-    }
-};
 
 const resolveTierPriceFromVariant = (basePrice: number, tier: string, variantRaw: unknown): number => {
     if (tier === 'regular') return basePrice;
@@ -458,6 +422,9 @@ export const checkout = async (req: Request, res: Response) => {
 
         await t.commit();
 
+        io.emit('admin:refresh_badges');
+
+
         // If successful and from_cart, clear the cart
         if (useCart) {
             const cart = await Cart.findOne({ where: { user_id: targetCustomerId } });
@@ -544,6 +511,7 @@ export const getOrderDetails = async (req: Request, res: Response) => {
                 { model: OrderItem, include: [{ model: Product, attributes: ['name', 'sku', 'unit'] }] },
                 { model: Invoice },
                 { model: OrderAllocation, as: 'Allocations' },
+                { model: Order, as: 'Children' },
                 { model: Retur }
             ]
         });
@@ -573,6 +541,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
 
         const order = await Order.findOne({
             where: { id, customer_id: userId },
+            include: [{ model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number'] }],
             transaction: t,
             lock: t.LOCK.UPDATE
         });
@@ -612,9 +581,8 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
             verified_at: null,
         }, { transaction: t });
 
-        // Update Order Status
-        await order.update({ status: 'waiting_payment' }, { transaction: t }); // "Menunggu Verifikasi" usually maps here or Processing? 
-        // Schema has: 'pending', 'waiting_payment', 'processing'.
+        // Update Order Status to 'waiting_admin_verification' (Waiting for Verification)
+        await order.update({ status: 'waiting_admin_verification' }, { transaction: t });        // Schema has: 'pending', 'waiting_payment', 'waiting_admin_verification'.
         // Let's assume 'waiting_payment' = Waiting for Transfer. 
         // Once uploaded, maybe 'processing' or stay 'waiting_payment' but Invoice is marked?
         // Let's stick to Schema: 'waiting_payment' is usually BEFORE upload.
@@ -623,6 +591,54 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
         // Let's update order status to 'processing' to indicate it moved forward, or keep it simple.
 
         await t.commit();
+
+        io.emit('admin:refresh_badges');
+
+
+        // --- ASYNC NOTIFICATIONS (POST-COMMIT) ---
+
+        // --- ASYNC NOTIFICATIONS (POST-COMMIT) ---
+        // Separate try-catch to ensure request succeeds even if notif fails
+        (async () => {
+            try {
+                console.log(`[Notif] Starting payment proof notification for Order #${order.id}`);
+                console.log(`[Notif] WA Client Status: ${getWaStatus()}`);
+
+                const customerMsg = `[Migunani Motor] Bukti pembayaran untuk pesanan #${order.id} telah kami terima. Pembayaran Anda akan segera diverifikasi oleh tim finance kami. Terima kasih!`;
+                // @ts-ignore
+                const customerWaRaw = order.Customer?.whatsapp_number || (order as any).whatsapp_number;
+                const customerWa = customerWaRaw ? String(customerWaRaw).trim() : '';
+
+                console.log(`[Notif] Target Customer WA: ${customerWa}`);
+
+                if (customerWa) {
+                    const target = customerWa.includes('@c.us') ? customerWa : `${customerWa}@c.us`;
+                    console.log(`[Notif] Sending to customer: ${target}`);
+                    await waClient.sendMessage(target, customerMsg);
+                    console.log(`[Notif] Sent to customer success`);
+                } else {
+                    console.warn(`[Notif] No customer WA found for order ${order.id}`);
+                }
+
+                // Notify Finance Admins
+                const financeAdmins = await User.findAll({ where: { role: 'admin_finance', status: 'active' } });
+                console.log(`[Notif] Finance Admins found: ${financeAdmins.length}`);
+
+                const adminMsg = `[PEMBAYARAN] Bukti transfer baru diunggah untuk Invoice ${invoice.invoice_number || order.id}.\nCustomer: ${order.customer_name || 'Customer'}\nSilakan verifikasi di panel admin.`;
+
+                for (const admin of financeAdmins) {
+                    if (admin.whatsapp_number) {
+                        const target = admin.whatsapp_number.includes('@c.us') ? admin.whatsapp_number : `${admin.whatsapp_number}@c.us`;
+                        console.log(`[Notif] Sending to admin ${admin.name} (${target})`);
+                        await waClient.sendMessage(target, adminMsg);
+                    }
+                }
+                console.log(`[Notif] Notification sequence completed`);
+            } catch (notifError) {
+                console.error('[Notif] Notification error (full stack):', notifError);
+            }
+        })();
+
         res.json({ message: 'Payment proof uploaded' });
     } catch (error) {
         try { await t.rollback(); } catch { }
@@ -634,7 +650,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
 
 export const getAllOrders = async (req: Request, res: Response) => {
     try {
-        const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo } = req.query;
+        const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = {};
@@ -645,6 +661,12 @@ export const getAllOrders = async (req: Request, res: Response) => {
             } else {
                 whereClause.status = statusStr;
             }
+        }
+
+        if (is_backorder === 'true') {
+            whereClause.parent_order_id = { [Op.ne]: null };
+        } else if (exclude_backorder === 'true') {
+            whereClause.parent_order_id = null;
         }
 
         const searchText = typeof search === 'string' ? search.trim() : '';
@@ -690,6 +712,7 @@ export const getAllOrders = async (req: Request, res: Response) => {
                 { model: User, as: 'Customer', attributes: ['id', 'name'] },
                 { model: User, as: 'Courier', attributes: ['id', 'name'] },
                 { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
+                { model: Order, as: 'Children', attributes: ['id'] },
             ],
             distinct: true,
             subQuery: false,
@@ -886,10 +909,98 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        io.emit('admin:refresh_badges');
         res.json({ message: `Order status updated to ${nextStatus}` });
+
+
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error updating status', error });
+        res.status(500).json({ message: 'Error updating order status', error });
+    }
+};
+
+export const reportMissingItem = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const orderId = String(req.params.id);
+        const userId = req.user!.id;
+        const { items, note } = req.body;
+        // items: [{ product_id, qty_missing }]
+
+        const order = await Order.findByPk(orderId, {
+            include: [
+                { model: OrderItem },
+                { model: OrderAllocation, as: 'Allocations' }
+            ],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        // 1. Validate Status: Must be Delivered or Completed
+        if (!['delivered', 'completed'].includes(order.status)) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Laporan barang kurang hanya bisa dibuat setelah pesanan diterima (delivered/completed).' });
+        }
+
+        // 2. Validate Items
+        if (!Array.isArray(items) || items.length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Daftar barang kurang wajib diisi.' });
+        }
+
+        const missingItemsData: string[] = [];
+
+        for (const item of items) {
+            const pid = String(item.product_id);
+            const qtyMissing = Number(item.qty_missing);
+
+            if (qtyMissing <= 0) continue;
+
+            const orderItem = (order.OrderItems || []).find((oi: any) => String(oi.product_id) === pid);
+            if (!orderItem) {
+                await t.rollback();
+                return res.status(400).json({ message: `Produk ID ${pid} tidak ada dalam pesanan ini.` });
+            }
+
+            if (qtyMissing > Number(orderItem.qty)) {
+                await t.rollback();
+                return res.status(400).json({ message: `Jumlah barang kurang untuk produk ${pid} melebihi jumlah pesanan.` });
+            }
+
+            const productName = (orderItem as any).Product?.name || pid;
+            missingItemsData.push(`${productName} (Qty: ${qtyMissing})`);
+        }
+
+        if (missingItemsData.length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Tidak ada item valid yang dilaporkan.' });
+        }
+
+        // 3. Create Order Issue
+        const issueNote = `Barang Kurang: ${missingItemsData.join(', ')}. Catatan: ${note || '-'}`;
+        const dueAt = new Date();
+        dueAt.setHours(dueAt.getHours() + 48); // 48h SLA
+
+        await OrderIssue.create({
+            order_id: orderId,
+            issue_type: 'missing_item', // Ensure this enum value is supported in your model
+            status: 'open',
+            note: issueNote,
+            due_at: dueAt,
+            created_by: userId
+        }, { transaction: t });
+
+        await t.commit();
+        res.status(201).json({ message: 'Laporan barang kurang berhasil dibuat. Tim kami akan segera melakukan verifikasi.' });
+
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        res.status(500).json({ message: 'Gagal membuat laporan barang kurang', error });
     }
 };
 
@@ -913,6 +1024,12 @@ export const getDashboardStats = async (req: Request, res: Response) => {
             shipped: 0,
             completed: 0,
             canceled: 0,
+            waiting_admin_verification: 0,
+            allocated: 0,
+            partially_fulfilled: 0,
+            debt_pending: 0,
+            hold: 0,
+            expired: 0,
             total: 0
         };
 

@@ -71,7 +71,8 @@ export default function WarehouseLandingPage() {
             icon: ClipboardList,
             color: 'text-blue-600',
             bg: 'bg-blue-50',
-            border: 'border-blue-100'
+            border: 'border-blue-100',
+            roles: ['super_admin', 'admin_gudang']
         },
         {
             href: '/admin/warehouse/helper',
@@ -80,7 +81,8 @@ export default function WarehouseLandingPage() {
             icon: UserCheck,
             color: 'text-indigo-600',
             bg: 'bg-indigo-50',
-            border: 'border-indigo-100'
+            border: 'border-indigo-100',
+            roles: ['super_admin', 'admin_gudang']
         },
         {
             href: '/admin/warehouse/inbound',
@@ -89,7 +91,18 @@ export default function WarehouseLandingPage() {
             icon: ShoppingCart,
             color: 'text-emerald-600',
             bg: 'bg-emerald-50',
-            border: 'border-emerald-100'
+            border: 'border-emerald-100',
+            roles: ['super_admin', 'kasir']
+        },
+        {
+            href: '/admin/warehouse/inbound/history',
+            label: 'Riwayat PO',
+            desc: 'Daftar semua Purchase Order',
+            icon: Clock,
+            color: 'text-amber-600',
+            bg: 'bg-amber-50',
+            border: 'border-amber-100',
+            roles: ['super_admin', 'admin_gudang', 'kasir']
         },
         {
             href: '/admin/warehouse/audit',
@@ -98,7 +111,8 @@ export default function WarehouseLandingPage() {
             icon: ShieldCheck,
             color: 'text-rose-600',
             bg: 'bg-rose-50',
-            border: 'border-rose-100'
+            border: 'border-rose-100',
+            roles: ['super_admin', 'admin_gudang']
         },
         {
             href: '/admin/warehouse/scanner',
@@ -107,7 +121,8 @@ export default function WarehouseLandingPage() {
             icon: ScanBarcode,
             color: 'text-slate-600',
             bg: 'bg-slate-100',
-            border: 'border-slate-200'
+            border: 'border-slate-200',
+            roles: ['super_admin', 'admin_gudang']
         },
         {
             href: '/admin/warehouse/categories',
@@ -116,7 +131,8 @@ export default function WarehouseLandingPage() {
             icon: Layers,
             color: 'text-sky-600',
             bg: 'bg-sky-50',
-            border: 'border-sky-100'
+            border: 'border-sky-100',
+            roles: ['super_admin', 'admin_gudang']
         },
         {
             href: '/admin/warehouse/suppliers',
@@ -125,7 +141,8 @@ export default function WarehouseLandingPage() {
             icon: Truck,
             color: 'text-violet-600',
             bg: 'bg-violet-50',
-            border: 'border-violet-100'
+            border: 'border-violet-100',
+            roles: ['super_admin', 'admin_gudang', 'kasir']
         },
         {
             href: '/admin/warehouse/import',
@@ -134,9 +151,10 @@ export default function WarehouseLandingPage() {
             icon: FileSpreadsheet,
             color: 'text-cyan-600',
             bg: 'bg-cyan-50',
-            border: 'border-cyan-100'
+            border: 'border-cyan-100',
+            roles: ['super_admin', 'admin_gudang']
         },
-    ];
+    ].filter(tool => !tool.roles || tool.roles.includes(user?.role || ''));
 
     return (
         <div className="warehouse-page space-y-8">

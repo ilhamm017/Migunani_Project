@@ -82,13 +82,6 @@ export default function AuditDetailPage() {
     return (
         <div className="warehouse-page">
             <div>
-                <div className="warehouse-breadcrumb">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-                    <span>/</span>
-                    <Link href="/admin/warehouse/audit" className="hover:text-emerald-500 transition-colors">Stock Audit</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Detail</span>
-                </div>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <Link href="/admin/warehouse/audit" className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">

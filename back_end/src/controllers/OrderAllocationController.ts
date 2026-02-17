@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Order, OrderItem, OrderAllocation, Product, sequelize, User, Invoice, OrderIssue, Backorder } from '../models';
+import { generateInvoiceNumber, resolveInitialInvoiceStatus } from '../utils/invoice';
+import { io } from '../server';
+
 
 const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 const TERMINAL_ORDER_STATUSES = ['completed', 'canceled', 'expired'] as const;
@@ -12,6 +15,7 @@ const buildShortageSummary = (orderItemsRaw: any[], allocationsRaw: any[]) => {
 
     const orderedByProduct = new Map<string, number>();
     const productNameByProduct = new Map<string, string>();
+    const productDetailsByProduct = new Map<string, any>();
     orderItems.forEach((item: any) => {
         const key = String(item?.product_id || '');
         if (!key) return;
@@ -19,6 +23,15 @@ const buildShortageSummary = (orderItemsRaw: any[], allocationsRaw: any[]) => {
         orderedByProduct.set(key, prev + Number(item?.qty || 0));
         if (!productNameByProduct.has(key)) {
             productNameByProduct.set(key, String(item?.Product?.name || 'Produk'));
+        }
+        // Store product details
+        const details = {
+            sku: item?.Product?.sku,
+            base_price: item?.Product?.base_price,
+            stock_quantity: item?.Product?.stock_quantity
+        };
+        if (!productDetailsByProduct.has(key)) {
+            productDetailsByProduct.set(key, details);
         }
     });
 
@@ -44,9 +57,13 @@ const buildShortageSummary = (orderItemsRaw: any[], allocationsRaw: any[]) => {
             shortageTotal += shortageQty;
 
             if (shortageQty <= 0) return null;
+            const details = productDetailsByProduct.get(productId) || {};
             return {
                 product_id: productId,
                 product_name: productNameByProduct.get(productId) || 'Produk',
+                sku: details.sku,
+                base_price: details.base_price,
+                stock_quantity: details.stock_quantity,
                 ordered_qty: Number(orderedQty || 0),
                 allocated_qty: allocatedQty,
                 shortage_qty: shortageQty,
@@ -73,7 +90,7 @@ export const getPendingAllocations = async (req: Request, res: Response) => {
             },
             include: [
                 { model: User, as: 'Customer', attributes: ['id', 'name'] },
-                { model: OrderItem, include: [{ model: Product, attributes: ['id', 'name', 'stock_quantity', 'allocated_quantity'] }] },
+                { model: OrderItem, include: [{ model: Product, attributes: ['id', 'name', 'sku', 'base_price', 'stock_quantity', 'allocated_quantity'] }] },
                 { model: OrderAllocation, as: 'Allocations' }
             ],
             order: [['createdAt', 'ASC']] // FIFO
@@ -91,8 +108,8 @@ export const getPendingAllocations = async (req: Request, res: Response) => {
                     allocated_total: allocatedTotal,
                     shortage_total: shortageTotal,
                     needs_allocation: needsAllocation,
-                    is_backorder: needsAllocation && allocatedTotal > 0,
-                    status_label: !needsAllocation ? 'fulfilled' : (allocatedTotal > 0 ? 'backorder' : 'preorder'),
+                    is_backorder: (needsAllocation && allocatedTotal > 0) || !!plain.parent_order_id,
+                    status_label: !needsAllocation ? 'fulfilled' : (plain.parent_order_id ? 'backorder' : (allocatedTotal > 0 ? 'backorder' : 'preorder')),
                     shortage_items: shortageItems,
                 };
             })
@@ -198,6 +215,12 @@ export const getOrderDetails = async (req: Request, res: Response) => {
 };
 
 export const allocateOrder = async (req: Request, res: Response) => {
+    /**
+     * KEBIJAKAN ALOKASI MANUAL:
+     * Fungsi ini adalah satu-satunya titik masuk untuk alokasi stok ke pesanan.
+     * Alokasi bersifat manual dan admin-triggered. Hindari penambahan alokasi otomatis 
+     * yang tidak terpantau untuk menjaga kontrol penuh administrator terhadap prioritas pesanan.
+     */
     const t = await sequelize.transaction();
     try {
         const { id } = req.params as { id: string };
@@ -289,6 +312,79 @@ export const allocateOrder = async (req: Request, res: Response) => {
             const allocQty = alloc ? alloc.allocated_qty : 0;
             allocatedTotal += Number(oi.price_at_purchase) * allocQty;
         }
+
+        // --- Handle Split Order for Shortages ---
+        let childOrderId: string | null = null;
+        const itemsWithShortage = orderItems.map(oi => {
+            const alloc = allocations.find(a => a.product_id === oi.product_id);
+            const allocQty = alloc ? alloc.allocated_qty : 0;
+            const shortage = oi.qty - allocQty;
+            return shortage > 0 ? { oi, shortage, allocQty } : null;
+        }).filter(Boolean);
+
+        if (itemsWithShortage.length > 0) {
+            // Create child order
+            const childOrder = await Order.create({
+                customer_id: order.customer_id,
+                customer_name: order.customer_name,
+                source: order.source,
+                status: 'pending', // Child order starts as pending
+                total_amount: 0,
+                discount_amount: 0,
+                parent_order_id: order.id,
+                stock_released: false
+            }, { transaction: t });
+            childOrderId = childOrder.id;
+
+            // Create Invoice for child order
+            const parentInvoice = await Invoice.findOne({
+                where: { order_id: id },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            if (parentInvoice) {
+                const childInvoiceNumber = generateInvoiceNumber(childOrder.id);
+                const initialStatus = await resolveInitialInvoiceStatus();
+
+                await Invoice.create({
+                    order_id: childOrder.id,
+                    invoice_number: childInvoiceNumber,
+                    payment_method: parentInvoice.payment_method,
+                    payment_status: initialStatus,
+                    amount_paid: 0,
+                    change_amount: 0
+                }, { transaction: t });
+            }
+
+            let childTotal = 0;
+            for (const item of itemsWithShortage as any[]) {
+                const { oi, shortage, allocQty } = item;
+
+                // Create item in child order
+                await OrderItem.create({
+                    order_id: childOrderId as string,
+                    product_id: oi.product_id,
+                    qty: shortage,
+                    price_at_purchase: oi.price_at_purchase,
+                    cost_at_purchase: oi.cost_at_purchase
+                }, { transaction: t });
+
+                childTotal += Number(oi.price_at_purchase) * shortage;
+
+                // Update quantity in original order
+                if (allocQty > 0) {
+                    await oi.update({ qty: allocQty }, { transaction: t });
+                } else {
+                    await oi.update({ qty: 0 }, { transaction: t });
+                }
+            }
+
+            await childOrder.update({
+                total_amount: childTotal
+            }, { transaction: t });
+        }
+
         await order.update({ total_amount: allocatedTotal }, { transaction: t });
 
         // --- Auto-transition order & invoice status based on payment method ---
@@ -377,52 +473,35 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }
         }
 
-        // 2. Manage Order Issues (Legacy Shortage Tracking - Optional but good for visibility)
-        if (hasShortage) {
-            // Create or update open shortage issue
-            const existingIssue = await OrderIssue.findOne({
-                where: { order_id: id, issue_type: 'shortage', status: 'open' },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
+        // DEPRECATED: Shortage directly creates Backorder items (waiting_stock). 
+        // We no longer create an 'OrderIssue' for shortage during allocation. 
+        // Issues are only for "Missing Item" complaints after delivery.
 
-            const shortageNote = (backorderItems as Array<{ product_id: string; shortage: number }>).map(b => `${b.product_id}: kurang ${b.shortage}`).join(', ');
+        // Logic removed.
 
-            if (existingIssue) {
-                await existingIssue.update({ note: shortageNote }, { transaction: t });
-            } else {
-                const dueAt = new Date(now.getTime() + (48 * 60 * 60 * 1000)); // Default 48h SLA
-                await OrderIssue.create({
-                    order_id: id,
-                    issue_type: 'shortage',
-                    status: 'open',
-                    note: shortageNote,
-                    due_at: dueAt,
-                    created_by: req.user?.id || null
-                }, { transaction: t });
-            }
-        } else {
-            // Resolve any open shortage issues
-            const openIssues = await OrderIssue.findAll({
-                where: { order_id: id, issue_type: 'shortage', status: 'open' },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
+        // Resolve any open shortage issues
+        const openIssues = await OrderIssue.findAll({
+            where: { order_id: id, issue_type: 'shortage', status: 'open' },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
 
-            for (const issue of openIssues) {
-                await issue.update({
-                    status: 'resolved',
-                    resolved_at: now,
-                    resolved_by: req.user?.id || null
-                }, { transaction: t });
-            }
+        for (const issue of openIssues) {
+            await issue.update({
+                status: 'resolved',
+                resolved_at: now,
+                resolved_by: req.user?.id || null
+            }, { transaction: t });
         }
 
         await t.commit();
+        io.emit('admin:refresh_badges');
+
         res.json({
             message: 'Alokasi berhasil',
-            status: fullyAllocated ? 'fully_allocated' : 'partially_allocated',
+            status: fullyAllocated ? 'fully_allocated' : 'partially_allocated_with_split',
             allocated_total: allocatedTotal,
+            backorder_order_id: childOrderId,
             backorder_items: backorderItems,
         });
 
@@ -532,6 +611,8 @@ export const cancelBackorder = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
+        io.emit('admin:refresh_badges');
+
         return res.json({
             message: 'Backorder / pre-order berhasil dibatalkan.',
             order_id: id,

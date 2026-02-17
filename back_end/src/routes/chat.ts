@@ -29,7 +29,14 @@ const allowedAttachmentMimeTypes = new Set([
 
 const chatUpload = multer({
     storage: multer.diskStorage({
-        destination: (_req, _file, cb) => cb(null, chatUploadsDir),
+        destination: (req, _file, cb) => {
+            const userId = req.user?.id || req.body.guest_id || 'anonymous';
+            const dest = path.join('uploads', String(userId), 'chat');
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+            }
+            cb(null, dest);
+        },
         filename: (_req, file, cb) => {
             const ext = path.extname(file.originalname || '').toLowerCase();
             const safeExt = ext.replace(/[^a-z0-9.]/g, '');

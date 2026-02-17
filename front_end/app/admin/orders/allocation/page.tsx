@@ -4,19 +4,22 @@ import { useState, useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { Box, User, Calendar, ArrowRight } from 'lucide-react';
+import { useRequireRoles } from '@/lib/guards';
 
 const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 
 export default function AllocationListPage() {
+    const allowed = useRequireRoles(['super_admin', 'kasir']);
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [onlyShortage, setOnlyShortage] = useState(true);
 
     useEffect(() => {
-        loadData();
-    }, [onlyShortage]);
+        if (allowed) loadData();
+    }, [onlyShortage, allowed]);
 
     const loadData = async () => {
+        if (!allowed) return;
         setLoading(true);
         try {
             const res = await api.allocation.getPending({
@@ -54,14 +57,11 @@ export default function AllocationListPage() {
         return { total, shortage, preorder, backorder, fulfilled };
     }, [orders]);
 
+    if (!allowed) return null;
+
     return (
         <div className="warehouse-page">
             <div>
-                <div className="warehouse-breadcrumb">
-                    <Link href="/admin/orders" className="hover:text-emerald-500 transition-colors">Orders</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Allocation</span>
-                </div>
                 <h1 className="warehouse-title">Alokasi Stok Order</h1>
                 <p className="warehouse-subtitle">Alokasikan stok untuk pesanan yang masuk sebelum diproses ke tim picker atau pengiriman.</p>
             </div>

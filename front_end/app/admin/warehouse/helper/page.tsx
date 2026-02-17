@@ -87,11 +87,6 @@ export default function WarehouseHelperPage() {
         <div className="warehouse-screen warehouse-screen-fill warehouse-screen-flush-bottom flex min-h-0 flex-col overflow-hidden bg-slate-50">
             {/* Breadcrumbs & Title */}
             <div className="warehouse-panel bg-white px-4 md:px-6 py-4 flex flex-col gap-1 border-b border-slate-200">
-                <div className="warehouse-breadcrumb mb-0">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Picker Helper</span>
-                </div>
                 <div className="flex items-center justify-between">
                     <div>
                         <h1 className="warehouse-title">Picking List</h1>

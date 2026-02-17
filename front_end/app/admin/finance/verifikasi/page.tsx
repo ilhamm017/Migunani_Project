@@ -2,11 +2,13 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { X, CheckCircle, FileText, Wallet } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import FinanceHeader from '@/components/admin/finance/FinanceHeader';
+import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 
 const normalizeProofImageUrl = (raw?: string | null) => {
   if (!raw) return null;
@@ -29,7 +31,7 @@ export default function FinanceVerifyPage() {
   const { user } = useAuthStore();
   const canVerify = useMemo(() => ['admin_finance', 'super_admin'].includes(user?.role || ''), [user?.role]);
 
-  const [activeTab, setActiveTab] = useState<'invoice' | 'verify' | 'cod'>('invoice');
+  const [activeTab, setActiveTab] = useState<'invoice' | 'verify' | 'cod' | 'completed'>('invoice');
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -38,12 +40,9 @@ export default function FinanceVerifyPage() {
   const load = async () => {
     try {
       setLoading(true);
-      // Fetch relevant statuses: waiting_invoice, waiting_payment, delivered.
-      // delivered is for COD settlement.
-      // We'll filter client-side for tabs.
       const res = await api.admin.orderManagement.getAll({
         page: 1, limit: 100,
-        status: 'waiting_invoice,waiting_payment,delivered'
+        status: 'waiting_invoice,waiting_payment,waiting_admin_verification,delivered,completed,canceled'
       });
       setOrders(res.data?.orders || []);
     } catch (error) {
@@ -71,10 +70,13 @@ export default function FinanceVerifyPage() {
   const tabOrders = useMemo(() => {
     return orders.filter(o => {
       if (activeTab === 'invoice') return o.status === 'waiting_invoice';
-      if (activeTab === 'verify') return o.status === 'waiting_payment';
+      if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
       if (activeTab === 'cod') {
         const isCod = ['cod', 'cash_store'].includes(o.Invoice?.payment_method);
         return o.status === 'delivered' && isCod && o.Invoice?.payment_status !== 'paid';
+      }
+      if (activeTab === 'completed') {
+        return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
       }
       return false;
     });
@@ -90,7 +92,6 @@ export default function FinanceVerifyPage() {
       } else if (actionType === 'verify') {
         await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
       } else if (actionType === 'cod_settle') {
-        // Use verifyPayment with 'approve' for COD settlement (backend logic handles transition delivered -> completed)
         await api.admin.finance.verifyPayment(id, 'approve');
       }
       await load();
@@ -103,168 +104,165 @@ export default function FinanceVerifyPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-        <h1 className="text-xl font-black text-slate-900">Finance Command Center</h1>
-        <p className="text-xs text-slate-600 mt-1">
-          Kelola penerbitan invoice, verifikasi pembayaran transfer, dan setoran uang COD dari driver.
-        </p>
+    <div className="bg-slate-50 min-h-screen pb-24">
+      <div className="bg-white px-6 pb-4 pt-2 shadow-sm sticky top-0 z-40">
+        <FinanceHeader title="Verifikasi Command" />
+
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+          <button
+            onClick={() => setActiveTab('invoice')}
+            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'invoice' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+          >
+            Issue Invoice
+          </button>
+          <button
+            onClick={() => setActiveTab('verify')}
+            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'verify' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+          >
+            Verifikasi
+          </button>
+          <button
+            onClick={() => setActiveTab('cod')}
+            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'cod' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+          >
+            COD Setoran
+          </button>
+          <button
+            onClick={() => setActiveTab('completed')}
+            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'completed' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+          >
+            History
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-2 border-b border-slate-200 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('invoice')}
-          className={`pb-3 px-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'invoice' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-        >
-          <FileText size={16} /> Perlu Invoice
-        </button>
-        <button
-          onClick={() => setActiveTab('verify')}
-          className={`pb-3 px-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'verify' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-        >
-          <CheckCircle size={16} /> Verifikasi Transfer
-        </button>
-        <button
-          onClick={() => setActiveTab('cod')}
-          className={`pb-3 px-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === 'cod' ? 'border-orange-600 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-        >
-          <Wallet size={16} /> Setoran COD
-        </button>
-      </div>
-
-      {loading ? (
-        <p className="text-sm text-slate-500">Memuat data...</p>
-      ) : (
-        <div className="space-y-3">
-          {tabOrders.length === 0 && (
-            <div className="bg-slate-50 rounded-2xl p-8 text-center min-h-[200px] flex flex-col items-center justify-center">
-              <p className="text-sm text-slate-500 font-medium">Tidak ada order di tab ini.</p>
-              <p className="text-xs text-slate-400 mt-1">Order baru akan muncul di sini sesuai statusnya.</p>
-            </div>
-          )}
-          {tabOrders.map((o) => {
+      <div className="px-5 py-4 space-y-3">
+        {loading ? (
+          [1, 2, 3].map(i => <div key={i} className="h-24 bg-slate-200 rounded-2xl animate-pulse" />)
+        ) : tabOrders.length === 0 ? (
+          <div className="text-center py-20 text-slate-400">
+            <p className="text-sm">Tidak ada data</p>
+          </div>
+        ) : (
+          tabOrders.map((o) => {
             const proofUrl = normalizeProofImageUrl(o.Invoice?.payment_proof_url);
-            const deliveryProofUrl = normalizeProofImageUrl(o.delivery_proof_url); // For COD tab
+            const deliveryProofUrl = normalizeProofImageUrl(o.delivery_proof_url);
+            const isCodTab = activeTab === 'cod';
+            // const isVerifyTab = activeTab === 'verify'; 
+            const initial = (o.customer_name || 'C').charAt(0).toUpperCase();
 
             return (
-              <div key={o.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
-                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-bold text-slate-900">Order #{o.id}</p>
-                    <p className="text-xs text-slate-600 mt-1">
-                      Invoice: {o.Invoice?.invoice_number || '-'} | Customer: {o.customer_name || '-'}
-                    </p>
-                    <p className="text-xs text-slate-600">
-                      Total: {formatCurrency(Number(o.total_amount || 0))} | Metode: <span className="font-bold uppercase">{o.Invoice?.payment_method || '-'}</span>
-                    </p>
-                    {o.Courier && (
-                      <p className="text-xs text-slate-600">Driver: {o.courier_display_name || o.Courier.name}</p>
-                    )}
+              <div key={o.id} className="bg-white rounded-[20px] p-4 shadow-sm border border-slate-100 active:scale-[0.98] transition-all">
+                <div className="flex justify-between items-start mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm ${isCodTab ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                      {initial}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{o.customer_name}</h4>
+                      <p className="text-[10px] text-slate-500 font-mono">#{o.Invoice?.invoice_number || o.id}</p>
+                    </div>
                   </div>
-                  <Link
-                    href={`/admin/orders/${o.id}`}
-                    className="inline-flex items-center justify-center px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 transition-colors"
-                  >
-                    Detail Order
-                  </Link>
+                  <span className="text-sm font-black text-slate-900">
+                    {formatCurrency(Number(o.total_amount))}
+                  </span>
                 </div>
 
-                {/* Content based on tab */}
-                {activeTab === 'invoice' && (
-                  <div className="flex justify-end pt-2 border-t border-slate-100 mt-2">
+                {/* Middle Content */}
+                <div className="bg-slate-50 rounded-xl p-3 mb-3">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-slate-500">Metode</span>
+                    <span className="font-bold text-slate-700 uppercase">{o.Invoice?.payment_method || '-'}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">Tanggal</span>
+                    <span className="font-medium text-slate-700">{formatDateTime(o.createdAt)}</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2">
+                  {activeTab === 'invoice' && (
                     <button
                       onClick={() => handleAction(o.id, 'issue')}
-                      disabled={!canVerify || busyId === o.id}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold disabled:opacity-50 hover:bg-blue-700 transition-colors"
+                      disabled={busyId === o.id}
+                      className="flex-1 bg-slate-900 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-slate-800"
                     >
-                      {busyId === o.id ? 'Memproses...' : 'Terbitkan Invoice'}
+                      {busyId === o.id ? '...' : 'Issue Invoice'}
                     </button>
-                  </div>
-                )}
+                  )}
 
-                {activeTab === 'verify' && (
-                  <div className="space-y-3 pt-2 border-t border-slate-100 mt-2">
-                    <div>
-                      <p className="text-xs text-slate-600 mb-1">Bukti Transfer:</p>
+                  {activeTab === 'verify' && (
+                    <>
                       {proofUrl ? (
-                        <button onClick={() => setPreviewUrl(proofUrl)} className="text-xs text-blue-600 font-medium underline hover:text-blue-700">Lihat Bukti</button>
-                      ) : (
-                        <p className="text-xs text-rose-500 font-medium">Belum ada bukti transfer.</p>
-                      )}
-                    </div>
-                    <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => setPreviewUrl(proofUrl)}
+                          className="px-3 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold"
+                        >
+                          Bukti
+                        </button>
+                      ) : null}
                       <button
                         onClick={() => handleAction(o.id, 'verify', 'approve')}
-                        disabled={!canVerify || !proofUrl || busyId === o.id}
-                        className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+                        disabled={busyId === o.id || !proofUrl}
+                        className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 disabled:opacity-50"
                       >
-                        {busyId === o.id ? '...' : 'Approve Payment'}
+                        Approve
                       </button>
-                      <button
-                        onClick={() => handleAction(o.id, 'verify', 'reject')}
-                        disabled={!canVerify || busyId === o.id}
-                        className="px-4 py-2 bg-rose-500 text-white rounded-xl text-xs font-bold disabled:opacity-50 hover:bg-rose-600 transition-colors"
-                      >
-                        {busyId === o.id ? '...' : 'Reject'}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                    </>
+                  )}
 
-                {activeTab === 'cod' && (
-                  <div className="space-y-3 pt-2 border-t border-slate-100 mt-2">
-                    <div className="bg-orange-50 border border-orange-100 p-3 rounded-xl">
-                      <p className="text-xs text-orange-800 font-bold flex items-center gap-2">
-                        <CheckCircle size={14} />
-                        Driver sudah mengantar. Pastikan uang cash sebesar {formatCurrency(Number(o.total_amount))} sudah disetor.
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-600 mb-1">Bukti Serah Terima (Driver):</p>
-                      {deliveryProofUrl ? (
-                        <button onClick={() => setPreviewUrl(deliveryProofUrl)} className="text-xs text-blue-600 font-medium underline hover:text-blue-700">Lihat Foto Serah Terima</button>
-                      ) : (
-                        <p className="text-xs text-slate-400">-</p>
-                      )}
-                    </div>
-                    <div className="flex justify-end">
-                      <button
-                        onClick={() => handleAction(o.id, 'cod_settle')}
-                        disabled={!canVerify || busyId === o.id}
-                        className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-                      >
-                        {busyId === o.id ? 'Memproses...' : 'Uang Diterima & Selesai'}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  {activeTab === 'cod' && (
+                    <button
+                      onClick={() => handleAction(o.id, 'cod_settle')}
+                      disabled={busyId === o.id}
+                      className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700"
+                    >
+                      Terima Uang
+                    </button>
+                  )}
+
+                  {activeTab === 'completed' && (o.Invoice?.payment_status === 'paid') && (
+                    <button
+                      onClick={() => {
+                        if (!confirm('Void invoice ini?')) return;
+                        api.admin.finance.voidInvoice(o.Invoice?.id).then(() => load());
+                      }}
+                      className="flex-1 bg-rose-100 text-rose-600 py-2.5 rounded-xl text-xs font-bold"
+                    >
+                      Void (Batal)
+                    </button>
+                  )}
+                </div>
               </div>
             );
-          })}
+          })
+        )}
+      </div>
+
+      {previewUrl && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4 backdrop-blur-md" onClick={() => setPreviewUrl(null)}>
+          <div className="relative w-full max-w-sm bg-white rounded-3xl overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="font-bold text-slate-900">Bukti Transfer</h3>
+              <button onClick={() => setPreviewUrl(null)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200"><X size={16} /></button>
+            </div>
+            <div className="p-0 bg-slate-900 flex items-center justify-center min-h-[300px]">
+              <img src={previewUrl} className="max-w-full max-h-[50vh] object-contain" alt="Proof" />
+            </div>
+            <div className="p-4 flex gap-2">
+              <button onClick={() => setPreviewUrl(null)} className="flex-1 py-3 font-bold text-slate-600 text-sm">Tutup</button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Preview Modal */}
-      {previewUrl && (
-        <div
-          className="fixed inset-0 z-[120] bg-black/75 p-4 sm:p-8 flex items-center justify-center backdrop-blur-sm"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <button
-            type="button"
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/90 text-slate-800 flex items-center justify-center hover:bg-white transition-colors"
-            onClick={() => setPreviewUrl(null)}
-          >
-            <X size={18} />
-          </button>
-          <img
-            src={previewUrl}
-            alt="Preview"
-            className="max-w-full max-h-[90vh] object-contain rounded-xl bg-white shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      )}
+      <FinanceBottomNav />
     </div>
   );
 }

@@ -167,11 +167,6 @@ export default function InventoryCategoriesPage() {
   return (
     <div className="warehouse-page">
       <div>
-        <div className="warehouse-breadcrumb">
-          <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-          <span>/</span>
-          <span className="text-slate-900">Categories</span>
-        </div>
         <h1 className="warehouse-title">Manajemen Kategori</h1>
         <p className="warehouse-subtitle">Kelola pengelompokan produk untuk mempermudah pencarian dan filter stok.</p>
       </div>

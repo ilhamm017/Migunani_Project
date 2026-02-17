@@ -3,10 +3,27 @@ import * as FinanceController from '../controllers/FinanceController';
 import * as ReportController from '../controllers/ReportController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 
+import fs from 'fs';
+import path from 'path';
 import multer from 'multer';
 
 const router = Router();
-const upload = multer({ dest: 'uploads/expenses/' });
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const userId = req.user?.id || 'anonymous';
+            const dest = path.join('uploads', String(userId), 'expenses');
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+            }
+            cb(null, dest);
+        },
+        filename: (req, file, cb) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, 'exp-' + uniqueSuffix + path.extname(file.originalname));
+        }
+    })
+});
 
 router.use(authenticateToken);
 

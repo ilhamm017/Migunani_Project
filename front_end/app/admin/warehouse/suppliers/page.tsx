@@ -14,7 +14,7 @@ interface SupplierRow {
 }
 
 export default function InventorySuppliersPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -155,11 +155,6 @@ export default function InventorySuppliersPage() {
   return (
     <div className="warehouse-page">
       <div>
-        <div className="warehouse-breadcrumb">
-          <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-          <span>/</span>
-          <span className="text-slate-900">Suppliers</span>
-        </div>
         <h1 className="warehouse-title">Manajemen Supplier</h1>
         <p className="warehouse-subtitle">Kelola data vendor pemasok barang untuk proses pengadaan dan inbound stok.</p>
       </div>

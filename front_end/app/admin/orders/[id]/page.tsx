@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X, AlertTriangle, ExternalLink } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
@@ -14,7 +14,7 @@ const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'allocated', label: 'allocated (Stok Dialokasikan)' },
   { key: 'partially_fulfilled', label: 'partially_fulfilled (Stok Tersedia Sebagian)' },
   { key: 'waiting_payment', label: 'waiting_payment (Menunggu Pembayaran)' },
-  { key: 'processing', label: 'processing (Diproses Gudang)' },
+  { key: 'waiting_admin_verification', label: 'waiting_admin_verification (Menunggu Verifikasi Admin)' },
   { key: 'debt_pending', label: 'debt_pending (Utang Belum Lunas)' },
   { key: 'shipped', label: 'shipped (Dikirim)' },
   { key: 'delivered', label: 'delivered (Sampai)' },
@@ -69,6 +69,7 @@ export default function AdminOrderDetailPage() {
   const [error, setError] = useState('');
   const [proofLoadError, setProofLoadError] = useState(false);
   const [isProofPreviewOpen, setIsProofPreviewOpen] = useState(false);
+  const [isVerifyPaymentOpen, setIsVerifyPaymentOpen] = useState(false);
 
   const canUpdateStatus = useMemo(
     () => !!user && ['super_admin', 'admin_gudang', 'admin_finance'].includes(user.role),
@@ -124,6 +125,7 @@ export default function AdminOrderDetailPage() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setIsProofPreviewOpen(false);
+        setIsVerifyPaymentOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -164,7 +166,7 @@ export default function AdminOrderDetailPage() {
 
   const statusBadgeClass = (status: string) => {
     if (['completed', 'delivered'].includes(status)) return 'bg-emerald-100 text-emerald-700';
-    if (['shipped', 'processing'].includes(status)) return 'bg-blue-100 text-blue-700';
+    if (['shipped', 'waiting_admin_verification'].includes(status)) return 'bg-blue-100 text-blue-700';
     if (status === 'allocated') return 'bg-teal-100 text-teal-700';
     if (status === 'partially_fulfilled') return 'bg-amber-100 text-amber-700';
     if (status === 'canceled') return 'bg-rose-100 text-rose-700';
@@ -209,16 +211,6 @@ export default function AdminOrderDetailPage() {
       </button>
 
       <div className="bg-white border border-slate-200 rounded-[28px] p-6 shadow-sm space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-black text-slate-900">Detail Order #{order.id}</h1>
-            <p className="text-xs text-slate-500 mt-1">Dibuat: {formatDateTime(order.createdAt)}</p>
-          </div>
-          <span className={`text-[11px] font-bold px-3 py-2 rounded-full uppercase w-fit ${statusBadgeClass(order.status)}`}>
-            {order.status}
-          </span>
-        </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
             <p className="text-xs text-slate-600">Customer Name: <span className="font-bold text-slate-900">{order.customer_name || '-'}</span></p>
@@ -265,10 +257,41 @@ export default function AdminOrderDetailPage() {
           </div>
         </div>
 
+        {/* Order Relationships (Split/Backorder) */}
+        {(order.parent_order_id || (order.Children && order.Children.length > 0)) && (
+          <div className="bg-slate-900 text-white rounded-[24px] p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <ExternalLink size={18} className="text-blue-400" />
+              <p className="text-sm font-black">Relasi Order (Split / Backorder)</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {order.parent_order_id && (
+                <Link
+                  href={`/admin/orders/${order.parent_order_id}`}
+                  className="bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl p-3 transition-colors"
+                >
+                  <p className="text-[10px] font-bold text-blue-200 uppercase tracking-wider">Order Induk (Parent)</p>
+                  <p className="text-xs font-black mt-0.5">#{order.parent_order_id.slice(-8).toUpperCase()}</p>
+                </Link>
+              )}
+              {order.Children?.map((child: any) => (
+                <Link
+                  key={child.id}
+                  href={`/admin/orders/${child.id}`}
+                  className="bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl p-3 transition-colors"
+                >
+                  <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">Order Anak (Backorder)</p>
+                  <p className="text-xs font-black mt-0.5">#{child.id.slice(-8).toUpperCase()}</p>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-sm font-black text-slate-900">Item Pesanan</p>
-            {canUpdateStatus && ['pending', 'partially_fulfilled', 'waiting_payment', 'hold'].includes(order.status) && ['kasir', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
+            {canUpdateStatus && ['pending', 'partially_fulfilled', 'waiting_payment', 'hold'].includes(order.status) && ['kasir', 'super_admin'].includes(user?.role || '') && (
               <Link
                 href={`/admin/orders/allocation/${order.id}`}
                 className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors"
@@ -301,7 +324,7 @@ export default function AdminOrderDetailPage() {
                           Dialokasikan: {allocQty}{isPartial && ` (kurang ${item.qty - allocQty})`}
                         </p>
                       )}
-                      {isUnallocated && ['allocated', 'partially_fulfilled', 'waiting_payment', 'processing'].includes(order.status) && (
+                      {isUnallocated && ['allocated', 'partially_fulfilled', 'waiting_payment', 'waiting_admin_verification'].includes(order.status) && (
                         <p className="text-xs mt-0.5 font-bold text-rose-500">Belum dialokasikan</p>
                       )}
                     </div>
@@ -342,66 +365,63 @@ export default function AdminOrderDetailPage() {
         <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
           <p className="text-sm font-black text-slate-900">Aksi Order</p>
 
-          {/* Step 1: Kasir — Alokasi (pending) */}
-          {order.status === 'pending' && ['kasir', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <Link
-              href={`/admin/orders/allocation/${order.id}`}
-              className="block w-full text-center px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors"
-            >
-              Proses Alokasi Stok →
-            </Link>
+          {/* Step 1: Kasir — Alokasi (pending/partially_fulfilled) */}
+          {['pending', 'partially_fulfilled', 'hold'].includes(order.status) && ['kasir', 'super_admin'].includes(user?.role || '') && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Aksi Stok (Kasir)</p>
+              <Link
+                href={`/admin/orders/allocation/${order.id}`}
+                className="block w-full text-center px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-200"
+              >
+                Proses Alokasi Stok →
+              </Link>
+            </div>
           )}
 
           {/* Step 2: Finance — Terbitkan Invoice (waiting_invoice) */}
           {order.status === 'waiting_invoice' && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <button
-              onClick={async () => {
-                try {
-                  setUpdating(true);
-                  setError('');
-                  await api.admin.finance.issueInvoice(orderId);
-                  await loadOrder();
-                } catch (e: any) {
-                  setError(e?.response?.data?.message || 'Gagal menerbitkan invoice');
-                } finally {
-                  setUpdating(false);
-                }
-              }}
-              disabled={updating}
-              className="w-full px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-blue-700 transition-colors"
-            >
-              {updating ? 'Memproses...' : 'Terbitkan Invoice'}
-            </button>
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Aksi Finance</p>
+              <button
+                onClick={async () => {
+                  try {
+                    setUpdating(true);
+                    setError('');
+                    await api.admin.finance.issueInvoice(orderId);
+                    await loadOrder();
+                  } catch (e: any) {
+                    setError(e?.response?.data?.message || 'Gagal menerbitkan invoice');
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+                disabled={updating}
+                className="w-full px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-blue-700 transition-colors shadow-sm shadow-blue-200"
+              >
+                {updating ? 'Memproses...' : 'Terbitkan Invoice'}
+              </button>
+            </div>
           )}
 
-          {/* Step 3: Finance — Approve/Reject Payment (waiting_payment, transfer) */}
-          {order.status === 'waiting_payment' && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-2">
-              <p className="text-xs text-slate-600">
-                {proofImageUrl ? 'Bukti pembayaran sudah diunggah. Silakan verifikasi.' : 'Menunggu customer mengunggah bukti pembayaran.'}
+          {/* Step 3: Finance — Approve/Reject Payment (waiting_payment, waiting_admin_verification) */}
+          {['waiting_payment', 'waiting_admin_verification'].includes(order.status) && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
+            <div className="space-y-3">
+              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Verifikasi Pembayaran (Finance)</p>
+              <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 italic">
+                {proofImageUrl ? 'Bukti pembayaran sudah diunggah. Silakan verifikasi di bawah.' : 'Menunggu customer mengunggah bukti pembayaran.'}
               </p>
-              {proofImageUrl ? (
+              {proofImageUrl && (
                 <div className="flex gap-2">
                   <button
-                    onClick={async () => {
-                      try {
-                        setUpdating(true);
-                        setError('');
-                        await api.admin.finance.verifyPayment(orderId, 'approve');
-                        await loadOrder();
-                      } catch (e: any) {
-                        setError(e?.response?.data?.message || 'Gagal approve');
-                      } finally {
-                        setUpdating(false);
-                      }
-                    }}
+                    onClick={() => setIsVerifyPaymentOpen(true)}
                     disabled={updating}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50"
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
                   >
-                    {updating ? 'Memproses...' : 'Approve Payment'}
+                    Setujui (Approve)
                   </button>
                   <button
                     onClick={async () => {
+                      if (!confirm('Tolak pembayaran ini?')) return;
                       try {
                         setUpdating(true);
                         setError('');
@@ -416,12 +436,8 @@ export default function AdminOrderDetailPage() {
                     disabled={updating}
                     className="px-4 py-2.5 rounded-xl bg-rose-500 text-white text-sm font-bold disabled:opacity-50"
                   >
-                    Reject
+                    Tolak
                   </button>
-                </div>
-              ) : (
-                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-center">
-                  <p className="text-xs text-slate-400 italic">Tombol aksi akan muncul setelah customer mengunggah bukti pembayaran.</p>
                 </div>
               )}
             </div>
@@ -430,17 +446,18 @@ export default function AdminOrderDetailPage() {
           {/* Step 4: Gudang — Assign Driver (ready_to_ship) */}
           {order.status === 'ready_to_ship' && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
             <div className="space-y-2">
-              <p className="text-xs text-slate-600">Barang siap. Pilih driver untuk pengiriman.</p>
+              <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Aksi Gudang / Logistik</p>
+              <p className="text-xs text-slate-600">Barang siap dikirim. Pilih driver.</p>
               <select
                 value={selectedCourierId}
                 onChange={(e) => setSelectedCourierId(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-amber-400 outline-none"
                 disabled={updating}
               >
                 <option value="">Pilih driver/kurir</option>
                 {couriers.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.display_name || item.name || item.whatsapp_number || 'Driver'}
+                    {item.display_name || item.name || 'Driver'}
                   </option>
                 ))}
               </select>
@@ -459,42 +476,36 @@ export default function AdminOrderDetailPage() {
                   }
                 }}
                 disabled={updating || !selectedCourierId}
-                className="w-full px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-blue-700 transition-colors"
+                className="w-full px-4 py-2.5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200"
               >
                 {updating ? 'Memproses...' : 'Kirim dengan Driver →'}
               </button>
             </div>
           )}
 
-          {/* Info: Shipped */}
-          {order.status === 'shipped' && (
-            <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
-              <p className="text-xs font-bold text-blue-700">
-                Sedang diantar oleh {order.courier_display_name || order.Courier?.name || 'driver'}
-              </p>
-            </div>
-          )}
-
-          {/* Step 6: Mark Completed (delivered) */}
+          {/* Step 6: Gudang/Finance — Mark Completed (delivered) */}
           {order.status === 'delivered' && ['admin_gudang', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <button
-              onClick={async () => {
-                try {
-                  setUpdating(true);
-                  setError('');
-                  await api.admin.orderManagement.updateStatus(orderId, { status: 'completed' });
-                  await loadOrder();
-                } catch (e: any) {
-                  setError(e?.response?.data?.message || 'Gagal tandai selesai');
-                } finally {
-                  setUpdating(false);
-                }
-              }}
-              disabled={updating}
-              className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-            >
-              {updating ? 'Memproses...' : 'Tandai Selesai ✓'}
-            </button>
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Konfirmasi Akhir</p>
+              <button
+                onClick={async () => {
+                  try {
+                    setUpdating(true);
+                    setError('');
+                    await api.admin.orderManagement.updateStatus(orderId, { status: 'completed' });
+                    await loadOrder();
+                  } catch (e: any) {
+                    setError(e?.response?.data?.message || 'Gagal tandai selesai');
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+                disabled={updating}
+                className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-200"
+              >
+                {updating ? 'Memproses...' : 'Selesaikan Order ✓'}
+              </button>
+            </div>
           )}
 
           {/* Delivery proof display */}
@@ -602,6 +613,55 @@ export default function AdminOrderDetailPage() {
             className="max-w-full max-h-[90vh] object-contain rounded-xl bg-white"
             onClick={(event) => event.stopPropagation()}
           />
+        </div>
+      )}
+
+      {/* Confirmation Modal for Payment Verification */}
+      {isVerifyPaymentOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 space-y-4 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 text-amber-600">
+                <AlertTriangle size={20} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-slate-900 text-lg">Konfirmasi Verifikasi</h3>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Pastikan uang sudah masuk ke rekening toko. Apakah Anda yakin ingin melanjutkan?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setIsVerifyPaymentOpen(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors"
+                disabled={updating}
+              >
+                Batal
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    setUpdating(true);
+                    setError('');
+                    await api.admin.finance.verifyPayment(orderId, 'approve');
+                    setIsVerifyPaymentOpen(false);
+                    await loadOrder();
+                  } catch (e: any) {
+                    setError(e?.response?.data?.message || 'Gagal approve');
+                    setIsVerifyPaymentOpen(false);
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+                disabled={updating}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors inline-flex items-center justify-center gap-2"
+              >
+                {updating ? 'Memproses...' : 'Ya, Verifikasi'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

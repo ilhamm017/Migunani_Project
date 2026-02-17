@@ -428,11 +428,6 @@ export default function InventoryImportPage() {
   return (
     <div className="warehouse-page">
       <div>
-        <div className="warehouse-breadcrumb">
-          <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-          <span>/</span>
-          <span className="text-slate-900">Import CSV</span>
-        </div>
         <h1 className="warehouse-title">Import Data Massal</h1>
         <p className="warehouse-subtitle">Gunakan file Excel/CSV untuk memperbarui stok atau menambah produk baru secara massal.</p>
       </div>

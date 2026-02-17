@@ -114,6 +114,8 @@ export const api = {
             apiClient.post(`/orders/${orderId}/proof`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
+        reportMissingItem: (id: string, data: { items: { product_id: string; qty_missing: number }[]; note?: string }) =>
+            apiClient.post(`/orders/${id}/missing-item`, data),
     },
 
     // Allocation (Admin)
@@ -230,6 +232,8 @@ export const api = {
                 search?: string;
                 startDate?: string;
                 endDate?: string;
+                is_backorder?: string;
+                exclude_backorder?: string;
             }) =>
                 apiClient.get('/orders/admin/list', { params }),
             getStats: () => apiClient.get('/orders/admin/stats'),
@@ -276,6 +280,11 @@ export const api = {
                 }),
             createMutation: (data: any) => apiClient.post('/admin/inventory/mutation', data),
             createPO: (data: any) => apiClient.post('/admin/inventory/po', data),
+            getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number }) =>
+                apiClient.get('/admin/inventory/po', { params }),
+            getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
+            receivePO: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>
+                apiClient.patch(`/admin/inventory/po/${id}/receive`, data),
             scanBySku: (sku: string) =>
                 apiClient.get('/admin/inventory/scan', {
                     params: { code: sku },
@@ -304,7 +313,7 @@ export const api = {
             finishAudit: (id: string) => apiClient.post(`/inventory/audit/${id}/finish`),
         },
         finance: {
-            getExpenses: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string; category?: string }) =>
+            getExpenses: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string; category?: string; status?: string }) =>
                 apiClient.get('/admin/finance/expenses', { params }),
             createExpense: (data: {
                 category: string;
@@ -314,6 +323,10 @@ export const api = {
                 details?: Array<{ key: string; value: string }>;
             }) =>
                 apiClient.post('/admin/finance/expenses', data),
+            approveExpense: (id: string) =>
+                apiClient.post(`/admin/finance/expenses/${id}/approve`),
+            payExpense: (id: string, account_id: string | number) =>
+                apiClient.post(`/admin/finance/expenses/${id}/pay`, { account_id }),
             getExpenseLabels: () =>
                 apiClient.get('/admin/finance/expense-labels'),
             createExpenseLabel: (data: { name: string; description?: string }) =>
@@ -329,14 +342,26 @@ export const api = {
             getAR: () => apiClient.get('/admin/finance/ar'),
             getARById: (invoiceId: string) => apiClient.get(`/admin/finance/ar/${invoiceId}`),
             getPnL: (params?: { startDate?: string; endDate?: string }) =>
-                apiClient.get('/admin/finance/pnl', { params }),
+                apiClient.get('/admin/finance/reports/pnl', { params }),
+            getBalanceSheet: (params?: { asOfDate?: string }) =>
+                apiClient.get('/admin/finance/reports/balance-sheet', { params }),
+            getCashFlow: (params?: { startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/finance/reports/cash-flow', { params }),
+            getInventoryValue: () =>
+                apiClient.get('/admin/finance/reports/inventory-value'),
+            getAPAging: () =>
+                apiClient.get('/admin/finance/reports/aging-ap'),
+            getARAging: () =>
+                apiClient.get('/admin/finance/reports/aging-ar'),
             getDriverCodList: () => apiClient.get('/admin/finance/driver-cod'),
             verifyDriverCod: (data: { driver_id: string; order_ids: string[]; amount_received: number }) =>
                 apiClient.post('/admin/finance/driver-cod/verify', data),
-            voidInvoice: (invoiceId: string) => apiClient.post(`/invoices/${invoiceId}/void`),
-            getPeriods: () => apiClient.get('/periods'),
-            closePeriod: (data: { month: number; year: number }) => apiClient.post('/periods/close', data),
-            getJournals: (params?: { page?: number; limit?: number }) => apiClient.get('/journals', { params }),
+            voidInvoice: (invoiceId: string) => apiClient.post(`/admin/finance/invoices/${invoiceId}/void`),
+            getPeriods: () => apiClient.get('/admin/finance/periods'),
+            closePeriod: (data: { month: number; year: number }) => apiClient.post('/admin/finance/periods/close', data),
+            createAdjustmentJournal: (data: { date: string; description: string; lines: Array<{ account_id: number; debit: number; credit: number }> }) =>
+                apiClient.post('/admin/finance/journals/adjustment', data),
+            getJournals: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string }) => apiClient.get('/admin/finance/journals', { params }),
         },
         staff: {
             getAll: () => apiClient.get('/admin/staff'),
@@ -357,6 +382,12 @@ export const api = {
                 password?: string;
             }) => apiClient.patch(`/admin/staff/${id}`, data),
             remove: (id: string) => apiClient.delete(`/admin/staff/${id}`),
+        },
+        accounts: {
+            getAll: (params?: { type?: string; code?: string }) => apiClient.get('/admin/accounts', { params }),
+            create: (data: any) => apiClient.post('/admin/accounts', data),
+            update: (id: number, data: any) => apiClient.put(`/admin/accounts/${id}`, data),
+            delete: (id: number) => apiClient.delete(`/admin/accounts/${id}`),
         },
     },
 

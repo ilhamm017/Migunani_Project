@@ -159,11 +159,6 @@ export default function WarehouseReturPage() {
     return (
         <div className="warehouse-page">
             <div>
-                <div className="warehouse-breadcrumb">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Manajemen Retur</span>
-                </div>
                 <h1 className="warehouse-title">Kelola Pengembalian Barang</h1>
                 <p className="warehouse-subtitle">Verifikasi pengajuan retur, tugaskan kurir, dan kelola stok kembali.</p>
             </div>

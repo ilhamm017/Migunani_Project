@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Check, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
+import { useRequireRoles } from '@/lib/guards';
 
 const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 type AllocationEditableStatus = typeof ALLOCATION_EDITABLE_STATUSES[number];
@@ -12,6 +13,7 @@ const isAllocationEditableStatus = (status: string): status is AllocationEditabl
     ALLOCATION_EDITABLE_STATUSES.includes(status as AllocationEditableStatus);
 
 export default function AllocationDetailPage() {
+    const allowed = useRequireRoles(['super_admin', 'kasir']);
     const { id } = useParams();
     const router = useRouter();
     const [order, setOrder] = useState<any>(null);
@@ -129,10 +131,11 @@ export default function AllocationDetailPage() {
     }, [order, allocationUpdatedAt, persistedShortageTotal]);
 
     useEffect(() => {
-        if (id) loadData();
-    }, [id]);
+        if (id && allowed) loadData();
+    }, [id, allowed]);
 
     const loadData = async () => {
+        if (!allowed) return;
         try {
             const res = await api.allocation.getDetail(id as string);
             setOrder(res.data);
@@ -231,19 +234,13 @@ export default function AllocationDetailPage() {
         }
     };
 
+    if (!allowed) return null;
     if (loading) return <div className="p-6">Loading...</div>;
     if (!order) return <div className="p-6">Order not found</div>;
 
     return (
         <div className="warehouse-page">
             <div>
-                <div className="warehouse-breadcrumb">
-                    <Link href="/admin/orders" className="hover:text-emerald-500 transition-colors">Orders</Link>
-                    <span>/</span>
-                    <Link href="/admin/orders/allocation" className="hover:text-emerald-500 transition-colors">Allocation</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Proses</span>
-                </div>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <Link href="/admin/orders/allocation" className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">

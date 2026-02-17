@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
@@ -74,7 +74,7 @@ export default function OrderDetailPage() {
       const hasProof = !!order?.Invoice?.payment_proof_url;
       return {
         icon: Clock3,
-        label: hasProof ? 'waiting_payment (Bukti Terkirim — Menunggu Verifikasi)' : 'waiting_payment (Invoice Terbit — Menunggu Pembayaran)',
+        label: 'waiting_payment (Invoice Terbit — Menunggu Pembayaran)',
         className: 'text-amber-700 bg-amber-50'
       };
     }
@@ -85,10 +85,10 @@ export default function OrderDetailPage() {
         className: 'text-amber-700 bg-amber-50'
       };
     }
-    if (status === 'processing') {
+    if (status === 'waiting_admin_verification') {
       return {
         icon: Clock3,
-        label: 'processing (Sedang Diproses Gudang)',
+        label: 'waiting_admin_verification (Menunggu Verifikasi Admin)',
         className: 'text-blue-700 bg-blue-50'
       };
     }
@@ -130,6 +130,65 @@ export default function OrderDetailPage() {
     printWindow.print();
   };
 
+  // --- Missing Item Logic ---
+  const [showMissingModal, setShowMissingModal] = useState(false);
+  const [missingItems, setMissingItems] = useState<{ product_id: string; qty_missing: number; max_qty: number; name: string }[]>([]);
+  const [missingNote, setMissingNote] = useState('');
+  const [submittingMissing, setSubmittingMissing] = useState(false);
+
+  const openMissingModal = () => {
+    if (!order) return;
+    // Pre-fill eligible items (qty > 0)
+    const items = (order.OrderItems || []).map((item: any) => ({
+      product_id: item.product_id,
+      qty_missing: 0,
+      max_qty: Number(item.qty),
+      name: item.Product?.name || 'Produk'
+    }));
+    setMissingItems(items);
+    setMissingNote('');
+    setShowMissingModal(true);
+  };
+
+  const handleMissingQtyChange = (productId: string, qty: number) => {
+    setMissingItems(prev => prev.map(p => {
+      if (p.product_id === productId) {
+        // Ensure within bounds
+        const validQty = Math.max(0, Math.min(qty, p.max_qty));
+        return { ...p, qty_missing: validQty };
+      }
+      return p;
+    }));
+  };
+
+  const submitMissingReport = async () => {
+    try {
+      const itemsToReport = missingItems
+        .filter(i => i.qty_missing > 0)
+        .map(i => ({ product_id: i.product_id, qty_missing: i.qty_missing }));
+
+      if (itemsToReport.length === 0) {
+        alert('Pilih minimal satu barang yang kurang.');
+        return;
+      }
+
+      setSubmittingMissing(true);
+      await api.orders.reportMissingItem(orderId, {
+        items: itemsToReport,
+        note: missingNote
+      });
+      alert('Laporan barang kurang berhasil dikirim. Admin akan segera memverifikasi.');
+      setShowMissingModal(false);
+      loadOrder(); // Refresh status/issues
+    } catch (error: any) {
+      console.error('Failed to report missing item:', error);
+      alert(error.response?.data?.message || 'Gagal mengirim laporan.');
+    } finally {
+      setSubmittingMissing(false);
+    }
+  };
+
+
   if (loading) {
     return <div className="p-6"><p className="text-sm text-slate-500">Memuat detail pesanan...</p></div>;
   }
@@ -146,7 +205,7 @@ export default function OrderDetailPage() {
   const StatusIcon = statusView.icon;
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-6 space-y-5 pb-20">
       <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
@@ -172,7 +231,7 @@ export default function OrderDetailPage() {
         {order.active_issue && (
           <div className={`rounded-2xl p-4 border ${order.issue_overdue ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
             <p className={`text-xs font-bold ${order.issue_overdue ? 'text-rose-700' : 'text-amber-700'}`}>
-              Pesanan bermasalah: barang kurang
+              Pesanan bermasalah: {order.active_issue.note || 'Barang Kurang'}
             </p>
             <p className={`text-xs mt-1 ${order.issue_overdue ? 'text-rose-700' : 'text-amber-700'}`}>
               Target selesai: {order.active_issue?.due_at ? formatDateTime(order.active_issue.due_at) : '-'}
@@ -212,6 +271,43 @@ export default function OrderDetailPage() {
             </Link>
           </div>
         )}
+
+        {/* Start: Split Order Info */}
+        {order.parent_order_id && (
+          <div className="bg-blue-50 border border-blue-100 rounded-[24px] p-4 flex items-center justify-between">
+            <div className="space-y-1">
+              <p className="text-[10px] font-black text-blue-700 uppercase tracking-wider">Pesanan Lanjutan</p>
+              <p className="text-xs text-slate-600">Pesanan ini adalah bagian dari pesanan sebelumnya.</p>
+            </div>
+            <Link href={`/orders/${order.parent_order_id}`} className="bg-white p-2 rounded-xl border border-blue-200 text-blue-700 hover:bg-blue-100 transition-colors">
+              <ArrowLeft size={16} />
+            </Link>
+          </div>
+        )}
+
+        {order.Children && order.Children.length > 0 && (
+          <div className="bg-indigo-50 border border-indigo-100 rounded-[24px] p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Clock3 size={16} className="text-indigo-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-indigo-700">Backorder / Pesanan Lanjutan</h3>
+            </div>
+            <p className="text-xs text-slate-600">Sebagian barang dikirim kemudian karena stok habis. Sisa barang ada di pesanan berikut:</p>
+            {order.Children.map((child: any) => (
+              <Link
+                key={child.id}
+                href={`/orders/${child.id}`}
+                className="flex items-center justify-between bg-white/80 border border-indigo-200 p-3 rounded-2xl hover:bg-white transition-colors group"
+              >
+                <div>
+                  <p className="text-[11px] font-black text-slate-800 uppercase">Order #{child.id.slice(0, 8)}...</p>
+                  <p className="text-[10px] text-slate-500">Status: <span className="font-bold">{child.status}</span></p>
+                </div>
+                <ArrowRight size={16} className="text-indigo-400 group-hover:text-indigo-600 transition-colors" />
+              </Link>
+            ))}
+          </div>
+        )}
+        {/* End: Split Order Info */}
 
         <div className="space-y-2">
 
@@ -268,12 +364,73 @@ export default function OrderDetailPage() {
             </Link>
           )}
           {['delivered', 'completed'].includes(order.status) && (
-            <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">
-              <AlertCircle size={14} /> Ajukan Retur
-            </Link>
+            <>
+              <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">
+                <AlertCircle size={14} /> Ajukan Retur
+              </Link>
+              <button onClick={openMissingModal} className="py-3 bg-amber-100 text-amber-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-amber-200 transition-colors">
+                <AlertCircle size={14} /> Lapor Barang Kurang
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Missing Item Modal */}
+      {showMissingModal && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
+          <div className="bg-white w-full max-w-lg rounded-3xl p-6 space-y-4 animate-in slide-in-from-bottom-10 fade-in duration-300">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-black text-slate-900">Lapor Barang Kurang</h3>
+              <button onClick={() => setShowMissingModal(false)} className="bg-slate-100 p-2 rounded-full"><XCircle size={20} className="text-slate-500" /></button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Silakan tandai barang yang tidak Anda terima meskipun status pesanan sudah "delivered".
+            </p>
+
+            <div className="max-h-[50vh] overflow-y-auto space-y-3">
+              {missingItems.map((item) => (
+                <div key={item.product_id} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">{item.name}</p>
+                    <p className="text-xs text-slate-500">Maksimum klaim: {item.max_qty}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => handleMissingQtyChange(item.product_id, item.qty_missing - 1)}
+                      className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-600 font-bold"
+                    >-</button>
+                    <span className="text-sm font-bold w-4 text-center">{item.qty_missing}</span>
+                    <button
+                      onClick={() => handleMissingQtyChange(item.product_id, item.qty_missing + 1)}
+                      className="w-8 h-8 rounded-full bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 font-bold"
+                    >+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 mb-1 block">Catatan Tambahan (Opsional)</label>
+              <textarea
+                value={missingNote}
+                onChange={(e) => setMissingNote(e.target.value)}
+                placeholder="Contoh: Paket terbuka saat sampai, kurir sudah info..."
+                className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 min-h-[80px]"
+              />
+            </div>
+
+            <button
+              onClick={submitMissingReport}
+              disabled={submittingMissing}
+              className="w-full py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submittingMissing ? 'Mengirim...' : 'Kirim Laporan'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

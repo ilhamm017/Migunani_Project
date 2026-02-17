@@ -5,7 +5,7 @@ import * as OrderAllocationController from '../controllers/OrderAllocationContro
 const router = Router();
 
 router.use(authenticate);
-router.use(requireRole('super_admin', 'kasir', 'admin_finance'));
+router.use(requireRole('super_admin', 'kasir'));
 
 router.get('/pending', OrderAllocationController.getPendingAllocations);
 router.get('/product/:productId', OrderAllocationController.getProductAllocations);

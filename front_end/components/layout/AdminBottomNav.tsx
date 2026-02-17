@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ClipboardList, LayoutDashboard, MessageSquare, Users, Wallet } from 'lucide-react';
@@ -31,6 +32,31 @@ export default function AdminBottomNav() {
     role: user?.role
   });
 
+  // "Notification" logic: only show badge for orders that became actionable since last visit.
+  const [lastSeenOrderCount, setLastSeenOrderCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('admin_orders_last_seen_count');
+      if (saved !== null) setLastSeenOrderCount(Number(saved));
+    }
+  }, []);
+
+  const isInOrderPage = pathname === '/admin/orders' || pathname?.startsWith('/admin/orders/');
+
+  useEffect(() => {
+    if (isInOrderPage) {
+      setLastSeenOrderCount(orderBadgeCount);
+      localStorage.setItem('admin_orders_last_seen_count', String(orderBadgeCount));
+    } else if (orderBadgeCount < lastSeenOrderCount) {
+      // If items were cleared/processed while away, reset baseline to current to avoid negative/stale badges
+      setLastSeenOrderCount(orderBadgeCount);
+      localStorage.setItem('admin_orders_last_seen_count', String(orderBadgeCount));
+    }
+  }, [isInOrderPage, orderBadgeCount, lastSeenOrderCount]);
+
+  const displayOrderBadgeCount = Math.max(0, orderBadgeCount - lastSeenOrderCount);
+
   if (!pathname?.startsWith('/admin') || !canAccessAdminNav) {
     return null;
   }
@@ -49,7 +75,7 @@ export default function AdminBottomNav() {
     }
 
     if (role === 'kasir') {
-      return ['Customer'].includes(item.label);
+      return ['Customer', 'Order'].includes(item.label);
     }
 
     return false;
@@ -84,12 +110,12 @@ export default function AdminBottomNav() {
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
-              {isOrderItem && orderBadgeCount > 0 && (
+              {isOrderItem && displayOrderBadgeCount > 0 && (
                 <span
                   className="absolute -top-2 -right-3 bg-emerald-600 text-white text-[8px] font-black rounded-full min-w-[16px] h-4 px-1 inline-flex items-center justify-center leading-none"
                   aria-hidden="true"
                 >
-                  {orderBadgeCount > 99 ? '99+' : orderBadgeCount}
+                  {displayOrderBadgeCount > 99 ? '99+' : displayOrderBadgeCount}
                 </span>
               )}
             </div>

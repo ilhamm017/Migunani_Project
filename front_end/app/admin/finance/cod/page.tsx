@@ -23,10 +23,17 @@ export default function AdminDriverCodPage() {
         try {
             setLoading(true);
             const res = await api.admin.finance.getDriverCodList();
-            setDrivers(res.data || []);
+            const driverList = res.data || [];
+            setDrivers(driverList);
+
+            // If only one driver has pending tasks, select them automatically for convenience
+            if (driverList.length === 1 && !selectedDriver) {
+                setSelectedDriver(driverList[0]);
+            }
+
             // If currently selected driver is updated, refresh selection
             if (selectedDriver) {
-                const updated = (res.data || []).find((d: any) => d.driver.id === selectedDriver.driver.id);
+                const updated = driverList.find((d: any) => d.driver.id === selectedDriver.driver.id);
                 if (updated) {
                     setSelectedDriver(updated);
                 } else {

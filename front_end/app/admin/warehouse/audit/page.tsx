@@ -39,11 +39,6 @@ export default function AuditListPage() {
     return (
         <div className="warehouse-page">
             <div>
-                <div className="warehouse-breadcrumb">
-                    <Link href="/admin" className="hover:text-emerald-500 transition-colors">Warehouse</Link>
-                    <span>/</span>
-                    <span className="text-slate-900">Stock Audit</span>
-                </div>
                 <div className="flex items-center justify-between">
                     <div>
                         <h1 className="warehouse-title">Stock Opname (Audit)</h1>

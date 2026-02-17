@@ -4,7 +4,7 @@ import sequelize from '../config/database';
 interface PurchaseOrderAttributes {
     id: string; // UUID
     supplier_id: number;
-    status: 'pending' | 'received' | 'canceled';
+    status: 'pending' | 'received' | 'partially_received' | 'canceled';
     total_cost: number;
     created_by: string; // UUID
 }
@@ -14,7 +14,7 @@ interface PurchaseOrderCreationAttributes extends Optional<PurchaseOrderAttribut
 class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreationAttributes> implements PurchaseOrderAttributes {
     declare id: string;
     declare supplier_id: number;
-    declare status: 'pending' | 'received' | 'canceled';
+    declare status: 'pending' | 'received' | 'partially_received' | 'canceled';
     declare total_cost: number;
     declare created_by: string;
 
@@ -34,7 +34,7 @@ PurchaseOrder.init(
             allowNull: false,
         },
         status: {
-            type: DataTypes.ENUM('pending', 'received', 'canceled'),
+            type: DataTypes.ENUM('pending', 'received', 'partially_received', 'canceled'),
             defaultValue: 'pending',
         },
         total_cost: {

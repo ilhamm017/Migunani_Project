@@ -38,6 +38,7 @@ const uploadsDir = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
+
 app.use('/uploads', express.static(uploadsDir));
 
 // WhatsApp Client
@@ -235,7 +236,8 @@ const ORDER_STATUS_ENUM_VALUES = [
     'completed',
     'canceled',
     'expired',
-    'hold'
+    'hold',
+    'waiting_admin_verification'
 ];
 
 const RETUR_STATUS_ENUM_VALUES = [
@@ -362,8 +364,8 @@ const ensureOrderStatusEnumReady = async () => {
         }
 
         const columnType = statusColumn.columnType || '';
-        // Check if new statuses exist. If 'allocated' is missing, we need to run ALTER.
-        if (typeof columnType === 'string' && columnType.includes('allocated') && columnType.includes('partially_fulfilled')) return;
+        // Check if new statuses exist. If 'allocated' and 'waiting_admin_verification' are missing, we need to run ALTER.
+        if (typeof columnType === 'string' && columnType.includes('allocated') && columnType.includes('partially_fulfilled') && columnType.includes('waiting_admin_verification')) return;
 
         const enumValuesSql = ORDER_STATUS_ENUM_VALUES.map((value) => `'${value}'`).join(', ');
         await sequelize.query(

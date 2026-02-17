@@ -3,22 +3,38 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, ClipboardCheck, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent } from 'lucide-react';
+import { AlertTriangle, Boxes, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, ClipboardCheck, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
+import FinanceHeader from '@/components/admin/finance/FinanceHeader';
+import BalanceCard from '@/components/admin/finance/BalanceCard';
+import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 
 export default function AdminOverviewPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver']);
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuthStore();
+
+  // General Summary State
   const [summary, setSummary] = useState({ pendingOrders: 0, unpaid: 0, unpaidTotal: 0, chats: 0, outOfStock: 0 });
+
+  // Warehouse Badges State
   const [warehouseCardBadges, setWarehouseCardBadges] = useState<Record<string, number>>({});
+
+  // Finance Badges & Stats State
   const { financeCardBadges } = useAdminActionBadges({
     enabled: !!allowed && user?.role === 'admin_finance',
     role: user?.role
+  });
+
+  const [financeStats, setFinanceStats] = useState({
+    pendingVerify: 0,
+    pendingCod: 0,
+    pendingExpense: 0,
+    cashBalance: 0
   });
 
   useEffect(() => {
@@ -38,8 +54,28 @@ export default function AdminOverviewPage() {
 
         let actionableCount = 0;
         if (user?.role === 'admin_finance') {
-          // Finance tasks: issue invoice, verify transfer, verify COD settlement
-          actionableCount = Number(stats.waiting_invoice || 0) + Number(stats.waiting_payment || 0) + Number(stats.delivered || 0);
+          // Finance tasks: issue invoice, verify transfer (processing), verify COD settlement
+          actionableCount = Number(stats.waiting_invoice || 0) + Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
+
+          // --- Fetch Additional Finance Specific Stats ---
+          // 1. Pending Verification (Waiting Payment) - already in stats.waiting_payment but let's be explicit if needed
+          // 2. Pending COD
+          const resCod = await api.admin.finance.getDriverCodList();
+          let codCount = 0;
+          if (Array.isArray(resCod.data)) {
+            codCount = resCod.data.filter((d: any) => d.total_pending > 0).length;
+          }
+
+          // 3. Pending Expense
+          const resExp = await api.admin.finance.getExpenses({ status: 'requested', limit: 1 });
+
+          setFinanceStats({
+            pendingVerify: Number(stats.waiting_admin_verification || 0),
+            pendingCod: codCount,
+            pendingExpense: resExp.data?.total || 0,
+            cashBalance: 0 // Placeholder
+          });
+
         } else if (user?.role === 'admin_gudang') {
           // Warehouse tasks: ship ready_to_ship (Allocation moved to sales)
           actionableCount = Number(stats.ready_to_ship || 0);
@@ -61,7 +97,7 @@ export default function AdminOverviewPage() {
 
         if (user?.role === 'admin_gudang' || user?.role === 'super_admin') {
           const [processingRes, allocatedRes, productsRes, retursRes, auditsRes] = await Promise.all([
-            api.admin.orderManagement.getAll({ status: 'processing', limit: 1 }).catch(() => ({ data: { total: 0 } })),
+            api.admin.orderManagement.getAll({ status: 'waiting_admin_verification', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.inventory.getProducts({ limit: 100 }).catch(() => ({ data: { products: [] } })),
             api.retur.getAll().catch(() => ({ data: [] })),
@@ -212,6 +248,20 @@ export default function AdminOverviewPage() {
         icon: UserCheck,
         tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white',
       },
+      {
+        href: '/admin/warehouse/inbound',
+        title: 'Inbound / PO',
+        desc: 'Input stok masuk dari Supplier manual.',
+        icon: ShoppingCart,
+        tone: 'bg-teal-100 text-teal-700 group-hover:bg-teal-700 group-hover:text-white',
+      },
+      {
+        href: '/admin/warehouse/inbound/history',
+        title: 'Riwayat PO',
+        desc: 'Daftar semua Purchase Order.',
+        icon: Clock,
+        tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white',
+      },
     ];
 
     return (
@@ -277,80 +327,121 @@ export default function AdminOverviewPage() {
     );
   }
 
-  // 2. Finance Admin
+  // 2. Finance Admin (CONSOLIDATED)
   if (user?.role === 'admin_finance') {
-    const financeMenus = [
-      { href: '/admin/finance/verifikasi', title: 'Verifikasi Bayar', desc: 'Approve/reject bukti transfer.', icon: Shield, tone: 'bg-emerald-100 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white', badge: financeCardBadges.verifyPayment },
-      { href: '/admin/finance/biaya', title: 'Biaya Operasional', desc: 'Input dan review pengeluaran.', icon: Plus, tone: 'bg-rose-100 text-rose-600 group-hover:bg-rose-600 group-hover:text-white' },
-      { href: '/admin/finance/cod', title: 'Setoran COD', desc: 'Konfirmasi setoran kurir.', icon: Truck, tone: 'bg-blue-100 text-blue-600 group-hover:bg-blue-600 group-hover:text-white', badge: financeCardBadges.codSettlement },
-      { href: '/admin/finance/piutang', title: 'Laporan Piutang', desc: 'Aging report invoice aktif.', icon: Wallet, tone: 'bg-amber-100 text-amber-600 group-hover:bg-amber-600 group-hover:text-white' },
-      { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Proses pengembalian dana.', icon: RotateCcw, tone: 'bg-indigo-100 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white', badge: financeCardBadges.refundRetur },
-      { href: '/admin/finance/pnl', title: 'Laba Rugi (P&L)', desc: 'Monitor omzet dan profit.', icon: DollarSign, tone: 'bg-slate-100 text-slate-900 group-hover:bg-slate-900 group-hover:text-white' },
-      { href: '/admin/finance/biaya/label', title: 'Label Biaya', desc: 'Kelola kategori biaya.', icon: Settings, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
-    ];
-
     return (
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="bg-slate-50 min-h-screen pb-20">
+        <div className="px-6 pb-6 bg-white rounded-b-[32px] shadow-sm">
+          <FinanceHeader title={`Halo, ${user?.name?.split(' ')[0] || 'Admin'}`} />
+          <BalanceCard title="Kas Operasional" amount={financeStats.cashBalance} />
+        </div>
+
+        <div className="px-6 py-6 space-y-6">
           <div>
-            <p className="text-[10px] font-black text-rose-600 uppercase tracking-[0.2em] mb-1">Financial Operations</p>
-            <h1 className="text-2xl font-black text-slate-900">Halo, {user?.name}</h1>
-          </div>
-
-        </div>
-
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-          <div className="col-span-2 lg:col-span-1 bg-rose-600 rounded-[28px] p-5 text-white shadow-lg shadow-rose-200 relative overflow-hidden">
-            <div className="relative z-10">
-              <p className="text-xs font-bold opacity-80 uppercase tracking-wider mb-1">Piutang Belum Lunas</p>
-              <h3 className="text-xl md:text-2xl font-black">Rp {summary.unpaidTotal.toLocaleString()}</h3>
-              <p className="text-[10px] mt-2 opacity-60">{summary.unpaid} item piutang perlu dikelola.</p>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Kerjakan Sekarang</h3>
             </div>
-            <Wallet size={80} className="absolute -right-4 -bottom-4 opacity-10" />
-          </div>
 
-          <div className="bg-slate-900 rounded-[28px] p-5 text-white shadow-lg shadow-slate-200 relative overflow-hidden">
-            <div className="relative z-10">
-              <p className="text-xs font-bold opacity-80 uppercase tracking-wider mb-1">Verifikasi Tertunda</p>
-              <h3 className="text-2xl md:text-3xl font-black">{summary.pendingOrders}</h3>
-              <p className="text-[10px] mt-2 opacity-60">Proses konfirmasi bukti transfer masuk.</p>
-            </div>
-            <ClipboardCheck size={80} className="absolute -right-4 -bottom-4 opacity-10" />
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-[28px] p-5 shadow-sm flex flex-col justify-center">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 text-center">Profitability</p>
-            <Link href="/admin/finance/pnl" className="text-center py-2 px-4 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-black uppercase hover:bg-emerald-100 transition-colors">
-              Lihat Laporan P&L
-            </Link>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-          {financeMenus.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="relative bg-white border border-slate-100 rounded-2xl p-4 hover:shadow-lg transition-all group flex items-start gap-3 shadow-sm h-full"
-              >
-                {Number(item.badge || 0) > 0 && (
-                  <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
-                    {Number(item.badge) > 99 ? '99+' : Number(item.badge)}
-                  </span>
-                )}
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${item.tone}`}>
-                  <Icon size={20} />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="font-black text-[13px] text-slate-900 leading-snug">{item.title}</h3>
-                  <p className="hidden sm:block text-[11px] text-slate-500 mt-1 leading-snug">{item.desc}</p>
+            <div className="space-y-3">
+              {/* Task 1: Verifikasi Transfer */}
+              <Link href="/admin/finance/verifikasi" className="block bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <CheckCircle size={24} />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900 text-sm">Verifikasi Transfer</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">{financeStats.pendingVerify} pesanan menunggu</p>
+                  </div>
+                  <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">
+                    Review
+                  </div>
                 </div>
               </Link>
-            );
-          })}
+
+              {/* Task 2: Terima Setoran COD */}
+              <Link href="/admin/finance/cod" className="block relative bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform overflow-hidden group hover:border-emerald-300">
+                {financeStats.pendingCod > 0 && (
+                  <span className="absolute top-3 right-3 bg-rose-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 flex items-center justify-center leading-none shadow-sm z-10 animate-bounce">
+                    {financeStats.pendingCod}
+                  </span>
+                )}
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center group-hover:bg-amber-100 transition-colors">
+                    <Wallet size={24} />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900 text-sm">Terima Setoran COD</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {financeStats.pendingCod > 0
+                        ? `${financeStats.pendingCod} driver perlu setor uang`
+                        : 'Semua setoran beres'}
+                    </p>
+                  </div>
+                  <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-sm group-hover:bg-emerald-700 transition-colors">
+                    Settle
+                  </div>
+                </div>
+              </Link>
+
+              {/* Task 3: Cairkan Expense */}
+              <Link href="/admin/finance/biaya" className="block bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <Clock size={24} />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900 text-sm">Cairkan Expense</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">{financeStats.pendingExpense} pengajuan</p>
+                  </div>
+                  <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">
+                    Pay
+                  </div>
+                </div>
+              </Link>
+            </div>
+          </div>
+
+          {/* Menu Lainnya */}
+          <div>
+            <h3 className="text-lg font-bold text-slate-900 mb-4">Menu Lainnya</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Link href="/admin/finance/laporan" className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-95 transition-transform">
+                <div className="w-10 h-10 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center mb-3">
+                  <TrendingUp size={20} />
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm">Laporan</h4>
+                <p className="text-[10px] text-slate-500">PnL, Neraca, Arus Kas</p>
+              </Link>
+
+              <Link href="/admin/finance/jurnal/adjustment" className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-95 transition-transform">
+                <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center mb-3">
+                  <FileText size={20} />
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm">Jurnal</h4>
+                <p className="text-[10px] text-slate-500">Manual Adjustment</p>
+              </Link>
+
+              <Link href="/admin/finance/piutang" className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-95 transition-transform">
+                <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mb-3">
+                  <Wallet size={20} />
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm">Piutang</h4>
+                <p className="text-[10px] text-slate-500">Monitor Tagihan</p>
+              </Link>
+
+              <Link href="/admin/finance/retur" className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-95 transition-transform">
+                <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3">
+                  <RotateCcw size={20} />
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm">Refund</h4>
+                <p className="text-[10px] text-slate-500">Pengembalian Dana</p>
+              </Link>
+            </div>
+          </div>
         </div>
+
+        <FinanceBottomNav />
       </div>
     );
   }
@@ -364,11 +455,11 @@ export default function AdminOverviewPage() {
       { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order', icon: ClipboardList, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
       { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Validasi retur masuk', icon: RotateCcw, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
       { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang', icon: UserCheck, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
-      { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Stok masuk supplier', icon: ShoppingCart, tone: 'bg-teal-100 text-teal-700 group-hover:bg-teal-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik', icon: Shield, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
       { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat', icon: ScanBarcode, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/categories', title: 'Kategori', desc: 'Kelola kategori', icon: Layers, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/suppliers', title: 'Supplier', desc: 'Data vendor', icon: Truck, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white', badge: 0 },
+      { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor daftar PO', icon: Clock, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/import', title: 'Import CSV', desc: 'Update massal data', icon: FileSpreadsheet, tone: 'bg-lime-100 text-lime-700 group-hover:bg-lime-700 group-hover:text-white', badge: 0 },
     ];
 
@@ -520,6 +611,7 @@ export default function AdminOverviewPage() {
         {[
           { href: '/admin/warehouse', title: 'Admin Gudang (Advanced)', desc: 'Dashboard, Kanban, Picker Helper, Alokasi', icon: Warehouse },
           { href: '/admin/warehouse/stok', title: 'Data Grid Inventori', desc: 'Manajemen produk, stok, & update massal', icon: Boxes },
+          { href: '/admin/warehouse/inbound/history', title: 'Riwayat Purchase Order', desc: 'Monitor semua daftar pesanan pengadaan', icon: Clock },
           { href: '/admin/finance', title: 'Admin FinanceHub', desc: 'Verifikasi transfer, biaya operasional, AR, Retur', icon: DollarSign },
           { href: '/admin/warehouse/retur', title: 'Manajemen Retur', desc: 'Approve retur, jemput barang, & refund', icon: RotateCcw },
           { href: '/admin/sales', title: 'Manajemen Customer', desc: 'Kelola customer, tier, status blokir, dan poin.', icon: Users },

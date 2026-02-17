@@ -4,7 +4,8 @@
     "description": "Migunani Motor - Sistema Omnichannel dengan WhatsApp Integration",
     "private": true,
     "scripts": {
-        "dev": "concurrently -k -n backend,frontend \"npm:dev:backend\" \"npm:dev:frontend:wait\"",
+        "dev": "npm run docker:up && npm run wait:db && npm run seed && concurrently -k -n backend,frontend \"npm:dev:backend\" \"npm:dev:frontend:wait\"",
+        "wait:db": "bash -lc 'until (echo > /dev/tcp/127.0.0.1/3306) >/dev/null 2>&1; do echo \"[wait] database belum siap di :3306\"; sleep 1; done'",
         "dev:backend": "cd back_end && npm run dev",
         "dev:frontend:wait": "bash -lc 'until (echo > /dev/tcp/127.0.0.1/5000) >/dev/null 2>&1; do echo \"[wait] backend belum siap di :5000\"; sleep 1; done; npm run dev:frontend'",
         "dev:frontend": "cd front_end && npm run dev",
@@ -15,7 +16,7 @@
         "docker:bootstrap": "bash -lc 'docker compose down -v && docker compose up -d mysql && docker compose --profile seed run --rm seed && docker compose up -d back_end front_end'",
         "seed": "cd back_end && npm run seed",
         "setup": "npm run docker:bootstrap",
-        "start": "npm run docker:up && npm run dev"
+        "start": "npm run dev"
     },
     "keywords": [
         "motor",

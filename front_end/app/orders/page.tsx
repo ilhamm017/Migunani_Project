@@ -22,9 +22,9 @@ const getOrderListVisual = (status: string) => {
             label: 'Dikirim'
         };
     }
-    if (status === 'waiting_payment') {
+    if (status === 'processing') {
         return {
-            className: 'bg-amber-50 text-amber-600',
+            className: 'bg-indigo-50 text-indigo-600',
             icon: Clock,
             label: 'Verifikasi Bayar'
         };
@@ -36,18 +36,25 @@ const getOrderListVisual = (status: string) => {
             label: 'Utang Belum Lunas'
         };
     }
-    if (status === 'pending') {
+    if (status === 'waiting_payment') {
+        return {
+            className: 'bg-amber-50 text-amber-600',
+            icon: Clock,
+            label: 'Menunggu Bayar'
+        };
+    }
+    if (status === 'pending' || status === 'waiting_invoice') {
         return {
             className: 'bg-orange-50 text-orange-600',
             icon: Clock,
-            label: 'Menunggu Bayar'
+            label: 'Menunggu Konfirmasi'
         };
     }
 
     return {
         className: 'bg-slate-100 text-slate-600',
         icon: Clock,
-        label: 'Diproses'
+        label: 'Sedang Diproses'
     };
 };
 
@@ -165,12 +172,20 @@ export default function OrdersPage() {
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-center mb-0.5">
                                         <p className="text-[10px] font-bold text-slate-400 uppercase truncate">{order.id}</p>
-                                        {order.Returs && order.Returs.length > 0 && (
-                                            <div className="flex items-center gap-1 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-lg">
-                                                <RotateCcw size={8} />
-                                                <span className="text-[8px] font-black uppercase">Retur</span>
-                                            </div>
-                                        )}
+                                        <div className="flex items-center gap-1">
+                                            {order.parent_order_id && (
+                                                <div className="flex items-center gap-1 bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-lg">
+                                                    <Clock size={8} />
+                                                    <span className="text-[8px] font-black uppercase">Backorder</span>
+                                                </div>
+                                            )}
+                                            {order.Returs && order.Returs.length > 0 && (
+                                                <div className="flex items-center gap-1 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-lg">
+                                                    <RotateCcw size={8} />
+                                                    <span className="text-[8px] font-black uppercase">Retur</span>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                     <h4 className="text-xs font-bold text-slate-900">Invoice: {order.Invoice?.invoice_number || '-'}</h4>
                                     <p className="text-[10px] font-bold text-slate-500 mt-0.5">{visual.label}</p>

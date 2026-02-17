@@ -7,10 +7,7 @@ import { useAuthStore } from '@/store/authStore';
 
 export default function HomePage() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const [hydrated, setHydrated] = useState(() => {
-    const persistApi = (useAuthStore as any).persist;
-    return persistApi?.hasHydrated?.() ?? false;
-  });
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     const persistApi = (useAuthStore as any).persist;
