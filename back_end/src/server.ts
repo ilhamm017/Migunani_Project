@@ -14,6 +14,7 @@ import { createThreadMessage, resolveThreadForIncomingWebSocket } from './servic
 import { ensureChatThreadSchema } from './services/chatSchema';
 import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadService';
 import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
+import { TaxConfigService } from './services/TaxConfigService';
 
 dotenv.config();
 
@@ -25,6 +26,10 @@ const io = new Server(httpServer, {
         methods: ["GET", "POST"]
     }
 });
+
+// Socket contract:
+// - admin:refresh_badges => trigger badge refresh on admin surfaces
+// - order:status_changed => order workflow notification across roles
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
 const CHAT_ATTACHMENT_URL_REGEX = /^\/uploads\/chat\/[a-zA-Z0-9._-]+$/;
 
@@ -191,6 +196,8 @@ import customerRoutes from './routes/customer';
 import shippingMethodRoutes from './routes/shippingMethod';
 import discountVoucherRoutes from './routes/discountVoucher';
 import accountRoutes from './routes/accounts';
+import profileRoutes from './routes/profile';
+import promoRoutes from './routes/promo';
 
 // Routes
 // Routes
@@ -214,6 +221,8 @@ app.use('/api/v1/admin/customers', customerRoutes);
 app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
 app.use('/api/v1/admin/discount-vouchers', discountVoucherRoutes);
 app.use('/api/v1/admin/accounts', accountRoutes);
+app.use('/api/v1/profile', profileRoutes);
+app.use('/api/v1/promos', promoRoutes);
 
 app.get('/', (req, res) => {
     res.send('Migunani Motor Backend Running');
@@ -442,6 +451,7 @@ const startServer = async () => {
             await runStartupStep('Database sync', syncDatabaseWithRetry);
             await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
             await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
             await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
             await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
         } catch (error: any) {

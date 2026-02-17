@@ -2,10 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect } from 'react';
 import { Truck, Clock, MessageSquare } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
+import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 
 type NavItem = {
     label: string;
@@ -27,6 +29,20 @@ export default function DriverBottomNav() {
     const unreadCount = useChatUnreadCount({
         enabled: !!pathname?.startsWith('/driver') && isAuthenticated && canUseChatUnreadByRole(role)
     });
+    const {
+        newTaskCount,
+        markSeen,
+    } = useOrderStatusNotifications({
+        enabled: !!pathname?.startsWith('/driver') && isAuthenticated && canAccessDriverNav,
+        role,
+        userId: user?.id,
+    });
+
+    useEffect(() => {
+        if (pathname === '/driver' && newTaskCount > 0) {
+            markSeen();
+        }
+    }, [markSeen, newTaskCount, pathname]);
 
     // Only show on driver pages for driver-access roles.
     if (!pathname?.startsWith('/driver') || !canAccessDriverNav) {
@@ -39,6 +55,7 @@ export default function DriverBottomNav() {
                 const Icon = item.icon;
                 const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
                 const isChat = item.href === '/driver/chat';
+                const isTask = item.href === '/driver';
                 const sharedClassName = `flex flex-col items-center gap-1 flex-1 transition-colors ${isActive ? 'text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`;
 
                 return (
@@ -52,6 +69,11 @@ export default function DriverBottomNav() {
                             {isChat && unreadCount > 0 && (
                                 <span className="absolute -top-2 -right-3 bg-emerald-600 text-white text-[8px] font-black rounded-full min-w-[16px] h-4 px-1 inline-flex items-center justify-center leading-none">
                                     {unreadCount > 99 ? '99+' : unreadCount}
+                                </span>
+                            )}
+                            {isTask && newTaskCount > 0 && (
+                                <span className="absolute -top-2 -right-3 bg-blue-600 text-white text-[8px] font-black rounded-full min-w-[16px] h-4 px-1 inline-flex items-center justify-center leading-none">
+                                    {newTaskCount > 99 ? '99+' : newTaskCount}
                                 </span>
                             )}
                         </div>

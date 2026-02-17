@@ -8,6 +8,8 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
+import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
+import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import BalanceCard from '@/components/admin/finance/BalanceCard';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
@@ -35,6 +37,18 @@ export default function AdminOverviewPage() {
     pendingCod: 0,
     pendingExpense: 0,
     cashBalance: 0
+  });
+  const {
+    newTaskCount: incomingTaskCount,
+    latestEvents: latestOrderEvents,
+    priorityCards,
+    markSeen: markNotificationsSeen,
+    activeToast,
+    dismissToast,
+  } = useOrderStatusNotifications({
+    enabled: !!allowed && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || '')),
+    role: user?.role,
+    userId: user?.id,
   });
 
   useEffect(() => {
@@ -156,6 +170,8 @@ export default function AdminOverviewPage() {
 
   if (!allowed) return null;
 
+  const latestOrderStatusLabel = latestOrderEvents[0] ? formatOrderStatusLabel(latestOrderEvents[0].to_status) : '-';
+
 
 
   // --- Views ---
@@ -262,6 +278,13 @@ export default function AdminOverviewPage() {
         icon: Clock,
         tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white',
       },
+      {
+        href: '/admin/finance/laporan/backorder',
+        title: 'Laporan Backorder / Preorder',
+        desc: 'Pantau stok yang kurang untuk segera di-restock.',
+        icon: ClipboardList,
+        tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white',
+      },
     ];
 
     return (
@@ -272,6 +295,26 @@ export default function AdminOverviewPage() {
             <h1 className="text-2xl font-black text-slate-900">Halo, {user?.name}</h1>
           </div>
 
+        </div>
+
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
+              <p className="text-xs font-semibold text-blue-700 mt-1">
+                {incomingTaskCount > 0
+                  ? `${incomingTaskCount} tugas baru. Status terbaru: ${latestOrderStatusLabel}`
+                  : 'Belum ada tugas baru.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={markNotificationsSeen}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+            >
+              Tandai Dilihat
+            </button>
+          </div>
         </div>
 
         <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm">
@@ -323,6 +366,17 @@ export default function AdminOverviewPage() {
             })}
           </div>
         </div>
+
+        {activeToast && (
+          <button
+            type="button"
+            onClick={dismissToast}
+            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
+            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+          </button>
+        )}
       </div>
     );
   }
@@ -337,6 +391,26 @@ export default function AdminOverviewPage() {
         </div>
 
         <div className="px-6 py-6 space-y-6">
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
+                <p className="text-xs font-semibold text-blue-700 mt-1">
+                  {incomingTaskCount > 0
+                    ? `${incomingTaskCount} tugas baru. ${priorityCards[0]?.description || ''}`
+                    : 'Belum ada tugas baru.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={markNotificationsSeen}
+                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+              >
+                Tandai Dilihat
+              </button>
+            </div>
+          </div>
+
           <div>
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold text-slate-900">Kerjakan Sekarang</h3>
@@ -351,7 +425,7 @@ export default function AdminOverviewPage() {
                   </div>
                   <div className="flex-1">
                     <h4 className="font-bold text-slate-900 text-sm">Verifikasi Transfer</h4>
-                    <p className="text-xs text-slate-500 mt-0.5">{financeStats.pendingVerify} pesanan menunggu</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{financeCardBadges.verifyPayment} pesanan menunggu</p>
                   </div>
                   <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">
                     Review
@@ -361,9 +435,9 @@ export default function AdminOverviewPage() {
 
               {/* Task 2: Terima Setoran COD */}
               <Link href="/admin/finance/cod" className="block relative bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform overflow-hidden group hover:border-emerald-300">
-                {financeStats.pendingCod > 0 && (
+                {financeCardBadges.codSettlement > 0 && (
                   <span className="absolute top-3 right-3 bg-rose-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 flex items-center justify-center leading-none shadow-sm z-10 animate-bounce">
-                    {financeStats.pendingCod}
+                    {financeCardBadges.codSettlement}
                   </span>
                 )}
                 <div className="flex items-center gap-4">
@@ -373,13 +447,28 @@ export default function AdminOverviewPage() {
                   <div className="flex-1">
                     <h4 className="font-bold text-slate-900 text-sm">Terima Setoran COD</h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {financeStats.pendingCod > 0
-                        ? `${financeStats.pendingCod} driver perlu setor uang`
+                      {financeCardBadges.codSettlement > 0
+                        ? `${financeCardBadges.codSettlement} order menunggu settlement`
                         : 'Semua setoran beres'}
                     </p>
                   </div>
                   <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-sm group-hover:bg-emerald-700 transition-colors">
                     Settle
+                  </div>
+                </div>
+              </Link>
+
+              <Link href="/admin/finance/retur" className="block bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                    <RotateCcw size={24} />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900 text-sm">Refund Retur</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">{financeCardBadges.refundRetur} retur menunggu tindak lanjut</p>
+                  </div>
+                  <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">
+                    Proses
                   </div>
                 </div>
               </Link>
@@ -442,6 +531,16 @@ export default function AdminOverviewPage() {
         </div>
 
         <FinanceBottomNav />
+        {activeToast && (
+          <button
+            type="button"
+            onClick={dismissToast}
+            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
+            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+          </button>
+        )}
       </div>
     );
   }
@@ -469,6 +568,26 @@ export default function AdminOverviewPage() {
           <div>
             <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.2em] mb-1">Inventory & Logistics</p>
             <h1 className="text-2xl font-black text-slate-900">Halo, {user?.name}</h1>
+          </div>
+        </div>
+
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
+              <p className="text-xs font-semibold text-blue-700 mt-1">
+                {incomingTaskCount > 0
+                  ? `${incomingTaskCount} tugas baru. Status terbaru: ${latestOrderStatusLabel}`
+                  : 'Belum ada tugas baru.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={markNotificationsSeen}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+            >
+              Tandai Dilihat
+            </button>
           </div>
         </div>
 
@@ -531,6 +650,17 @@ export default function AdminOverviewPage() {
             })}
           </div>
         </div>
+
+        {activeToast && (
+          <button
+            type="button"
+            onClick={dismissToast}
+            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
+            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+          </button>
+        )}
       </div>
     );
   }

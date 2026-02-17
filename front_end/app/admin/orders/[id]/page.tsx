@@ -70,6 +70,8 @@ export default function AdminOrderDetailPage() {
   const [proofLoadError, setProofLoadError] = useState(false);
   const [isProofPreviewOpen, setIsProofPreviewOpen] = useState(false);
   const [isVerifyPaymentOpen, setIsVerifyPaymentOpen] = useState(false);
+  const [isCancelBackorderOpen, setIsCancelBackorderOpen] = useState(false);
+  const [cancelBackorderReason, setCancelBackorderReason] = useState('');
 
   const canUpdateStatus = useMemo(
     () => !!user && ['super_admin', 'admin_gudang', 'admin_finance'].includes(user.role),
@@ -126,6 +128,7 @@ export default function AdminOrderDetailPage() {
       if (event.key === 'Escape') {
         setIsProofPreviewOpen(false);
         setIsVerifyPaymentOpen(false);
+        setIsCancelBackorderOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -184,6 +187,31 @@ export default function AdminOrderDetailPage() {
   const courierChanged = needsCourier && (selectedCourierId || '') !== (order?.courier_id || '');
   const issueNoteChanged = selectedStatus === 'hold' && ((issueNote || '').trim() !== (activeIssue?.note || '').trim());
   const canSubmitUpdate = canUpdateStatus && !updating && (statusChanged || courierChanged || issueNoteChanged);
+  const CANCELABLE_ORDER_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'processing', 'hold'];
+  const BACKORDER_CANCELABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'];
+  const canCancelByRole = ['kasir', 'super_admin'].includes(user?.role || '');
+  const isOrderCancelable = canCancelByRole && CANCELABLE_ORDER_STATUSES.includes(String(order?.status || ''));
+
+  const orderQtyByProduct = (order?.OrderItems || []).reduce((acc: Record<string, number>, item: any) => {
+    const key = String(item?.product_id || '');
+    if (!key) return acc;
+    acc[key] = Number(acc[key] || 0) + Number(item?.qty || 0);
+    return acc;
+  }, {});
+  const allocQtyByProduct = (order?.Allocations || []).reduce((acc: Record<string, number>, allocation: any) => {
+    const key = String(allocation?.product_id || '');
+    if (!key) return acc;
+    acc[key] = Number(acc[key] || 0) + Number(allocation?.allocated_qty || 0);
+    return acc;
+  }, {});
+  const shortageTotal = Object.entries(orderQtyByProduct).reduce((sum, [productId, orderedQty]) => {
+    const allocatedQty = Number(allocQtyByProduct[productId] || 0);
+    return sum + Math.max(0, Number(orderedQty || 0) - allocatedQty);
+  }, 0);
+  const isBackorderCancelable =
+    canCancelByRole &&
+    BACKORDER_CANCELABLE_STATUSES.includes(String(order?.status || '')) &&
+    shortageTotal > 0;
 
   if (!allowed) return null;
 
@@ -375,6 +403,42 @@ export default function AdminOrderDetailPage() {
               >
                 Proses Alokasi Stok →
               </Link>
+            </div>
+          )}
+
+          {(isOrderCancelable || isBackorderCancelable) && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Aksi Pembatalan (Kasir / Super Admin)</p>
+              {isOrderCancelable && (
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Batalkan order #${order.id.slice(-8).toUpperCase()}?`)) return;
+                    try {
+                      setUpdating(true);
+                      setError('');
+                      await api.admin.orderManagement.updateStatus(orderId, { status: 'canceled' });
+                      await loadOrder();
+                    } catch (e: any) {
+                      setError(e?.response?.data?.message || 'Gagal membatalkan order');
+                    } finally {
+                      setUpdating(false);
+                    }
+                  }}
+                  disabled={updating}
+                  className="w-full px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-rose-700 transition-colors"
+                >
+                  {updating ? 'Memproses...' : 'Cancel Order'}
+                </button>
+              )}
+              {isBackorderCancelable && (
+                <button
+                  onClick={() => setIsCancelBackorderOpen(true)}
+                  disabled={updating}
+                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-rose-200 text-rose-700 text-sm font-bold disabled:opacity-50 hover:bg-rose-50 transition-colors"
+                >
+                  Cancel Backorder ({shortageTotal} item kurang)
+                </button>
+              )}
             </div>
           )}
 
@@ -659,6 +723,65 @@ export default function AdminOrderDetailPage() {
                 className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors inline-flex items-center justify-center gap-2"
               >
                 {updating ? 'Memproses...' : 'Ya, Verifikasi'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCancelBackorderOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-900 text-lg">Cancel Backorder</h3>
+              <p className="text-sm text-slate-600">
+                Order ini masih kekurangan alokasi <span className="font-bold text-rose-600">{shortageTotal}</span> item.
+                Isi alasan pembatalan untuk catatan order.
+              </p>
+            </div>
+            <textarea
+              value={cancelBackorderReason}
+              onChange={(e) => setCancelBackorderReason(e.target.value)}
+              rows={4}
+              placeholder="Contoh: customer tidak ingin menunggu restock."
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-rose-400"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  if (updating) return;
+                  setIsCancelBackorderOpen(false);
+                  setCancelBackorderReason('');
+                }}
+                disabled={updating}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={async () => {
+                  const reason = cancelBackorderReason.trim();
+                  if (reason.length < 5) {
+                    setError('Alasan cancel backorder minimal 5 karakter.');
+                    return;
+                  }
+                  try {
+                    setUpdating(true);
+                    setError('');
+                    await api.allocation.cancelBackorder(orderId, reason);
+                    setIsCancelBackorderOpen(false);
+                    setCancelBackorderReason('');
+                    await loadOrder();
+                  } catch (e: any) {
+                    setError(e?.response?.data?.message || 'Gagal cancel backorder');
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+                disabled={updating}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 transition-colors"
+              >
+                {updating ? 'Memproses...' : 'Ya, Cancel Backorder'}
               </button>
             </div>
           </div>

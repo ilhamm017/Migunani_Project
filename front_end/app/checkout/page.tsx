@@ -1,9 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CreditCard, Truck } from 'lucide-react';
+import { ArrowLeft, CreditCard, Tag, Truck } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
@@ -20,13 +20,58 @@ export default function CheckoutPage() {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [promoCode, setPromoCode] = useState('');
+  const [promoData, setPromoData] = useState<any>(null);
+  const [promoError, setPromoError] = useState('');
+  const [validatingPromo, setValidatingPromo] = useState(false);
+
   const shippingFee = useMemo(() => {
     if (shippingMethod === 'same_day') return 25000;
     if (shippingMethod === 'pickup') return 0;
     return 12000;
   }, [shippingMethod]);
 
-  const grandTotal = totalPrice + shippingFee;
+  const promoDiscount = useMemo(() => {
+    if (!promoData) return 0;
+    const itemsTotal = totalPrice;
+    const discount = Math.min(
+      Math.round(itemsTotal * (promoData.discount_pct / 100)),
+      promoData.max_discount_rupiah || Infinity
+    );
+    return discount;
+  }, [promoData, totalPrice]);
+
+  const grandTotal = Math.max(0, totalPrice + shippingFee - promoDiscount);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      api.profile.getMe().then((res) => {
+        const user = res.data?.user;
+        setUserProfile(user);
+        const addresses = user?.CustomerProfile?.saved_addresses;
+        if (Array.isArray(addresses) && addresses.length > 0 && !address) {
+          setAddress(addresses[0]);
+        }
+      }).catch(console.error);
+    }
+  }, [isAuthenticated]);
+
+  const handleValidatePromo = async () => {
+    if (!promoCode.trim()) return;
+    try {
+      setValidatingPromo(true);
+      setPromoError('');
+      const res = await api.promos.validate(promoCode);
+      setPromoData(res.data?.promo);
+      alert('Kode promo berhasil diterapkan!');
+    } catch (error: any) {
+      setPromoData(null);
+      setPromoError(error?.response?.data?.message || 'Kode promo tidak valid');
+    } finally {
+      setValidatingPromo(false);
+    }
+  };
 
   const handleCheckout = async () => {
     if (!isAuthenticated) {
@@ -57,6 +102,7 @@ export default function CheckoutPage() {
         payment_method: paymentMethod,
         shipping_method_code: shippingMethod,
         items: payloadItems,
+        promo_code: promoData?.code || undefined,
       });
 
       clearCart();
@@ -115,12 +161,30 @@ export default function CheckoutPage() {
 
         {shippingMethod !== 'pickup' && (
           <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-900">Alamat Pengiriman</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-bold text-slate-900">Alamat Pengiriman</label>
+              {userProfile?.CustomerProfile?.saved_addresses?.length > 0 && (
+                <div className="flex gap-1 overflow-x-auto pb-1 max-w-[200px] scrollbar-hide">
+                  {userProfile.CustomerProfile.saved_addresses.map((addr: string, idx: number) => (
+                    <button
+                      key={idx}
+                      onClick={() => setAddress(addr)}
+                      className={`whitespace-nowrap px-2 py-1 rounded-full text-[10px] font-bold border transition-all ${address === addr
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                        }`}
+                    >
+                      Alamat {idx + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <textarea
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               rows={3}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
               placeholder="Masukkan alamat lengkap"
             />
           </div>
@@ -129,14 +193,14 @@ export default function CheckoutPage() {
         <div className="space-y-3">
           <h2 className="text-sm font-bold text-slate-900">Metode Pembayaran</h2>
           <div className="grid grid-cols-1 gap-2">
-            <label className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3">
+            <label className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 cursor-pointer">
               <div className="flex items-center gap-2 text-slate-800">
                 <CreditCard size={16} />
                 <span className="text-sm font-medium">Transfer Manual</span>
               </div>
               <input type="radio" checked={paymentMethod === 'transfer_manual'} onChange={() => setPaymentMethod('transfer_manual')} />
             </label>
-            <label className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3">
+            <label className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 cursor-pointer">
               <div className="flex items-center gap-2 text-slate-800">
                 <Truck size={16} />
                 <span className="text-sm font-medium">COD (Bayar di Tempat)</span>
@@ -152,15 +216,59 @@ export default function CheckoutPage() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm"
+            className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
             placeholder="Contoh: tolong hubungi dulu sebelum kirim"
           />
         </div>
 
-        <div className="bg-slate-900 rounded-3xl p-5 text-white space-y-2">
-          <div className="flex justify-between text-sm"><span>Subtotal</span><span>{formatCurrency(totalPrice)}</span></div>
-          <div className="flex justify-between text-sm"><span>Ongkir</span><span>{formatCurrency(shippingFee)}</span></div>
-          <div className="border-t border-white/20 my-2"></div>
+        {/* Promo Code Section */}
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <Tag size={14} className="text-emerald-600" />
+            Kode Promo
+          </label>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={promoCode}
+                onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                className={`w-full bg-slate-50 border rounded-2xl p-3 text-sm uppercase font-bold tracking-wider placeholder:normal-case placeholder:font-normal transition-all ${promoError ? 'border-red-300 bg-red-50 text-red-900' : 'border-slate-200 focus:border-emerald-500'
+                  }`}
+                placeholder="Masukkan kode promo"
+              />
+              {promoData && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 bg-emerald-500 text-white rounded-full p-1">
+                  <Tag size={12} />
+                </div>
+              )}
+            </div>
+            <button
+              onClick={handleValidatePromo}
+              disabled={validatingPromo || !promoCode.trim()}
+              className="px-6 bg-slate-900 text-white rounded-2xl text-xs font-black uppercase disabled:opacity-50"
+            >
+              Cek
+            </button>
+          </div>
+          {promoError && <p className="text-[10px] font-bold text-red-600 pl-1">{promoError}</p>}
+          {promoData && (
+            <p className="text-[10px] font-bold text-emerald-600 pl-1">
+              Tersimpan: Diskon {promoData.discount_pct}% (Maks {formatCurrency(promoData.max_discount_rupiah)})
+            </p>
+          )}
+        </div>
+
+        <div className="bg-slate-900 rounded-3xl p-5 text-white space-y-2 shadow-xl shadow-slate-200">
+          <div className="flex justify-between text-sm opacity-80"><span>Subtotal</span><span>{formatCurrency(totalPrice)}</span></div>
+          <div className="flex justify-between text-sm opacity-80"><span>Ongkir</span><span>{formatCurrency(shippingFee)}</span></div>
+          {promoDiscount > 0 && (
+            <div className="flex justify-between text-sm text-emerald-400 font-bold">
+              <span>Diskon Promo</span>
+              <span>-{formatCurrency(promoDiscount)}</span>
+            </div>
+          )}
+          <div className="border-t border-white/10 my-2"></div>
           <div className="flex justify-between text-lg font-black"><span>Total</span><span>{formatCurrency(grandTotal)}</span></div>
         </div>
 

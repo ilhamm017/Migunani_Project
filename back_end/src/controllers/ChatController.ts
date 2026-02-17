@@ -37,6 +37,23 @@ const asActor = (req: Request): ChatActor => ({
     whatsapp_number: req.user?.whatsapp_number,
 });
 
+const mapChatServiceError = (res: Response, error: unknown): boolean => {
+    const code = String((error as any)?.message || '');
+    if (code === 'ACTOR_NOT_FOUND') {
+        res.status(401).json({ message: 'Sesi tidak valid. Silakan login ulang.' });
+        return true;
+    }
+    if (code === 'THREAD_NOT_FOUND') {
+        res.status(404).json({ message: 'Thread tidak ditemukan.' });
+        return true;
+    }
+    if (code === 'THREAD_FORBIDDEN') {
+        res.status(403).json({ message: 'Akses thread ditolak.' });
+        return true;
+    }
+    return false;
+};
+
 const emitThreadMessage = (payload: {
     thread_id: string;
     channel: ChatMessageChannel;
@@ -174,6 +191,7 @@ export const getThreads = async (req: Request, res: Response) => {
 
         return res.json(result);
     } catch (error: any) {
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching threads' });
     }
 };
@@ -206,6 +224,7 @@ export const openChatThread = async (req: Request, res: Response) => {
         const code = String(error?.message || '');
         if (code === 'TARGET_NOT_FOUND') return res.status(404).json({ message: 'Target user tidak ditemukan.' });
         if (code === 'TARGET_REQUIRED') return res.status(400).json({ message: 'target_user_id wajib diisi.' });
+        if (mapChatServiceError(res, error)) return;
         if (code.includes('FORBIDDEN') || code.startsWith('INVALID_') || code === 'SUPPORT_FORBIDDEN') {
             return res.status(403).json({ message: 'Anda tidak memiliki akses membuka thread ini.' });
         }
@@ -240,9 +259,7 @@ export const getThreadMessagesV2 = async (req: Request, res: Response) => {
             next_cursor: result.next_cursor
         });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') return res.status(404).json({ message: 'Thread tidak ditemukan.' });
-        if (code === 'THREAD_FORBIDDEN') return res.status(403).json({ message: 'Akses thread ditolak.' });
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching thread messages' });
     }
 };
@@ -332,9 +349,7 @@ export const sendThreadMessage = async (req: Request, res: Response) => {
             }
         });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') return res.status(404).json({ message: 'Thread tidak ditemukan.' });
-        if (code === 'THREAD_FORBIDDEN') return res.status(403).json({ message: 'Akses thread ditolak.' });
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error sending thread message' });
     }
 };
@@ -355,9 +370,7 @@ export const markThreadRead = async (req: Request, res: Response) => {
             updated_count: result.updated_count
         });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') return res.status(404).json({ message: 'Thread tidak ditemukan.' });
-        if (code === 'THREAD_FORBIDDEN') return res.status(403).json({ message: 'Akses thread ditolak.' });
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error marking thread as read' });
     }
 };
@@ -380,6 +393,7 @@ export const getThreadContacts = async (req: Request, res: Response) => {
         });
         return res.json({ contacts });
     } catch (error: any) {
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching contacts' });
     }
 };
@@ -510,6 +524,7 @@ export const getSessions = async (req: Request, res: Response) => {
             sessions
         });
     } catch (error: any) {
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching sessions' });
     }
 };
@@ -556,9 +571,7 @@ export const getMessages = async (req: Request, res: Response) => {
             }))
         });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') return res.status(404).json({ message: 'Session not found' });
-        if (code === 'THREAD_FORBIDDEN') return res.status(403).json({ message: 'Akses thread ditolak.' });
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching messages' });
     }
 };
@@ -642,9 +655,7 @@ export const replyToChat = async (req: Request, res: Response) => {
 
         return res.json({ message: 'Reply sent' });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') return res.status(404).json({ message: 'Session not found' });
-        if (code === 'THREAD_FORBIDDEN') return res.status(403).json({ message: 'Akses thread ditolak.' });
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error sending reply' });
     }
 };
@@ -664,6 +675,7 @@ export const searchContacts = async (req: Request, res: Response) => {
 
         return res.json({ contacts });
     } catch (error: any) {
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error searching contacts' });
     }
 };
@@ -805,6 +817,7 @@ export const getMyWebSessions = async (req: Request, res: Response) => {
 
         return res.json({ sessions });
     } catch (error: any) {
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching web sessions' });
     }
 };
@@ -885,10 +898,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
 
         return res.status(403).json({ message: 'Akses riwayat chat ditolak.' });
     } catch (error: any) {
-        const code = String(error?.message || '');
-        if (code === 'THREAD_NOT_FOUND') {
-            return res.status(404).json({ message: 'Sesi chat tidak ditemukan.' });
-        }
+        if (mapChatServiceError(res, error)) return;
         return res.status(500).json({ message: error?.message || 'Error fetching web messages' });
     }
 };

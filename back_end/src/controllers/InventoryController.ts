@@ -6,6 +6,8 @@ import { Readable } from 'stream';
 import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../models';
 import { JournalService } from '../services/JournalService';
 import { Op, Transaction } from 'sequelize';
+import { InventoryCostService } from '../services/InventoryCostService';
+import { TaxConfigService } from '../services/TaxConfigService';
 
 const ALLOWED_IMPORT_EXTENSIONS = new Set(['.xlsx', '.xls', '.csv']);
 const REQUIRED_IMPORT_HEADERS = [
@@ -972,7 +974,7 @@ export const getProducts = async (req: Request, res: Response) => {
 export const getCategories = async (_req: Request, res: Response) => {
     try {
         const categories = await Category.findAll({
-            attributes: ['id', 'name', 'description', 'icon'],
+            attributes: ['id', 'name', 'description', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'],
             order: [['name', 'ASC']]
         });
         res.json({ categories });
@@ -991,6 +993,23 @@ const normalizeCategoryIcon = (rawIcon: unknown): string | null => {
         throw new Error('Nilai icon terlalu panjang (maksimal 50 karakter).');
     }
     return icon;
+};
+
+const toNullablePercentage = (value: unknown): number | null | undefined => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return undefined;
+    return Math.round(parsed * 100) / 100;
+};
+
+const parseCategoryDiscountField = (value: unknown, fieldName: string): number | null => {
+    const parsed = toNullablePercentage(value);
+    if (parsed === undefined) {
+        throw new Error(`${fieldName} harus angka antara 0 sampai 100 atau null.`);
+    }
+    return parsed;
 };
 
 export const createCategory = async (req: Request, res: Response) => {
@@ -1015,10 +1034,31 @@ export const createCategory = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Nama kategori sudah digunakan' });
         }
 
+        let regularDiscount: number | null = null;
+        let goldDiscount: number | null = null;
+        let premiumDiscount: number | null = null;
+        try {
+            if (req.body?.discount_regular_pct !== undefined) {
+                regularDiscount = parseCategoryDiscountField(req.body.discount_regular_pct, 'discount_regular_pct');
+            }
+            if (req.body?.discount_gold_pct !== undefined) {
+                goldDiscount = parseCategoryDiscountField(req.body.discount_gold_pct, 'discount_gold_pct');
+            }
+            if (req.body?.discount_premium_pct !== undefined) {
+                premiumDiscount = parseCategoryDiscountField(req.body.discount_premium_pct, 'discount_premium_pct');
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Diskon kategori tidak valid';
+            return res.status(400).json({ message });
+        }
+
         const category = await Category.create({
             name,
             description: description || null,
-            icon
+            icon,
+            discount_regular_pct: regularDiscount,
+            discount_gold_pct: goldDiscount,
+            discount_premium_pct: premiumDiscount
         });
 
         res.status(201).json(category);
@@ -1039,7 +1079,14 @@ export const updateCategory = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Kategori tidak ditemukan' });
         }
 
-        const updates: { name?: string; description?: string | null; icon?: string | null } = {};
+        const updates: {
+            name?: string;
+            description?: string | null;
+            icon?: string | null;
+            discount_regular_pct?: number | null;
+            discount_gold_pct?: number | null;
+            discount_premium_pct?: number | null;
+        } = {};
 
         if (req.body?.name !== undefined) {
             const nextName = String(req.body.name).trim();
@@ -1073,10 +1120,82 @@ export const updateCategory = async (req: Request, res: Response) => {
             }
         }
 
+        if (req.body?.discount_regular_pct !== undefined) {
+            const parsed = toNullablePercentage(req.body.discount_regular_pct);
+            if (parsed === undefined) {
+                return res.status(400).json({ message: 'discount_regular_pct harus angka antara 0 sampai 100 atau null.' });
+            }
+            updates.discount_regular_pct = parsed;
+        }
+
+        if (req.body?.discount_gold_pct !== undefined) {
+            const parsed = toNullablePercentage(req.body.discount_gold_pct);
+            if (parsed === undefined) {
+                return res.status(400).json({ message: 'discount_gold_pct harus angka antara 0 sampai 100 atau null.' });
+            }
+            updates.discount_gold_pct = parsed;
+        }
+
+        if (req.body?.discount_premium_pct !== undefined) {
+            const parsed = toNullablePercentage(req.body.discount_premium_pct);
+            if (parsed === undefined) {
+                return res.status(400).json({ message: 'discount_premium_pct harus angka antara 0 sampai 100 atau null.' });
+            }
+            updates.discount_premium_pct = parsed;
+        }
+
         await category.update(updates);
         res.json(category);
     } catch (error) {
         res.status(500).json({ message: 'Error updating category', error });
+    }
+};
+
+export const updateCategoryTierDiscount = async (req: Request, res: Response) => {
+    try {
+        const categoryId = Number(req.params.id);
+        if (!Number.isInteger(categoryId) || categoryId <= 0) {
+            return res.status(400).json({ message: 'ID kategori tidak valid' });
+        }
+
+        const category = await Category.findByPk(categoryId);
+        if (!category) {
+            return res.status(404).json({ message: 'Kategori tidak ditemukan' });
+        }
+
+        const hasRegular = Object.prototype.hasOwnProperty.call(req.body || {}, 'discount_regular_pct');
+        const hasGold = Object.prototype.hasOwnProperty.call(req.body || {}, 'discount_gold_pct');
+        const hasPremium = Object.prototype.hasOwnProperty.call(req.body || {}, 'discount_premium_pct');
+        if (!hasRegular || !hasGold || !hasPremium) {
+            return res.status(400).json({
+                message: 'discount_regular_pct, discount_gold_pct, dan discount_premium_pct wajib dikirim (boleh null untuk fallback).'
+            });
+        }
+
+        let regularDiscount: number | null;
+        let goldDiscount: number | null;
+        let premiumDiscount: number | null;
+        try {
+            regularDiscount = parseCategoryDiscountField(req.body?.discount_regular_pct, 'discount_regular_pct');
+            goldDiscount = parseCategoryDiscountField(req.body?.discount_gold_pct, 'discount_gold_pct');
+            premiumDiscount = parseCategoryDiscountField(req.body?.discount_premium_pct, 'discount_premium_pct');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Diskon kategori tidak valid';
+            return res.status(400).json({ message });
+        }
+
+        await category.update({
+            discount_regular_pct: regularDiscount,
+            discount_gold_pct: goldDiscount,
+            discount_premium_pct: premiumDiscount
+        });
+
+        return res.json({
+            message: 'Diskon tier kategori berhasil diperbarui.',
+            category
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error updating category tier discount', error });
     }
 };
 
@@ -1789,6 +1908,37 @@ export const createStockMutation = async (req: Request, res: Response) => {
             reference_id
         }, { transaction: t });
 
+        const effectiveQty = type === 'out' ? -Math.abs(Number(qty)) : Number(qty);
+        if (type === 'in' && effectiveQty > 0) {
+            await InventoryCostService.recordInbound({
+                product_id,
+                qty: effectiveQty,
+                unit_cost: Number(product.base_price || 0),
+                reference_type: 'stock_mutation',
+                reference_id: reference_id ? String(reference_id) : undefined,
+                note: note || 'Manual stock in',
+                transaction: t
+            });
+        } else if (type === 'out' && effectiveQty < 0) {
+            await InventoryCostService.consumeOutbound({
+                product_id,
+                qty: Math.abs(effectiveQty),
+                reference_type: 'stock_mutation',
+                reference_id: reference_id ? String(reference_id) : undefined,
+                note: note || 'Manual stock out',
+                transaction: t
+            });
+        } else if (type === 'adjustment' && effectiveQty !== 0) {
+            await InventoryCostService.recordAdjustment({
+                product_id,
+                qty_diff: effectiveQty,
+                reference_type: 'stock_mutation',
+                reference_id: reference_id ? String(reference_id) : undefined,
+                note: note || 'Manual stock adjustment',
+                transaction: t
+            });
+        }
+
         await product.update({ stock_quantity: newStock }, { transaction: t });
 
         await t.commit();
@@ -1857,7 +2007,7 @@ export const createPurchaseOrder = async (req: Request, res: Response) => {
 export const createSupplierInvoice = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
-        const { purchase_order_id, invoice_number, total, due_date } = req.body;
+        const { purchase_order_id, invoice_number, total, due_date, subtotal, tax_amount, tax_percent } = req.body;
         const userId = req.user!.id;
 
         const po = await PurchaseOrder.findByPk(purchase_order_id, { transaction: t });
@@ -1866,31 +2016,45 @@ export const createSupplierInvoice = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Purchase Order not found' });
         }
 
+        const subtotalNum = Number.isFinite(Number(subtotal)) ? Number(subtotal) : Number(total || 0);
+        const taxAmountNum = Number.isFinite(Number(tax_amount)) ? Number(tax_amount) : 0;
+        const totalNum = Number(total || 0);
+        const taxPercentNum = Number.isFinite(Number(tax_percent)) ? Number(tax_percent) : 0;
+
         const supplierInvoice = await SupplierInvoice.create({
             supplier_id: po.supplier_id,
             purchase_order_id: po.id,
             invoice_number,
-            total: Number(total),
+            total: totalNum,
+            subtotal: subtotalNum,
+            tax_amount: taxAmountNum,
+            tax_percent: taxPercentNum,
             due_date: new Date(due_date),
             status: 'unpaid',
             created_by: userId
         }, { transaction: t });
 
-        // --- Journal: Persediaan (D) vs Hutang Supplier (K) ---
-        // Note: Assuming inventory value increases when invoice is received/acknowledged.
+        // --- Journal: Persediaan + PPN Masukan (D) vs Hutang Supplier (K) ---
         const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
         const apAcc = await Account.findOne({ where: { code: '2100' }, transaction: t }); // Hutang Supplier
+        const ppnInputAcc = await Account.findOne({ where: { code: '2202' }, transaction: t });
+        const taxCfg = await TaxConfigService.getConfig();
 
         if (inventoryAcc && apAcc) {
+            const lines: any[] = [
+                { account_id: inventoryAcc.id, debit: Number(subtotalNum), credit: 0 }
+            ];
+            if (taxCfg.company_tax_mode === 'pkp' && Number(taxAmountNum) > 0 && ppnInputAcc) {
+                lines.push({ account_id: ppnInputAcc.id, debit: Number(taxAmountNum), credit: 0 });
+            }
+            lines.push({ account_id: apAcc.id, debit: 0, credit: Number(totalNum) });
             await JournalService.createEntry({
                 description: `Tagihan Supplier #${supplierInvoice.invoice_number} (PO #${po.id})`,
                 reference_type: 'supplier_invoice',
                 reference_id: supplierInvoice.id.toString(),
                 created_by: userId,
-                lines: [
-                    { account_id: inventoryAcc.id, debit: Number(total), credit: 0 },
-                    { account_id: apAcc.id, debit: 0, credit: Number(total) }
-                ]
+                idempotency_key: `supplier_invoice_${supplierInvoice.id}`,
+                lines
             }, t);
         }
 
@@ -2190,6 +2354,16 @@ export const receivePurchaseOrder = async (req: Request, res: Response) => {
                     await product.update({
                         stock_quantity: Number(product.stock_quantity || 0) + receivedQty
                     }, { transaction: t });
+
+                    await InventoryCostService.recordInbound({
+                        product_id: item.product_id,
+                        qty: receivedQty,
+                        unit_cost: Number(poItem.unit_cost || product.base_price || 0),
+                        reference_type: 'purchase_order_receive',
+                        reference_id: String(po.id),
+                        note: item.note || `Inbound PO #${po.id}`,
+                        transaction: t
+                    });
                 }
 
                 // Create Stock Mutation
@@ -2227,6 +2401,13 @@ export const receivePurchaseOrder = async (req: Request, res: Response) => {
          * Semua penyelesaian kekurangan stok (shortage) wajib melalui proses alokasi manual oleh admin 
          * di dashboard Order Allocation untuk menjaga kontrol penuh administrator.
          */
+        if (Array.isArray(items)) {
+            for (const item of items) {
+                const productId = String(item?.product_id || '');
+                if (!productId) continue;
+                await InventoryCostService.autoAllocateBackordersForProduct(productId, t);
+            }
+        }
         await t.commit();
         res.json({ message: 'PO received successfully', status: newStatus });
     } catch (error) {

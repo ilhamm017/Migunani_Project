@@ -253,6 +253,14 @@ export const api = {
                 apiClient.post('/admin/categories', data),
             updateCategory: (id: number, data: { name?: string; description?: string; icon?: string }) =>
                 apiClient.put(`/admin/categories/${id}`, data),
+            updateCategoryTierDiscount: (
+                id: number,
+                data: {
+                    discount_regular_pct: number | null;
+                    discount_gold_pct: number | null;
+                    discount_premium_pct: number | null;
+                }
+            ) => apiClient.patch(`/admin/categories/${id}/tier-discount`, data),
             deleteCategory: (id: number, replacement_category_id?: number) =>
                 apiClient.delete(`/admin/categories/${id}`, {
                     data: replacement_category_id ? { replacement_category_id } : undefined,
@@ -353,15 +361,51 @@ export const api = {
                 apiClient.get('/admin/finance/reports/aging-ap'),
             getARAging: () =>
                 apiClient.get('/admin/finance/reports/aging-ar'),
+            getBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/finance/reports/backorders', { params }),
+            getTaxSummary: (params: { startDate: string; endDate: string }) =>
+                apiClient.get('/admin/finance/reports/tax-summary', { params }),
+            getVatMonthly: (params?: { year?: number }) =>
+                apiClient.get('/admin/finance/reports/vat-monthly', { params }),
             getDriverCodList: () => apiClient.get('/admin/finance/driver-cod'),
             verifyDriverCod: (data: { driver_id: string; order_ids: string[]; amount_received: number }) =>
                 apiClient.post('/admin/finance/driver-cod/verify', data),
+            createCreditNote: (data: {
+                invoice_id: string;
+                reason?: string;
+                mode?: 'receivable' | 'cash_refund';
+                amount: number;
+                tax_amount?: number;
+                lines?: Array<{
+                    product_id?: string;
+                    description?: string;
+                    qty?: number;
+                    unit_price?: number;
+                    line_subtotal?: number;
+                    line_tax?: number;
+                    line_total?: number;
+                }>;
+            }) => apiClient.post('/admin/finance/credit-notes', data),
+            postCreditNote: (id: number, data?: { pay_now?: boolean; payment_account_code?: string }) =>
+                apiClient.post(`/admin/finance/credit-notes/${id}/post`, data || {}),
             voidInvoice: (invoiceId: string) => apiClient.post(`/admin/finance/invoices/${invoiceId}/void`),
             getPeriods: () => apiClient.get('/admin/finance/periods'),
             closePeriod: (data: { month: number; year: number }) => apiClient.post('/admin/finance/periods/close', data),
             createAdjustmentJournal: (data: { date: string; description: string; lines: Array<{ account_id: number; debit: number; credit: number }> }) =>
                 apiClient.post('/admin/finance/journals/adjustment', data),
             getJournals: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string }) => apiClient.get('/admin/finance/journals', { params }),
+            getTaxSettings: () => apiClient.get('/admin/finance/settings/tax'),
+            updateTaxSettings: (data: { company_tax_mode: 'pkp' | 'non_pkp'; vat_percent: number; pph_final_percent: number }) =>
+                apiClient.put('/admin/finance/settings/tax', data),
+        },
+        // Profile
+        profile: {
+            getMe: () => apiClient.get('/profile/me'),
+            updateAddresses: (addresses: any[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+        },
+        // Promos
+        promos: {
+            validate: (code: string) => apiClient.get(`/promos/validate/${code}`),
         },
         staff: {
             getAll: () => apiClient.get('/admin/staff'),

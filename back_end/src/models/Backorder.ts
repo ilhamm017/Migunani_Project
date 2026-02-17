@@ -7,6 +7,8 @@ interface BackorderAttributes {
     qty_pending: number;
     status: 'waiting_stock' | 'ready' | 'fulfilled' | 'canceled';
     notes?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface BackorderCreationAttributes extends Optional<BackorderAttributes, 'id' | 'status'> { }

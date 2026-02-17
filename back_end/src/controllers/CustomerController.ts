@@ -159,10 +159,12 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: 'Nomor WhatsApp tidak valid' });
         }
+        /* 
         if (!/^\d{6}$/.test(otpCode)) {
             await t.rollback();
             return res.status(400).json({ message: 'Kode OTP harus 6 digit' });
         }
+        */
         if (!email) {
             await t.rollback();
             return res.status(400).json({ message: 'Email wajib diisi' });
@@ -176,6 +178,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             return res.status(400).json({ message: `Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter` });
         }
 
+        /* Temporarily disabled OTP verification
         const otpSession = customerOtpMap.get(normalizedWhatsapp);
         const now = Date.now();
         if (!otpSession || otpSession.expiresAt <= now) {
@@ -198,6 +201,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: 'Kode OTP salah' });
         }
+        */
 
         const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
         const conflictConditions: Array<Record<string, unknown>> = [

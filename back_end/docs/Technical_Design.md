@@ -31,14 +31,14 @@ Struktur database final untuk MySQL (Sequelize).
 
 ### B. Inventory (Gudang)
 *   **Products:** id, sku (Unique), barcode, name, base_price (HPP), price (Jual), stock, min_stock, category_id.
-*   **Categories:** id, name.
+*   **Categories:** id, name, discount_regular_pct, discount_gold_pct, discount_premium_pct (nullable, override per kategori).
 *   **Suppliers:** id, name, contact.
 *   **StockMutations:** id, product_id, type (In/Out/Adjust/Initial), qty, reason, created_at.
 *   **PurchaseOrders:** id, supplier_id, status (Pending/Received), total_cost.
 
 ### C. Transactions (Web & POS)
 *   **Orders:** id, customer_id, courier_id (Driver), source (Web/WA/POS), status (Pending/Processing/Shipped/Delivered/Completed/Expired/Hold), total_amount, expiry_date.
-*   **OrderItems:** order_id, product_id, qty, price_at_purchase, cost_at_purchase (Snapshot HPP).
+*   **OrderItems:** order_id, product_id, qty, price_at_purchase, cost_at_purchase (Snapshot HPP), pricing_snapshot (sumber diskon: category/tier_fallback).
 *   **Invoices:** order_id, payment_method (Transfer/COD/Cash), payment_status (Unpaid/Paid/CODPending), payment_proof_url, verified_by.
 
 ### D. Omnichannel Chat

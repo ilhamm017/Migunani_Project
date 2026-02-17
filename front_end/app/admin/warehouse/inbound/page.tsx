@@ -263,7 +263,7 @@ export default function PurchaseOrderPage() {
       setSupplierId('');
       setItems([]);
     } catch (error) {
-      console.error('Create PO failed:', error); s
+      console.error('Create PO failed:', error);
       const err = error as any;
       setErrorMessage(err?.response?.data?.message || 'Gagal membuat purchase order.');
     } finally {

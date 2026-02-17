@@ -6,6 +6,9 @@ interface SupplierInvoiceAttributes {
     supplier_id: number;
     purchase_order_id: string;
     invoice_number: string;
+    subtotal: number;
+    tax_amount: number;
+    tax_percent: number;
     total: number;
     due_date: Date;
     status: 'unpaid' | 'paid' | 'overdue';
@@ -19,6 +22,9 @@ class SupplierInvoice extends Model<SupplierInvoiceAttributes, SupplierInvoiceCr
     declare supplier_id: number;
     declare purchase_order_id: string;
     declare invoice_number: string;
+    declare subtotal: number;
+    declare tax_amount: number;
+    declare tax_percent: number;
     declare total: number;
     declare due_date: Date;
     declare status: 'unpaid' | 'paid' | 'overdue';
@@ -54,6 +60,21 @@ SupplierInvoice.init(
         invoice_number: {
             type: DataTypes.STRING,
             allowNull: false,
+        },
+        subtotal: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        tax_amount: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        tax_percent: {
+            type: DataTypes.DECIMAL(6, 3),
+            allowNull: false,
+            defaultValue: 0,
         },
         total: {
             type: DataTypes.DECIMAL(15, 2),

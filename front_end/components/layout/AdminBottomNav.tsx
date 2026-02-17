@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ClipboardList, LayoutDashboard, MessageSquare, Users, Wallet } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
+import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 
 const navItems = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard },
@@ -31,31 +32,24 @@ export default function AdminBottomNav() {
     enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessAdminNav,
     role: user?.role
   });
-
-  // "Notification" logic: only show badge for orders that became actionable since last visit.
-  const [lastSeenOrderCount, setLastSeenOrderCount] = useState<number>(0);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('admin_orders_last_seen_count');
-      if (saved !== null) setLastSeenOrderCount(Number(saved));
-    }
-  }, []);
+  const {
+    newTaskCount: orderNotificationCount,
+    markSeen: markOrderNotificationsSeen,
+  } = useOrderStatusNotifications({
+    enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessAdminNav,
+    role: user?.role,
+    userId: user?.id,
+  });
 
   const isInOrderPage = pathname === '/admin/orders' || pathname?.startsWith('/admin/orders/');
 
   useEffect(() => {
-    if (isInOrderPage) {
-      setLastSeenOrderCount(orderBadgeCount);
-      localStorage.setItem('admin_orders_last_seen_count', String(orderBadgeCount));
-    } else if (orderBadgeCount < lastSeenOrderCount) {
-      // If items were cleared/processed while away, reset baseline to current to avoid negative/stale badges
-      setLastSeenOrderCount(orderBadgeCount);
-      localStorage.setItem('admin_orders_last_seen_count', String(orderBadgeCount));
+    if (isInOrderPage && orderNotificationCount > 0) {
+      markOrderNotificationsSeen();
     }
-  }, [isInOrderPage, orderBadgeCount, lastSeenOrderCount]);
+  }, [isInOrderPage, markOrderNotificationsSeen, orderNotificationCount]);
 
-  const displayOrderBadgeCount = Math.max(0, orderBadgeCount - lastSeenOrderCount);
+  const displayOrderBadgeCount = Math.max(0, Math.max(orderNotificationCount, orderBadgeCount));
 
   if (!pathname?.startsWith('/admin') || !canAccessAdminNav) {
     return null;

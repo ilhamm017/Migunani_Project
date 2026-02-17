@@ -41,6 +41,8 @@ router.delete('/expense-labels/:id', authorizeRoles('super_admin', 'admin_financ
 router.post('/orders/:id/issue-invoice', authorizeRoles('super_admin', 'admin_finance'), FinanceController.issueInvoice);
 router.patch('/orders/:id/verify', authorizeRoles('super_admin', 'admin_finance'), FinanceController.verifyPayment);
 router.post('/invoices/:id/void', authorizeRoles('super_admin', 'admin_finance'), FinanceController.voidPayment);
+router.get('/settings/tax', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getTaxSettings);
+router.put('/settings/tax', authorizeRoles('super_admin', 'admin_finance'), FinanceController.updateTaxSettings);
 
 // Reports (Super Admin, Owner - assuming Owner has super_admin/admin_finance role or separate)
 // Reports
@@ -50,6 +52,9 @@ router.get('/reports/cash-flow', authorizeRoles('super_admin', 'admin_finance'),
 router.get('/reports/inventory-value', authorizeRoles('super_admin', 'admin_finance'), ReportController.getInventoryValue);
 router.get('/reports/aging-ap', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsPayableAging);
 router.get('/reports/aging-ar', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsReceivableAging);
+router.get('/reports/backorders', authorizeRoles('super_admin', 'kasir'), ReportController.getBackorderPreorderReport);
+router.get('/reports/tax-summary', authorizeRoles('super_admin', 'admin_finance'), ReportController.getTaxSummary);
+router.get('/reports/vat-monthly', authorizeRoles('super_admin', 'admin_finance'), ReportController.getVatMonthlyReport);
 
 // Legacy/Operational AR
 router.get('/ar', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountsReceivable);
@@ -59,6 +64,10 @@ router.get('/ar/:id', authorizeRoles('super_admin', 'admin_finance'), FinanceCon
 // Driver COD Deposit
 router.get('/driver-cod', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getDriverCodList);
 router.post('/driver-cod/verify', authorizeRoles('super_admin', 'admin_finance'), FinanceController.verifyDriverCod);
+
+// Credit Notes
+router.post('/credit-notes', authorizeRoles('super_admin', 'admin_finance'), FinanceController.createCreditNote);
+router.post('/credit-notes/:id/post', authorizeRoles('super_admin', 'admin_finance'), FinanceController.postCreditNote);
 
 // Journals
 router.get('/journals', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getJournals);

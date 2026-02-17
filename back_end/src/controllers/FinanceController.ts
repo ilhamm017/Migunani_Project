@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod } from '../models';
+import { Expense, ExpenseLabel, Invoice, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting } from '../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../services/JournalService';
-import { io } from '../server';
+import { TaxConfigService, computeInvoiceTax } from '../services/TaxConfigService';
+import { AccountingPostingService } from '../services/AccountingPostingService';
+import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 
 
 type ExpenseDetail = {
@@ -83,6 +85,7 @@ const ensureDefaultExpenseLabels = async () => {
 };
 
 const AR_ORDER_STATUS_FILTER = { [Op.notIn]: ['canceled', 'expired'] as string[] };
+const genCreditNoteNumber = () => `CN-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
 const buildAccountsReceivableInclude = (extraOrderWhere: Record<string, unknown> = {}) => ([
     {
@@ -136,7 +139,7 @@ const mapAccountsReceivableRows = (invoices: Invoice[]) => {
         const orderCreatedAtMs = orderCreatedAtRaw ? new Date(orderCreatedAtRaw).getTime() : nowMs;
         const agingDays = Math.max(0, Math.floor((nowMs - orderCreatedAtMs) / (24 * 60 * 60 * 1000)));
 
-        const totalAmount = Number(order.total_amount || 0);
+        const totalAmount = Number(plainInvoice.total || order.total_amount || 0);
         const amountPaid = Number(plainInvoice.amount_paid || 0);
         const amountDue = Math.max(0, totalAmount - amountPaid);
 
@@ -240,22 +243,68 @@ export const issueInvoice = async (req: Request, res: Response) => {
 
         const paymentMethod = invoice.payment_method;
 
+        const taxConfig = await TaxConfigService.getConfig();
+        const subtotal = Number(order.total_amount || 0);
+        const computedTax = computeInvoiceTax(subtotal, taxConfig);
+
         if (paymentMethod === 'transfer_manual') {
-            // Transfer: issue invoice → customer pays → finance verifies
-            await invoice.update({ payment_status: 'unpaid' }, { transaction: t });
+            await invoice.update({
+                payment_status: 'unpaid',
+                subtotal,
+                tax_percent: computedTax.tax_percent,
+                tax_amount: computedTax.tax_amount,
+                total: computedTax.total,
+                tax_mode_snapshot: computedTax.tax_mode_snapshot,
+                pph_final_amount: computedTax.pph_final_amount
+            }, { transaction: t });
             await order.update({ status: 'waiting_payment' }, { transaction: t });
+
+            const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
+            const deferredRevenueAcc = await Account.findOne({ where: { code: '2300' }, transaction: t });
+            const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
+            const lines: any[] = [];
+
+            if (arAcc) lines.push({ account_id: arAcc.id, debit: Number(computedTax.total), credit: 0 });
+            if (deferredRevenueAcc) lines.push({ account_id: deferredRevenueAcc.id, debit: 0, credit: Number(subtotal) });
+            if (Number(computedTax.tax_amount || 0) > 0 && ppnOutputAcc) {
+                lines.push({ account_id: ppnOutputAcc.id, debit: 0, credit: Number(computedTax.tax_amount) });
+            }
+            if (lines.length >= 2) {
+                await JournalService.createEntry({
+                    description: `Issue Invoice Transfer Order #${order.id}`,
+                    reference_type: 'invoice_issue',
+                    reference_id: invoice.id.toString(),
+                    created_by: String(req.user!.id),
+                    idempotency_key: `invoice_issue_${invoice.id}`,
+                    lines
+                }, t);
+            }
         } else if (paymentMethod === 'cod' || paymentMethod === 'cash_store') {
-            // COD/Cash: skip waiting_payment → go straight to ready_to_ship
-            await invoice.update({ payment_status: 'cod_pending' }, { transaction: t });
+            await invoice.update({
+                payment_status: 'cod_pending',
+                subtotal,
+                tax_percent: computedTax.tax_percent,
+                tax_amount: computedTax.tax_amount,
+                total: computedTax.total,
+                tax_mode_snapshot: computedTax.tax_mode_snapshot,
+                pph_final_amount: computedTax.pph_final_amount
+            }, { transaction: t });
             await order.update({ status: 'ready_to_ship' }, { transaction: t });
         } else {
-            // Fallback: treat as transfer
-            await invoice.update({ payment_status: 'unpaid' }, { transaction: t });
+            await invoice.update({
+                payment_status: 'unpaid',
+                subtotal,
+                tax_percent: computedTax.tax_percent,
+                tax_amount: computedTax.tax_amount,
+                total: computedTax.total,
+                tax_mode_snapshot: computedTax.tax_mode_snapshot,
+                pph_final_amount: computedTax.pph_final_amount
+            }, { transaction: t });
             await order.update({ status: 'waiting_payment' }, { transaction: t });
         }
 
         await t.commit();
-        io.emit('admin:refresh_badges');
+        emitAdminRefreshBadges();
 
         res.json({
             message: paymentMethod === 'cod' || paymentMethod === 'cash_store'
@@ -266,6 +315,61 @@ export const issueInvoice = async (req: Request, res: Response) => {
     } catch (error) {
         try { await t.rollback(); } catch { }
         res.status(500).json({ message: 'Error issuing invoice', error });
+    }
+};
+
+export const getTaxSettings = async (_req: Request, res: Response) => {
+    try {
+        const config = await TaxConfigService.getConfig();
+        return res.json(config);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching tax settings', error });
+    }
+};
+
+export const updateTaxSettings = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const modeRaw = String(req.body?.company_tax_mode || '').trim().toLowerCase();
+        const vatPercent = Number(req.body?.vat_percent);
+        const pphFinalPercent = Number(req.body?.pph_final_percent);
+
+        if (!['pkp', 'non_pkp'].includes(modeRaw)) {
+            await t.rollback();
+            return res.status(400).json({ message: 'company_tax_mode harus pkp atau non_pkp' });
+        }
+        if (!Number.isFinite(vatPercent) || vatPercent < 0 || vatPercent > 100) {
+            await t.rollback();
+            return res.status(400).json({ message: 'vat_percent tidak valid' });
+        }
+        if (!Number.isFinite(pphFinalPercent) || pphFinalPercent < 0 || pphFinalPercent > 100) {
+            await t.rollback();
+            return res.status(400).json({ message: 'pph_final_percent tidak valid' });
+        }
+
+        await TaxConfigService.ensureDefaults();
+        await Setting.upsert({
+            key: 'company_tax_config',
+            value: {
+                company_tax_mode: modeRaw,
+                vat_percent: vatPercent,
+                pph_final_percent: pphFinalPercent
+            },
+            description: 'Tax mode and rates for company (Indonesia)'
+        }, { transaction: t });
+
+        await t.commit();
+        return res.json({
+            message: 'Tax settings updated',
+            data: {
+                company_tax_mode: modeRaw,
+                vat_percent: vatPercent,
+                pph_final_percent: pphFinalPercent
+            }
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        return res.status(500).json({ message: 'Error updating tax settings', error });
     }
 };
 
@@ -307,8 +411,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Order not found' });
         }
 
+        const previousOrderStatus = String(order.status || '');
         if (action === 'approve') {
             const isNoProofMethod = ['cod', 'cash_store'].includes(invoice.payment_method);
+
+            if (isNoProofMethod) {
+                await t.rollback();
+                return res.status(409).json({ message: 'Invoice COD/Cash Store hanya boleh menjadi paid melalui proses settlement.' });
+            }
 
             if (!isNoProofMethod && !invoice.payment_proof_url) {
                 await t.rollback();
@@ -323,69 +433,32 @@ export const verifyPayment = async (req: Request, res: Response) => {
             await invoice.update({
                 payment_status: 'paid',
                 verified_by: verifierId,
-                verified_at: new Date()
+                verified_at: new Date(),
+                amount_paid: Number(invoice.total || order.total_amount || 0)
             }, { transaction: t });
 
-            // --- Create Journal Entries for Sales & COGS ---
-            const totalAmount = Number(order.total_amount);
-
-            // 1. Journal Sales (Kas/Bank vs Penjualan)
+            const totalAmount = Number(invoice.total || order.total_amount || 0);
             const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
             const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
-            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+            const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
 
-            if (paymentAcc && revenueAcc) {
+            if (paymentAcc && arAcc && totalAmount > 0) {
                 await JournalService.createEntry({
-                    description: `Penjualan Order #${order.id} - ${invoice.invoice_number}`,
-                    reference_type: 'order',
-                    reference_id: order.id.toString(),
+                    description: `Verifikasi Pembayaran Invoice #${invoice.invoice_number}`,
+                    reference_type: 'payment_verify',
+                    reference_id: invoice.id.toString(),
                     created_by: verifierId,
+                    idempotency_key: `payment_verify_${invoice.id}`,
                     lines: [
                         { account_id: paymentAcc.id, debit: totalAmount, credit: 0 },
-                        { account_id: revenueAcc.id, debit: 0, credit: totalAmount }
+                        { account_id: arAcc.id, debit: 0, credit: totalAmount }
                     ]
                 }, t);
             }
 
-            // 2. Journal COGS (HPP vs Persediaan)
-            const orderItems = await OrderItem.findAll({ where: { order_id: order.id }, transaction: t });
-            const allocations = await OrderAllocation.findAll({ where: { order_id: order.id }, transaction: t });
-
-            let totalCost = 0;
-            orderItems.forEach(item => {
-                const alloc = allocations.find(a => a.product_id === item.product_id);
-                const allocQty = alloc ? Number(alloc.allocated_qty || 0) : 0;
-                totalCost += Number(item.cost_at_purchase || 0) * allocQty;
-            });
-
-            if (totalCost > 0) {
-                const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
-                const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
-
-                if (hppAcc && inventoryAcc) {
-                    await JournalService.createEntry({
-                        description: `HPP untuk Order #${order.id}`,
-                        reference_type: 'order',
-                        reference_id: order.id.toString(),
-                        created_by: verifierId,
-                        lines: [
-                            { account_id: hppAcc.id, debit: totalCost, credit: 0 },
-                            { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
-                        ]
-                    }, t);
-                }
-            }
-
             // Transition logic based on current status
-            if (order.status === 'delivered' && (invoice.payment_method === 'cod' || invoice.payment_method === 'cash_store')) {
-                // COD Settlement: Driver already delivered & uploaded proof, now Finance confirms cash receipt
-                await order.update({ status: 'completed' }, { transaction: t });
-            } else {
-                // Standard flow: Payment verified → Ready to Ship
-                // (Only if not already shipped/delivered/completed to avoid regression)
-                if (['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(order.status)) {
-                    await order.update({ status: 'ready_to_ship' }, { transaction: t });
-                }
+            if (['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(order.status)) {
+                await order.update({ status: 'ready_to_ship' }, { transaction: t });
             }
 
         } else {
@@ -401,7 +474,20 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
 
         await t.commit();
-        io.emit('admin:refresh_badges');
+        if (action === 'approve' && previousOrderStatus !== 'ready_to_ship' && ['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(previousOrderStatus)) {
+            emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus,
+                to_status: 'ready_to_ship',
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: verifierRole,
+                target_roles: ['admin_gudang'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
         res.json({ message: `Payment ${action}d` });
     } catch (error) {
@@ -504,7 +590,7 @@ export const voidPayment = async (req: Request, res: Response) => {
         }
 
         await t.commit();
-        io.emit('admin:refresh_badges');
+        emitAdminRefreshBadges();
 
         res.json({ message: 'Pembayaran berhasil di-void (Reversed)' });
 
@@ -1092,7 +1178,7 @@ export const getDriverCodList = async (req: Request, res: Response) => {
                 };
             }
 
-            const amount = Number(order.total_amount || 0);
+            const amount = Number((inv as any).total || order.total_amount || 0);
             grouped[courier.id].orders.push({
                 id: order.id,
                 order_number: order.id,
@@ -1157,7 +1243,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
 
             invoices = pendingInvoices;
             invoices.forEach((inv: any) => {
-                totalExpected += Number(inv.Order.total_amount || 0);
+                totalExpected += Number(inv.total || inv.Order.total_amount || 0);
             });
         }
 
@@ -1172,7 +1258,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         }
 
         const previousDebt = Number(driver.debt || 0);
-        const newDebt = previousDebt - received;
+        const newDebt = Math.max(0, previousDebt + totalExpected - received);
 
         await driver.update({ debt: newDebt }, { transaction: t });
 
@@ -1209,40 +1295,39 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 });
             }
 
-            // Update Invoices -> Paid
-            await Invoice.update({
-                payment_status: 'paid',
-                verified_at: new Date(),
-                verified_by: verifierId
-            }, {
-                where: { id: { [Op.in]: invoiceIds } },
-                transaction: t
-            });
+            const fullySettled = received >= totalExpected;
+            if (fullySettled) {
+                await Invoice.update({
+                    payment_status: 'paid',
+                    verified_at: new Date(),
+                    verified_by: verifierId
+                }, {
+                    where: { id: { [Op.in]: invoiceIds } },
+                    transaction: t
+                });
 
-            // Update Orders -> Completed
-            await Order.update({
-                status: 'completed'
-            }, {
-                where: { id: { [Op.in]: order_ids } },
-                transaction: t
-            });
+                await Order.update({
+                    status: 'completed'
+                }, {
+                    where: { id: { [Op.in]: order_ids } },
+                    transaction: t
+                });
+            }
 
-            // --- Journal Entry for Settlement (Cash vs Piutang vs Revenue) ---
-            // 1. Revenue & Payment
+            // --- Journal Entry for Settlement (Cash vs Piutang Driver) ---
             if (totalExpected > 0 || received > 0) {
                 const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
-                const piutangAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
-                const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+                const piutangDriverAcc = await Account.findOne({ where: { code: '1104' }, transaction: t });
 
-                if (cashAcc && piutangAcc && revenueAcc) {
+                if (cashAcc && piutangDriverAcc) {
                     const journalLines: any[] = [];
 
                     // a. Cash Received
                     if (received > 0) {
                         journalLines.push({ account_id: cashAcc.id, debit: received, credit: 0 });
 
-                        // b. Reduce Piutang (Clearing the balance created at Delivery)
-                        journalLines.push({ account_id: piutangAcc.id, debit: 0, credit: received });
+                        // b. Reduce Driver Receivable
+                        journalLines.push({ account_id: piutangDriverAcc.id, debit: 0, credit: received });
                     }
 
                     if (journalLines.length >= 2) {
@@ -1253,47 +1338,6 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                             created_by: verifierId,
                             lines: journalLines
                         }, t);
-                    }
-                }
-
-                // 2. COGS (HPP vs Inventory)
-                if (invoices.length > 0) {
-                    // Collect Order IDs
-                    const settledOrderIds = invoices.map(inv => inv.Order.id);
-
-                    // Fetch items & allocations for these orders
-                    const orderItems = await OrderItem.findAll({
-                        where: { order_id: { [Op.in]: settledOrderIds } },
-                        include: [],
-                        transaction: t
-                    });
-                    // Note: OrderAllocations might be gone if we cleared them? 
-                    // Usually we keep them or move to 'shipped'. Assuming OrderAllocation persists or we use item.cost_at_purchase directly.
-                    // The COGS logic in verifyPayment used allocations to verify quantity, but items have qty too.
-                    // Let's rely on OrderItem cost_at_purchase * qty.
-                    // IMPORTANT: cost_at_purchase is stored on OrderItem.
-
-                    let totalCost = 0;
-                    orderItems.forEach(item => {
-                        totalCost += Number(item.cost_at_purchase || 0) * Number(item.qty || 0);
-                    });
-
-                    if (totalCost > 0) {
-                        const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
-                        const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
-
-                        if (hppAcc && inventoryAcc) {
-                            await JournalService.createEntry({
-                                description: `HPP untuk COD Settlement #${settlement.id}`,
-                                reference_type: 'cod_settlement',
-                                reference_id: settlement.id.toString(),
-                                created_by: verifierId,
-                                lines: [
-                                    { account_id: hppAcc.id, debit: totalCost, credit: 0 },
-                                    { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
-                                ]
-                            }, t);
-                        }
                     }
                 }
             }
@@ -1318,6 +1362,139 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         try { await t.rollback(); } catch { }
         const errMsg = error instanceof Error ? error.message : 'Unknown error';
         res.status(500).json({ message: 'Error verifying driver COD', error: errMsg });
+    }
+};
+
+export const createCreditNote = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { invoice_id, reason, mode = 'receivable', amount, tax_amount = 0, lines = [] } = req.body || {};
+        const userId = req.user!.id;
+        const invoice = await Invoice.findByPk(String(invoice_id), { transaction: t, lock: t.LOCK.UPDATE });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice tidak ditemukan' });
+        }
+
+        const creditAmount = Math.max(0, Number(amount || 0));
+        if (creditAmount <= 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Nominal credit note tidak valid' });
+        }
+
+        const cn = await CreditNote.create({
+            invoice_id: invoice.id,
+            credit_note_number: genCreditNoteNumber(),
+            amount: creditAmount,
+            tax_amount: Math.max(0, Number(tax_amount || 0)),
+            reason: typeof reason === 'string' ? reason.trim() : null,
+            mode: mode === 'cash_refund' ? 'cash_refund' : 'receivable',
+            status: 'draft'
+        }, { transaction: t });
+
+        if (Array.isArray(lines) && lines.length > 0) {
+            for (const line of lines) {
+                const qty = Math.max(1, Number(line?.qty || 1));
+                const unitPrice = Math.max(0, Number(line?.unit_price || 0));
+                const lineSubtotal = Math.max(0, Number(line?.line_subtotal ?? qty * unitPrice));
+                const lineTax = Math.max(0, Number(line?.line_tax || 0));
+                const lineTotal = Math.max(0, Number(line?.line_total ?? lineSubtotal + lineTax));
+                await CreditNoteLine.create({
+                    credit_note_id: cn.id,
+                    product_id: line?.product_id || null,
+                    description: line?.description || null,
+                    qty,
+                    unit_price: unitPrice,
+                    line_subtotal: lineSubtotal,
+                    line_tax: lineTax,
+                    line_total: lineTotal
+                }, { transaction: t });
+            }
+        }
+
+        await t.commit();
+        return res.status(201).json({ message: 'Credit note draft dibuat', credit_note: cn });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        return res.status(500).json({ message: 'Gagal membuat credit note', error });
+    }
+};
+
+export const postCreditNote = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const id = Number(req.params.id);
+        const payNow = Boolean(req.body?.pay_now);
+        const paymentAccountCode = String(req.body?.payment_account_code || '1101');
+        const userId = req.user!.id;
+
+        const cn = await CreditNote.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!cn) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Credit note tidak ditemukan' });
+        }
+        if (cn.status !== 'draft') {
+            await t.rollback();
+            return res.status(409).json({ message: 'Credit note sudah diposting' });
+        }
+
+        const invoice = await Invoice.findByPk(String(cn.invoice_id), { transaction: t, lock: t.LOCK.UPDATE });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Invoice terkait tidak ditemukan' });
+        }
+
+        const salesReturnAcc = await Account.findOne({ where: { code: '4101' }, transaction: t });
+        const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
+        const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
+        const refundPayableAcc = await Account.findOne({ where: { code: '2203' }, transaction: t });
+        const paymentAcc = await Account.findOne({ where: { code: paymentAccountCode }, transaction: t });
+
+        const amount = Number(cn.amount || 0);
+        const taxAmount = Number(cn.tax_amount || 0);
+        const dpp = Math.max(0, amount - taxAmount);
+
+        const creditTargetAcc = (cn.mode === 'cash_refund' && refundPayableAcc)
+            ? refundPayableAcc
+            : arAcc;
+        const lines: any[] = [];
+        if (salesReturnAcc && dpp > 0) lines.push({ account_id: salesReturnAcc.id, debit: dpp, credit: 0 });
+        if (taxAmount > 0 && ppnOutputAcc) lines.push({ account_id: ppnOutputAcc.id, debit: taxAmount, credit: 0 });
+        if (creditTargetAcc) lines.push({ account_id: creditTargetAcc.id, debit: 0, credit: amount });
+
+        if (lines.length >= 2) {
+            await JournalService.createEntry({
+                description: `Posting Credit Note ${cn.credit_note_number}`,
+                reference_type: 'credit_note',
+                reference_id: String(cn.id),
+                created_by: String(userId),
+                idempotency_key: `credit_note_post_${cn.id}`,
+                lines
+            }, t);
+        }
+
+        if (payNow && cn.mode === 'cash_refund' && refundPayableAcc && paymentAcc) {
+            await JournalService.createEntry({
+                description: `Refund payout Credit Note ${cn.credit_note_number}`,
+                reference_type: 'credit_note_refund',
+                reference_id: String(cn.id),
+                created_by: String(userId),
+                idempotency_key: `credit_note_refund_${cn.id}`,
+                lines: [
+                    { account_id: refundPayableAcc.id, debit: amount, credit: 0 },
+                    { account_id: paymentAcc.id, debit: 0, credit: amount }
+                ]
+            }, t);
+            await cn.update({ status: 'refunded', posted_at: new Date(), posted_by: userId }, { transaction: t });
+        } else {
+            await cn.update({ status: 'posted', posted_at: new Date(), posted_by: userId }, { transaction: t });
+        }
+
+        await t.commit();
+        return res.json({ message: 'Credit note berhasil diposting', credit_note: cn });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        return res.status(500).json({ message: 'Gagal posting credit note', error });
     }
 };
 

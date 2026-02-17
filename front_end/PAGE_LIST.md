@@ -1,6 +1,6 @@
 # Frontend Page List
 
-Total halaman aktif saat ini: **42**
+Total halaman aktif saat ini: **43**
 
 | Route | File Path |
 |---|---|
@@ -39,6 +39,7 @@ Total halaman aktif saat ini: **42**
 | `/catalog` | `front_end/app/catalog/page.tsx` |
 | `/checkout` | `front_end/app/checkout/page.tsx` |
 | `/driver/history` | `front_end/app/driver/history/page.tsx` |
+| `/driver/orders/[id]/checklist` | `front_end/app/driver/orders/[id]/checklist/page.tsx` |
 | `/driver/orders/[id]` | `front_end/app/driver/orders/[id]/page.tsx` |
 | `/driver` | `front_end/app/driver/page.tsx` |
 | `/orders/[id]` | `front_end/app/orders/[id]/page.tsx` |

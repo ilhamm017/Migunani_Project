@@ -54,6 +54,10 @@ Format akses role:
 | `GET` | `/orders/admin/couriers` | `super_admin`, `admin_gudang`, `admin_finance` | List driver aktif |
 | `PATCH` | `/orders/admin/:id/status` | `super_admin`, `admin_gudang` | Update status order admin |
 
+Catatan pricing checkout:
+- Jika kategori produk punya `discount_<tier>_pct`, diskon kategori dipakai.
+- Jika diskon kategori `null`, sistem fallback ke diskon tier global produk.
+
 ## E) Inventory & Product Admin
 
 | Method | Endpoint | Access | Keterangan |
@@ -64,9 +68,10 @@ Format akses role:
 | `PATCH` | `/admin/products/:id/tier-pricing` | `super_admin`, `kasir` | Update harga tier (regular, gold, premium/platinum) |
 | `PATCH` | `/admin/products/tier-pricing/bulk-discount` | `super_admin`, `kasir` | Terapkan diskon tier (%) ke semua produk aktif |
 | `POST` | `/admin/products/upload-image` | `super_admin`, `admin_gudang` | Upload gambar produk |
-| `GET` | `/admin/categories` | `super_admin`, `admin_gudang` | List kategori |
+| `GET` | `/admin/categories` | `super_admin`, `admin_gudang`, `kasir` | List kategori |
 | `POST` | `/admin/categories` | `super_admin`, `admin_gudang` | Create kategori |
 | `PUT` | `/admin/categories/:id` | `super_admin`, `admin_gudang` | Update kategori |
+| `PATCH` | `/admin/categories/:id/tier-discount` | `super_admin`, `kasir` | Update diskon tier kategori (`null` = fallback tier global) |
 | `DELETE` | `/admin/categories/:id` | `super_admin`, `admin_gudang` | Delete kategori |
 | `GET` | `/admin/suppliers` | `super_admin`, `admin_gudang` | List supplier |
 | `POST` | `/admin/suppliers` | `super_admin`, `admin_gudang` | Create supplier |

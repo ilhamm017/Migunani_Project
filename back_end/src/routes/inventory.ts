@@ -35,9 +35,10 @@ const uploadProductImageMiddleware = (req: Request, res: Response, next: NextFun
 
 // Protected Routes (Admin/Gudang + role operasional order intake)
 router.get('/admin/products', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProducts);
-router.get('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getCategories);
+router.get('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getCategories);
 router.post('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createCategory);
 router.put('/admin/categories/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.updateCategory);
+router.patch('/admin/categories/:id/tier-discount', authenticateToken, authorizeRoles('super_admin', 'kasir'), InventoryController.updateCategoryTierDiscount);
 router.delete('/admin/categories/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.deleteCategory);
 router.get('/admin/suppliers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getSuppliers);
 router.post('/admin/suppliers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.createSupplier);

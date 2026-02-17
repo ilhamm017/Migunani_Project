@@ -22,32 +22,11 @@ export default function SalesMemberCreatePage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [tier, setTier] = useState<TierType>('regular');
-  const [otp, setOtp] = useState('');
-  const [sendingOtp, setSendingOtp] = useState(false);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
 
-  const handleSendOtp = async () => {
-    if (!whatsapp.trim()) {
-      setError('Nomor WhatsApp wajib diisi untuk kirim OTP.');
-      return;
-    }
-
-    try {
-      setSendingOtp(true);
-      setError('');
-      setActionMessage('');
-      await api.admin.customers.sendOtp({ whatsapp_number: whatsapp.trim() });
-      setOtpSent(true);
-      setActionMessage('OTP berhasil dikirim ke WhatsApp customer.');
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal mengirim OTP WhatsApp');
-    } finally {
-      setSendingOtp(false);
-    }
-  };
+  // handleSendOtp is disabled
 
   const handleCreateCustomer = async () => {
     if (!name.trim()) {
@@ -70,10 +49,12 @@ export default function SalesMemberCreatePage() {
       setError('Password minimal 6 karakter.');
       return;
     }
+    /* 
     if (!/^\d{6}$/.test(otp.trim())) {
       setError('Kode OTP harus 6 digit.');
       return;
     }
+    */
 
     try {
       setCreatingCustomer(true);
@@ -82,7 +63,7 @@ export default function SalesMemberCreatePage() {
       await api.admin.customers.create({
         name: name.trim(),
         whatsapp_number: whatsapp.trim(),
-        otp_code: otp.trim(),
+        otp_code: '000000', // Dummy OTP since security is disabled
         email: email.trim(),
         password: password.trim(),
         tier,
@@ -93,9 +74,7 @@ export default function SalesMemberCreatePage() {
       setWhatsapp('');
       setEmail('');
       setPassword('');
-      setOtp('');
       setTier('regular');
-      setOtpSent(false);
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Gagal menambahkan customer');
     } finally {
@@ -121,7 +100,7 @@ export default function SalesMemberCreatePage() {
         <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.2em]">Registrasi Member Baru</p>
         <h1 className="text-2xl font-black text-slate-900 mt-1">Tambah Customer (OTP WhatsApp)</h1>
         <p className="text-sm text-slate-600 mt-2">
-          Nomor WhatsApp customer diverifikasi lewat OTP sebelum akun customer dibuat.
+          Registrasi member baru tanpa verifikasi OTP (Sementara).
         </p>
       </div>
 
@@ -137,10 +116,6 @@ export default function SalesMemberCreatePage() {
             value={whatsapp}
             onChange={(e) => {
               setWhatsapp(e.target.value);
-              if (otpSent) {
-                setOtpSent(false);
-                setOtp('');
-              }
             }}
             placeholder="Nomor WhatsApp (contoh: 0812xxxx)"
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
@@ -171,31 +146,16 @@ export default function SalesMemberCreatePage() {
           </select>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
-          <input
-            value={otp}
-            onChange={(e) => setOtp(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
-            placeholder="Masukkan kode OTP 6 digit dari WhatsApp customer"
-            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm tracking-[0.18em]"
-          />
-          <button
-            type="button"
-            onClick={() => void handleSendOtp()}
-            disabled={sendingOtp || creatingCustomer}
-            className="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-50"
-          >
-            {sendingOtp ? 'Mengirim OTP...' : (otpSent ? 'Kirim Ulang OTP' : 'Kirim OTP')}
-          </button>
-        </div>
+        {/* OTP section hidden */}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-slate-500">
-            OTP dikirim via WhatsApp bot untuk memastikan nomor benar-benar milik customer.
+            Pendaftaran langsung. Anggap nomor WhatsApp sudah benar.
           </p>
           <button
             type="button"
             onClick={() => void handleCreateCustomer()}
-            disabled={creatingCustomer || !otpSent}
+            disabled={creatingCustomer}
             className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold disabled:opacity-50"
           >
             {creatingCustomer ? 'Menyimpan Customer...' : 'Tambah Customer'}

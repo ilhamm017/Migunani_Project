@@ -14,6 +14,7 @@ export interface JournalInput {
     reference_id?: string;
     created_by: string;
     lines: JournalLineInput[];
+    idempotency_key?: string;
 }
 
 export class JournalService {
@@ -30,6 +31,16 @@ export class JournalService {
 
         try {
             const { date, description, reference_type, reference_id, created_by, lines } = input;
+            if (input.idempotency_key) {
+                const existing = await Journal.findOne({
+                    where: { idempotency_key: input.idempotency_key },
+                    transaction
+                });
+                if (existing) {
+                    if (!t) await transaction.commit();
+                    return existing;
+                }
+            }
 
             // 1. Validate debit/credit balance
             const totalDebit = lines.reduce((sum, line) => sum + Number(line.debit), 0);
@@ -52,7 +63,8 @@ export class JournalService {
                 reference_type: reference_type || null,
                 reference_id: reference_id || null,
                 created_by,
-                posted_at: new Date() // Post immediately for now
+                posted_at: new Date(), // Post immediately for now
+                idempotency_key: input.idempotency_key || null
             }, { transaction });
 
             // 3. Create Journal Lines
@@ -162,7 +174,8 @@ export class JournalService {
             reference_type: reference_type || null,
             reference_id: reference_id || null,
             created_by,
-            posted_at: new Date()
+            posted_at: new Date(),
+            idempotency_key: input.idempotency_key || null
         }, { transaction });
 
         // 3. Create Journal Lines

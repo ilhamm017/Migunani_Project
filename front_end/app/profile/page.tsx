@@ -47,25 +47,17 @@ export default function ProfilePage() {
         );
     }
 
-    const points = 1250;
-    const tier = points >= 5000 ? 'Platinum' : points >= 1500 ? 'Gold' : 'Regular';
-    const pointHistory = [
-        { id: 'P-001', type: 'earn', amount: 120, note: 'Belanja order #A1', date: '2026-02-01' },
-        { id: 'P-002', type: 'redeem', amount: -50, note: 'Voucher potongan', date: '2026-02-05' },
-        { id: 'P-003', type: 'earn', amount: 80, note: 'Belanja order #A2', date: '2026-02-10' },
-    ];
-
     const initials = user?.name
         ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
         : 'U';
 
     const menuItems = [
         { icon: RotateCcw, label: 'Status Retur', desc: 'Lacak pengembalian barang Anda', href: '/retur' },
-        { icon: User, label: 'Edit Profil', desc: 'Ubah nama, foto profil', href: '#' },
-        { icon: MapPin, label: 'Alamat Saya', desc: 'Kelola alamat pengiriman', href: '#' },
-        { icon: Shield, label: 'Keamanan', desc: 'Password, verifikasi', href: '#' },
-        { icon: Settings, label: 'Pengaturan', desc: 'Notifikasi, bahasa', href: '#' },
-        { icon: HelpCircle, label: 'Bantuan', desc: 'FAQ, hubungi kami', href: '#' },
+        { icon: User, label: 'Edit Profil', desc: 'Ubah nama, foto profil', href: '/profile/edit' },
+        { icon: MapPin, label: 'Alamat Saya', desc: 'Kelola alamat pengiriman', href: '/profile/addresses' },
+        { icon: Shield, label: 'Keamanan', desc: 'Password, verifikasi', href: '/profile/security' },
+        { icon: Settings, label: 'Pengaturan', desc: 'Notifikasi, bahasa', href: '/profile/settings' },
+        { icon: HelpCircle, label: 'Bantuan', desc: 'FAQ, hubungi kami', href: '/profile/help' },
     ];
 
     return (
@@ -91,20 +83,6 @@ export default function ProfilePage() {
                     </div>
                 </div>
 
-                {/* Loyalty */}
-                <div className="mt-6 bg-emerald-50 border border-emerald-100 rounded-2xl p-4">
-                    <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">Loyalty</p>
-                    <div className="flex items-end justify-between mt-2">
-                        <div>
-                            <p className="text-2xl font-black text-emerald-700">{points.toLocaleString('id-ID')}</p>
-                            <p className="text-xs text-emerald-700">Total Poin</p>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-xs text-emerald-700">Tier Saat Ini</p>
-                            <p className="text-lg font-black text-emerald-700">{tier}</p>
-                        </div>
-                    </div>
-                </div>
 
                 {/* Contact Info */}
                 <div className="mt-6 space-y-3">
@@ -125,21 +103,6 @@ export default function ProfilePage() {
                 </div>
             </div>
 
-            {/* Point History */}
-            <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm space-y-3">
-                <h4 className="text-xs font-black uppercase tracking-widest text-slate-400">Riwayat Poin</h4>
-                {pointHistory.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between bg-slate-50 rounded-2xl px-3 py-2.5">
-                        <div>
-                            <p className="text-xs font-bold text-slate-900">{item.note}</p>
-                            <p className="text-[10px] text-slate-500">{item.date}</p>
-                        </div>
-                        <p className={`text-sm font-black ${item.amount >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {item.amount >= 0 ? '+' : ''}{item.amount}
-                        </p>
-                    </div>
-                ))}
-            </div>
 
             {/* Menu Items */}
             <div className="space-y-2">

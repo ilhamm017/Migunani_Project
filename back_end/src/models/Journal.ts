@@ -9,9 +9,10 @@ interface JournalAttributes {
     description: string;
     created_by: string; // UUID
     posted_at: Date | null;
+    idempotency_key: string | null;
 }
 
-interface JournalCreationAttributes extends Optional<JournalAttributes, 'id' | 'reference_type' | 'reference_id' | 'posted_at'> { }
+interface JournalCreationAttributes extends Optional<JournalAttributes, 'id' | 'reference_type' | 'reference_id' | 'posted_at' | 'idempotency_key'> { }
 
 class Journal extends Model<JournalAttributes, JournalCreationAttributes> implements JournalAttributes {
     declare id: number;
@@ -21,6 +22,7 @@ class Journal extends Model<JournalAttributes, JournalCreationAttributes> implem
     declare description: string;
     declare created_by: string;
     declare posted_at: Date | null;
+    declare idempotency_key: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -57,6 +59,11 @@ Journal.init(
         posted_at: {
             type: DataTypes.DATE,
             allowNull: true,
+        },
+        idempotency_key: {
+            type: DataTypes.STRING,
+            allowNull: true,
+            unique: true,
         },
     },
     {

@@ -27,6 +27,14 @@ type TierDiscount = {
   premium: number;
 };
 
+type CategoryTierDiscount = {
+  id: number;
+  name: string;
+  discount_regular_pct: number | null;
+  discount_gold_pct: number | null;
+  discount_premium_pct: number | null;
+};
+
 const toNullableNumber = (value: unknown): number | null => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
@@ -130,6 +138,13 @@ export default function SalesTierPricingPage() {
   const [goldDiscount, setGoldDiscount] = useState('');
   const [premiumDiscount, setPremiumDiscount] = useState('');
   const [discountsInitialized, setDiscountsInitialized] = useState(false);
+  const [categories, setCategories] = useState<CategoryTierDiscount[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [categoryRegularInput, setCategoryRegularInput] = useState('');
+  const [categoryGoldInput, setCategoryGoldInput] = useState('');
+  const [categoryPremiumInput, setCategoryPremiumInput] = useState('');
+  const [savingCategoryDiscount, setSavingCategoryDiscount] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
 
@@ -170,6 +185,20 @@ export default function SalesTierPricingPage() {
     }
   }, [search, discountsInitialized]);
 
+  const loadCategories = useCallback(async () => {
+    try {
+      setLoadingCategories(true);
+      const res = await api.admin.inventory.getCategories();
+      const rows = Array.isArray(res.data?.categories) ? (res.data.categories as CategoryTierDiscount[]) : [];
+      setCategories(rows);
+    } catch (e: any) {
+      setError(e?.response?.data?.message || 'Gagal memuat kategori');
+      setCategories([]);
+    } finally {
+      setLoadingCategories(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!allowed) return;
     const timer = setTimeout(() => {
@@ -177,6 +206,11 @@ export default function SalesTierPricingPage() {
     }, 250);
     return () => clearTimeout(timer);
   }, [allowed, loadProducts]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    void loadCategories();
+  }, [allowed, loadCategories]);
 
   const sampleRows = useMemo(() => {
     return products.slice(0, 8).map((item) => {
@@ -228,6 +262,47 @@ export default function SalesTierPricingPage() {
       setError(e?.response?.data?.message || 'Gagal menerapkan diskon tier');
     } finally {
       setApplyingDiscount(false);
+    }
+  };
+
+  const openCategoryEditor = (category: CategoryTierDiscount) => {
+    setEditingCategoryId(category.id);
+    setCategoryRegularInput(category.discount_regular_pct === null ? '' : String(category.discount_regular_pct));
+    setCategoryGoldInput(category.discount_gold_pct === null ? '' : String(category.discount_gold_pct));
+    setCategoryPremiumInput(category.discount_premium_pct === null ? '' : String(category.discount_premium_pct));
+  };
+
+  const parseNullablePercentageInput = (value: string): number | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      throw new Error('Diskon kategori harus angka 0-100 atau kosong.');
+    }
+    return Math.round(parsed * 100) / 100;
+  };
+
+  const handleSaveCategoryDiscount = async () => {
+    if (editingCategoryId === null) return;
+    try {
+      setSavingCategoryDiscount(true);
+      setError('');
+      setActionMessage('');
+
+      const payload = {
+        discount_regular_pct: parseNullablePercentageInput(categoryRegularInput),
+        discount_gold_pct: parseNullablePercentageInput(categoryGoldInput),
+        discount_premium_pct: parseNullablePercentageInput(categoryPremiumInput),
+      };
+
+      const res = await api.admin.inventory.updateCategoryTierDiscount(editingCategoryId, payload);
+      setActionMessage(res.data?.message || 'Diskon kategori berhasil diperbarui.');
+      setEditingCategoryId(null);
+      await loadCategories();
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e?.message || 'Gagal menyimpan diskon kategori');
+    } finally {
+      setSavingCategoryDiscount(false);
     }
   };
 
@@ -365,9 +440,85 @@ export default function SalesTierPricingPage() {
           </button>
 
           <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-[11px] text-emerald-700">
-            Hanya admin sales/kasir yang bisa mengubah diskon tier. Tim gudang hanya melihat hasil harga tier.
+            Diskon tier global adalah fallback default. Jika kategori punya diskon sendiri, checkout akan memakai diskon kategori.
           </div>
         </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-black text-slate-900">Diskon Per Kategori</h2>
+          <button
+            type="button"
+            onClick={() => void loadCategories()}
+            disabled={loadingCategories}
+            className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-50"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">Kosongkan nilai diskon kategori untuk memakai diskon tier global (fallback).</p>
+
+        {loadingCategories ? (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-500">Memuat kategori...</div>
+        ) : categories.length === 0 ? (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-500">Kategori tidak ditemukan.</div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-3 py-2 font-black uppercase">Kategori</th>
+                  <th className="px-3 py-2 font-black uppercase">Regular %</th>
+                  <th className="px-3 py-2 font-black uppercase">Gold %</th>
+                  <th className="px-3 py-2 font-black uppercase">Premium %</th>
+                  <th className="px-3 py-2 font-black uppercase">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((category) => {
+                  const isEditing = editingCategoryId === category.id;
+                  return (
+                    <tr key={category.id} className="border-t border-slate-100">
+                      <td className="px-3 py-2 font-semibold text-slate-800">{category.name}</td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {isEditing ? (
+                          <input value={categoryRegularInput} onChange={(e) => setCategoryRegularInput(e.target.value)} placeholder="Fallback" className="w-24 rounded-lg border border-slate-200 px-2 py-1" />
+                        ) : (category.discount_regular_pct ?? 'Fallback')}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {isEditing ? (
+                          <input value={categoryGoldInput} onChange={(e) => setCategoryGoldInput(e.target.value)} placeholder="Fallback" className="w-24 rounded-lg border border-slate-200 px-2 py-1" />
+                        ) : (category.discount_gold_pct ?? 'Fallback')}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {isEditing ? (
+                          <input value={categoryPremiumInput} onChange={(e) => setCategoryPremiumInput(e.target.value)} placeholder="Fallback" className="w-24 rounded-lg border border-slate-200 px-2 py-1" />
+                        ) : (category.discount_premium_pct ?? 'Fallback')}
+                      </td>
+                      <td className="px-3 py-2">
+                        {isEditing ? (
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => void handleSaveCategoryDiscount()} disabled={savingCategoryDiscount} className="rounded-lg bg-emerald-600 text-white px-2 py-1 font-bold disabled:opacity-50">
+                              Simpan
+                            </button>
+                            <button onClick={() => setEditingCategoryId(null)} disabled={savingCategoryDiscount} className="rounded-lg border border-slate-300 px-2 py-1 font-bold">
+                              Batal
+                            </button>
+                          </div>
+                        ) : (
+                          <button onClick={() => openCategoryEditor(category)} className="rounded-lg bg-slate-900 text-white px-2 py-1 font-bold">
+                            Atur
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {(error || actionMessage) && (

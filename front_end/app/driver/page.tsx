@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, User, Wallet, MapPin, Phone, Package, ChevronRight, RotateCcw, HandCoins, MessageCircle, ClipboardList, Truck } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
+import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
 
 export default function DriverTaskPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
@@ -13,27 +15,52 @@ export default function DriverTaskPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [returs, setReturs] = useState<any[]>([]);
   const { user } = useAuthStore();
+  const {
+    newTaskCount,
+    latestEvents,
+    markSeen,
+    activeToast,
+    dismissToast,
+  } = useOrderStatusNotifications({
+    enabled: !!allowed,
+    role: user?.role,
+    userId: user?.id,
+  });
   const remainingDeliveryCount = orders.filter((o) => !['delivered', 'completed', 'cancelled'].includes(String(o?.status || '').toLowerCase())).length;
   const remainingPickupCount = returs.filter((r) => !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())).length;
   const remainingTaskCount = remainingDeliveryCount + remainingPickupCount;
+  const latestDriverEvent = latestEvents[0];
+  const latestDriverStatusLabel = useMemo(
+    () => (latestDriverEvent ? formatOrderStatusLabel(latestDriverEvent.to_status) : '-'),
+    [latestDriverEvent]
+  );
+
+  const load = useCallback(async () => {
+    try {
+      const [ordersRes, walletRes, retursRes] = await Promise.all([
+        api.driver.getOrders(),
+        api.driver.getWallet(),
+        api.driver.getReturs()
+      ]);
+      setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : []);
+      setWallet(walletRes.data);
+      setReturs(Array.isArray(retursRes.data) ? retursRes.data : []);
+    } catch (error) {
+      console.error('Failed to load driver data:', error);
+    }
+  }, []);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [ordersRes, walletRes, retursRes] = await Promise.all([
-          api.driver.getOrders(),
-          api.driver.getWallet(),
-          api.driver.getReturs()
-        ]);
-        setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : []);
-        setWallet(walletRes.data);
-        setReturs(Array.isArray(retursRes.data) ? retursRes.data : []);
-      } catch (error) {
-        console.error('Failed to load driver data:', error);
-      }
-    };
-    if (allowed) load();
-  }, [allowed]);
+    if (allowed) {
+      void load();
+    }
+  }, [allowed, load]);
+
+  useEffect(() => {
+    if (allowed && latestEvents.length > 0) {
+      void load();
+    }
+  }, [allowed, latestEvents.length, load]);
 
   if (!allowed) return null;
 
@@ -76,6 +103,35 @@ export default function DriverTaskPage() {
         </div>
       </div>
 
+      <div className="bg-blue-50 border border-blue-200 rounded-[24px] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Tugas Baru</p>
+            <p className="text-xs font-semibold text-blue-700 mt-1">
+              {newTaskCount > 0
+                ? `${newTaskCount} tugas baru. Status terbaru: ${latestDriverStatusLabel}`
+                : 'Belum ada notifikasi tugas baru.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={markSeen}
+            className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+          >
+            Tandai Dilihat
+          </button>
+        </div>
+        {latestEvents.length > 0 && (
+          <div className="mt-3 space-y-1">
+            {latestEvents.slice(0, 2).map((event) => (
+              <p key={`${event.order_id}-${event.triggered_at}`} className="text-[11px] font-semibold text-blue-700">
+                #{String(event.order_id).slice(-8).toUpperCase()} {'->'} {formatOrderStatusLabel(event.to_status)}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Task List */}
       <div className="space-y-4">
         <div className="flex items-center justify-between px-1">
@@ -99,10 +155,9 @@ export default function DriverTaskPage() {
             const whatsapp = customer.whatsapp_number || '-';
 
             return (
-              <Link
+              <div
                 key={o.id}
-                href={`/driver/orders/${o.id}`}
-                className="group bg-white border border-slate-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-emerald-200 transition-all active:scale-[0.98]"
+                className="group bg-white border border-slate-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-emerald-200 transition-all"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
@@ -151,11 +206,21 @@ export default function DriverTaskPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between text-emerald-600 font-bold text-xs uppercase tracking-wide group-hover:underline">
-                  <span>Lihat Detail Lengkap</span>
-                  <ChevronRight size={16} />
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <Link
+                    href={`/driver/orders/${o.id}/checklist`}
+                    className="py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-black uppercase text-center"
+                  >
+                    Cek Barang
+                  </Link>
+                  <Link
+                    href={`/driver/orders/${o.id}`}
+                    className="py-3 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                  >
+                    Detail <ChevronRight size={14} />
+                  </Link>
                 </div>
-              </Link>
+              </div>
             );
           })}
         </div>
@@ -236,6 +301,17 @@ export default function DriverTaskPage() {
           })}
         </div>
       </div>
+
+      {activeToast && (
+        <button
+          type="button"
+          onClick={dismissToast}
+          className="fixed right-4 bottom-28 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+        >
+          <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
+          <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+        </button>
+      )}
     </div>
   );
 }

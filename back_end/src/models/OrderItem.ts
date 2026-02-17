@@ -8,6 +8,7 @@ interface OrderItemAttributes {
     qty: number;
     price_at_purchase: number;
     cost_at_purchase: number;
+    pricing_snapshot: unknown | null;
 }
 
 interface OrderItemCreationAttributes extends Optional<OrderItemAttributes, 'id'> { }
@@ -19,6 +20,7 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes> 
     declare qty: number;
     declare price_at_purchase: number;
     declare cost_at_purchase: number;
+    declare pricing_snapshot: unknown | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -50,6 +52,10 @@ OrderItem.init(
         cost_at_purchase: {
             type: DataTypes.DECIMAL(15, 2),
             allowNull: false,
+        },
+        pricing_snapshot: {
+            type: DataTypes.JSON,
+            allowNull: true,
         },
     },
     {

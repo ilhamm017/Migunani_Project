@@ -12,9 +12,15 @@ interface InvoiceAttributes {
     payment_proof_url?: string | null;
     verified_by?: string | null; // UUID
     verified_at?: Date | null;
+    subtotal: number;
+    tax_percent: number;
+    tax_amount: number;
+    total: number;
+    tax_mode_snapshot: 'pkp' | 'non_pkp';
+    pph_final_amount?: number | null;
 }
 
-interface InvoiceCreationAttributes extends Optional<InvoiceAttributes, 'id' | 'payment_status' | 'amount_paid' | 'change_amount'> { }
+interface InvoiceCreationAttributes extends Optional<InvoiceAttributes, 'id' | 'payment_status' | 'amount_paid' | 'change_amount' | 'tax_percent' | 'tax_amount' | 'pph_final_amount'> { }
 
 class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implements InvoiceAttributes {
     declare id: string;
@@ -27,6 +33,12 @@ class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implem
     declare payment_proof_url: string | null;
     declare verified_by: string | null;
     declare verified_at: Date | null;
+    declare subtotal: number;
+    declare tax_percent: number;
+    declare tax_amount: number;
+    declare total: number;
+    declare tax_mode_snapshot: 'pkp' | 'non_pkp';
+    declare pph_final_amount: number | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -74,6 +86,35 @@ Invoice.init(
         },
         verified_at: {
             type: DataTypes.DATE,
+            allowNull: true,
+        },
+        subtotal: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        tax_percent: {
+            type: DataTypes.DECIMAL(6, 3),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        tax_amount: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        total: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        tax_mode_snapshot: {
+            type: DataTypes.ENUM('pkp', 'non_pkp'),
+            allowNull: false,
+            defaultValue: 'non_pkp',
+        },
+        pph_final_amount: {
+            type: DataTypes.DECIMAL(15, 2),
             allowNull: true,
         },
     },

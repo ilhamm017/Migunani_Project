@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Order, OrderItem, OrderAllocation, Product, sequelize, User, Invoice, OrderIssue, Backorder } from '../models';
 import { generateInvoiceNumber, resolveInitialInvoiceStatus } from '../utils/invoice';
-import { io } from '../server';
+import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 
 
 const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
@@ -353,7 +353,13 @@ export const allocateOrder = async (req: Request, res: Response) => {
                     payment_method: parentInvoice.payment_method,
                     payment_status: initialStatus,
                     amount_paid: 0,
-                    change_amount: 0
+                    change_amount: 0,
+                    subtotal: 0,
+                    tax_percent: 0,
+                    tax_amount: 0,
+                    total: 0,
+                    tax_mode_snapshot: parentInvoice.tax_mode_snapshot || 'non_pkp',
+                    pph_final_amount: parentInvoice.pph_final_amount || 0
                 }, { transaction: t });
             }
 
@@ -383,6 +389,14 @@ export const allocateOrder = async (req: Request, res: Response) => {
             await childOrder.update({
                 total_amount: childTotal
             }, { transaction: t });
+
+            await Invoice.update({
+                subtotal: childTotal,
+                total: childTotal
+            }, {
+                where: { order_id: childOrder.id },
+                transaction: t
+            });
         }
 
         await order.update({ total_amount: allocatedTotal }, { transaction: t });
@@ -393,6 +407,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
             transaction: t,
             lock: t.LOCK.UPDATE
         });
+        let previousStatusForNotification: string | null = null;
 
         if (fullyAllocated || partiallyAllocated) {
             const statusProgressRank: Record<string, number> = {
@@ -410,6 +425,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 canceled: 7,
                 expired: 7,
             };
+            const previousOrderStatus = String(order.status || '');
             const currentRank = Number(statusProgressRank[order.status] || 0);
             const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
             const nextStatus = currentRank >= waitingInvoiceRank ? order.status : 'waiting_invoice';
@@ -417,6 +433,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
             if (nextStatus !== order.status) {
                 await order.update({ status: nextStatus }, { transaction: t });
             }
+            previousStatusForNotification = previousOrderStatus;
 
             if (invoice) {
                 // Keep invoice in draft — Finance will issue it
@@ -495,7 +512,21 @@ export const allocateOrder = async (req: Request, res: Response) => {
         }
 
         await t.commit();
-        io.emit('admin:refresh_badges');
+        const previousStatus = String(previousStatusForNotification || '');
+        if (String(order.status || '') === 'waiting_invoice' && previousStatus && previousStatus !== 'waiting_invoice') {
+            emitOrderStatusChanged({
+                order_id: order.id,
+                from_status: previousStatus,
+                to_status: 'waiting_invoice',
+                source: String(order.source || ''),
+                payment_method: String(invoice?.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || ''),
+                target_roles: ['admin_finance'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
         res.json({
             message: 'Alokasi berhasil',
@@ -611,7 +642,7 @@ export const cancelBackorder = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
-        io.emit('admin:refresh_badges');
+        emitAdminRefreshBadges();
 
         return res.json({
             message: 'Backorder / pre-order berhasil dibatalkan.',

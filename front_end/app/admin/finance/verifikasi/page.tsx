@@ -76,7 +76,7 @@ export default function FinanceVerifyPage() {
         return o.status === 'delivered' && isCod && o.Invoice?.payment_status !== 'paid';
       }
       if (activeTab === 'completed') {
-        return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
+        return o.status === 'completed' || o.status === 'waiting_payment' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
       }
       return false;
     });
@@ -84,15 +84,13 @@ export default function FinanceVerifyPage() {
 
   if (!allowed) return null;
 
-  const handleAction = async (id: string, actionType: 'issue' | 'verify' | 'cod_settle', verifyAction?: 'approve' | 'reject') => {
+  const handleAction = async (id: string, actionType: 'issue' | 'verify', verifyAction?: 'approve' | 'reject') => {
     try {
       setBusyId(id);
       if (actionType === 'issue') {
         await api.admin.finance.issueInvoice(id);
       } else if (actionType === 'verify') {
         await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
-      } else if (actionType === 'cod_settle') {
-        await api.admin.finance.verifyPayment(id, 'approve');
       }
       await load();
     } catch (error: any) {
@@ -169,7 +167,7 @@ export default function FinanceVerifyPage() {
                     </div>
                   </div>
                   <span className="text-sm font-black text-slate-900">
-                    {formatCurrency(Number(o.total_amount))}
+                    {formatCurrency(Number(o.Invoice?.total || o.total_amount))}
                   </span>
                 </div>
 
@@ -218,13 +216,12 @@ export default function FinanceVerifyPage() {
                   )}
 
                   {activeTab === 'cod' && (
-                    <button
-                      onClick={() => handleAction(o.id, 'cod_settle')}
-                      disabled={busyId === o.id}
-                      className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700"
+                    <Link
+                      href="/admin/finance/cod"
+                      className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-orange-600 text-center"
                     >
-                      Terima Uang
-                    </button>
+                      Buka Settlement COD
+                    </Link>
                   )}
 
                   {activeTab === 'completed' && (o.Invoice?.payment_status === 'paid') && (

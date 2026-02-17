@@ -71,7 +71,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
       if (fixedStatus === 'all') {
         if (activeTab === 'baru_masuk') {
           // These are active statuses that are NOT completed/canceled/backorder
-          fetchStatus = 'pending,waiting_payment,waiting_admin_verification,allocated,ready_to_ship,hold,debt_pending';
+          fetchStatus = 'pending,waiting_invoice,waiting_payment,waiting_admin_verification,allocated,ready_to_ship,hold,debt_pending';
           excludeBackorder = 'true';
         } else if (activeTab === 'selesai') {
           fetchStatus = 'completed,delivered';

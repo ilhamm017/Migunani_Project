@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, Account, OrderAllocation } from '../models';
 import { JournalService } from '../services/JournalService';
 import { Op } from 'sequelize';
+import { AccountingPostingService } from '../services/AccountingPostingService';
+import { emitOrderStatusChanged } from '../utils/orderNotification';
 
 export const getAssignedOrders = async (req: Request, res: Response) => {
     try {
@@ -81,10 +83,11 @@ export const completeDelivery = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: 'Invoice missing' });
         }
+        const previousOrderStatus = String(order.status || '');
 
         // Handle COD logic
         if (invoice.payment_method === 'cod') {
-            const amountToCollect = Number(order.total_amount || 0);
+            const amountToCollect = Number(invoice.total || order.total_amount || 0);
 
             // 1. Update invoice status & record validation
             await invoice.update({
@@ -110,59 +113,8 @@ export const completeDelivery = async (req: Request, res: Response) => {
             }
         }
 
-        // --- Journal Entry for Delivery (Revenue Recognition) ---
-        // Even if not COD, delivery usually triggers revenue recognition in accrual basis?
-        // But per request "Saat settlement: Kas(D), Piutang(K)", implying previously it was Piutang(D), Revenue(K).
-        // For COD, when delivered -> Piutang (Driver holds money) vs Revenue.
-
-        const totalAmount = Number(order.total_amount);
-        const piutangCode = invoice.payment_method === 'cod' ? '1103' : null; // 1103 = Piutang Usaha (or specialized Piutang COD)
-
-        if (piutangCode && totalAmount > 0) {
-            const piutangAcc = await Account.findOne({ where: { code: piutangCode }, transaction: t });
-            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
-
-            if (piutangAcc && revenueAcc) {
-                await JournalService.createEntry({
-                    description: `Penjualan COD Order #${order.id} (Delivered)`,
-                    reference_type: 'order',
-                    reference_id: order.id.toString(),
-                    created_by: userId,
-                    lines: [
-                        { account_id: piutangAcc.id, debit: totalAmount, credit: 0 },
-                        { account_id: revenueAcc.id, debit: 0, credit: totalAmount }
-                    ]
-                }, t);
-            }
-
-            // COGS Journal
-            const orderItems = await OrderItem.findAll({ where: { order_id: order.id }, transaction: t });
-            const allocations = await OrderAllocation.findAll({ where: { order_id: order.id }, transaction: t });
-
-            let totalCost = 0;
-            orderItems.forEach(item => {
-                const alloc = allocations.find(a => a.product_id === item.product_id);
-                const allocQty = alloc ? Number(alloc.allocated_qty || 0) : 0;
-                totalCost += Number(item.cost_at_purchase || 0) * allocQty;
-            });
-
-            if (totalCost > 0) {
-                const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
-                const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
-
-                if (hppAcc && inventoryAcc) {
-                    await JournalService.createEntry({
-                        description: `HPP untuk Order #${order.id}`,
-                        reference_type: 'order',
-                        reference_id: order.id.toString(),
-                        created_by: userId, // Driver triggers this
-                        lines: [
-                            { account_id: hppAcc.id, debit: totalCost, credit: 0 },
-                            { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
-                        ]
-                    }, t);
-                }
-            }
+        if (invoice.payment_method === 'cod') {
+            await AccountingPostingService.postGoodsOutForOrder(order.id, String(userId), t, 'cod');
         }
 
         // Save delivery proof photo to order (separate from payment proof)
@@ -173,6 +125,16 @@ export const completeDelivery = async (req: Request, res: Response) => {
         await order.update(updatePayload, { transaction: t });
 
         await t.commit();
+        emitOrderStatusChanged({
+            order_id: String(order.id),
+            from_status: previousOrderStatus,
+            to_status: 'delivered',
+            source: String(order.source || ''),
+            payment_method: String(invoice.payment_method || ''),
+            courier_id: String(order.courier_id || userId),
+            triggered_by_role: String(req.user?.role || 'driver'),
+            target_roles: ['admin_finance'],
+        });
         res.json({ message: 'Delivery completed' });
     } catch (error) {
         await t.rollback();
@@ -205,11 +167,12 @@ export const getDriverWallet = async (req: Request, res: Response) => {
         for (const order of orders) {
             const inv = (order as any).Invoice; // HasOne relationship
             if (inv) {
-                totalCash += Number(inv.amount_paid) > 0 ? Number(inv.amount_paid) : Number(order.total_amount);
+                const invoiceTotal = Number(inv.total || order.total_amount || 0);
+                totalCash += Number(inv.amount_paid) > 0 ? Number(inv.amount_paid) : invoiceTotal;
                 details.push({
                     order_id: order.id,
                     invoice_number: inv.invoice_number,
-                    amount: Number(order.total_amount)
+                    amount: invoiceTotal
                 });
             }
         }

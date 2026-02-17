@@ -57,6 +57,12 @@ export default function FinanceReturPage() {
                     <h1 className="text-2xl font-black text-slate-900">Refund Retur Pelanggan</h1>
                     <p className="text-sm text-slate-500">Daftar pengembalian dana yang harus diproses.</p>
                 </div>
+                <Link
+                    href="/admin/finance/credit-note"
+                    className="ml-auto px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black uppercase tracking-wider hover:bg-slate-800"
+                >
+                    Credit Note
+                </Link>
             </div>
 
             {loading ? (

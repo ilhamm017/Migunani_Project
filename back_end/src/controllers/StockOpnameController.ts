@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
-import { StockOpname, StockOpnameItem, Product, User, sequelize } from '../models';
+import { StockOpname, StockOpnameItem, Product, User, sequelize, Account } from '../models';
+import { JournalService } from '../services/JournalService';
+import { InventoryCostService } from '../services/InventoryCostService';
 
 export const getAllOpnames = async (req: Request, res: Response) => {
     try {
@@ -123,17 +125,68 @@ export const finishOpname = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Opname not found or not open' });
         }
 
+        const items = await StockOpnameItem.findAll({
+            where: { opname_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+        const gainAcc = await Account.findOne({ where: { code: '4200' }, transaction: t });
+        const lossAcc = await Account.findOne({ where: { code: '5600' }, transaction: t });
+
+        for (const item of items) {
+            const diff = Number(item.difference || 0);
+            if (!diff) continue;
+            const product = await Product.findByPk(item.product_id, { transaction: t, lock: t.LOCK.UPDATE });
+            if (!product) continue;
+
+            await product.update({
+                stock_quantity: Number(item.physical_qty || 0)
+            }, { transaction: t });
+
+            const valuation = await InventoryCostService.recordAdjustment({
+                product_id: item.product_id,
+                qty_diff: diff,
+                reference_type: 'stock_opname',
+                reference_id: String(id),
+                note: `Stock opname adjustment product ${item.product_id}`,
+                transaction: t
+            });
+            const totalCost = Number(valuation.total_cost || 0);
+            if (!inventoryAcc || totalCost <= 0) continue;
+
+            if (diff > 0 && gainAcc) {
+                await JournalService.createEntry({
+                    description: `Adjustment Stok Plus (Opname #${id})`,
+                    reference_type: 'inventory_adjustment',
+                    reference_id: String(id),
+                    created_by: String(req.user?.id || opname.admin_id),
+                    idempotency_key: `opname_plus_${id}_${item.product_id}`,
+                    lines: [
+                        { account_id: inventoryAcc.id, debit: totalCost, credit: 0 },
+                        { account_id: gainAcc.id, debit: 0, credit: totalCost }
+                    ]
+                }, t);
+            } else if (diff < 0 && lossAcc) {
+                await JournalService.createEntry({
+                    description: `Adjustment Stok Minus (Opname #${id})`,
+                    reference_type: 'inventory_adjustment',
+                    reference_id: String(id),
+                    created_by: String(req.user?.id || opname.admin_id),
+                    idempotency_key: `opname_minus_${id}_${item.product_id}`,
+                    lines: [
+                        { account_id: lossAcc.id, debit: totalCost, credit: 0 },
+                        { account_id: inventoryAcc.id, debit: 0, credit: totalCost }
+                    ]
+                }, t);
+            }
+        }
+
         await opname.update({
             status: 'completed',
             completed_at: new Date()
         }, { transaction: t });
-
-        // Note: Real audit usually adjusts stock automatically or creates mutation.
-        // For now, we just record the audit report as per requirement "mencatat selisih dan menampilkan dalam bentuk laporan audit".
-        // If automatic adjustment is needed, we would create StockMutation here.
-        // I'll assume reporting only for now, unless specified "adjust stock".
-        // Re-reading request: "Sistem akan mencatat selisih dan menampilkan dalam bentuk laporan audit jika sudah selesai."
-        // Doesn't explicitly say "auto-adjust inventory". 
 
         await t.commit();
         res.json(opname);

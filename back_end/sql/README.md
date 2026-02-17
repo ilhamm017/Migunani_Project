@@ -38,6 +38,14 @@ Run this SQL if update produk gagal saat menyimpan URL gambar panjang:
 mysql -u root -p migunani_motor_db < back_end/sql/20260213_expand_products_image_url.sql
 ```
 
+## Add category tier discounts + order item pricing snapshot
+
+Run this SQL to enable category-level tier discounts with tier fallback snapshot on checkout:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260217_add_category_tier_discounts_and_order_item_snapshot.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

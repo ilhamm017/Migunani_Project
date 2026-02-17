@@ -43,6 +43,9 @@ Fitur utama untuk memasukkan ribuan data sparepart sekaligus.
 ### B. Manajemen Kategori
 *   **Otomatis**: Dibuat saat import barang.
 *   **Manual**: Admin bisa menambah/edit nama kategori untuk merapikan katalog di aplikasi pelanggan.
+*   **Diskon Tier Kategori**: Setiap kategori bisa punya diskon `regular/gold/premium` sendiri (persentase).
+    *   Jika diskon kategori terisi, checkout memakai diskon kategori.
+    *   Jika diskon kategori `null` (kosong), checkout fallback ke diskon tier global produk.
 
 ---
 

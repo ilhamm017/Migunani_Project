@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Package, ShoppingBag, ArrowRight, Clock, CheckCircle2, Truck, RotateCcw } from 'lucide-react';
+import { ArrowRight, Clock, CheckCircle2, Truck, RotateCcw, CreditCard, Package, ShoppingCart } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
+import PaymentCountdown from '@/components/orders/PaymentCountdown';
 
 const getOrderListVisual = (status: string) => {
     if (['completed', 'delivered'].includes(status)) {
@@ -116,7 +117,7 @@ export default function OrdersPage() {
 
                 <Link href="/catalog">
                     <button className="w-full py-3 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase active:scale-95 transition-all">
-                        <ShoppingBag size={14} className="inline mr-2" />
+                        <ShoppingCart size={14} className="inline mr-2" />
                         Lanjut Belanja sebagai Tamu
                     </button>
                 </Link>
@@ -136,6 +137,18 @@ export default function OrdersPage() {
                 )}
             </div>
 
+            {orders.some(o => o.status === 'waiting_payment') && (
+                <Link href="/orders/waiting-payment" className="block">
+                    <div className="bg-amber-500 rounded-3xl p-4 text-white flex items-center justify-between shadow-lg shadow-amber-100 active:scale-[0.98] transition-all">
+                        <div className="flex items-center gap-3">
+                            <CreditCard size={20} className="animate-pulse" />
+                            <span className="text-xs font-black uppercase tracking-tight">Ada Tagihan Menunggu Pembayaran</span>
+                        </div>
+                        <ArrowRight size={16} />
+                    </div>
+                </Link>
+            )}
+
             {orders.length === 0 ? (
                 /* Empty State */
                 <div className="flex flex-col items-center justify-center py-16">
@@ -148,7 +161,7 @@ export default function OrdersPage() {
                     </p>
                     <Link href="/catalog">
                         <button className="px-6 py-3 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg shadow-emerald-200 active:scale-95 transition-all">
-                            <ShoppingBag size={14} className="inline mr-2" />
+                            <ShoppingCart size={14} className="inline mr-2" />
                             Mulai Belanja
                         </button>
                     </Link>
@@ -188,7 +201,12 @@ export default function OrdersPage() {
                                         </div>
                                     </div>
                                     <h4 className="text-xs font-bold text-slate-900">Invoice: {order.Invoice?.invoice_number || '-'}</h4>
-                                    <p className="text-[10px] font-bold text-slate-500 mt-0.5">{visual.label}</p>
+                                    <div className="flex justify-between items-center mt-0.5">
+                                        <p className="text-[10px] font-bold text-slate-500">{visual.label}</p>
+                                        {order.status === 'waiting_payment' && (
+                                            <PaymentCountdown expiryDate={order.expiry_date} />
+                                        )}
+                                    </div>
                                     <p className="text-[11px] font-black text-slate-900 mt-1">{formatCurrency(Number(order.total_amount || 0))}</p>
                                 </div>
                                 <ArrowRight size={16} className="text-slate-300" />

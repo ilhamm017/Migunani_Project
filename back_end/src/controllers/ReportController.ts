@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op, QueryTypes } from 'sequelize';
-import { Account, Journal, JournalLine, Product, SupplierInvoice, Invoice, User, Order, sequelize } from '../models';
+import { Account, Journal, JournalLine, Product, SupplierInvoice, Invoice, User, Order, sequelize, Backorder, OrderItem, ProductCostState } from '../models';
 
 // --- Helper Functions ---
 const getJournalBalance = async (
@@ -139,7 +139,7 @@ export const getCashFlow = async (req: Request, res: Response) => {
         const end = new Date(endDate as string);
 
         // 1. Opening Balance (Cash Account 11xx up to StartDate)
-        const accWhere = { code: { [Op.like]: '11%' }, type: 'asset' };
+        const accWhere = { code: { [Op.in]: ['1101', '1102'] }, type: 'asset' };
 
         const openingLines = await JournalLine.findAll({
             include: [
@@ -187,25 +187,42 @@ export const getCashFlow = async (req: Request, res: Response) => {
 
 export const getInventoryValue = async (req: Request, res: Response) => {
     try {
-        // Detailed list breakdown
         const products = await Product.findAll({
             attributes: [
-                'id', 'sku', 'name', 'stock_quantity', 'base_price',
-                [sequelize.literal('stock_quantity * base_price'), 'total_valuation']
+                'id', 'sku', 'name', 'stock_quantity'
             ],
             where: {
                 stock_quantity: { [Op.gt]: 0 }
             },
-            order: [[sequelize.literal('total_valuation'), 'DESC']]
+            include: [{
+                model: ProductCostState,
+                as: 'CostState',
+                required: false,
+                attributes: ['avg_cost', 'on_hand_qty']
+            }],
+            order: [['updatedAt', 'DESC']]
         });
 
-        const totalItems = products.reduce((sum, p) => sum + Number(p.stock_quantity || 0), 0);
-        const totalValue = products.reduce((sum, p) => sum + (Number(p.getDataValue('total_valuation' as any)) || 0), 0);
+        const breakdown = products.map((p: any) => {
+            const qty = Number(p.stock_quantity || 0);
+            const avgCost = Number(p.CostState?.avg_cost || 0);
+            const value = qty * avgCost;
+            return {
+                id: p.id,
+                sku: p.sku,
+                name: p.name,
+                stock_quantity: qty,
+                avg_cost: avgCost,
+                total_valuation: value
+            };
+        });
+        const totalItems = breakdown.reduce((sum, p) => sum + Number(p.stock_quantity || 0), 0);
+        const totalValue = breakdown.reduce((sum, p) => sum + Number(p.total_valuation || 0), 0);
 
         res.json({
             total_items: totalItems || 0,
             total_valuation: totalValue || 0,
-            breakdown: products
+            breakdown
         });
     } catch (error) {
         res.status(500).json({ message: 'Error calculating Inventory Value', error });
@@ -214,11 +231,6 @@ export const getInventoryValue = async (req: Request, res: Response) => {
 
 export const getAccountsPayableAging = async (req: Request, res: Response) => {
     try {
-        const unpaidInvoices = await SupplierInvoice.findAll({
-            where: { status: 'unpaid' },
-            order: [['due_date', 'ASC']]
-        });
-
         const now = new Date();
         const aging = {
             '0-30': 0,
@@ -227,29 +239,39 @@ export const getAccountsPayableAging = async (req: Request, res: Response) => {
             '>90': 0,
             total: 0
         };
+        const rowsRaw = await sequelize.query(
+            `SELECT 
+                j.reference_type,
+                j.reference_id,
+                MIN(j.date) AS first_date,
+                SUM(jl.credit - jl.debit) AS outstanding
+             FROM journal_lines jl
+             INNER JOIN journals j ON j.id = jl.journal_id
+             INNER JOIN accounts a ON a.id = jl.account_id
+             WHERE a.code = '2100'
+             GROUP BY j.reference_type, j.reference_id
+             HAVING SUM(jl.credit - jl.debit) > 0`,
+            { type: QueryTypes.SELECT }
+        ) as Array<{ reference_type: string; reference_id: string; first_date: string; outstanding: number }>;
 
-        const rows = unpaidInvoices.map(inv => {
-            const dueDate = new Date(inv.due_date);
-            const diffTime = Math.abs(now.getTime() - dueDate.getTime());
+        const rows = rowsRaw.map((r) => {
+            const firstDate = new Date(r.first_date);
+            const diffTime = Math.abs(now.getTime() - firstDate.getTime());
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const amount = Number(r.outstanding || 0);
 
-            // If not overdue yet (future due date), treat as 0 aging or separate bucket?
-            // "Aging Hutang" usually looks at how OLD the invoice is, or how OVERDUE it is.
-            // Let's assume Aging from Due Date (Overdue Days).
-            const isOverdue = now > dueDate;
-            const daysOverdue = isOverdue ? diffDays : 0;
-
-            const amount = Number(inv.total);
             aging.total += amount;
-
-            if (daysOverdue <= 30) aging['0-30'] += amount;
-            else if (daysOverdue <= 60) aging['31-60'] += amount;
-            else if (daysOverdue <= 90) aging['61-90'] += amount;
+            if (diffDays <= 30) aging['0-30'] += amount;
+            else if (diffDays <= 60) aging['31-60'] += amount;
+            else if (diffDays <= 90) aging['61-90'] += amount;
             else aging['>90'] += amount;
 
             return {
-                ...inv.get({ plain: true }),
-                days_overdue: daysOverdue
+                reference_type: r.reference_type,
+                reference_id: r.reference_id,
+                created_at: firstDate,
+                days_outstanding: diffDays,
+                amount_due: amount
             };
         });
 
@@ -264,12 +286,6 @@ export const getAccountsPayableAging = async (req: Request, res: Response) => {
 
 export const getAccountsReceivableAging = async (req: Request, res: Response) => {
     try {
-        const unpaidInvoices = await Invoice.findAll({
-            where: { payment_status: { [Op.ne]: 'paid' } },
-            include: [{ model: Order, attributes: ['total_amount', 'createdAt', 'customer_name'] }],
-            order: [['createdAt', 'ASC']]
-        });
-
         const now = new Date();
         const aging = {
             '0-30': 0,
@@ -278,28 +294,35 @@ export const getAccountsReceivableAging = async (req: Request, res: Response) =>
             '>90': 0,
             total: 0
         };
+        const rowsRaw = await sequelize.query(
+            `SELECT 
+                j.reference_type,
+                j.reference_id,
+                MIN(j.date) AS first_date,
+                SUM(jl.debit - jl.credit) AS outstanding
+             FROM journal_lines jl
+             INNER JOIN journals j ON j.id = jl.journal_id
+             INNER JOIN accounts a ON a.id = jl.account_id
+             WHERE a.code IN ('1103', '1104', '1105')
+             GROUP BY j.reference_type, j.reference_id
+             HAVING SUM(jl.debit - jl.credit) > 0`,
+            { type: QueryTypes.SELECT }
+        ) as Array<{ reference_type: string; reference_id: string; first_date: string; outstanding: number }>;
 
-        const rows = unpaidInvoices.map(inv => {
-            const order = (inv as any).Order;
-            const createdAt = new Date(order?.createdAt || inv.createdAt);
-            const amountDue = Number(order?.total_amount || 0) - Number(inv.amount_paid || 0);
-
-            const diffTime = Math.abs(now.getTime() - createdAt.getTime());
+        const rows = rowsRaw.map((r) => {
+            const firstDate = new Date(r.first_date);
+            const diffTime = Math.abs(now.getTime() - firstDate.getTime());
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-            if (amountDue > 0) {
-                aging.total += amountDue;
-                if (diffDays <= 30) aging['0-30'] += amountDue;
-                else if (diffDays <= 60) aging['31-60'] += amountDue;
-                else if (diffDays <= 90) aging['61-90'] += amountDue;
-                else aging['>90'] += amountDue;
-            }
-
+            const amountDue = Number(r.outstanding || 0);
+            aging.total += amountDue;
+            if (diffDays <= 30) aging['0-30'] += amountDue;
+            else if (diffDays <= 60) aging['31-60'] += amountDue;
+            else if (diffDays <= 90) aging['61-90'] += amountDue;
+            else aging['>90'] += amountDue;
             return {
-                id: inv.id,
-                invoice_number: inv.invoice_number,
-                customer: order?.customer_name,
-                created_at: createdAt,
+                reference_type: r.reference_type,
+                reference_id: r.reference_id,
+                created_at: firstDate,
                 days_outstanding: diffDays,
                 amount_due: amountDue
             };
@@ -311,5 +334,188 @@ export const getAccountsReceivableAging = async (req: Request, res: Response) =>
         });
     } catch (error) {
         res.status(500).json({ message: 'Error calculating AR Aging', error });
+    }
+};
+
+export const getTaxSummary = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'StartDate dan EndDate wajib diisi' });
+        }
+        const dateFilter = {
+            [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+        };
+        const ppnOutput = await getJournalBalance('liability', dateFilter, true, '2201');
+        const ppnInput = await getJournalBalance('asset', dateFilter, false, '2202');
+        const vatPayable = ppnOutput - ppnInput;
+
+        const nonPkpInvoices = await Invoice.findAll({
+            where: {
+                tax_mode_snapshot: 'non_pkp',
+                verified_at: dateFilter
+            },
+            attributes: ['id', 'invoice_number', 'subtotal', 'pph_final_amount', 'verified_at']
+        });
+        const omzetNonPkp = nonPkpInvoices.reduce((sum, inv) => sum + Number(inv.subtotal || 0), 0);
+        const pphFinal = nonPkpInvoices.reduce((sum, inv) => sum + Number(inv.pph_final_amount || 0), 0);
+
+        return res.json({
+            period: { startDate, endDate },
+            ppn: {
+                output: ppnOutput,
+                input: ppnInput,
+                payable: vatPayable
+            },
+            pph_final_non_pkp: {
+                omzet: omzetNonPkp,
+                amount: pphFinal
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error calculating tax summary', error });
+    }
+};
+
+export const getVatMonthlyReport = async (req: Request, res: Response) => {
+    try {
+        const { year } = req.query;
+        const y = Number(year || new Date().getFullYear());
+        if (!Number.isInteger(y) || y < 2000 || y > 3000) {
+            return res.status(400).json({ message: 'Year tidak valid' });
+        }
+
+        const rows = await sequelize.query(
+            `SELECT 
+                MONTH(j.date) AS month_num,
+                SUM(CASE WHEN a.code = '2201' THEN (jl.credit - jl.debit) ELSE 0 END) AS ppn_keluaran,
+                SUM(CASE WHEN a.code = '2202' THEN (jl.debit - jl.credit) ELSE 0 END) AS ppn_masukan
+             FROM journal_lines jl
+             INNER JOIN journals j ON j.id = jl.journal_id
+             INNER JOIN accounts a ON a.id = jl.account_id
+             WHERE YEAR(j.date) = :yearParam
+               AND a.code IN ('2201', '2202')
+             GROUP BY MONTH(j.date)
+             ORDER BY MONTH(j.date)`,
+            {
+                type: QueryTypes.SELECT,
+                replacements: { yearParam: y }
+            }
+        ) as Array<{ month_num: number; ppn_keluaran: number; ppn_masukan: number }>;
+
+        const monthly = Array.from({ length: 12 }).map((_, idx) => {
+            const monthNum = idx + 1;
+            const row = rows.find((r) => Number(r.month_num) === monthNum);
+            const output = Number(row?.ppn_keluaran || 0);
+            const input = Number(row?.ppn_masukan || 0);
+            return {
+                month: monthNum,
+                ppn_keluaran: output,
+                ppn_masukan: input,
+                ppn_netto: output - input
+            };
+        });
+
+        return res.json({ year: y, rows: monthly });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error generating VAT monthly report', error });
+    }
+};
+
+export const getBackorderPreorderReport = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const end = endDate ? new Date(endDate as string) : new Date();
+
+        const backorders = await Backorder.findAll({
+            where: {
+                qty_pending: { [Op.gt]: 0 },
+                status: 'waiting_stock',
+                createdAt: { [Op.between]: [start, end] }
+            },
+            include: [
+                {
+                    model: OrderItem,
+                    include: [
+                        { model: Product, attributes: ['id', 'sku', 'name', 'price', 'base_price'] },
+                        {
+                            model: Order,
+                            include: [{ model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number'] }]
+                        }
+                    ]
+                }
+            ],
+            order: [['createdAt', 'DESC']]
+        });
+
+        const rows = backorders.map((bo: any) => {
+            const item = bo.OrderItem;
+            const product = item?.Product;
+            const order = item?.Order;
+            const customer = order?.Customer;
+
+            // Preorder logic: if no allocation was made yet (allocated_total = 0 on order level)
+            // But we can simplify: if bo records exist and are waiting, they are backorders/preorders.
+            // In our system, 'preorder' is just a backorder with 0 allocation.
+            const isPreorder = !order?.parent_order_id && bo.qty_pending === item?.qty;
+
+            return {
+                id: bo.id,
+                order_id: order?.id,
+                customer_name: customer?.name || order?.customer_name || 'Generic Customer',
+                product_name: product?.name || 'Unknown Product',
+                sku: product?.sku || '-',
+                qty: bo.qty_pending,
+                price: Number(product?.price || 0),
+                total_value: bo.qty_pending * Number(product?.price || 0),
+                date: bo.createdAt,
+                type: isPreorder ? 'preorder' : 'backorder'
+            };
+        });
+
+        const summary = {
+            total_items: rows.reduce((sum, r) => sum + r.qty, 0),
+            total_value: rows.reduce((sum, r) => sum + r.total_value, 0),
+            backorder_count: rows.filter(r => r.type === 'backorder').length,
+            preorder_count: rows.filter(r => r.type === 'preorder').length,
+        };
+
+        // Top Products
+        const productStats = new Map<string, any>();
+        rows.forEach(r => {
+            const existing = productStats.get(r.sku) || { sku: r.sku, name: r.product_name, qty: 0, value: 0 };
+            existing.qty += r.qty;
+            existing.value += r.total_value;
+            productStats.set(r.sku, existing);
+        });
+
+        const topProducts = Array.from(productStats.values())
+            .sort((a, b) => b.qty - a.qty)
+            .slice(0, 10);
+
+        // Top Customers
+        const customerStats = new Map<string, any>();
+        rows.forEach(r => {
+            const existing = customerStats.get(r.customer_name) || { name: r.customer_name, qty: 0, value: 0 };
+            existing.qty += r.qty;
+            existing.value += r.total_value;
+            customerStats.set(r.customer_name, existing);
+        });
+
+        const topCustomers = Array.from(customerStats.values())
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 10);
+
+        res.json({
+            period: { start, end },
+            summary,
+            top_products: topProducts,
+            top_customers: topCustomers,
+            details: rows
+        });
+    } catch (error) {
+        console.error('Error in getBackorderPreorderReport:', error);
+        res.status(500).json({ message: 'Error calculating Backorder report', error });
     }
 };

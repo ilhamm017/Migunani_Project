@@ -6,15 +6,21 @@ interface CategoryAttributes {
     name: string;
     description: string | null;
     icon: string | null;
+    discount_regular_pct: number | null;
+    discount_gold_pct: number | null;
+    discount_premium_pct: number | null;
 }
 
-interface CategoryCreationAttributes extends Optional<CategoryAttributes, 'id' | 'description' | 'icon'> { }
+interface CategoryCreationAttributes extends Optional<CategoryAttributes, 'id' | 'description' | 'icon' | 'discount_regular_pct' | 'discount_gold_pct' | 'discount_premium_pct'> { }
 
 class Category extends Model<CategoryAttributes, CategoryCreationAttributes> implements CategoryAttributes {
     declare id: number;
     declare name: string;
     declare description: string | null;
     declare icon: string | null;
+    declare discount_regular_pct: number | null;
+    declare discount_gold_pct: number | null;
+    declare discount_premium_pct: number | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -37,6 +43,18 @@ Category.init(
         },
         icon: {
             type: DataTypes.STRING(50),
+            allowNull: true,
+        },
+        discount_regular_pct: {
+            type: DataTypes.DECIMAL(5, 2),
+            allowNull: true,
+        },
+        discount_gold_pct: {
+            type: DataTypes.DECIMAL(5, 2),
+            allowNull: true,
+        },
+        discount_premium_pct: {
+            type: DataTypes.DECIMAL(5, 2),
             allowNull: true,
         },
     },

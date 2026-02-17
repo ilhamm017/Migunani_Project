@@ -35,6 +35,10 @@ import SupplierInvoice from './SupplierInvoice';
 import SupplierPayment from './SupplierPayment';
 import Backorder from './Backorder';
 import AccountingPeriod from './AccountingPeriod';
+import ProductCostState from './ProductCostState';
+import InventoryCostLedger from './InventoryCostLedger';
+import CreditNote from './CreditNote';
+import CreditNoteLine from './CreditNoteLine';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -102,6 +106,10 @@ PurchaseOrder.belongsTo(Supplier, { foreignKey: 'supplier_id' });
 
 Product.hasMany(StockMutation, { foreignKey: 'product_id' });
 StockMutation.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasOne(ProductCostState, { foreignKey: 'product_id', as: 'CostState' });
+ProductCostState.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasMany(InventoryCostLedger, { foreignKey: 'product_id', as: 'CostLedgers' });
+InventoryCostLedger.belongsTo(Product, { foreignKey: 'product_id' });
 
 // Transactions
 User.hasMany(Order, { foreignKey: 'customer_id', as: 'CustomerOrders' });
@@ -127,6 +135,11 @@ Product.hasMany(OrderAllocation, { foreignKey: 'product_id' });
 
 Order.hasOne(Invoice, { foreignKey: 'order_id' });
 Invoice.belongsTo(Order, { foreignKey: 'order_id' });
+Invoice.hasMany(CreditNote, { foreignKey: 'invoice_id', as: 'CreditNotes' });
+CreditNote.belongsTo(Invoice, { foreignKey: 'invoice_id' });
+CreditNote.hasMany(CreditNoteLine, { foreignKey: 'credit_note_id', as: 'Lines' });
+CreditNoteLine.belongsTo(CreditNote, { foreignKey: 'credit_note_id' });
+CreditNoteLine.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 
 Order.hasMany(OrderIssue, { foreignKey: 'order_id', as: 'Issues' });
 OrderIssue.belongsTo(Order, { foreignKey: 'order_id' });
@@ -210,6 +223,10 @@ CodSettlement.belongsTo(User, { foreignKey: 'received_by', as: 'Receiver' });
 PurchaseOrderItem.belongsTo(Product, { foreignKey: 'product_id' });
 Product.hasMany(PurchaseOrderItem, { foreignKey: 'product_id' });
 
+// Backorders
+Backorder.belongsTo(OrderItem, { foreignKey: 'order_item_id' });
+OrderItem.hasOne(Backorder, { foreignKey: 'order_item_id' });
+
 export {
     sequelize,
     User,
@@ -247,5 +264,9 @@ export {
     SupplierInvoice,
     SupplierPayment,
     Backorder,
-    AccountingPeriod
+    AccountingPeriod,
+    ProductCostState,
+    InventoryCostLedger,
+    CreditNote,
+    CreditNoteLine
 };

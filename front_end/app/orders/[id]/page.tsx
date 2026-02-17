@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import PaymentCountdown from '@/components/orders/PaymentCountdown';
 
 export default function OrderDetailPage() {
   const params = useParams();
@@ -221,6 +222,14 @@ export default function OrderDetailPage() {
             <span className="text-xs font-bold">{statusView.label}</span>
           </div>
         </div>
+
+        {order.status === 'waiting_payment' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex flex-col items-center gap-3">
+            <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest">Sisa Waktu Pembayaran</p>
+            <PaymentCountdown expiryDate={order.expiry_date} className="scale-125" />
+            <p className="text-[10px] text-amber-600 font-medium text-center">Pesanan akan dibatalkan otomatis jika waktu habis.</p>
+          </div>
+        )}
 
         <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
           <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>

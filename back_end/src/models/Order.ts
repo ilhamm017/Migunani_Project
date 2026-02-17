@@ -16,6 +16,8 @@ interface OrderAttributes {
     updatedAt?: Date;
     stock_released: boolean;
     parent_order_id?: string | null; // UUID linking to original order if split
+    goods_out_posted_at?: Date | null;
+    goods_out_posted_by?: string | null;
 }
 
 interface OrderCreationAttributes extends Optional<OrderAttributes, 'id' | 'discount_amount' | 'stock_released' | 'delivery_proof_url'> { }
@@ -33,6 +35,8 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     declare delivery_proof_url: string;
     declare stock_released: boolean;
     declare parent_order_id: string | null;
+    declare goods_out_posted_at: Date | null;
+    declare goods_out_posted_by: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -93,6 +97,14 @@ Order.init(
                 model: 'orders',
                 key: 'id'
             }
+        },
+        goods_out_posted_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+        },
+        goods_out_posted_by: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
     },
     {

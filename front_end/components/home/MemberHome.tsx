@@ -19,15 +19,20 @@ export default function MemberHome() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
+  const [waitingPaymentCount, setWaitingPaymentCount] = useState(0);
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const res = await api.catalog.getProducts({ limit: 4 });
-        setProducts(res.data?.products || []);
+        const [productsRes, ordersRes] = await Promise.all([
+          api.catalog.getProducts({ limit: 4 }),
+          api.orders.getMyOrders({ status: 'waiting_payment', limit: 1 })
+        ]);
+        setProducts(productsRes.data?.products || []);
+        setWaitingPaymentCount(ordersRes.data?.total || 0);
       } catch (error) {
-        console.error('Failed to load featured products:', error);
+        console.error('Failed to load home data:', error);
       } finally {
         setLoading(false);
       }
@@ -57,6 +62,23 @@ export default function MemberHome() {
 
   return (
     <div className="p-6 space-y-8">
+      {waitingPaymentCount > 0 && (
+        <Link href="/orders/waiting-payment" className="block">
+          <div className="bg-amber-500 rounded-3xl p-5 text-white flex items-center justify-between shadow-lg shadow-amber-200 active:scale-[0.98] transition-all">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center shrink-0">
+                <CreditCard size={24} className="animate-pulse" />
+              </div>
+              <div>
+                <h4 className="text-sm font-black uppercase tracking-tight">Tagihan Belum Bayar</h4>
+                <p className="text-[10px] font-bold opacity-80 uppercase tracking-widest">Ada {waitingPaymentCount} pesanan wajib bayar segera</p>
+              </div>
+            </div>
+            <ArrowRight size={20} className="opacity-60" />
+          </div>
+        </Link>
+      )}
+
       <section className="grid grid-cols-2 gap-3">
         {combinedStats.map((stat, i) => {
           const Icon = stat.icon;

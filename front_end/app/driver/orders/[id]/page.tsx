@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, MessageCircle, Upload } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, ClipboardCheck, MessageCircle, Upload } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -17,6 +17,10 @@ export default function DriverOrderDetailPage() {
   const [proof, setProof] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [checklistState, setChecklistState] = useState<{ exists: boolean; mismatchCount: number; savedAt?: string }>({
+    exists: false,
+    mismatchCount: 0,
+  });
 
   useEffect(() => {
     const load = async () => {
@@ -29,6 +33,30 @@ export default function DriverOrderDetailPage() {
       }
     };
     if (allowed && orderId) load();
+  }, [allowed, orderId]);
+
+  useEffect(() => {
+    if (!allowed || !orderId || typeof window === 'undefined') return;
+
+    const raw = sessionStorage.getItem(`driver-checklist-${orderId}`);
+    if (!raw) {
+      setChecklistState({ exists: false, mismatchCount: 0 });
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+      const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+      setChecklistState({
+        exists: true,
+        mismatchCount,
+        savedAt: parsed?.savedAt,
+      });
+    } catch (error) {
+      console.error('Failed to parse checklist state:', error);
+      setChecklistState({ exists: false, mismatchCount: 0 });
+    }
   }, [allowed, orderId]);
 
   if (!allowed) return null;
@@ -49,8 +77,13 @@ export default function DriverOrderDetailPage() {
     }
   };
 
+  const canComplete = !!proof && checklistState.exists && checklistState.mismatchCount === 0 && !loading;
+  const defaultIssueNote = checklistState.mismatchCount > 0
+    ? 'Ketidaksesuaian terdeteksi dari checklist barang.'
+    : '';
+
   const reportIncomplete = async () => {
-    const note = prompt('Apa yang kurang/bermasalah? (Contoh: Busi kurang 2 pcs)');
+    const note = prompt('Apa yang kurang/bermasalah? (Contoh: Busi kurang 2 pcs)', defaultIssueNote);
     if (!note) return;
 
     try {
@@ -101,6 +134,29 @@ export default function DriverOrderDetailPage() {
           </div>
         </div>
 
+        <div className={`rounded-2xl border p-4 ${checklistState.exists && checklistState.mismatchCount === 0 ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          <div className="flex items-start gap-2">
+            {checklistState.exists && checklistState.mismatchCount === 0 ? (
+              <CheckCircle2 size={18} className="text-emerald-600 mt-0.5" />
+            ) : (
+              <AlertTriangle size={18} className="text-amber-600 mt-0.5" />
+            )}
+            <div>
+              <p className={`text-sm font-black ${checklistState.exists && checklistState.mismatchCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {checklistState.exists
+                  ? checklistState.mismatchCount === 0
+                    ? 'Checklist barang sudah sesuai.'
+                    : `Checklist mendeteksi ${checklistState.mismatchCount} item tidak sesuai.`
+                  : 'Checklist barang belum dilakukan.'}
+              </p>
+              <p className="text-xs text-slate-600 mt-1">
+                Driver wajib cek barang sebelum konfirmasi pengiriman.
+                {checklistState.savedAt ? ` (Disimpan: ${new Date(checklistState.savedAt).toLocaleString('id-ID')})` : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-3">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
             Bukti Foto (Wajib jika Selesai)
@@ -123,6 +179,14 @@ export default function DriverOrderDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 pt-2">
+          <Link
+            href={`/driver/orders/${orderId}/checklist`}
+            className="w-full py-4 bg-white border-2 border-emerald-200 text-emerald-700 rounded-[24px] font-black text-xs uppercase inline-flex items-center justify-center gap-2"
+          >
+            <ClipboardCheck size={16} />
+            Cek Barang Dulu
+          </Link>
+
           {customer.id ? (
             <Link
               href={`/driver/chat?userId=${encodeURIComponent(String(customer.id))}&phone=${encodeURIComponent(String(customer.whatsapp_number || ''))}`}
@@ -135,7 +199,7 @@ export default function DriverOrderDetailPage() {
 
           <button
             onClick={() => setIsConfirmOpen(true)}
-            disabled={loading || !proof}
+            disabled={!canComplete}
             className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-black text-sm uppercase shadow-xl shadow-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 disabled:shadow-none"
           >
             {loading ? 'Processing...' : 'Konfirmasi Selesai'}
