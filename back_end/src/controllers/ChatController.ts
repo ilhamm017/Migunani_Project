@@ -20,6 +20,9 @@ import {
     resolveThreadForIncomingWebSocket,
     resolveThreadForLegacySession,
 } from '../services/ChatThreadService';
+import {
+    buildUnreadBadgePayloadsForThread
+} from '../services/ChatBadgeService';
 import { io } from '../server';
 import waClient, { getStatus as getWhatsappStatus } from '../services/whatsappClient';
 import { normalizeWhatsappNumber } from '../utils/whatsappNumber';
@@ -96,6 +99,13 @@ const emitThreadRead = (threadId: string, updatedCount: number) => {
         action: 'marked_read',
         updated_count: updatedCount
     });
+};
+
+const emitUnreadBadgeForThread = async (params: { threadId: string; excludeUserId?: string }) => {
+    const payloads = await buildUnreadBadgePayloadsForThread(params);
+    for (const payload of payloads) {
+        io.emit('chat:unread_badge_updated', payload);
+    }
 };
 
 const resolveThreadByIdOrLegacySession = async (value: string): Promise<{ thread: ChatThread; session?: ChatSession | null }> => {
@@ -330,6 +340,7 @@ export const sendThreadMessage = async (req: Request, res: Response) => {
             sender_id: message.sender_id || undefined,
             timestamp: message.createdAt
         });
+        await emitUnreadBadgeForThread({ threadId: thread.id, excludeUserId: actor.id });
 
         return res.status(201).json({
             message: 'Message sent',
@@ -363,6 +374,7 @@ export const markThreadRead = async (req: Request, res: Response) => {
         });
         if (result.updated_count > 0) {
             emitThreadRead(result.thread.id, result.updated_count);
+            await emitUnreadBadgeForThread({ threadId: result.thread.id });
         }
         return res.json({
             message: 'Thread marked as read',
@@ -553,6 +565,7 @@ export const getMessages = async (req: Request, res: Response) => {
         });
         if (readResult.updated_count > 0) {
             emitThreadRead(thread.id, readResult.updated_count);
+            await emitUnreadBadgeForThread({ threadId: thread.id });
         }
 
         return res.json({
@@ -652,6 +665,7 @@ export const replyToChat = async (req: Request, res: Response) => {
             sender_id: saved.sender_id || undefined,
             timestamp: saved.createdAt
         });
+        await emitUnreadBadgeForThread({ threadId: thread.id, excludeUserId: actor.id });
 
         return res.json({ message: 'Reply sent' });
     } catch (error: any) {
@@ -871,6 +885,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
             });
             if (readResult.updated_count > 0) {
                 emitThreadRead(thread.id, readResult.updated_count);
+                await emitUnreadBadgeForThread({ threadId: thread.id });
             }
 
             return res.json({

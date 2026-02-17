@@ -7,6 +7,14 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { roleLabelMap, StaffRecord } from '../staffShared';
 
+type ApiErrorShape = {
+  response?: {
+    data?: {
+      message?: string;
+    };
+  };
+};
+
 export default function StaffListPage() {
   const allowed = useRequireRoles(['super_admin']);
   const [staff, setStaff] = useState<StaffRecord[]>([]);
@@ -35,8 +43,9 @@ export default function StaffListPage() {
       setError('');
       const res = await api.admin.staff.getAll();
       setStaff((res.data?.staff || []) as StaffRecord[]);
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal memuat daftar staff');
+    } catch (e: unknown) {
+      const message = (e as ApiErrorShape)?.response?.data?.message || 'Gagal memuat daftar staff';
+      setError(message);
       setStaff([]);
     } finally {
       setLoading(false);

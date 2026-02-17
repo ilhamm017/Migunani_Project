@@ -6,6 +6,7 @@ import getSocket from '@/lib/socket';
 
 type UseChatUnreadCountParams = {
     enabled: boolean;
+    userId?: string | null;
 };
 
 const CHAT_ENABLED_ROLES = new Set([
@@ -17,29 +18,31 @@ const CHAT_ENABLED_ROLES = new Set([
     'customer'
 ]);
 
-export const useChatUnreadCount = ({ enabled }: UseChatUnreadCountParams): number => {
+export const useChatUnreadCount = ({ enabled, userId }: UseChatUnreadCountParams): number => {
     const [unreadCount, setUnreadCount] = useState(0);
 
     useEffect(() => {
-        if (!enabled) {
+        const currentUserId = String(userId || '').trim();
+        if (!enabled || !currentUserId) {
             setUnreadCount(0);
             return;
         }
 
         let isMounted = true;
+        const applyUnreadCount = (value: number) => {
+            if (!isMounted) return;
+            const normalized = Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+            setUnreadCount(normalized);
+        };
 
         const loadUnreadCount = async () => {
             try {
                 const res = await api.chat.getThreads({ limit: 100 });
                 const rows = Array.isArray(res.data?.threads) ? (res.data.threads as Array<{ unread_count?: number | string }>) : [];
                 const total = rows.reduce((acc, row) => acc + Number(row.unread_count || 0), 0);
-                if (isMounted) {
-                    setUnreadCount(total);
-                }
+                applyUnreadCount(total);
             } catch (_error) {
-                if (isMounted) {
-                    setUnreadCount(0);
-                }
+                applyUnreadCount(0);
             }
         };
 
@@ -49,25 +52,41 @@ export const useChatUnreadCount = ({ enabled }: UseChatUnreadCountParams): numbe
         const refreshUnread = () => {
             void loadUnreadCount();
         };
+        const onUnreadBadgeUpdated = (payload: { user_id?: string; total_unread?: number | string }) => {
+            const payloadUserId = String(payload?.user_id || '').trim();
+            if (payloadUserId && payloadUserId !== currentUserId) return;
+            const nextValue = Number(payload?.total_unread ?? 0);
+            if (!Number.isFinite(nextValue)) {
+                refreshUnread();
+                return;
+            }
+            applyUnreadCount(nextValue);
+        };
+        const onConnect = () => {
+            refreshUnread();
+        };
+        const onFocus = () => {
+            refreshUnread();
+        };
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                refreshUnread();
+            }
+        };
 
-        socket.on('chat:message', refreshUnread);
-        socket.on('chat:thread_message', refreshUnread);
-        socket.on('chat:thread_read', refreshUnread);
-        socket.on('chat:status', refreshUnread);
-
-        const timer = window.setInterval(() => {
-            void loadUnreadCount();
-        }, 15000);
+        socket.on('chat:unread_badge_updated', onUnreadBadgeUpdated);
+        socket.on('connect', onConnect);
+        window.addEventListener('focus', onFocus);
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         return () => {
             isMounted = false;
-            window.clearInterval(timer);
-            socket.off('chat:message', refreshUnread);
-            socket.off('chat:thread_message', refreshUnread);
-            socket.off('chat:thread_read', refreshUnread);
-            socket.off('chat:status', refreshUnread);
+            socket.off('chat:unread_badge_updated', onUnreadBadgeUpdated);
+            socket.off('connect', onConnect);
+            window.removeEventListener('focus', onFocus);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [enabled]);
+    }, [enabled, userId]);
 
     return unreadCount;
 };

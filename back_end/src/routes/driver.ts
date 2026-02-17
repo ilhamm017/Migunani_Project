@@ -5,11 +5,11 @@ import multer from 'multer';
 import * as DriverController from '../controllers/DriverController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 
-const upload = multer({
+const createDriverUpload = (folderName: string, prefix: string) => multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
             const userId = req.user?.id || 'anonymous';
-            const dest = path.join('uploads', String(userId), 'proofs');
+            const dest = path.join('uploads', String(userId), folderName);
             if (!fs.existsSync(dest)) {
                 fs.mkdirSync(dest, { recursive: true });
             }
@@ -17,20 +17,22 @@ const upload = multer({
         },
         filename: (req, file, cb) => {
             const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            cb(null, 'proof-' + uniqueSuffix + path.extname(file.originalname));
+            cb(null, `${prefix}-${uniqueSuffix}${path.extname(file.originalname)}`);
         }
     })
 });
+const proofUpload = createDriverUpload('proofs', 'proof');
+const issueUpload = createDriverUpload('issues', 'issue');
 const router = Router();
 
 router.use(authenticateToken);
 
 router.get('/orders', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedOrders);
-router.post('/orders/:id/complete', authorizeRoles('driver'), upload.single('proof'), DriverController.completeDelivery);
-router.post('/orders/:id/issue', authorizeRoles('driver'), DriverController.reportIssue);
+router.post('/orders/:id/complete', authorizeRoles('driver'), proofUpload.single('proof'), DriverController.completeDelivery);
+router.post('/orders/:id/issue', authorizeRoles('driver'), issueUpload.single('evidence'), DriverController.reportIssue);
 router.get('/wallet', authorizeRoles('driver', 'admin_finance', 'super_admin'), DriverController.getDriverWallet);
-router.get('/retur', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedReturs);
-router.get('/retur/:id', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedReturDetail);
+router.get('/retur', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturs);
+router.get('/retur/:id', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturDetail);
 router.patch('/retur/:id/status', authorizeRoles('driver'), DriverController.updateAssignedReturStatus);
 
 export default router;

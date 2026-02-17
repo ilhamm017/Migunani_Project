@@ -56,13 +56,13 @@ const toNumber = (value: unknown): number => {
 };
 
 const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => {
-  // Finance cares about invoices to issue, payments to verify, and deliveries to complete
+  // Customer-action statuses (e.g. waiting_payment/debt_pending) are excluded from admin action badge.
+  // Finance cares about invoices to issue, payment proofs to verify, and deliveries to complete.
   if (role === 'admin_finance') {
     return (
       toNumber(stats.waiting_invoice) +
       toNumber(stats.waiting_admin_verification) +
-      toNumber(stats.delivered) +
-      toNumber(stats.debt_pending)
+      toNumber(stats.delivered)
     );
   }
   // Gudang cares about new orders to pick and ready items to ship
@@ -71,25 +71,24 @@ const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => 
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
       toNumber(stats.allocated) +
-      toNumber(stats.partially_fulfilled)
+      toNumber(stats.partially_fulfilled) +
+      toNumber(stats.hold)
     );
   }
   // Kasir/Admin is responsible for initial allocation
   if (role === 'kasir') {
-    return toNumber(stats.pending) + toNumber(stats.waiting_payment);
+    return toNumber(stats.pending);
   }
   // Super Admin sees everything that requires action
   if (role === 'super_admin') {
     return (
       toNumber(stats.pending) +
       toNumber(stats.waiting_invoice) +
-      toNumber(stats.waiting_payment) +
       toNumber(stats.ready_to_ship) +
       toNumber(stats.waiting_admin_verification) +
       toNumber(stats.delivered) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
-      toNumber(stats.debt_pending) +
       toNumber(stats.shipped) +
       toNumber(stats.hold)
     );
@@ -208,4 +207,3 @@ export const useAdminActionBadges = ({
 
   return badges;
 };
-

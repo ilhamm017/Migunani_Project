@@ -11,7 +11,7 @@ import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNo
 // --- Customer Endpoints ---
 const DELIVERY_EMPLOYEE_ROLES = ['driver'] as const;
 const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
-const ISSUE_SLA_HOURS = 48;
+const ISSUE_SLA_HOURS = 24;
 const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
 type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
 type NormalizedCheckoutItem = { product_id: string; qty: number };
@@ -89,6 +89,8 @@ const withOrderTrackingFields = (orderLike: any) => {
                 issue_type: activeIssue.issue_type,
                 status: activeIssue.status,
                 note: activeIssue.note,
+                evidence_url: activeIssue.evidence_url || null,
+                resolution_note: activeIssue.resolution_note || null,
                 due_at: activeIssue.due_at,
                 resolved_at: activeIssue.resolved_at,
             }
@@ -706,7 +708,20 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
         // Let's update order status to 'processing' to indicate it moved forward, or keep it simple.
 
         await t.commit();
-        emitAdminRefreshBadges();
+        if (prevStatus !== 'waiting_admin_verification') {
+            emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: prevStatus || null,
+                to_status: 'waiting_admin_verification',
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || 'customer'),
+                target_roles: ['admin_finance', 'customer'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
 
         // --- ASYNC NOTIFICATIONS (POST-COMMIT) ---
@@ -764,7 +779,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
 
 export const getAllOrders = async (req: Request, res: Response) => {
     try {
-        const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder } = req.query;
+        const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder, updatedAfter } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = {};
@@ -817,6 +832,16 @@ export const getAllOrders = async (req: Request, res: Response) => {
 
         if (Object.keys(createdAtRange).length > 0) {
             whereClause.createdAt = createdAtRange;
+        }
+
+        const updatedAfterRaw = typeof updatedAfter === 'string' ? updatedAfter : '';
+        if (updatedAfterRaw) {
+            const updatedAfterDate = new Date(updatedAfterRaw);
+            if (!Number.isNaN(updatedAfterDate.getTime())) {
+                whereClause.updatedAt = {
+                    [Op.gte]: updatedAfterDate
+                };
+            }
         }
 
         const orders = await Order.findAndCountAll({
@@ -878,7 +903,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     try {
         const orderId = String(req.params.id);
         const userRole = req.user!.role;
-        const { status, courier_id, issue_type, issue_note } = req.body;
+        const { status, courier_id, issue_type, issue_note, resolution_note } = req.body;
 
         const nextStatus = typeof status === 'string' ? status : '';
         if (!ORDER_STATUS_OPTIONS.includes(nextStatus as (typeof ORDER_STATUS_OPTIONS)[number])) {
@@ -904,6 +929,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         //   shipped → delivered                     (completeDelivery)
         const ALLOWED_TRANSITIONS: Record<string, { roles: string[]; to: string[] }> = {
             'ready_to_ship': { roles: ['admin_gudang'], to: ['shipped'] },
+            'hold': { roles: ['admin_gudang'], to: ['shipped'] },
             'delivered': { roles: ['admin_gudang', 'admin_finance'], to: ['completed'] },
         };
         const CANCELABLE_STATUSES = [
@@ -936,6 +962,12 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                     });
                 }
             }
+        }
+
+        const normalizedResolutionNote = normalizeIssueNote(resolution_note);
+        if (prevStatus === 'hold' && nextStatus === 'shipped' && !normalizedResolutionNote) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Catatan follow-up wajib diisi sebelum kirim ulang order dari status hold.' });
         }
 
         // --- Courier validation for shipped ---
@@ -1002,9 +1034,16 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                 transaction: t, lock: t.LOCK.UPDATE
             });
             for (const issue of openIssues) {
-                await issue.update({
-                    status: 'resolved', resolved_at: new Date(),
+                const issueUpdatePayload: any = {
+                    status: 'resolved',
+                    resolved_at: new Date(),
                     resolved_by: req.user?.id || null,
+                };
+                if (normalizedResolutionNote && issue.issue_type === 'shortage') {
+                    issueUpdatePayload.resolution_note = normalizedResolutionNote;
+                }
+                await issue.update({
+                    ...issueUpdatePayload,
                 }, { transaction: t });
             }
         }
@@ -1031,16 +1070,25 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         }
 
         await t.commit();
-        if (nextStatus === 'shipped') {
+        if (nextStatus !== prevStatus) {
+            const targetRoles = nextStatus === 'shipped'
+                ? ['driver', 'customer']
+                : nextStatus === 'delivered'
+                    ? ['admin_finance', 'customer']
+                    : nextStatus === 'hold'
+                        ? ['admin_gudang', 'super_admin', 'customer']
+                        : nextStatus === 'completed'
+                            ? ['customer']
+                            : ['admin_gudang', 'admin_finance', 'kasir', 'customer'];
             emitOrderStatusChanged({
                 order_id: orderId,
                 from_status: prevStatus || null,
                 to_status: nextStatus,
                 source: String(order.source || ''),
                 payment_method: null,
-                courier_id: courierIdToSave || null,
+                courier_id: courierIdToSave || String(order.courier_id || ''),
                 triggered_by_role: userRole || null,
-                target_roles: ['driver'],
+                target_roles: targetRoles,
                 target_user_ids: courierIdToSave ? [courierIdToSave] : [],
             });
         } else {
@@ -1132,6 +1180,7 @@ export const reportMissingItem = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
+        emitAdminRefreshBadges();
         res.status(201).json({ message: 'Laporan barang kurang berhasil dibuat. Tim kami akan segera melakukan verifikasi.' });
 
     } catch (error) {

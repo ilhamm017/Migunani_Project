@@ -6,9 +6,21 @@ import { api } from '@/lib/api';
 import { MessageSquare, Coins, Key, Loader2, QrCode, RefreshCw, Smartphone, LogOut, CheckCircle2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
+type WhatsAppStatusInfo = {
+  pushname?: string;
+  wid?: {
+    user?: string;
+  };
+};
+
+type WhatsAppStatus = {
+  status?: string;
+  info?: WhatsAppStatusInfo;
+};
+
 export default function AdminSettingsPage() {
   const allowed = useRequireRoles(['super_admin']);
-  const [waStatus, setWaStatus] = useState<any>({ status: 'LOADING' });
+  const [waStatus, setWaStatus] = useState<WhatsAppStatus>({ status: 'LOADING' });
   const [qr, setQr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -50,7 +62,7 @@ export default function AdminSettingsPage() {
       await api.whatsapp.connect();
       // Wait a bit for initialization to start
       setTimeout(loadStatus, 2000);
-    } catch (error) {
+    } catch {
       alert('Gagal memulai koneksi WhatsApp');
     } finally {
       setLoading(false);
@@ -63,7 +75,7 @@ export default function AdminSettingsPage() {
       setLoading(true);
       await api.whatsapp.logout();
       setTimeout(loadStatus, 1000);
-    } catch (error) {
+    } catch {
       alert('Gagal memutus koneksi');
     } finally {
       setLoading(false);

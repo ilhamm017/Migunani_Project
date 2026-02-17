@@ -1,17 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronRight, PackageSearch, Search, Smartphone, MessageCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 type Props = {
   title: string;
   description: string;
   fixedStatus?: string;
 };
+
+type TabId = 'baru_masuk' | 'selesai' | 'backorder';
 
 const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'all', label: 'Semua' },
@@ -29,11 +32,27 @@ const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
 const statusHref = (status: string) =>
   status === 'all' ? '/admin/orders' : `/admin/orders/status/${status}`;
 
-const TABS = [
+const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'baru_masuk', label: 'Baru Masuk' },
   { id: 'selesai', label: 'Order Selesai' },
   { id: 'backorder', label: 'Backorder / Preorder' },
 ];
+
+const TAB_FILTERS: Record<TabId, { status: string; is_backorder?: string; exclude_backorder?: string }> = {
+  baru_masuk: {
+    // Customer-action statuses (waiting_payment/debt_pending) are intentionally excluded.
+    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,hold',
+    exclude_backorder: 'true',
+  },
+  selesai: {
+    status: 'completed,delivered',
+  },
+  backorder: {
+    // Keep backorder badge focused on actionable admin statuses.
+    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,hold,partially_fulfilled,shipped,delivered',
+    is_backorder: 'true',
+  },
+};
 
 const calculateAge = (createdAt: string) => {
   const created = new Date(createdAt);
@@ -52,7 +71,12 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
   const [endDate, setEndDate] = useState('');
 
   const activeStatus = fixedStatus || 'all';
-  const [activeTab, setActiveTab] = useState('baru_masuk');
+  const [activeTab, setActiveTab] = useState<TabId>('baru_masuk');
+  const [tabBadgeCounts, setTabBadgeCounts] = useState<Record<TabId, number>>({
+    baru_masuk: 0,
+    selesai: 0,
+    backorder: 0,
+  });
 
   const dateRangeError = useMemo(() => {
     if (!startDate || !endDate) return '';
@@ -60,7 +84,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
     return 'Tanggal mulai tidak boleh lebih besar dari tanggal akhir.';
   }, [startDate, endDate]);
 
-  const load = async (params?: { search?: string; startDate?: string; endDate?: string }) => {
+  const load = useCallback(async (params?: { search?: string; startDate?: string; endDate?: string }) => {
     try {
       setLoading(true);
 
@@ -70,8 +94,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
 
       if (fixedStatus === 'all') {
         if (activeTab === 'baru_masuk') {
-          // These are active statuses that are NOT completed/canceled/backorder
-          fetchStatus = 'pending,waiting_invoice,waiting_payment,waiting_admin_verification,allocated,ready_to_ship,hold,debt_pending';
+          fetchStatus = TAB_FILTERS.baru_masuk.status;
           excludeBackorder = 'true';
         } else if (activeTab === 'selesai') {
           fetchStatus = 'completed,delivered';
@@ -97,15 +120,70 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeStatus, activeTab]);
+
+  const loadTabBadgeCounts = useCallback(async () => {
+    if (fixedStatus !== 'all') return;
+    const fetchCount = async (tabId: TabId) => {
+      if (tabId === 'selesai') return 0;
+      const filter = TAB_FILTERS[tabId];
+      try {
+        const res = await api.admin.orderManagement.getAll({
+          page: 1,
+          limit: 1,
+          status: filter.status,
+          is_backorder: filter.is_backorder,
+          exclude_backorder: filter.exclude_backorder,
+        });
+        return Number(res.data?.total || 0);
+      } catch {
+        return 0;
+      }
+    };
+
+    const entries = await Promise.all(
+      TABS.map(async (tab) => [tab.id, await fetchCount(tab.id)] as const)
+    );
+
+    const nextCounts: Record<TabId, number> = {
+      baru_masuk: 0,
+      selesai: 0,
+      backorder: 0,
+    };
+    for (const [tabId, count] of entries) {
+      nextCounts[tabId] = count;
+    }
+    setTabBadgeCounts(nextCounts);
+  }, [fixedStatus]);
 
   useEffect(() => {
     if (dateRangeError) return;
     const timer = setTimeout(() => {
-      load({ search, startDate, endDate });
+      void load({ search, startDate, endDate });
     }, 250);
     return () => clearTimeout(timer);
-  }, [activeStatus, activeTab, search, startDate, endDate, dateRangeError]);
+  }, [activeStatus, activeTab, search, startDate, endDate, dateRangeError, load]);
+
+  useEffect(() => {
+    if (fixedStatus !== 'all') return;
+    void loadTabBadgeCounts();
+  }, [fixedStatus, loadTabBadgeCounts]);
+
+  const refreshCurrent = useCallback(() => {
+    if (dateRangeError) return;
+    void load({ search, startDate, endDate });
+
+    if (fixedStatus === 'all') {
+      void loadTabBadgeCounts();
+    }
+  }, [dateRangeError, endDate, fixedStatus, load, loadTabBadgeCounts, search, startDate]);
+
+  useRealtimeRefresh({
+    enabled: true,
+    onRefresh: refreshCurrent,
+    domains: ['order', 'retur', 'cod', 'admin'],
+    pollIntervalMs: 15000,
+  });
 
   const statusBadgeClass = (status: string) => {
     if (['completed', 'delivered'].includes(status)) return 'bg-emerald-100 text-emerald-700';
@@ -132,18 +210,37 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
       </div>
 
       {fixedStatus === 'all' && (
-        <div className="flex bg-slate-100 p-1 rounded-2xl w-fit">
+        <div className="flex flex-wrap gap-2">
           {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === tab.id
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-                }`}
-            >
-              {tab.label}
-            </button>
+            (() => {
+              const count = Number(tabBadgeCounts[tab.id] || 0);
+              const hasBadge = count > 0;
+              const isActive = activeTab === tab.id;
+
+              const accentClass = tab.id === 'backorder'
+                ? 'ring-violet-300 bg-violet-50 text-violet-700'
+                : tab.id === 'selesai'
+                  ? 'ring-emerald-300 bg-emerald-50 text-emerald-700'
+                  : 'ring-amber-300 bg-amber-50 text-amber-700';
+
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative px-4 py-2 rounded-2xl text-xs font-bold transition-all border ${isActive
+                    ? 'bg-white text-slate-900 border-slate-200 shadow-sm'
+                    : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-slate-700'
+                    } ${hasBadge ? `ring-2 ${accentClass}` : ''}`}
+                >
+                  <span>{tab.label}</span>
+                  {hasBadge && (
+                    <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-slate-900 text-white text-[10px] font-black leading-none">
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </button>
+              );
+            })()
           ))}
         </div>
       )}

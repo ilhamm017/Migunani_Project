@@ -7,13 +7,15 @@ interface OrderIssueAttributes {
     issue_type: 'shortage' | 'missing_item';
     status: 'open' | 'resolved';
     note: string | null;
+    evidence_url: string | null;
+    resolution_note: string | null;
     due_at: Date;
     resolved_at: Date | null;
     created_by: string | null;
     resolved_by: string | null;
 }
 
-interface OrderIssueCreationAttributes extends Optional<OrderIssueAttributes, 'id' | 'status' | 'note' | 'resolved_at' | 'created_by' | 'resolved_by'> { }
+interface OrderIssueCreationAttributes extends Optional<OrderIssueAttributes, 'id' | 'status' | 'note' | 'evidence_url' | 'resolution_note' | 'resolved_at' | 'created_by' | 'resolved_by'> { }
 
 class OrderIssue extends Model<OrderIssueAttributes, OrderIssueCreationAttributes> implements OrderIssueAttributes {
     declare id: string;
@@ -21,6 +23,8 @@ class OrderIssue extends Model<OrderIssueAttributes, OrderIssueCreationAttribute
     declare issue_type: 'shortage' | 'missing_item';
     declare status: 'open' | 'resolved';
     declare note: string | null;
+    declare evidence_url: string | null;
+    declare resolution_note: string | null;
     declare due_at: Date;
     declare resolved_at: Date | null;
     declare created_by: string | null;
@@ -51,6 +55,14 @@ OrderIssue.init(
             defaultValue: 'open',
         },
         note: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        evidence_url: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        resolution_note: {
             type: DataTypes.TEXT,
             allowNull: true,
         },

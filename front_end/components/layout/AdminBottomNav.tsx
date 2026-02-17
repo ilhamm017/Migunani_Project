@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ClipboardList, LayoutDashboard, MessageSquare, Users, Wallet } from 'lucide-react';
@@ -26,7 +25,8 @@ export default function AdminBottomNav() {
   const canAccessAdminNav = !!user && allowedAdminRoles.includes(user.role);
   const canAccessChat = !!user && canUseChatUnreadByRole(user.role);
   const unreadCount = useChatUnreadCount({
-    enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessChat
+    enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessChat,
+    userId: user?.id
   });
   const { orderBadgeCount } = useAdminActionBadges({
     enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessAdminNav,
@@ -34,20 +34,11 @@ export default function AdminBottomNav() {
   });
   const {
     newTaskCount: orderNotificationCount,
-    markSeen: markOrderNotificationsSeen,
   } = useOrderStatusNotifications({
     enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessAdminNav,
     role: user?.role,
     userId: user?.id,
   });
-
-  const isInOrderPage = pathname === '/admin/orders' || pathname?.startsWith('/admin/orders/');
-
-  useEffect(() => {
-    if (isInOrderPage && orderNotificationCount > 0) {
-      markOrderNotificationsSeen();
-    }
-  }, [isInOrderPage, markOrderNotificationsSeen, orderNotificationCount]);
 
   const displayOrderBadgeCount = Math.max(0, Math.max(orderNotificationCount, orderBadgeCount));
 

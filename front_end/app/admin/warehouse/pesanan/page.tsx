@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef, DragEvent } from 'react';
+import { useEffect, useState, useCallback, DragEvent } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { Package, Clock, User, Hash, GripVertical, RefreshCw } from 'lucide-react';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 interface OrderCard {
     id: string;
@@ -60,7 +61,6 @@ export default function WarehouseKanbanPage() {
     const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
     const [updating, setUpdating] = useState<string | null>(null);
     const [lastRefresh, setLastRefresh] = useState(new Date());
-    const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const loadOrders = useCallback(async () => {
         try {
@@ -97,10 +97,14 @@ export default function WarehouseKanbanPage() {
 
     useEffect(() => {
         void loadOrders();
-        // Auto-refresh every 30 seconds
-        refreshTimerRef.current = setInterval(() => { void loadOrders(); }, 30000);
-        return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
     }, [loadOrders]);
+
+    useRealtimeRefresh({
+        enabled: true,
+        onRefresh: loadOrders,
+        domains: ['order', 'admin'],
+        pollIntervalMs: 15000,
+    });
 
     // Categorize orders by kanban column
     const getColumnOrders = useCallback((columnKey: string): OrderCard[] => {

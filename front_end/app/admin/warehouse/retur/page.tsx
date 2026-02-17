@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import {
@@ -18,9 +18,10 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function WarehouseReturPage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
+    const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
     const [returs, setReturs] = useState<any[]>([]);
     const [couriers, setCouriers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -33,12 +34,40 @@ export default function WarehouseReturPage() {
     const [isBackToStock, setIsBackToStock] = useState<boolean>(true);
     const [adminResponse, setAdminResponse] = useState('');
 
+    const loadData = useCallback(async () => {
+        try {
+            setLoading(true);
+            const res = await api.retur.getAll();
+            setReturs(res.data || []);
+        } catch (error) {
+            console.error('Failed to load returs:', error);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const loadCouriers = useCallback(async () => {
+        try {
+            const res = await api.admin.orderManagement.getCouriers();
+            setCouriers(res.data.employees || []);
+        } catch (error) {
+            console.error('Failed to load couriers:', error);
+        }
+    }, []);
+
     useEffect(() => {
         if (allowed) {
-            loadData();
-            loadCouriers();
+            void loadData();
+            void loadCouriers();
         }
-    }, [allowed]);
+    }, [allowed, loadCouriers, loadData]);
+
+    useRealtimeRefresh({
+        enabled: allowed,
+        onRefresh: loadData,
+        domains: ['retur', 'order', 'cod', 'admin'],
+        pollIntervalMs: 15000,
+    });
 
     // Debugging and Auto-Calculation Logic
     const [debugPriceInfo, setDebugPriceInfo] = useState<string>('');
@@ -76,27 +105,6 @@ export default function WarehouseReturPage() {
         setDebugPriceInfo('Data harga item tidak tersedia dari riwayat pesanan.');
         setRefundAmount('');
     }, [selectedRetur]);
-
-    const loadData = async () => {
-        try {
-            setLoading(true);
-            const res = await api.retur.getAll();
-            setReturs(res.data || []);
-        } catch (error) {
-            console.error('Failed to load returs:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const loadCouriers = async () => {
-        try {
-            const res = await api.admin.orderManagement.getCouriers();
-            setCouriers(res.data.employees || []);
-        } catch (error) {
-            console.error('Failed to load couriers:', error);
-        }
-    };
 
     const handleUpdateStatus = async (id: string, nextStatus: string) => {
         try {
@@ -148,8 +156,8 @@ export default function WarehouseReturPage() {
             case 'approved': return 'Disetujui (Belum Dijemput)';
             case 'pickup_assigned': return 'Kurir Ditugaskan';
             case 'picked_up': return 'Sudah Dipickup Kurir';
-            case 'handed_to_warehouse': return 'Menunggu ACC Gudang';
-            case 'received': return 'Barang Diterima Gudang';
+            case 'handed_to_warehouse': return 'Menunggu ACC Kasir';
+            case 'received': return 'Barang Diterima Kasir';
             case 'completed': return 'Selesai';
             case 'rejected': return 'Ditolak';
             default: return status;
@@ -160,7 +168,7 @@ export default function WarehouseReturPage() {
         <div className="warehouse-page">
             <div>
                 <h1 className="warehouse-title">Kelola Pengembalian Barang</h1>
-                <p className="warehouse-subtitle">Verifikasi pengajuan retur, tugaskan kurir, dan kelola stok kembali.</p>
+                <p className="warehouse-subtitle">Kasir memverifikasi pengajuan retur, menugaskan kurir, dan memproses barang kembali.</p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -382,7 +390,7 @@ export default function WarehouseReturPage() {
                                                     <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-3">
                                                         <Truck size={18} className="text-amber-600 shrink-0 mt-0.5" />
                                                         <p className="text-xs text-amber-800 leading-relaxed font-bold">
-                                                            Driver sudah pickup barang. Menunggu driver menyerahkan fisik barang ke gudang.
+                                                            Driver sudah pickup barang. Menunggu driver menyerahkan fisik barang ke kasir.
                                                         </p>
                                                     </div>
                                                 </div>
@@ -393,7 +401,7 @@ export default function WarehouseReturPage() {
                                                     <div className="p-4 bg-violet-50 border border-violet-100 rounded-2xl flex items-start gap-3">
                                                         <CheckCircle size={18} className="text-violet-600 shrink-0 mt-0.5" />
                                                         <p className="text-xs text-violet-800 leading-relaxed font-bold">
-                                                            Driver sudah konfirmasi barang diserahkan. Silakan ACC jika barang fisik benar-benar sudah diterima gudang.
+                                                            Driver sudah konfirmasi barang diserahkan. Silakan ACC jika barang fisik benar-benar sudah diterima kasir.
                                                         </p>
                                                     </div>
                                                     <button
@@ -401,7 +409,7 @@ export default function WarehouseReturPage() {
                                                         disabled={submitting}
                                                         className="w-full py-4 bg-violet-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-violet-700 transition-colors"
                                                     >
-                                                        ACC Barang Diterima Gudang
+                                                        ACC Barang Diterima Kasir
                                                     </button>
                                                 </div>
                                             )}
@@ -412,7 +420,7 @@ export default function WarehouseReturPage() {
                                                         <div className="flex items-start gap-3">
                                                             <Box size={20} className="text-emerald-400 shrink-0" />
                                                             <div>
-                                                                <p className="text-sm font-black">Barang sudah di Tangan Gudang</p>
+                                                                <p className="text-sm font-black">Barang sudah di Tangan Kasir</p>
                                                                 <p className="text-[10px] opacity-60">Putuskan apakah barang ini layak jual kembali (masuk stok) atau tidak.</p>
                                                             </div>
                                                         </div>

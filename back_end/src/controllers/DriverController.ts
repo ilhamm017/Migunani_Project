@@ -3,7 +3,7 @@ import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, Custom
 import { JournalService } from '../services/JournalService';
 import { Op } from 'sequelize';
 import { AccountingPostingService } from '../services/AccountingPostingService';
-import { emitOrderStatusChanged } from '../utils/orderNotification';
+import { emitOrderStatusChanged, emitReturStatusChanged } from '../utils/orderNotification';
 
 export const getAssignedOrders = async (req: Request, res: Response) => {
     try {
@@ -202,11 +202,23 @@ export const reportIssue = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params; // Order ID
-        const { note } = req.body;
+        const noteRaw = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+        const checklistSnapshotRaw = typeof req.body?.checklist_snapshot === 'string'
+            ? req.body.checklist_snapshot.trim()
+            : '';
         const userId = req.user!.id;
+        const evidence = req.file;
+
+        if (noteRaw.length < 5) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Catatan laporan wajib diisi minimal 5 karakter.' });
+        }
 
         const order = await Order.findOne({
-            where: { id, courier_id: userId }
+            where: { id, courier_id: userId },
+            include: [{ model: Invoice }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
         });
 
         if (!order) {
@@ -214,20 +226,75 @@ export const reportIssue = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Order tidak ditemukan atau bukan tugas Anda' });
         }
 
-        // Create issue record
-        await OrderIssue.create({
-            order_id: String(id),
-            issue_type: 'shortage',
-            status: 'open',
-            note: note || 'Barang kurang/bermasalah saat pengiriman',
-            due_at: new Date(Date.now() + 24 * 60 * 60 * 1000), // Default 24h to resolve
-            created_by: userId
+        if (!['ready_to_ship', 'shipped'].includes(String(order.status || '').toLowerCase())) {
+            await t.rollback();
+            return res.status(409).json({ message: 'Laporan kekurangan hanya bisa dibuat pada order yang masih aktif dikirim.' });
+        }
+
+        let finalNote = noteRaw;
+        if (checklistSnapshotRaw) {
+            let normalizedSnapshot = checklistSnapshotRaw;
+            try {
+                const parsed = JSON.parse(checklistSnapshotRaw);
+                normalizedSnapshot = JSON.stringify(parsed);
+            } catch {
+                // Keep raw snapshot as-is when it is not valid JSON.
+            }
+            if (normalizedSnapshot.length > 1800) {
+                normalizedSnapshot = `${normalizedSnapshot.slice(0, 1800)}...`;
+            }
+            finalNote = `${noteRaw}\n\n[CHECKLIST_SNAPSHOT] ${normalizedSnapshot}`;
+        }
+
+        const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const previousStatus = String(order.status || '');
+        const existingIssue = await OrderIssue.findOne({
+            where: {
+                order_id: String(id),
+                issue_type: 'shortage',
+                status: 'open'
+            },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (existingIssue) {
+            await existingIssue.update({
+                note: finalNote,
+                due_at: dueAt,
+                created_by: userId,
+                evidence_url: evidence?.path || existingIssue.evidence_url || null,
+                resolution_note: null,
+            }, { transaction: t });
+        } else {
+            await OrderIssue.create({
+                order_id: String(id),
+                issue_type: 'shortage',
+                status: 'open',
+                note: finalNote,
+                due_at: dueAt,
+                created_by: userId,
+                evidence_url: evidence?.path || null,
+                resolution_note: null,
+            }, { transaction: t });
+        }
+
+        await order.update({
+            status: 'hold',
+            courier_id: null as any,
         }, { transaction: t });
 
-        // Status order tetap 'shipped' (karena belum selesai secara sempurna)
-        // Atau bisa diupdate ke status custom jika ada.
-
         await t.commit();
+        emitOrderStatusChanged({
+            order_id: String(order.id),
+            from_status: previousStatus || null,
+            to_status: 'hold',
+            source: String(order.source || ''),
+            payment_method: String((order as any)?.Invoice?.payment_method || ''),
+            courier_id: null,
+            triggered_by_role: String(req.user?.role || 'driver'),
+            target_roles: ['admin_gudang', 'super_admin'],
+        });
         res.json({ message: 'Masalah berhasil dilaporkan' });
     } catch (error) {
         await t.rollback();
@@ -342,16 +409,27 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
 
         if (nextStatus === 'handed_to_warehouse' && retur.status !== 'picked_up') {
             await t.rollback();
-            return res.status(409).json({ message: 'Barang hanya bisa diserahkan ke gudang setelah pickup' });
+            return res.status(409).json({ message: 'Barang hanya bisa diserahkan ke kasir setelah pickup' });
         }
 
+        const previousStatus = String(retur.status || '');
         await retur.update({ status: nextStatus }, { transaction: t });
         await t.commit();
+        emitReturStatusChanged({
+            retur_id: String(retur.id),
+            order_id: String(retur.order_id),
+            from_status: previousStatus || null,
+            to_status: nextStatus,
+            courier_id: String(retur.courier_id || userId),
+            triggered_by_role: String(req.user?.role || 'driver'),
+            target_roles: ['driver', 'kasir', 'admin_finance', 'customer', 'super_admin'],
+            target_user_ids: [String(userId)],
+        });
 
         return res.json({
             message: nextStatus === 'picked_up'
                 ? 'Pickup barang retur berhasil dikonfirmasi'
-                : 'Penyerahan barang ke gudang berhasil dikonfirmasi',
+                : 'Penyerahan barang ke kasir berhasil dikonfirmasi',
             retur
         });
     } catch (error) {

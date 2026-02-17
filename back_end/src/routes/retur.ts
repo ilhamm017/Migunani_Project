@@ -29,8 +29,8 @@ router.post('/request', authenticate, upload.single('evidence_img'), ReturContro
 router.get('/my', authenticate, ReturController.getMyReturs);
 
 // Admin Routes
-router.get('/all', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance'), ReturController.getAllReturs);
-router.put('/:id/status', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance'), ReturController.updateReturStatus);
+router.get('/all', authenticate, requireRole('super_admin', 'kasir', 'admin_finance'), ReturController.getAllReturs);
+router.put('/:id/status', authenticate, requireRole('super_admin', 'kasir'), ReturController.updateReturStatus);
 router.post('/:id/disburse', authenticate, requireRole('super_admin', 'admin_finance'), ReturController.disburseRefund);
 
 export default router;

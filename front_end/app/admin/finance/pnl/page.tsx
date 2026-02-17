@@ -4,11 +4,18 @@ import { useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
+type PnlSummary = {
+  revenue?: number | string | null;
+  cogs?: number | string | null;
+  expenses?: number | string | null;
+  net_profit?: number | string | null;
+};
+
 export default function FinancePnLPage() {
   const allowed = useRequireRoles(['super_admin']);
   const [startDate, setStartDate] = useState('2026-01-01');
   const [endDate, setEndDate] = useState('2026-12-31');
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<PnlSummary | null>(null);
 
   if (!allowed) return null;
 

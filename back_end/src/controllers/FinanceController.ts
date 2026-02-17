@@ -4,7 +4,7 @@ import { Op } from 'sequelize';
 import { JournalService } from '../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../services/TaxConfigService';
 import { AccountingPostingService } from '../services/AccountingPostingService';
-import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
+import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../utils/orderNotification';
 
 
 type ExpenseDetail = {
@@ -242,6 +242,8 @@ export const issueInvoice = async (req: Request, res: Response) => {
         }
 
         const paymentMethod = invoice.payment_method;
+        const previousOrderStatus = String(order.status || '');
+        let nextOrderStatus = previousOrderStatus;
 
         const taxConfig = await TaxConfigService.getConfig();
         const subtotal = Number(order.total_amount || 0);
@@ -257,7 +259,11 @@ export const issueInvoice = async (req: Request, res: Response) => {
                 tax_mode_snapshot: computedTax.tax_mode_snapshot,
                 pph_final_amount: computedTax.pph_final_amount
             }, { transaction: t });
-            await order.update({ status: 'waiting_payment' }, { transaction: t });
+            await order.update({
+                status: 'waiting_payment',
+                expiry_date: new Date(Date.now() + 24 * 60 * 60 * 1000)
+            }, { transaction: t });
+            nextOrderStatus = 'waiting_payment';
 
             const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
             const deferredRevenueAcc = await Account.findOne({ where: { code: '2300' }, transaction: t });
@@ -290,6 +296,7 @@ export const issueInvoice = async (req: Request, res: Response) => {
                 pph_final_amount: computedTax.pph_final_amount
             }, { transaction: t });
             await order.update({ status: 'ready_to_ship' }, { transaction: t });
+            nextOrderStatus = 'ready_to_ship';
         } else {
             await invoice.update({
                 payment_status: 'unpaid',
@@ -300,17 +307,36 @@ export const issueInvoice = async (req: Request, res: Response) => {
                 tax_mode_snapshot: computedTax.tax_mode_snapshot,
                 pph_final_amount: computedTax.pph_final_amount
             }, { transaction: t });
-            await order.update({ status: 'waiting_payment' }, { transaction: t });
+            await order.update({
+                status: 'waiting_payment',
+                expiry_date: new Date(Date.now() + 24 * 60 * 60 * 1000)
+            }, { transaction: t });
+            nextOrderStatus = 'waiting_payment';
         }
 
         await t.commit();
-        emitAdminRefreshBadges();
+        if (nextOrderStatus !== previousOrderStatus) {
+            emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus,
+                to_status: nextOrderStatus,
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || ''),
+                target_roles: nextOrderStatus === 'ready_to_ship'
+                    ? ['admin_gudang', 'customer']
+                    : ['customer'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
         res.json({
             message: paymentMethod === 'cod' || paymentMethod === 'cash_store'
                 ? 'Invoice COD diterbitkan. Order siap dikirim.'
                 : 'Invoice diterbitkan. Menunggu pembayaran customer.',
-            next_status: order.status
+            next_status: nextOrderStatus
         });
     } catch (error) {
         try { await t.rollback(); } catch { }
@@ -470,20 +496,29 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 verified_by: null,
                 verified_at: null
             }, { transaction: t });
-            await order.update({ status: 'waiting_payment' }, { transaction: t });
+            await order.update({
+                status: 'waiting_payment',
+                expiry_date: new Date(Date.now() + 24 * 60 * 60 * 1000)
+            }, { transaction: t });
         }
 
+        const nextOrderStatus = action === 'approve'
+            ? (['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(previousOrderStatus) ? 'ready_to_ship' : previousOrderStatus)
+            : 'waiting_payment';
+
         await t.commit();
-        if (action === 'approve' && previousOrderStatus !== 'ready_to_ship' && ['waiting_payment', 'waiting_invoice', 'waiting_admin_verification'].includes(previousOrderStatus)) {
+        if (nextOrderStatus !== previousOrderStatus) {
             emitOrderStatusChanged({
                 order_id: String(order.id),
                 from_status: previousOrderStatus,
-                to_status: 'ready_to_ship',
+                to_status: nextOrderStatus,
                 source: String(order.source || ''),
                 payment_method: String(invoice.payment_method || ''),
                 courier_id: String(order.courier_id || ''),
                 triggered_by_role: verifierRole,
-                target_roles: ['admin_gudang'],
+                target_roles: action === 'approve'
+                    ? ['admin_gudang', 'customer']
+                    : ['customer'],
             });
         } else {
             emitAdminRefreshBadges();
@@ -585,12 +620,31 @@ export const voidPayment = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         // 3. Reset Order Status
+        const previousOrderStatus = String(order.status || '');
+        let nextOrderStatus = previousOrderStatus;
         if (order.status !== 'canceled') {
-            await order.update({ status: 'waiting_payment' }, { transaction: t });
+            await order.update({
+                status: 'waiting_payment',
+                expiry_date: new Date(Date.now() + 24 * 60 * 60 * 1000)
+            }, { transaction: t });
+            nextOrderStatus = 'waiting_payment';
         }
 
         await t.commit();
-        emitAdminRefreshBadges();
+        if (nextOrderStatus !== previousOrderStatus) {
+            emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus,
+                to_status: nextOrderStatus,
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || ''),
+                target_roles: ['admin_finance', 'customer'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
         res.json({ message: 'Pembayaran berhasil di-void (Reversed)' });
 
@@ -1199,6 +1253,9 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { driver_id, order_ids = [], amount_received } = req.body;
+        const selectedOrderIds = Array.isArray(order_ids)
+            ? order_ids.map((value: unknown) => String(value)).filter(Boolean)
+            : [];
         const verifierId = req.user!.id;
 
         if (!driver_id) {
@@ -1212,15 +1269,20 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Jumlah uang tidak valid' });
         }
 
-        if ((!order_ids || order_ids.length === 0) && received === 0) {
+        if (selectedOrderIds.length === 0 && received === 0) {
             await t.rollback();
             return res.status(400).json({ message: 'Tidak ada order dipilih dan tidak ada pembayaran.' });
         }
 
         let invoices: any[] = [];
         let totalExpected = 0;
+        const previousOrderStatusById: Record<string, string> = {};
+        let settlementId: string | null = null;
+        let settledAtIso: string | null = null;
+        let settledInvoiceIds: string[] = [];
+        let completedOrderIds: string[] = [];
 
-        if (order_ids && order_ids.length > 0) {
+        if (selectedOrderIds.length > 0) {
             const pendingInvoices = await Invoice.findAll({
                 where: {
                     payment_status: 'cod_pending'
@@ -1228,7 +1290,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 include: [{
                     model: Order,
                     where: {
-                        id: { [Op.in]: order_ids },
+                        id: { [Op.in]: selectedOrderIds },
                         courier_id: driver_id
                     }
                 }],
@@ -1236,7 +1298,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 lock: t.LOCK.UPDATE
             });
 
-            if (pendingInvoices.length !== order_ids.length) {
+            if (pendingInvoices.length !== selectedOrderIds.length) {
                 await t.rollback();
                 return res.status(409).json({ message: 'Beberapa pesanan tidak ditemukan atau statusnya bukan COD Pending' });
             }
@@ -1244,6 +1306,10 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             invoices = pendingInvoices;
             invoices.forEach((inv: any) => {
                 totalExpected += Number(inv.total || inv.Order.total_amount || 0);
+                const orderId = String(inv?.Order?.id || '');
+                if (orderId) {
+                    previousOrderStatusById[orderId] = String(inv?.Order?.status || '');
+                }
             });
         }
 
@@ -1283,6 +1349,9 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 received_by: verifierId,
                 settled_at: new Date()
             }, { transaction: t });
+            settlementId = String(settlement.id);
+            settledAtIso = settlement.settled_at ? new Date(settlement.settled_at).toISOString() : new Date().toISOString();
+            settledInvoiceIds = invoiceIds.map((value) => String(value));
 
             // Mark collections as settled
             if (collections.length > 0) {
@@ -1309,9 +1378,10 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 await Order.update({
                     status: 'completed'
                 }, {
-                    where: { id: { [Op.in]: order_ids } },
+                    where: { id: { [Op.in]: selectedOrderIds } },
                     transaction: t
                 });
+                completedOrderIds = [...selectedOrderIds];
             }
 
             // --- Journal Entry for Settlement (Cash vs Piutang Driver) ---
@@ -1344,6 +1414,41 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        if (completedOrderIds.length > 0) {
+            for (const inv of invoices) {
+                const orderData = (inv as any)?.Order;
+                const orderId = String(orderData?.id || '');
+                if (!orderId || !completedOrderIds.includes(orderId)) continue;
+                const previousStatus = previousOrderStatusById[orderId] || String(orderData?.status || '');
+                if (previousStatus === 'completed') continue;
+                const courierId = String(orderData?.courier_id || '');
+                emitOrderStatusChanged({
+                    order_id: orderId,
+                    from_status: previousStatus || null,
+                    to_status: 'completed',
+                    source: String(orderData?.source || ''),
+                    payment_method: String((inv as any)?.payment_method || ''),
+                    courier_id: courierId || null,
+                    triggered_by_role: String(req.user?.role || ''),
+                    target_roles: ['admin_finance', 'driver', 'customer'],
+                    target_user_ids: courierId ? [courierId] : [],
+                });
+            }
+        }
+
+        emitCodSettlementUpdated({
+            driver_id: String(driver_id),
+            order_ids: selectedOrderIds,
+            invoice_ids: settledInvoiceIds,
+            total_expected: totalExpected,
+            amount_received: received,
+            driver_debt_before: previousDebt,
+            driver_debt_after: newDebt,
+            settled_at: settledAtIso || new Date().toISOString(),
+            triggered_by_role: String(req.user?.role || ''),
+            target_roles: ['admin_finance', 'driver'],
+            target_user_ids: [String(driver_id)],
+        });
 
         res.json({
             message: 'Setoran COD berhasil dikonfirmasi',
@@ -1355,7 +1460,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 driver_debt_before: previousDebt,
                 driver_debt_after: newDebt
             },
-            settlement: invoices.length > 0 ? 'created' : 'skipped'
+            settlement: settlementId ? 'created' : 'skipped'
         });
 
     } catch (error) {

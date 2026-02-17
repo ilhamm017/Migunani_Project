@@ -12,6 +12,22 @@ Aplikasi ini adalah sistem manajemen operasional menyeluruh (ERP sederhana) yang
 
 ---
 
+## 1.1 Kontrak Notifikasi Realtime (Socket)
+
+Untuk sinkronisasi lintas halaman tanpa reload manual, backend menyiarkan event berikut:
+
+- `admin:refresh_badges`: sinyal fallback agar semua badge/list admin melakukan refetch.
+- `order:status_changed`: perubahan status order (misalnya `waiting_payment`, `ready_to_ship`, `shipped`, `completed`, `canceled`).
+- `retur:status_changed`: perubahan status retur (misalnya `pending`, `pickup_assigned`, `picked_up`, `received`, `completed`) termasuk state penting seperti refund sudah dicairkan.
+- `cod:settlement_updated`: update settlement COD driver (nominal diterima, perubahan debt, order/invoice yang terselesaikan).
+- `chat:unread_badge_updated`: update badge unread chat per user (`user_id`, `total_unread`) tanpa polling interval.
+
+Catatan implementasi:
+- Arsitektur socket saat ini masih broadcast global (`io.emit`) untuk kompatibilitas.
+- Semua event di atas tetap memicu `admin:refresh_badges` sebagai fallback agar UI tetap sinkron saat halaman tidak subscribe event spesifik.
+
+---
+
 ## 2. Mekanisme Pencatatan Keuangan
 
 Sistem keuangan dalam aplikasi ini bekerja secara otomatis berdasarkan aktivitas operasional, meminimalkan input manual untuk pendapatan.

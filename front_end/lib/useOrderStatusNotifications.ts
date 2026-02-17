@@ -36,6 +36,12 @@ type DashboardStats = {
 };
 
 const MAX_EVENTS = 30;
+const ACTIONABLE_STATUSES_BY_ROLE: Record<Exclude<SupportedRole, 'driver'>, string[]> = {
+  super_admin: ['pending', 'waiting_invoice', 'ready_to_ship', 'waiting_admin_verification', 'delivered', 'allocated', 'partially_fulfilled', 'shipped', 'hold'],
+  admin_gudang: ['pending', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'hold'],
+  admin_finance: ['waiting_invoice', 'waiting_admin_verification', 'delivered'],
+  kasir: ['pending'],
+};
 
 const toNumber = (value: unknown): number => {
   const n = Number(value || 0);
@@ -55,8 +61,7 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
     return (
       toNumber(stats.waiting_invoice) +
       toNumber(stats.waiting_admin_verification) +
-      toNumber(stats.delivered) +
-      toNumber(stats.debt_pending)
+      toNumber(stats.delivered)
     );
   }
   if (role === 'admin_gudang') {
@@ -64,23 +69,22 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
       toNumber(stats.allocated) +
-      toNumber(stats.partially_fulfilled)
+      toNumber(stats.partially_fulfilled) +
+      toNumber(stats.hold)
     );
   }
   if (role === 'kasir') {
-    return toNumber(stats.pending) + toNumber(stats.waiting_payment);
+    return toNumber(stats.pending);
   }
   if (role === 'super_admin') {
     return (
       toNumber(stats.pending) +
       toNumber(stats.waiting_invoice) +
-      toNumber(stats.waiting_payment) +
       toNumber(stats.ready_to_ship) +
       toNumber(stats.waiting_admin_verification) +
       toNumber(stats.delivered) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
-      toNumber(stats.debt_pending) +
       toNumber(stats.shipped) +
       toNumber(stats.hold)
     );
@@ -116,6 +120,13 @@ const isEventRelevant = (event: OrderStatusChangedEvent, role: SupportedRole, us
   }
 
   return true;
+};
+
+const isActionableStatusForRole = (status: string, role: SupportedRole): boolean => {
+  const normalizedStatus = String(status || '').trim();
+  if (!normalizedStatus) return false;
+  if (role === 'driver') return true;
+  return ACTIONABLE_STATUSES_BY_ROLE[role].includes(normalizedStatus);
 };
 
 const buildPriorityCards = (role: SupportedRole, events: OrderStatusChangedEvent[], newTaskCount: number): PriorityCard[] => {
@@ -262,8 +273,10 @@ export const useOrderStatusNotifications = ({
         return;
       }
 
-      setLatestEvents((prev) => [normalizedEvent, ...prev].slice(0, MAX_EVENTS));
-      showToast(formatOrderStatusToastMessage(normalizedEvent));
+      if (isActionableStatusForRole(normalizedEvent.to_status, normalizedRole)) {
+        setLatestEvents((prev) => [normalizedEvent, ...prev].slice(0, MAX_EVENTS));
+        showToast(formatOrderStatusToastMessage(normalizedEvent));
+      }
       void loadActionableCount().then((count) => {
         if (mounted) setActionableCount(count);
       });

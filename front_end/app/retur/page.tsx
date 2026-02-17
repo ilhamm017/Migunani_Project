@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
     RotateCcw,
@@ -16,30 +16,40 @@ import {
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function MyReturnsPage() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const [returs, setReturs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
+    const loadReturs = useCallback(async () => {
         if (!isAuthenticated) {
             setLoading(false);
             return;
         }
 
-        const load = async () => {
-            try {
-                const res = await api.retur.getMyReturs();
-                setReturs(res.data || []);
-            } catch (error) {
-                console.error('Failed to load returs:', error);
-            } finally {
-                setLoading(false);
-            }
-        };
-        load();
+        try {
+            setLoading(true);
+            const res = await api.retur.getMyReturs();
+            setReturs(res.data || []);
+        } catch (error) {
+            console.error('Failed to load returs:', error);
+        } finally {
+            setLoading(false);
+        }
     }, [isAuthenticated]);
+
+    useEffect(() => {
+        void loadReturs();
+    }, [loadReturs]);
+
+    useRealtimeRefresh({
+        enabled: isAuthenticated,
+        onRefresh: loadReturs,
+        domains: ['retur', 'order', 'admin'],
+        pollIntervalMs: 10000,
+    });
 
     const getStatusVisual = (status: string) => {
         switch (status) {
@@ -52,9 +62,9 @@ export default function MyReturnsPage() {
             case 'picked_up':
                 return { label: 'Barang Sudah Dipickup Kurir', className: 'text-amber-600 bg-amber-50', icon: Truck };
             case 'handed_to_warehouse':
-                return { label: 'Menunggu ACC Gudang', className: 'text-violet-600 bg-violet-50', icon: RotateCcw };
+                return { label: 'Menunggu ACC Kasir', className: 'text-violet-600 bg-violet-50', icon: RotateCcw };
             case 'received':
-                return { label: 'Barang Diterima Gudang', className: 'text-indigo-600 bg-indigo-50', icon: RotateCcw };
+                return { label: 'Barang Diterima Kasir', className: 'text-indigo-600 bg-indigo-50', icon: RotateCcw };
             case 'completed':
                 return { label: 'Retur Selesai', className: 'text-slate-600 bg-slate-100', icon: CheckCircle2 };
             case 'rejected':

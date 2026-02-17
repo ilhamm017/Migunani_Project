@@ -11,6 +11,7 @@ import path from 'path';
 import { sequelize, ChatSession, ChatThread } from './models';
 import { normalizeWhatsappNumber } from './utils/whatsappNumber';
 import { createThreadMessage, resolveThreadForIncomingWebSocket } from './services/ChatThreadService';
+import { buildUnreadBadgePayloadsForThread } from './services/ChatBadgeService';
 import { ensureChatThreadSchema } from './services/chatSchema';
 import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadService';
 import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
@@ -30,6 +31,9 @@ const io = new Server(httpServer, {
 // Socket contract:
 // - admin:refresh_badges => trigger badge refresh on admin surfaces
 // - order:status_changed => order workflow notification across roles
+// - retur:status_changed => retur workflow notification across roles
+// - cod:settlement_updated => COD settlement update notification
+// - chat:unread_badge_updated => unread chat badge update per user
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
 const CHAT_ATTACHMENT_URL_REGEX = /^\/uploads\/chat\/[a-zA-Z0-9._-]+$/;
 
@@ -172,6 +176,13 @@ io.on('connection', (socket) => {
                 platform: 'web',
                 message: 'New web chat message'
             });
+            const unreadBadgePayloads = await buildUnreadBadgePayloadsForThread({
+                threadId: thread.id,
+                excludeUserId: incomingUserId
+            });
+            for (const payload of unreadBadgePayloads) {
+                io.emit('chat:unread_badge_updated', payload);
+            }
         } catch (error) {
             console.error('Error handling client:message', error);
         }
@@ -280,6 +291,15 @@ const runStartupStep = async (name: string, fn: () => Promise<void>) => {
     console.log(`[Startup] ${name} done (${Date.now() - startedAt}ms)`);
 };
 
+type DbSyncMode = 'alter' | 'safe' | 'off';
+
+const resolveDbSyncMode = (): DbSyncMode => {
+    const rawMode = String(process.env.DB_SYNC_MODE || 'alter').trim().toLowerCase();
+    if (rawMode === 'safe' || rawMode === 'off' || rawMode === 'alter') return rawMode;
+    console.warn(`[Startup] Unknown DB_SYNC_MODE='${rawMode}', fallback to 'alter'`);
+    return 'alter';
+};
+
 const isDeadlockError = (error: any): boolean => {
     const code = error?.parent?.code || error?.original?.code || error?.code;
     return code === 'ER_LOCK_DEADLOCK';
@@ -326,6 +346,18 @@ const ensureCriticalTablesReady = async () => {
 };
 
 const syncDatabaseWithRetry = async () => {
+    const syncMode = resolveDbSyncMode();
+    if (syncMode === 'off') {
+        console.log('[Startup] DB sync skipped (DB_SYNC_MODE=off)');
+        return;
+    }
+
+    if (syncMode === 'safe') {
+        await sequelize.sync();
+        await ensureCriticalTablesReady();
+        return;
+    }
+
     const maxAttempts = 3;
     let lastError: any = null;
 

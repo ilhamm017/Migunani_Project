@@ -1,19 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, CreditCard, ArrowRight, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import PaymentCountdown from '@/components/orders/PaymentCountdown';
 import { useRouter } from 'next/navigation';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function WaitingPaymentPage() {
     const router = useRouter();
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const loadOrders = async () => {
+    const loadOrders = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.orders.getMyOrders({ status: 'waiting_payment', page: 1, limit: 50 });
@@ -23,11 +24,18 @@ export default function WaitingPaymentPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        loadOrders();
-    }, []);
+        void loadOrders();
+    }, [loadOrders]);
+
+    useRealtimeRefresh({
+        enabled: true,
+        onRefresh: loadOrders,
+        domains: ['order', 'admin'],
+        pollIntervalMs: 10000,
+    });
 
     if (loading) {
         return (

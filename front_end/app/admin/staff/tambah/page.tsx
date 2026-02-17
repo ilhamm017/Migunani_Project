@@ -8,6 +8,14 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { roleOptions, StaffRole } from '../staffShared';
 
+type ApiErrorShape = {
+  response?: {
+    data?: {
+      message?: string;
+    };
+  };
+};
+
 export default function StaffCreatePage() {
   const allowed = useRequireRoles(['super_admin']);
   const router = useRouter();
@@ -47,8 +55,9 @@ export default function StaffCreatePage() {
         return;
       }
       router.push('/admin/staff/daftar');
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menambahkan staff');
+    } catch (e: unknown) {
+      const message = (e as ApiErrorShape)?.response?.data?.message || 'Gagal menambahkan staff';
+      setError(message);
     } finally {
       setCreating(false);
     }

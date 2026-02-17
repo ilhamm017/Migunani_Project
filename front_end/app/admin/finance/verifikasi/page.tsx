@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
@@ -9,6 +9,7 @@ import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const normalizeProofImageUrl = (raw?: string | null) => {
   if (!raw) return null;
@@ -37,7 +38,7 @@ export default function FinanceVerifyPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.admin.orderManagement.getAll({
@@ -50,11 +51,18 @@ export default function FinanceVerifyPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (allowed) load();
-  }, [allowed]);
+    if (allowed) void load();
+  }, [allowed, load]);
+
+  useRealtimeRefresh({
+    enabled: allowed,
+    onRefresh: load,
+    domains: ['order', 'retur', 'cod', 'admin'],
+    pollIntervalMs: 10000,
+  });
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

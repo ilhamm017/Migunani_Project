@@ -10,6 +10,7 @@ import {
     resolveThreadForIncomingWhatsapp,
     resolveThreadForLegacySession
 } from './ChatThreadService';
+import { buildUnreadBadgePayloadsForThread } from './ChatBadgeService';
 
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
 
@@ -243,6 +244,13 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
             sender_id: saved.sender_id || user?.id || undefined,
             timestamp: saved.createdAt
         });
+        const unreadBadgePayloads = await buildUnreadBadgePayloadsForThread({
+            threadId: thread.id,
+            excludeUserId: user?.id
+        });
+        for (const payload of unreadBadgePayloads) {
+            io.emit('chat:unread_badge_updated', payload);
+        }
 
         // 5. Bot Logic
         if (session.is_bot_active) {

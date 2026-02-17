@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Clock3, Search } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const toDate = (value: string | Date | null | undefined): Date | null => {
   if (!value) return null;
@@ -35,7 +36,7 @@ export default function AdminIssueOrdersPage() {
   const [search, setSearch] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
 
-  const load = async (searchValue: string) => {
+  const load = useCallback(async (searchValue: string) => {
     try {
       setLoading(true);
       const res = await api.admin.orderManagement.getAll({
@@ -62,13 +63,26 @@ export default function AdminIssueOrdersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!allowed) return;
-    const timer = setTimeout(() => load(search.trim()), 250);
+    const timer = setTimeout(() => {
+      void load(search.trim());
+    }, 250);
     return () => clearTimeout(timer);
-  }, [allowed, search]);
+  }, [allowed, load, search]);
+
+  const refreshCurrent = useCallback(() => {
+    void load(search.trim());
+  }, [load, search]);
+
+  useRealtimeRefresh({
+    enabled: allowed,
+    onRefresh: refreshCurrent,
+    domains: ['order', 'admin'],
+    pollIntervalMs: 15000,
+  });
 
   const filteredOrders = useMemo(() => {
     if (!overdueOnly) return orders;

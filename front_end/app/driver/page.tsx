@@ -8,13 +8,18 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+
+type ChecklistIndicator = 'not_checked' | 'mismatch' | 'ready';
 
 export default function DriverTaskPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
   const [wallet, setWallet] = useState<any>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [returs, setReturs] = useState<any[]>([]);
+  const [checklistStatusByOrder, setChecklistStatusByOrder] = useState<Record<string, ChecklistIndicator>>({});
   const { user } = useAuthStore();
+  const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
     newTaskCount,
     latestEvents,
@@ -27,7 +32,9 @@ export default function DriverTaskPage() {
     userId: user?.id,
   });
   const remainingDeliveryCount = orders.filter((o) => !['delivered', 'completed', 'cancelled'].includes(String(o?.status || '').toLowerCase())).length;
-  const remainingPickupCount = returs.filter((r) => !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())).length;
+  const remainingPickupCount = canMonitorReturTasks
+    ? returs.filter((r) => !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())).length
+    : 0;
   const remainingTaskCount = remainingDeliveryCount + remainingPickupCount;
   const latestDriverEvent = latestEvents[0];
   const latestDriverStatusLabel = useMemo(
@@ -40,7 +47,7 @@ export default function DriverTaskPage() {
       const [ordersRes, walletRes, retursRes] = await Promise.all([
         api.driver.getOrders(),
         api.driver.getWallet(),
-        api.driver.getReturs()
+        canMonitorReturTasks ? api.driver.getReturs() : Promise.resolve({ data: [] })
       ]);
       setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : []);
       setWallet(walletRes.data);
@@ -48,7 +55,7 @@ export default function DriverTaskPage() {
     } catch (error) {
       console.error('Failed to load driver data:', error);
     }
-  }, []);
+  }, [canMonitorReturTasks]);
 
   useEffect(() => {
     if (allowed) {
@@ -61,6 +68,39 @@ export default function DriverTaskPage() {
       void load();
     }
   }, [allowed, latestEvents.length, load]);
+
+  useRealtimeRefresh({
+    enabled: allowed,
+    onRefresh: load,
+    domains: ['order', 'retur', 'cod', 'admin'],
+    pollIntervalMs: 12000,
+    filterDriverIds: user?.id ? [String(user.id)] : [],
+  });
+
+  useEffect(() => {
+    if (!allowed || typeof window === 'undefined') return;
+    const nextMap: Record<string, ChecklistIndicator> = {};
+
+    for (const order of orders) {
+      const orderId = String(order?.id || '');
+      if (!orderId) continue;
+      const raw = sessionStorage.getItem(`driver-checklist-${orderId}`);
+      if (!raw) {
+        nextMap[orderId] = 'not_checked';
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+        const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+        nextMap[orderId] = mismatchCount > 0 ? 'mismatch' : 'ready';
+      } catch {
+        nextMap[orderId] = 'not_checked';
+      }
+    }
+
+    setChecklistStatusByOrder(nextMap);
+  }, [allowed, orders]);
 
   if (!allowed) return null;
 
@@ -94,9 +134,11 @@ export default function DriverTaskPage() {
               <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
                 <Truck size={13} className="text-emerald-600" /> Pengiriman: {remainingDeliveryCount}
               </p>
-              <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
-                <RotateCcw size={13} className="text-amber-600" /> Pickup Retur: {remainingPickupCount}
-              </p>
+              {canMonitorReturTasks && (
+                <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
+                  <RotateCcw size={13} className="text-amber-600" /> Pickup Retur: {remainingPickupCount}
+                </p>
+              )}
             </div>
           </div>
           <ClipboardList size={100} className="absolute -right-6 -bottom-6 text-slate-200" />
@@ -153,6 +195,17 @@ export default function DriverTaskPage() {
             const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
             const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
             const whatsapp = customer.whatsapp_number || '-';
+            const checklistStatus = checklistStatusByOrder[String(o.id)] || 'not_checked';
+            const checklistLabel = checklistStatus === 'ready'
+              ? 'Siap berangkat'
+              : checklistStatus === 'mismatch'
+                ? 'Ada mismatch'
+                : 'Belum dicek';
+            const checklistBadgeClass = checklistStatus === 'ready'
+              ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+              : checklistStatus === 'mismatch'
+                ? 'bg-rose-100 text-rose-700 border-rose-200'
+                : 'bg-amber-100 text-amber-700 border-amber-200';
 
             return (
               <div
@@ -170,6 +223,10 @@ export default function DriverTaskPage() {
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-slate-50 space-y-3">
+                  <div className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${checklistBadgeClass}`}>
+                    Checklist: {checklistLabel}
+                  </div>
+
                   {/* Customer Name */}
                   <div className="flex items-center gap-2 text-slate-600">
                     <User size={14} className="min-w-[14px] opacity-40" />
@@ -226,81 +283,82 @@ export default function DriverTaskPage() {
         </div>
       </div>
 
-      {/* Return Task List */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-xs font-black text-amber-500 uppercase tracking-widest flex items-center gap-2">
-            <RotateCcw size={14} /> Misi Penjemputan Retur ({returs.length})
-          </h2>
-        </div>
+      {canMonitorReturTasks && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-xs font-black text-amber-500 uppercase tracking-widest flex items-center gap-2">
+              <RotateCcw size={14} /> Misi Penjemputan Retur ({returs.length})
+            </h2>
+          </div>
 
-        <div className="grid grid-cols-1 gap-3">
-          {returs.length === 0 && (
-            <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
-              <RotateCcw size={40} className="mx-auto text-slate-200 mb-3" />
-              <p className="text-sm font-bold text-slate-400 italic">Tidak ada jemputan retur.</p>
-            </div>
-          )}
-          {returs.map((r) => {
-            const customer = r.Creator || {};
-            const profile = customer.CustomerProfile || {};
-            const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-            const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
-            const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
-            const whatsapp = customer.whatsapp_number || '-';
+          <div className="grid grid-cols-1 gap-3">
+            {returs.length === 0 && (
+              <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
+                <RotateCcw size={40} className="mx-auto text-slate-200 mb-3" />
+                <p className="text-sm font-bold text-slate-400 italic">Tidak ada jemputan retur.</p>
+              </div>
+            )}
+            {returs.map((r) => {
+              const customer = r.Creator || {};
+              const profile = customer.CustomerProfile || {};
+              const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
+              const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
+              const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
+              const whatsapp = customer.whatsapp_number || '-';
 
-            return (
-              <Link
-                key={r.id}
-                href={`/driver/retur/${r.id}`}
-                className="group block bg-white border-2 border-amber-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-amber-300 transition-all"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <p className="text-[10px] font-black text-amber-500 uppercase tracking-tighter">RETUR Pesanan</p>
-                    <p className="text-lg font-black text-slate-900 leading-none">#{r.order_id.slice(-8).toUpperCase()}</p>
-                  </div>
-                  <div className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-[10px] font-black uppercase flex items-center gap-1">
-                    <HandCoins size={10} /> Verifikasi Dana (CS)
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-4 border-t border-slate-50 space-y-3">
-                  <div className="flex items-center gap-2 text-slate-600">
-                    <User size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-xs font-bold line-clamp-1">{customer.name || 'Customer'}</span>
-                  </div>
-
-                  <div className="flex items-start gap-2 text-slate-600">
-                    <MapPin size={14} className="min-w-[14px] mt-0.5 opacity-40" />
-                    <span className="text-xs font-medium leading-relaxed line-clamp-2">{address}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-slate-600">
-                    <Phone size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-xs font-medium">{whatsapp}</span>
-                  </div>
-
-                  <div className="bg-amber-50/50 rounded-xl p-3 flex items-start gap-2 mt-1 border border-amber-100">
-                    <Package size={14} className="min-w-[14px] mt-0.5 text-amber-600" />
-                    <div className="flex-1">
-                      <p className="text-[10px] font-black text-amber-600 uppercase tracking-wide mb-1">Barang Diambil</p>
-                      <p className="text-xs font-black text-slate-800">{r.qty}x {r.Product?.name || 'Produk'}</p>
+              return (
+                <Link
+                  key={r.id}
+                  href={`/driver/retur/${r.id}`}
+                  className="group block bg-white border-2 border-amber-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-amber-300 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black text-amber-500 uppercase tracking-tighter">RETUR Pesanan</p>
+                      <p className="text-lg font-black text-slate-900 leading-none">#{r.order_id.slice(-8).toUpperCase()}</p>
+                    </div>
+                    <div className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-[10px] font-black uppercase flex items-center gap-1">
+                      <HandCoins size={10} /> Verifikasi Dana (CS)
                     </div>
                   </div>
-                </div>
 
-                <div className="mt-4 flex items-center justify-between text-amber-600 font-black text-[10px] uppercase tracking-widest">
-                  <span className="flex items-center gap-1 bg-slate-900 text-white px-3 py-2 rounded-xl">
-                    <MessageCircle size={12} /> Buka Detail Tugas
-                  </span>
-                  <span className="flex items-center gap-1 italic opacity-60">Status: {r.status}</span>
-                </div>
-              </Link>
-            );
-          })}
+                  <div className="mt-4 pt-4 border-t border-slate-50 space-y-3">
+                    <div className="flex items-center gap-2 text-slate-600">
+                      <User size={14} className="min-w-[14px] opacity-40" />
+                      <span className="text-xs font-bold line-clamp-1">{customer.name || 'Customer'}</span>
+                    </div>
+
+                    <div className="flex items-start gap-2 text-slate-600">
+                      <MapPin size={14} className="min-w-[14px] mt-0.5 opacity-40" />
+                      <span className="text-xs font-medium leading-relaxed line-clamp-2">{address}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-slate-600">
+                      <Phone size={14} className="min-w-[14px] opacity-40" />
+                      <span className="text-xs font-medium">{whatsapp}</span>
+                    </div>
+
+                    <div className="bg-amber-50/50 rounded-xl p-3 flex items-start gap-2 mt-1 border border-amber-100">
+                      <Package size={14} className="min-w-[14px] mt-0.5 text-amber-600" />
+                      <div className="flex-1">
+                        <p className="text-[10px] font-black text-amber-600 uppercase tracking-wide mb-1">Barang Diambil</p>
+                        <p className="text-xs font-black text-slate-800">{r.qty}x {r.Product?.name || 'Produk'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between text-amber-600 font-black text-[10px] uppercase tracking-widest">
+                    <span className="flex items-center gap-1 bg-slate-900 text-white px-3 py-2 rounded-xl">
+                      <MessageCircle size={12} /> Buka Detail Tugas
+                    </span>
+                    <span className="flex items-center gap-1 italic opacity-60">Status: {r.status}</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {activeToast && (
         <button

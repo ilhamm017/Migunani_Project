@@ -39,11 +39,17 @@ type ChatContactRow = {
   role?: string;
 };
 
+type ChatSocketPayload = {
+  session_id?: string;
+};
+
 function DriverChatContent() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
   const { user } = useAuthStore();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const role = String(user?.role || '').trim();
+  const canViewWhatsapp = ['super_admin', 'kasir'].includes(role);
 
   const userIdParam = searchParams.get('userId');
   const phoneParam = searchParams.get('phone') || searchParams.get('whatsapp');
@@ -86,7 +92,7 @@ function DriverChatContent() {
     return Array.from(variants).filter((item) => item.length >= 3);
   };
 
-  const doesPhoneMatchKeyword = (phone: string, keyword: string) => {
+  const doesPhoneMatchKeyword = useCallback((phone: string, keyword: string) => {
     const phoneCandidates = getPhoneSearchCandidates(phone);
     const keywordCandidates = getPhoneSearchCandidates(keyword);
     if (!phoneCandidates.length || !keywordCandidates.length) return false;
@@ -94,7 +100,7 @@ function DriverChatContent() {
     return keywordCandidates.some((keywordPart) =>
       phoneCandidates.some((phonePart) => phonePart.includes(keywordPart) || keywordPart.includes(phonePart))
     );
-  };
+  }, []);
 
   const getSessionName = (session: ChatSessionRow) =>
     session.User?.name || session.whatsapp_number || 'Customer';
@@ -144,12 +150,16 @@ function DriverChatContent() {
   ) => {
     try {
       setInboxLoading(true);
-      const res = await api.chat.getSessions(params || { platform: 'web' });
-      const rows = Array.isArray(res.data?.sessions) ? res.data.sessions : [];
+      const effectiveParams = params || (!canViewWhatsapp ? { platform: 'web' as const } : undefined);
+      const res = await api.chat.getSessions(effectiveParams);
+      const rowsRaw = Array.isArray(res.data?.sessions) ? (res.data.sessions as ChatSessionRow[]) : [];
+      const rows = canViewWhatsapp
+        ? rowsRaw
+        : rowsRaw.filter((item) => String(item.platform || 'web').toLowerCase() !== 'whatsapp');
       setSessions(rows);
 
       const preferredFromUserId = userIdParam
-        ? rows.find((item: any) => String(item?.user_id || '') === userIdParam)?.id
+        ? rows.find((item: ChatSessionRow) => String(item?.user_id || '') === userIdParam)?.id
         : '';
       const preferredFromSessionId = sessionIdParam
         ? rows.find((item: ChatSessionRow) => String(item.id || '') === sessionIdParam)?.id
@@ -176,7 +186,7 @@ function DriverChatContent() {
     } finally {
       setInboxLoading(false);
     }
-  }, [loadMessages, phoneParam, selectedSessionId, sessionIdParam, userIdParam]);
+  }, [canViewWhatsapp, loadMessages, phoneParam, selectedSessionId, sessionIdParam, userIdParam]);
 
   useEffect(() => {
     if (allowed) {
@@ -229,7 +239,7 @@ function DriverChatContent() {
     if (!allowed) return;
 
     const socket = getSocket();
-    const onChatMessage = (payload: any) => {
+    const onChatMessage = (payload: ChatSocketPayload) => {
       if (payload?.session_id && payload.session_id === selectedSessionId) {
         void loadMessages(payload.session_id);
       }
@@ -275,9 +285,12 @@ function DriverChatContent() {
     setSearchQuery('');
     const res = await api.chat.getSessions({
       user_id: contact.id,
-      platform: 'web',
+      ...(!canViewWhatsapp ? { platform: 'web' as const } : {}),
     });
-    const rows = Array.isArray(res.data?.sessions) ? res.data.sessions : [];
+    const rowsRaw = Array.isArray(res.data?.sessions) ? (res.data.sessions as ChatSessionRow[]) : [];
+    const rows = canViewWhatsapp
+      ? rowsRaw
+      : rowsRaw.filter((item) => String(item.platform || 'web').toLowerCase() !== 'whatsapp');
     const targetSessionId = rows[0]?.id ? String(rows[0].id) : '';
     await loadSessions(undefined, targetSessionId || undefined);
     setMobilePanel('chat');
@@ -317,7 +330,7 @@ function DriverChatContent() {
         </button>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-visible min-h-[70vh] lg:grid lg:grid-cols-[320px_1fr]">
+      <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-visible min-h-[620px] lg:grid lg:grid-cols-[320px_1fr]">
         <div className={`${mobilePanel === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col border-r border-slate-200 bg-slate-50/60`}>
           <div className="p-4 border-b border-slate-200 bg-white/80 space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -328,7 +341,7 @@ function DriverChatContent() {
                     {unreadSessionCount} belum dibalas
                   </span>
                 ) : null}
-                <span className="text-[11px] font-bold px-2 py-1 rounded-full bg-slate-200 text-slate-700">
+                <span className="text-[10px] md:text-[11px] font-bold px-2 py-1 rounded-full bg-slate-200 text-slate-700 whitespace-nowrap">
                   {sessions.length} sesi
                 </span>
               </div>
@@ -388,8 +401,8 @@ function DriverChatContent() {
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-bold text-slate-900 truncate">{getSessionName(session)}</p>
                     {unread ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">
-                        Belum dibalas
+                      <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 shrink-0">
+                        <span className="hidden sm:inline">Belum dibalas</span>
                         <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-rose-600 text-white text-[9px] leading-none">
                           {unreadCount > 99 ? '99+' : unreadCount}
                         </span>
@@ -404,7 +417,7 @@ function DriverChatContent() {
           </div>
         </div>
 
-        <div className={`${mobilePanel === 'list' ? 'hidden lg:flex' : 'flex'} flex-col relative`}>
+        <div className={`${mobilePanel === 'list' ? 'hidden lg:flex' : 'flex'} min-h-[620px] flex-col relative`}>
           <div className="p-4 border-b border-slate-200 bg-white flex items-center gap-3">
             <button
               onClick={() => setMobilePanel('list')}
@@ -435,7 +448,7 @@ function DriverChatContent() {
                   : message.sender_type === 'admin';
                 return (
                   <div key={`${message.id || 'row'}-${idx}`} className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[84%] rounded-2xl px-3 py-2 text-sm ${isOwnMessage ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
+                    <div className={`max-w-[90%] sm:max-w-[84%] rounded-2xl px-3 py-2 text-sm ${isOwnMessage ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
                       <p className="whitespace-pre-wrap break-words">{message.body || ''}</p>
                       <p className={`text-[10px] mt-1 text-right ${isOwnMessage ? 'text-emerald-100' : 'text-slate-500'}`}>
                         {formatTime(message)}
@@ -458,16 +471,16 @@ function DriverChatContent() {
                 }
               }}
               placeholder={selectedSessionId ? 'Tulis pesan...' : 'Pilih sesi dulu'}
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+              className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
               disabled={!selectedSessionId || sending}
             />
             <button
               onClick={() => void sendReply()}
               disabled={!selectedSessionId || !replyText.trim() || sending}
-              className="inline-flex items-center justify-center gap-2 bg-emerald-600 text-white rounded-xl px-4 py-2 text-sm font-black disabled:opacity-50"
+              className="inline-flex shrink-0 items-center justify-center gap-1.5 bg-emerald-600 text-white rounded-xl px-3 sm:px-4 py-2 text-sm font-black disabled:opacity-50"
             >
               <Send size={14} />
-              {sending ? '...' : 'Kirim'}
+              <span className="hidden sm:inline">{sending ? '...' : 'Kirim'}</span>
             </button>
           </div>
         </div>

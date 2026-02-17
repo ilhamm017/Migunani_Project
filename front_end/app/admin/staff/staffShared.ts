@@ -1,4 +1,4 @@
-export type StaffRole = 'admin_gudang' | 'admin_finance' | 'driver';
+export type StaffRole = 'admin_gudang' | 'admin_finance' | 'driver' | 'kasir';
 export type StaffStatus = 'active' | 'banned';
 
 export interface StaffRecord {
@@ -16,12 +16,14 @@ export const roleOptions: Array<{ value: StaffRole; label: string }> = [
   { value: 'admin_gudang', label: 'Admin Gudang' },
   { value: 'admin_finance', label: 'Admin Finance' },
   { value: 'driver', label: 'Driver' },
+  { value: 'kasir', label: 'Kasir / Sales Admin' },
 ];
 
 export const roleLabelMap: Record<StaffRole, string> = {
   admin_gudang: 'Admin Gudang',
   admin_finance: 'Admin Finance',
   driver: 'Driver',
+  kasir: 'Kasir / Sales Admin',
 };
 
 export const formatDateTime = (value?: string) => {

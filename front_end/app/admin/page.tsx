@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, ClipboardCheck, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
+import { AlertTriangle, Boxes, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, ClipboardCheck, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -14,11 +14,18 @@ import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import BalanceCard from '@/components/admin/finance/BalanceCard';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 
+type DashboardArRow = { amount_due?: number | string | null };
+type DashboardCodRow = { total_pending?: number | string | null };
+type DashboardProductRow = { stock_quantity?: number | string | null };
+type DashboardAuditRow = { status?: string | null };
+type DashboardReturRow = { status?: string | null; admin_response?: string | null };
+
 export default function AdminOverviewPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver']);
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuthStore();
+  const canUseOrderNotifications = ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || ''));
 
   // General Summary State
   const [summary, setSummary] = useState({ pendingOrders: 0, unpaid: 0, unpaidTotal: 0, chats: 0, outOfStock: 0 });
@@ -27,8 +34,8 @@ export default function AdminOverviewPage() {
   const [warehouseCardBadges, setWarehouseCardBadges] = useState<Record<string, number>>({});
 
   // Finance Badges & Stats State
-  const { financeCardBadges } = useAdminActionBadges({
-    enabled: !!allowed && user?.role === 'admin_finance',
+  const { orderBadgeCount, financeCardBadges } = useAdminActionBadges({
+    enabled: !!allowed && canUseOrderNotifications,
     role: user?.role
   });
 
@@ -38,6 +45,12 @@ export default function AdminOverviewPage() {
     pendingExpense: 0,
     cashBalance: 0
   });
+  const [collapsedFeatureSections, setCollapsedFeatureSections] = useState<Record<string, boolean>>({
+    'Logistics & Inventory': true,
+    'Sales & Customer': true,
+    'Finance & Accounts': true,
+    'System & Security': true,
+  });
   const {
     newTaskCount: incomingTaskCount,
     latestEvents: latestOrderEvents,
@@ -46,7 +59,7 @@ export default function AdminOverviewPage() {
     activeToast,
     dismissToast,
   } = useOrderStatusNotifications({
-    enabled: !!allowed && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || '')),
+    enabled: !!allowed && canUseOrderNotifications,
     role: user?.role,
     userId: user?.id,
   });
@@ -58,8 +71,11 @@ export default function AdminOverviewPage() {
         const [statsRes, arData, chatRes] = await Promise.all([
           api.admin.orderManagement.getStats(),
           canReadAR
-            ? api.admin.finance.getAR().then((res) => (Array.isArray(res.data) ? res.data : [])).catch(() => [])
-            : Promise.resolve([]),
+            ? api.admin.finance
+              .getAR()
+              .then((res) => (Array.isArray(res.data) ? (res.data as DashboardArRow[]) : []))
+              .catch((): DashboardArRow[] => [])
+            : Promise.resolve<DashboardArRow[]>([]),
           api.chat.getSessions(),
         ]);
 
@@ -77,7 +93,7 @@ export default function AdminOverviewPage() {
           const resCod = await api.admin.finance.getDriverCodList();
           let codCount = 0;
           if (Array.isArray(resCod.data)) {
-            codCount = resCod.data.filter((d: any) => d.total_pending > 0).length;
+            codCount = (resCod.data as DashboardCodRow[]).filter((d) => Number(d.total_pending || 0) > 0).length;
           }
 
           // 3. Pending Expense
@@ -91,14 +107,23 @@ export default function AdminOverviewPage() {
           });
 
         } else if (user?.role === 'admin_gudang') {
-          // Warehouse tasks: ship ready_to_ship (Allocation moved to sales)
-          actionableCount = Number(stats.ready_to_ship || 0);
+          // Warehouse tasks: ship ready_to_ship + follow-up shortage (hold)
+          actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.hold || 0);
         } else if (user?.role === 'kasir') {
           // Kasir tasks: Allocate pending orders
           actionableCount = pendingAllocCount;
         } else {
-          // Super admin / Others: any order that isn't finished or canceled
-          actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0) + Number(stats.waiting_payment || 0) + Number(stats.delivered || 0);
+          // Super admin / Others: actionable admin tasks only (exclude customer-action statuses).
+          actionableCount =
+            pendingAllocCount +
+            Number(stats.waiting_invoice || 0) +
+            Number(stats.ready_to_ship || 0) +
+            Number(stats.waiting_admin_verification || 0) +
+            Number(stats.delivered || 0) +
+            Number(stats.allocated || 0) +
+            Number(stats.partially_fulfilled || 0) +
+            Number(stats.shipped || 0) +
+            Number(stats.hold || 0);
         }
 
         let outOfStockCount = 0;
@@ -110,11 +135,10 @@ export default function AdminOverviewPage() {
         }
 
         if (user?.role === 'admin_gudang' || user?.role === 'super_admin') {
-          const [processingRes, allocatedRes, productsRes, retursRes, auditsRes] = await Promise.all([
+          const [processingRes, allocatedRes, productsRes, auditsRes] = await Promise.all([
             api.admin.orderManagement.getAll({ status: 'waiting_admin_verification', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }).catch(() => ({ data: { total: 0 } })),
             api.admin.inventory.getProducts({ limit: 100 }).catch(() => ({ data: { products: [] } })),
-            api.retur.getAll().catch(() => ({ data: [] })),
             api.admin.inventory.getAudits().catch(() => ({ data: [] })),
           ]);
 
@@ -122,27 +146,31 @@ export default function AdminOverviewPage() {
           const allocatedOrders = Number(allocatedRes.data?.total || 0);
           const readyToShipOrders = Number(stats.ready_to_ship || 0);
 
-          const products = Array.isArray(productsRes.data?.products) ? productsRes.data.products : [];
-          outOfStockCount = products.filter((p: any) => Number(p.stock_quantity || 0) <= 0).length;
+          const products = Array.isArray(productsRes.data?.products) ? (productsRes.data.products as DashboardProductRow[]) : [];
+          outOfStockCount = products.filter((p) => Number(p.stock_quantity || 0) <= 0).length;
 
-          const returs = Array.isArray(retursRes.data) ? retursRes.data : [];
-          const pendingReturActions = returs.filter((r: any) => {
-            const status = String(r?.status || '').toLowerCase();
-            const hasAdminResponse = String(r?.admin_response || '').trim().length > 0;
-            return status === 'pending' && !hasAdminResponse;
-          }).length;
-
-          const audits = Array.isArray(auditsRes.data) ? auditsRes.data : [];
-          const openAuditCount = audits.filter((audit: any) => String(audit?.status || '').toLowerCase() === 'open').length;
+          const audits = Array.isArray(auditsRes.data) ? (auditsRes.data as DashboardAuditRow[]) : [];
+          const openAuditCount = audits.filter((audit) => String(audit?.status || '').toLowerCase() === 'open').length;
 
           // Merge updates
           Object.assign(newWarehouseBadges, {
             '/admin/warehouse/allocation': pendingAllocCount, // Explicitly set again to be sure
             '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders,
             '/admin/warehouse/helper': processingOrders,
-            '/admin/warehouse/retur': pendingReturActions,
             '/admin/warehouse/audit': openAuditCount,
+            '/admin/warehouse/driver-issues': Number(stats.hold || 0),
           });
+        }
+
+        if (user?.role === 'kasir' || user?.role === 'super_admin') {
+          const retursRes = await api.retur.getAll().catch(() => ({ data: [] }));
+          const returs = Array.isArray(retursRes.data) ? (retursRes.data as DashboardReturRow[]) : [];
+          const pendingReturActions = returs.filter((r) => {
+            const status = String(r?.status || '').toLowerCase();
+            const hasAdminResponse = String(r?.admin_response || '').trim().length > 0;
+            return status === 'pending' && !hasAdminResponse;
+          }).length;
+          newWarehouseBadges['/admin/warehouse/retur'] = pendingReturActions;
         }
 
         setWarehouseCardBadges(newWarehouseBadges);
@@ -150,7 +178,7 @@ export default function AdminOverviewPage() {
         setSummary({
           pendingOrders: actionableCount,
           unpaid: arData.length,
-          unpaidTotal: arData.reduce((sum: number, row: any) => sum + Number(row.amount_due || 0), 0),
+          unpaidTotal: arData.reduce((sum: number, row) => sum + Number(row.amount_due || 0), 0),
           chats: Number(chatRes.data?.pending_total || 0),
           outOfStock: outOfStockCount,
         });
@@ -171,6 +199,13 @@ export default function AdminOverviewPage() {
   if (!allowed) return null;
 
   const latestOrderStatusLabel = latestOrderEvents[0] ? formatOrderStatusLabel(latestOrderEvents[0].to_status) : '-';
+  const displayOrderNotificationCount = Math.max(0, Math.max(incomingTaskCount, orderBadgeCount));
+  const priorityStatusMessage = priorityCards[0]?.description || (latestOrderStatusLabel !== '-' ? `Status terbaru: ${latestOrderStatusLabel}` : '');
+  const priorityNotificationMessage = displayOrderNotificationCount > 0
+    ? incomingTaskCount > 0
+      ? [`${displayOrderNotificationCount} tugas perlu ditindak.`, priorityStatusMessage].filter(Boolean).join(' ')
+      : `${displayOrderNotificationCount} tugas perlu ditindak saat ini.`
+    : 'Belum ada tugas baru.';
 
 
 
@@ -207,6 +242,14 @@ export default function AdminOverviewPage() {
         icon: ClipboardCheck,
         tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white',
         badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0
+      },
+      {
+        href: '/admin/warehouse/retur',
+        title: 'Kelola Retur Barang',
+        desc: 'Validasi retur, tugaskan pickup, dan lanjutkan proses barang kembali.',
+        icon: RotateCcw,
+        tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white',
+        badge: warehouseCardBadges['/admin/warehouse/retur'] || 0
       },
       {
         href: '/admin/chat',
@@ -302,9 +345,7 @@ export default function AdminOverviewPage() {
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
               <p className="text-xs font-semibold text-blue-700 mt-1">
-                {incomingTaskCount > 0
-                  ? `${incomingTaskCount} tugas baru. Status terbaru: ${latestOrderStatusLabel}`
-                  : 'Belum ada tugas baru.'}
+                {priorityNotificationMessage}
               </p>
             </div>
             <button
@@ -351,8 +392,13 @@ export default function AdminOverviewPage() {
                 <Link
                   key={`${item.href}-${item.title}`}
                   href={item.href}
-                  className="group rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 transition-all h-full hover:bg-white hover:border-emerald-300 hover:shadow-md"
+                  className="group relative rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 transition-all h-full hover:bg-white hover:border-emerald-300 hover:shadow-md"
                 >
+                  {Number(item.badge || 0) > 0 && (
+                    <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
+                      {Number(item.badge) > 99 ? '99+' : Number(item.badge)}
+                    </span>
+                  )}
                   <div className="flex items-start justify-between gap-2">
                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all ${item.tone}`}>
                       <Icon size={18} />
@@ -396,9 +442,7 @@ export default function AdminOverviewPage() {
               <div>
                 <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
                 <p className="text-xs font-semibold text-blue-700 mt-1">
-                  {incomingTaskCount > 0
-                    ? `${incomingTaskCount} tugas baru. ${priorityCards[0]?.description || ''}`
-                    : 'Belum ada tugas baru.'}
+                  {priorityNotificationMessage}
                 </p>
               </div>
               <button
@@ -552,7 +596,7 @@ export default function AdminOverviewPage() {
       // Allocation moved to Sales
 
       { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order', icon: ClipboardList, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
-      { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Validasi retur masuk', icon: RotateCcw, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
+      { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang', icon: AlertTriangle, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
       { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang', icon: UserCheck, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
       { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik', icon: Shield, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white', badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
       { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat', icon: ScanBarcode, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white', badge: 0 },
@@ -576,9 +620,7 @@ export default function AdminOverviewPage() {
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
               <p className="text-xs font-semibold text-blue-700 mt-1">
-                {incomingTaskCount > 0
-                  ? `${incomingTaskCount} tugas baru. Status terbaru: ${latestOrderStatusLabel}`
-                  : 'Belum ada tugas baru.'}
+                {priorityNotificationMessage}
               </p>
             </div>
             <button
@@ -621,7 +663,7 @@ export default function AdminOverviewPage() {
         <div className="bg-white border border-slate-200 rounded-[24px] p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Menu Gudang</h3>
-            <p className="text-[10px] font-bold text-slate-400">11 modul</p>
+            <p className="text-[10px] font-bold text-slate-400">{warehouseMenus.length} modul</p>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
             {warehouseMenus.map((item) => {
@@ -666,16 +708,105 @@ export default function AdminOverviewPage() {
   }
 
 
-  // 4. Super Admin (Existing Palugada View)
+  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
+  const quickActionCards = [
+    { href: '/admin/orders/allocation', title: 'Alokasi Order', desc: 'Order baru belum dialokasikan.', icon: ClipboardCheck, badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0, tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white' },
+    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
+    { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Setoran driver menunggu proses.', icon: Wallet, badge: financeCardBadges.codSettlement, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
+    { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
+    { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
+    { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur pesanan gudang.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white' },
+    { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Bantu proses picking barang.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
+    { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white' },
+    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
+    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
+  ];
+  const featureCategories = [
+    {
+      group: 'Logistics & Inventory',
+      tone: 'text-blue-600 bg-blue-50 border-blue-100',
+      menus: [
+        { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
+        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
+        { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
+        { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
+        { href: '/admin/orders/allocation', title: 'Alokasi Order', desc: 'Alokasi stok order.', icon: ClipboardCheck, badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0 },
+        { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
+        { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
+        { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
+        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
+        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
+        { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
+        { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Input stok masuk.', icon: ShoppingCart },
+        { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor pengadaan.', icon: Clock },
+        { href: '/admin/warehouse/import', title: 'Import CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
+      ]
+    },
+    {
+      group: 'Sales & Customer',
+      tone: 'text-emerald-600 bg-emerald-50 border-emerald-100',
+      menus: [
+        { href: '/admin/sales', title: 'Daftar Customer', desc: 'Tier, blokir, poin.', icon: Users },
+        { href: '/admin/sales/member-baru', title: 'Register Member', desc: 'Onboarding WA OTP.', icon: UserCheck },
+        { href: '/admin/orders/create', title: 'Input Order', desc: 'Manual order entry.', icon: Plus },
+        { href: '/admin/orders', title: 'Monitor Order', desc: 'Kontrol order aktif.', icon: ClipboardList },
+        { href: '/admin/orders/issues', title: 'Issue Pesanan', desc: 'Kendala order di lapangan.', icon: AlertTriangle },
+        { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer support.', icon: MessageSquare, badge: summary.chats },
+        { href: '/admin/chat/broadcast', title: 'Broadcast Chat', desc: 'Kirim pesan massal.', icon: Megaphone },
+        { href: '/admin/chat/whatsapp', title: 'WA Engine', desc: 'Status bot dan OTP.', icon: MessageSquare },
+        { href: '/admin/sales/tier-pricing', title: 'Pricing Master', desc: 'Atur harga tier.', icon: DollarSign },
+        { href: '/admin/sales/discount-vouchers', title: 'Promosi & Voucher', desc: 'Kupon diskon sistem.', icon: Percent },
+        { href: '/admin/sales/shipping-methods', title: 'Metode Kirim', desc: 'Pilihan dan biaya kirim.', icon: Truck },
+        { href: '/admin/sales/karyawan', title: 'Regis Karyawan', desc: 'Pendaftaran user internal.', icon: Shield },
+        { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang.', icon: ClipboardList },
+      ]
+    },
+    {
+      group: 'Finance & Accounts',
+      tone: 'text-amber-600 bg-amber-50 border-amber-100',
+      menus: [
+        { href: '/admin/finance', title: 'FinanceHub', desc: 'Verifikasi dan pengeluaran.', icon: DollarSign },
+        { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi pembayaran transfer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment },
+        { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Terima setoran driver.', icon: Wallet, badge: financeCardBadges.codSettlement },
+        { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Klaim balik dan refund.', icon: RotateCcw, badge: financeCardBadges.refundRetur },
+        { href: '/admin/finance/biaya', title: 'Biaya Operasional', desc: 'Pengajuan dan pencairan.', icon: Clock, badge: financeStats.pendingExpense },
+        { href: '/admin/finance/piutang', title: 'Piutang (AR)', desc: 'Monitor tagihan aktif.', icon: Wallet },
+        { href: '/admin/finance/credit-note', title: 'Credit Note', desc: 'Koreksi nota kredit.', icon: FileText },
+        { href: '/admin/finance/laporan', title: 'Laporan Keuangan', desc: 'PnL, neraca, cashflow.', icon: TrendingUp },
+        { href: '/admin/finance/pnl', title: 'Quick PnL', desc: 'Ringkasan laba rugi.', icon: TrendingUp },
+        { href: '/admin/finance/jurnal/adjustment', title: 'Jurnal Manual', desc: 'Koreksi data akuntansi.', icon: FileText },
+      ]
+    },
+    {
+      group: 'System & Security',
+      tone: 'text-indigo-600 bg-indigo-50 border-indigo-100',
+      menus: [
+        { href: '/admin/staff/daftar', title: 'Akun Staf', desc: 'CRUD admin dan driver.', icon: Users },
+        { href: '/admin/staff/tambah', title: 'Tambah Staf', desc: 'Buat akun operasional.', icon: UserCheck },
+        { href: '/admin/settings', title: 'System Settings', desc: 'WhatsApp, API, loyalty.', icon: Settings },
+        { href: '/admin/audit-log', title: 'Security Audit', desc: 'Log aktivitas detail.', icon: Shield },
+        { href: '/admin/profile', title: 'Profil Saya', desc: 'Data akun personal.', icon: Users },
+      ]
+    }
+  ];
+  const toggleFeatureSection = (group: string) => {
+    setCollapsedFeatureSections((prev) => ({
+      ...prev,
+      [group]: !prev[group],
+    }));
+  };
+
+  // 4. Super Admin (Enhanced + Mobile Friendly Dashboard)
   return (
-    <div className="p-6 space-y-6">
-      <div className="bg-white border border-slate-200 rounded-[24px] p-3 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="p-4 max-[360px]:p-3 sm:p-6 pb-20 space-y-6 sm:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      {/* Quick Tabs & Navigation */}
+      <div className="bg-white/80 backdrop-blur-md border border-slate-200 sticky top-[calc(var(--admin-header-height,72px)+1px)] z-20 rounded-xl sm:rounded-2xl p-1.5 sm:p-2 shadow-sm">
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-1">
           {[
-            { href: '/admin', label: 'Overview', icon: LayoutDashboard },
-            { href: '/admin/staff/daftar', label: 'Staf', icon: Users },
+            { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+            { href: '/admin/staff/daftar', label: 'Manajemen Staf', icon: Users },
             { href: '/admin/settings', label: 'Pengaturan', icon: Settings },
-            { href: '/admin/audit-log', label: 'Audit', icon: Shield },
+            { href: '/admin/audit-log', label: 'Audit Log', icon: Shield },
             { href: '/admin/chat/broadcast', label: 'Broadcast', icon: Megaphone },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -684,94 +815,214 @@ export default function AdminOverviewPage() {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-colors ${active ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                className={`flex-1 min-w-[115px] max-[360px]:min-w-[48%] inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 max-[360px]:px-2 sm:px-3 py-2 max-[360px]:py-1.5 sm:py-2.5 rounded-lg sm:rounded-xl text-[11px] max-[360px]:text-[10px] sm:text-xs font-black transition-all ${active
+                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-200 scale-[1.02]'
+                  : 'text-slate-500 hover:bg-slate-100'
                   }`}
               >
-                <Icon size={14} />
+                <Icon size={13} />
                 {tab.label}
               </Link>
             );
           })}
-
-
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm">
-        <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">PALUGADA MODE</p>
-        <h1 className="text-2xl font-black text-slate-900 mt-1">Owner Takeover Dashboard</h1>
-        <p className="text-sm text-slate-600 mt-2">
-          Mode Palugada dipakai saat owner perlu turun tangan menggantikan admin yang sedang berhalangan.
-        </p>
+      {/* Header Welcome Card */}
+      <div className="relative overflow-hidden bg-slate-900 rounded-[24px] sm:rounded-[32px] p-5 max-[360px]:p-4 sm:p-8 text-white shadow-2xl shadow-slate-200">
+        <div className="relative z-10 max-w-2xl">
+          <div className="inline-flex items-center gap-2 px-2.5 sm:px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mb-3 sm:mb-4">
+            <Shield size={11} fill="currentColor" />
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest">Super Admin Mode</span>
+          </div>
+          <h1 className="text-2xl sm:text-4xl font-black tracking-tight leading-tight">
+            Selamat Datang, <span className="text-emerald-400">{user?.name?.split(' ')[0]}</span>.
+          </h1>
+          <p className="text-slate-400 text-xs sm:text-sm mt-2.5 sm:mt-3 leading-relaxed font-medium">
+            Akses penuh ke seluruh ekosistem Migunani. Pantau operasional, kelola keuangan, dan kendalikan inventori dari satu pusat kendali.
+          </p>
+        </div>
+        <div className="absolute top-0 right-0 w-44 h-44 sm:w-64 sm:h-64 bg-emerald-500/10 blur-[100px] -mr-24 sm:-mr-32 -mt-24 sm:-mt-32 rounded-full" />
+        <div className="absolute bottom-0 left-0 w-32 h-32 sm:w-48 sm:h-48 bg-blue-500/10 blur-[80px] -ml-14 sm:-ml-24 -mb-14 sm:-mb-24 rounded-full" />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="relative h-[122px] md:h-[132px] overflow-hidden rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-3.5 md:p-4 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">Order Follow-up</p>
-          <p className="text-[30px] leading-none font-black text-amber-800 mt-2">{summary.pendingOrders}</p>
-          <p className="text-[10px] text-amber-700/90 mt-1">Butuh tindakan admin.</p>
-          <ClipboardList size={48} className="absolute right-3 bottom-3 text-amber-700/15" />
-        </div>
+      {/* Mobile Metrics */}
+      <div className="grid grid-cols-3 gap-2 max-[360px]:gap-1.5 sm:hidden">
+        <Link href="/admin/orders" className="rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Tindakan</p>
+          <p className="text-lg max-[360px]:text-base leading-none font-black text-slate-900 mt-1.5">{summary.pendingOrders}</p>
+          <p className="text-[9px] text-amber-700 font-black uppercase mt-1">Order</p>
+        </Link>
+        <Link href="/admin/finance/piutang" className="rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Piutang</p>
+          <p className="text-sm max-[360px]:text-[11px] leading-none font-black text-slate-900 mt-2">Rp {compactCurrency.format(summary.unpaidTotal)}</p>
+          <p className="text-[9px] text-rose-700 font-black uppercase mt-1">{summary.unpaid} invoice</p>
+        </Link>
+        <Link href="/admin/chat" className="rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 shadow-sm">
+          <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Chat</p>
+          <p className="text-lg max-[360px]:text-base leading-none font-black text-slate-900 mt-1.5">{summary.chats}</p>
+          <p className="text-[9px] text-blue-700 font-black uppercase mt-1">Pending</p>
+        </Link>
+      </div>
 
-        <div className="relative h-[122px] md:h-[132px] overflow-hidden rounded-3xl border border-rose-200 bg-gradient-to-br from-rose-50 to-pink-50 p-3.5 md:p-4 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-rose-700">Piutang Aktif</p>
-          <p className="text-[24px] leading-tight font-black text-rose-700 mt-2">Rp {summary.unpaidTotal.toLocaleString()}</p>
-          <span className="inline-flex items-center mt-1.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide">
-            {summary.unpaid} Item
-          </span>
-          <Wallet size={48} className="absolute right-3 bottom-3 text-rose-700/15" />
-        </div>
+      {/* Desktop Metrics */}
+      <div className="hidden sm:grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Link href="/admin/orders" className="group relative overflow-hidden bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm hover:border-amber-300 hover:shadow-xl hover:shadow-amber-100 transition-all">
+          <div className="flex justify-between items-start">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center group-hover:scale-110 group-hover:rotate-3 transition-transform">
+              <ClipboardList size={24} />
+            </div>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest group-hover:text-amber-600 transition-colors">Pending Orders</span>
+          </div>
+          <div className="mt-4">
+            <p className="text-4xl font-black text-slate-900">{summary.pendingOrders}</p>
+            <p className="text-xs text-slate-500 mt-1 font-bold">Perlu Tindakan Admin</p>
+          </div>
+          <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
+            <span className="text-[10px] font-black text-amber-700 uppercase">Input & Alokasi</span>
+            <span className="text-slate-300 group-hover:text-amber-600 translate-x-0 group-hover:translate-x-1 transition-all">→</span>
+          </div>
+        </Link>
 
-        <div className="relative col-span-2 md:col-span-1 h-[122px] md:h-[132px] overflow-hidden rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50 p-3.5 md:p-4 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-blue-700">Chat Masuk</p>
-          <p className="text-[30px] leading-none font-black text-blue-700 mt-2">{summary.chats}</p>
-          <p className="text-[10px] text-blue-700/90 mt-1">Percakapan perlu dipantau.</p>
-          <MessageSquare size={48} className="absolute right-3 bottom-3 text-blue-700/15" />
+        <Link href="/admin/finance/piutang" className="group relative overflow-hidden bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm hover:border-rose-300 hover:shadow-xl hover:shadow-rose-100 transition-all">
+          <div className="flex justify-between items-start">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center group-hover:scale-110 group-hover:-rotate-3 transition-transform">
+              <Wallet size={24} />
+            </div>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest group-hover:text-rose-600 transition-colors">Total Piutang</span>
+          </div>
+          <div className="mt-4">
+            <p className="text-3xl font-black text-slate-900">Rp {summary.unpaidTotal.toLocaleString()}</p>
+            <p className="text-xs text-slate-500 mt-1 font-bold">{summary.unpaid} Invoice Aktif</p>
+          </div>
+          <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
+            <span className="text-[10px] font-black text-rose-700 uppercase">Accounts Receivable</span>
+            <span className="text-slate-300 group-hover:text-rose-600 translate-x-0 group-hover:translate-x-1 transition-all">→</span>
+          </div>
+        </Link>
+
+        <Link href="/admin/chat" className="group relative overflow-hidden bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm hover:border-blue-300 hover:shadow-xl hover:shadow-blue-100 transition-all">
+          <div className="flex justify-between items-start">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:scale-110 group-hover:rotate-6 transition-transform">
+              <MessageSquare size={24} />
+            </div>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest group-hover:text-blue-600 transition-colors">Chat Pending</span>
+          </div>
+          <div className="mt-4">
+            <p className="text-4xl font-black text-slate-900">{summary.chats}</p>
+            <p className="text-xs text-slate-500 mt-1 font-bold">Butuh Balasan Segera</p>
+          </div>
+          <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
+            <span className="text-[10px] font-black text-blue-700 uppercase">Customer Support</span>
+            <span className="text-slate-300 group-hover:text-blue-600 translate-x-0 group-hover:translate-x-1 transition-all">→</span>
+          </div>
+        </Link>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Notifikasi Prioritas</p>
+            <p className="text-xs font-semibold text-blue-700 mt-1">
+              {priorityNotificationMessage}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={markNotificationsSeen}
+            className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100 w-full sm:w-auto"
+          >
+            Tandai Dilihat
+          </button>
         </div>
       </div>
 
-      <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-3">
-        <AlertTriangle size={18} className="text-amber-600 mt-0.5" />
-        <p className="text-sm text-amber-800">
-          Saat satu fungsi admin kosong, owner bisa langsung buka modul terkait dari halaman ini tanpa menunggu handover personel.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
-        {[
-          { href: '/admin/warehouse', title: 'Admin Gudang (Advanced)', desc: 'Dashboard, Kanban, Picker Helper, Alokasi', icon: Warehouse },
-          { href: '/admin/warehouse/stok', title: 'Data Grid Inventori', desc: 'Manajemen produk, stok, & update massal', icon: Boxes },
-          { href: '/admin/warehouse/inbound/history', title: 'Riwayat Purchase Order', desc: 'Monitor semua daftar pesanan pengadaan', icon: Clock },
-          { href: '/admin/finance', title: 'Admin FinanceHub', desc: 'Verifikasi transfer, biaya operasional, AR, Retur', icon: DollarSign },
-          { href: '/admin/warehouse/retur', title: 'Manajemen Retur', desc: 'Approve retur, jemput barang, & refund', icon: RotateCcw },
-          { href: '/admin/sales', title: 'Manajemen Customer', desc: 'Kelola customer, tier, status blokir, dan poin.', icon: Users },
-          { href: '/admin/sales/member-baru', title: 'Daftarkan Member Baru', desc: 'Registrasi customer baru via OTP WhatsApp.', icon: UserCheck },
-          { href: '/admin/sales/karyawan', title: 'Daftarkan Karyawan Baru', desc: 'Buat akun karyawan/admin operasional baru.', icon: Shield },
-          { href: '/admin/sales/tier-pricing', title: 'Modifikasi Harga Tier', desc: 'Atur diskon tier produk berbasis persentase.', icon: DollarSign },
-          { href: '/admin/sales/shipping-methods', title: 'Jenis Pengiriman', desc: 'Kelola opsi pengiriman dan biayanya.', icon: Truck },
-          { href: '/admin/sales/discount-vouchers', title: 'Voucher Diskon', desc: 'Atur kode, persen, kuota, dan umur voucher.', icon: Percent },
-          { href: '/admin/chat', title: 'Admin CS / Sales', desc: 'Omnichannel inbox & WhatsApp manual order', icon: MessageSquare },
-          { href: '/admin/chat/whatsapp', title: 'WhatsApp Bot & OTP', desc: 'Monitor koneksi bot dan validasi OTP.', icon: MessageSquare },
-          { href: '/admin/orders/create', title: 'Input Pesanan Manual', desc: 'Input order cepat dari WA/Offline', icon: ClipboardCheck },
-          { href: '/admin/staff/daftar', title: 'Manajemen Staf', desc: 'CRUD akun admin/driver', icon: Users },
-          { href: '/admin/settings', title: 'Pengaturan Sistem', desc: 'WA bot, poin loyalty, API', icon: Settings },
-          { href: '/admin/audit-log', title: 'Audit Log', desc: 'Jejak aktivitas sensitif', icon: Shield },
-        ].map((m) => {
-          const Icon = m.icon;
-          return (
-            <Link key={m.href} href={m.href} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-emerald-300 transition-colors min-w-0">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-                  <Icon size={18} />
+      {/* All Admin Cards in One Place */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[11px] sm:text-xs font-black text-slate-500 uppercase tracking-[0.16em]">Aksi Cepat Lintas Admin</h3>
+          <p className="text-[10px] font-bold text-slate-400">{quickActionCards.length} modul</p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3">
+          {quickActionCards.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={`${item.href}-${item.title}`}
+                href={item.href}
+                className="group relative rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 sm:p-4 shadow-sm hover:border-emerald-300 hover:shadow-md transition-all min-h-[130px] max-[360px]:min-h-[120px] sm:min-h-[150px]"
+              >
+                {Number(item.badge || 0) > 0 && (
+                  <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
+                    {Number(item.badge) > 99 ? '99+' : Number(item.badge)}
+                  </span>
+                )}
+                <div className="flex items-start justify-between gap-2">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all ${item.tone}`}>
+                    <Icon size={18} />
+                  </div>
+                  <span className="text-[9px] font-black uppercase tracking-wide text-slate-400 group-hover:text-emerald-700">Buka</span>
                 </div>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
-                  <p className="text-xs text-slate-600 mt-1">{m.desc}</p>
-                </div>
+                <h3 className="font-black text-[11px] sm:text-xs text-slate-900 leading-snug mt-2.5">{item.title}</h3>
+                <p className="text-[10px] text-slate-500 mt-1 leading-snug max-[360px]:hidden">{item.desc}</p>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Main Feature Categories */}
+      <div className="space-y-6 sm:space-y-8">
+        {featureCategories.map((category) => (
+          <div key={category.group} className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className={`inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-2xl border ${category.tone}`}>
+                <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest">{category.group}</span>
               </div>
-            </Link>
-          );
-        })}
+              <button
+                type="button"
+                onClick={() => toggleFeatureSection(category.group)}
+                className="sm:hidden inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-[10px] font-black uppercase tracking-wide text-slate-600"
+              >
+                {collapsedFeatureSections[category.group] ? 'Buka' : 'Tutup'}
+                <ChevronDown
+                  size={13}
+                  className={`transition-transform ${collapsedFeatureSections[category.group] ? 'rotate-0' : 'rotate-180'}`}
+                />
+              </button>
+            </div>
+            <div
+              className={`${collapsedFeatureSections[category.group] ? 'hidden sm:grid' : 'grid'} grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-2.5 max-[360px]:gap-1.5 sm:gap-3`}
+            >
+              {category.menus.map((m) => {
+                const Icon = m.icon;
+                return (
+                  <Link
+                    key={`${category.group}-${m.href}-${m.title}`}
+                    href={m.href}
+                    className="group relative p-3 max-[360px]:p-2.5 sm:p-4 bg-white border border-slate-200 rounded-2xl shadow-sm hover:border-emerald-300 hover:shadow-lg transition-all"
+                  >
+                    {Number(m.badge || 0) > 0 && (
+                      <span className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 inline-flex items-center justify-center leading-none">
+                        {Number(m.badge) > 99 ? '99+' : Number(m.badge)}
+                      </span>
+                    )}
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-50 text-slate-600 flex items-center justify-center mb-2.5 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                      <Icon size={17} />
+                    </div>
+                    <h3 className="text-[11px] sm:text-xs font-black text-slate-900 leading-tight">{m.title}</h3>
+                    <p className="text-[10px] text-slate-500 mt-1 leading-tight hidden sm:block">{m.desc}</p>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Footer Disclaimer */}
+      <div className="text-center pt-4 sm:pt-8 pb-4 sm:pb-6">
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Migunani Advanced Admin v2.1 • Owner Control Mode</p>
       </div>
     </div>
   );

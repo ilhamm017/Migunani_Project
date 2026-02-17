@@ -34,19 +34,84 @@ const normalizeCode = (value: string) =>
     .replace(/\s+/g, '')
     .replace(/[^A-Z0-9_-]+/g, '');
 
-const toDateTimeInputValue = (iso: string | undefined) => {
-  if (!iso) return '';
-  const parsed = new Date(iso);
-  if (!Number.isFinite(parsed.getTime())) return '';
-  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-};
-
-const toIsoFromDateTimeInput = (value: string) => {
+const parseDateInput = (value: string): Date | null => {
   const raw = value.trim();
   if (!raw) return null;
+
+  const isoLocalMatch = raw.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (isoLocalMatch) {
+    const year = Number(isoLocalMatch[1]);
+    const month = Number(isoLocalMatch[2]);
+    const day = Number(isoLocalMatch[3]);
+    const hour = Number(isoLocalMatch[4] ?? '0');
+    const minute = Number(isoLocalMatch[5] ?? '0');
+    const second = Number(isoLocalMatch[6] ?? '0');
+    const localDate = new Date(year, month - 1, day, hour, minute, second, 0);
+    if (
+      localDate.getFullYear() === year &&
+      localDate.getMonth() === month - 1 &&
+      localDate.getDate() === day &&
+      localDate.getHours() === hour &&
+      localDate.getMinutes() === minute &&
+      localDate.getSeconds() === second
+    ) {
+      return localDate;
+    }
+    return null;
+  }
+
+  const localeMatch = raw.match(
+    /^(\d{2})\/(\d{2})\/(\d{4})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (localeMatch) {
+    const day = Number(localeMatch[1]);
+    const month = Number(localeMatch[2]);
+    const year = Number(localeMatch[3]);
+    const hour = Number(localeMatch[4] ?? '0');
+    const minute = Number(localeMatch[5] ?? '0');
+    const second = Number(localeMatch[6] ?? '0');
+    const localDate = new Date(year, month - 1, day, hour, minute, second, 0);
+    if (
+      localDate.getFullYear() === year &&
+      localDate.getMonth() === month - 1 &&
+      localDate.getDate() === day &&
+      localDate.getHours() === hour &&
+      localDate.getMinutes() === minute &&
+      localDate.getSeconds() === second
+    ) {
+      return localDate;
+    }
+    return null;
+  }
+
   const parsed = new Date(raw);
   if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed;
+};
+
+const toDateInputValue = (iso: string | undefined) => {
+  if (!iso) return '';
+  const parsed = parseDateInput(iso);
+  if (!parsed) return '';
+  // Return YYYY-MM-DD for input type="date"
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const toIsoFromDateInput = (value: string, isEndOfDay = false) => {
+  const parsed = parseDateInput(value);
+  if (!parsed) return null;
+
+  if (isEndOfDay) {
+    parsed.setHours(23, 59, 59, 999);
+  } else {
+    parsed.setHours(0, 0, 0, 0);
+  }
+
   return parsed.toISOString();
 };
 
@@ -123,8 +188,8 @@ export default function DiscountVouchersPage() {
         nextDrafts[row.code] = {
           discount_pct: String(Number(row.discount_pct || 0)),
           max_discount_rupiah: String(Number(row.max_discount_rupiah || 0)),
-          starts_at: toDateTimeInputValue(row.starts_at),
-          expires_at: toDateTimeInputValue(row.expires_at),
+          starts_at: toDateInputValue(row.starts_at),
+          expires_at: toDateInputValue(row.expires_at),
           usage_limit: String(Number(row.usage_limit || 1)),
           is_active: row.is_active !== false,
         };
@@ -149,8 +214,8 @@ export default function DiscountVouchersPage() {
     const discountPct = Number(newDiscountPct);
     const maxDiscount = Number(newMaxDiscount);
     const usageLimit = Number(newUsageLimit);
-    const startsAtIso = toIsoFromDateTimeInput(newStartsAt);
-    const expiresAtIso = toIsoFromDateTimeInput(newExpiresAt);
+    const startsAtIso = toIsoFromDateInput(newStartsAt, false);
+    const expiresAtIso = toIsoFromDateInput(newExpiresAt, true);
 
     if (!code || code.length < 3 || code.length > 40) {
       setError('Kode voucher wajib 3-40 karakter (A-Z, 0-9, _, -).');
@@ -213,8 +278,8 @@ export default function DiscountVouchersPage() {
     const discountPct = Number(draft.discount_pct);
     const maxDiscount = Number(draft.max_discount_rupiah);
     const usageLimit = Number(draft.usage_limit);
-    const startsAtIso = toIsoFromDateTimeInput(draft.starts_at);
-    const expiresAtIso = toIsoFromDateTimeInput(draft.expires_at);
+    const startsAtIso = toIsoFromDateInput(draft.starts_at, false);
+    const expiresAtIso = toIsoFromDateInput(draft.expires_at, true);
 
     if (!Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100) {
       setError(`Persen diskon voucher ${code} harus angka 0-100.`);
@@ -326,13 +391,13 @@ export default function DiscountVouchersPage() {
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
           />
           <input
-            type="datetime-local"
+            type="date"
             value={newStartsAt}
             onChange={(event) => setNewStartsAt(event.target.value)}
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
           />
           <input
-            type="datetime-local"
+            type="date"
             value={newExpiresAt}
             onChange={(event) => setNewExpiresAt(event.target.value)}
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
@@ -387,19 +452,19 @@ export default function DiscountVouchersPage() {
               const draft = drafts[voucher.code] || {
                 discount_pct: String(Number(voucher.discount_pct || 0)),
                 max_discount_rupiah: String(Number(voucher.max_discount_rupiah || 0)),
-                starts_at: toDateTimeInputValue(voucher.starts_at),
-                expires_at: toDateTimeInputValue(voucher.expires_at),
+                starts_at: toDateInputValue(voucher.starts_at),
+                expires_at: toDateInputValue(voucher.expires_at),
                 usage_limit: String(Number(voucher.usage_limit || 1)),
                 is_active: voucher.is_active !== false,
               };
               const status = getVoucherStatus({
                 ...voucher,
                 is_active: draft.is_active,
-                starts_at: toIsoFromDateTimeInput(draft.starts_at) || voucher.starts_at,
-                expires_at: toIsoFromDateTimeInput(draft.expires_at) || voucher.expires_at,
+                starts_at: toIsoFromDateInput(draft.starts_at, false) || voucher.starts_at,
+                expires_at: toIsoFromDateInput(draft.expires_at, true) || voucher.expires_at,
               });
-              const effectiveStartsAt = toIsoFromDateTimeInput(draft.starts_at) || voucher.starts_at;
-              const effectiveExpiresAt = toIsoFromDateTimeInput(draft.expires_at) || voucher.expires_at;
+              const effectiveStartsAt = toIsoFromDateInput(draft.starts_at, false) || voucher.starts_at;
+              const effectiveExpiresAt = toIsoFromDateInput(draft.expires_at, true) || voucher.expires_at;
               const processing = processingCode === voucher.code;
               const remainingQuota = Math.max(0, Number(voucher.usage_limit || 0) - Number(voucher.usage_count || 0));
               const durationDays = getDurationDays(effectiveStartsAt, effectiveExpiresAt);
@@ -440,7 +505,7 @@ export default function DiscountVouchersPage() {
                       className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm"
                     />
                     <input
-                      type="datetime-local"
+                      type="date"
                       value={draft.starts_at}
                       onChange={(event) => setDrafts((prev) => ({
                         ...prev,
@@ -449,7 +514,7 @@ export default function DiscountVouchersPage() {
                       className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm"
                     />
                     <input
-                      type="datetime-local"
+                      type="date"
                       value={draft.expires_at}
                       onChange={(event) => setDrafts((prev) => ({
                         ...prev,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import {
@@ -17,6 +17,7 @@ import {
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function FinanceReturPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
@@ -24,13 +25,7 @@ export default function FinanceReturPage() {
     const [loading, setLoading] = useState(true);
     const router = useRouter();
 
-    useEffect(() => {
-        if (allowed) {
-            loadData();
-        }
-    }, [allowed]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.retur.getAll();
@@ -43,7 +38,20 @@ export default function FinanceReturPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (allowed) {
+            void loadData();
+        }
+    }, [allowed, loadData]);
+
+    useRealtimeRefresh({
+        enabled: allowed,
+        onRefresh: loadData,
+        domains: ['retur', 'order', 'cod', 'admin'],
+        pollIntervalMs: 10000,
+    });
 
     if (!allowed) return null;
 
@@ -148,7 +156,7 @@ export default function FinanceReturPage() {
                                         {r.status === 'approved' && (
                                             <div className="flex items-center gap-1 text-slate-400">
                                                 <Clock size={14} />
-                                                <span className="text-[9px] font-black uppercase">Menunggu Gudang</span>
+                                                <span className="text-[9px] font-black uppercase">Menunggu Kasir</span>
                                             </div>
                                         )}
                                         {r.status === 'pickup_assigned' && (
@@ -169,7 +177,7 @@ export default function FinanceReturPage() {
                                         {r.status === 'handed_to_warehouse' && (
                                             <div className="flex items-center gap-1 text-violet-600">
                                                 <RotateCcw size={14} />
-                                                <span className="text-[9px] font-black uppercase">Menunggu ACC Gudang</span>
+                                                <span className="text-[9px] font-black uppercase">Menunggu ACC Kasir</span>
                                             </div>
                                         )}
                                         {r.status === 'received' && (

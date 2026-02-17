@@ -57,6 +57,28 @@ export default function AllocationListPage() {
         return { total, shortage, preorder, backorder, fulfilled };
     }, [orders]);
 
+    const groupedOrders = useMemo(() => {
+        const backorders: any[] = [];
+        const preorders: any[] = [];
+        const fulfilled: any[] = [];
+
+        orders.forEach((order: any) => {
+            const hasShortage = Number(order.shortage_total || 0) > 0;
+            if (!hasShortage) {
+                fulfilled.push(order);
+                return;
+            }
+
+            if (order.is_backorder) {
+                backorders.push(order);
+            } else {
+                preorders.push(order);
+            }
+        });
+
+        return { backorders, preorders, fulfilled };
+    }, [orders]);
+
     if (!allowed) return null;
 
     return (
@@ -108,79 +130,238 @@ export default function AllocationListPage() {
                         ) : orders.length === 0 ? (
                             <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-500">Tidak ada order untuk tampilan ini.</td></tr>
                         ) : (
-                            orders.map((order: any) => {
-                                const hasShortage = Number(order.shortage_total || 0) > 0;
-                                const isEditable = ALLOCATION_EDITABLE_STATUSES.includes(String(order.status || '') as typeof ALLOCATION_EDITABLE_STATUSES[number]);
-                                const canProcess = hasShortage && isEditable;
-
-                                return (
-                                    <tr key={order.id} className="hover:bg-slate-50">
-                                        <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                                            {order.id.substring(0, 8)}...
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2 text-slate-700">
-                                                <Calendar size={14} className="text-slate-400" />
-                                                {new Date(order.createdAt).toLocaleDateString('id-ID')}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2 font-bold text-slate-900">
-                                                <User size={14} className="text-slate-400" />
-                                                {order.Customer?.name || 'Guest'}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex flex-wrap items-center gap-1.5">
-                                                <span className={`inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest
-                                                    ${order.status === 'waiting_invoice' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
-                                                        order.status === 'waiting_payment' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
-                                                            order.status === 'ready_to_ship' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                                                                order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
-                                                                    'bg-slate-50 text-slate-700 border border-slate-100'}
-                                                `}>
-                                                    {order.status}
-                                                </span>
-                                                <span className={`inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest ${Number(order.shortage_total || 0) <= 0
-                                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                                    : order.is_backorder
-                                                        ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                                        : 'bg-indigo-50 text-indigo-700 border border-indigo-100'
-                                                    }`}>
-                                                    {Number(order.shortage_total || 0) <= 0 ? 'Fulfilled' : (order.is_backorder ? 'Backorder' : 'Pre-order')}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-2 text-slate-600">
-                                                <Box size={14} />
-                                                {order.OrderItems?.length || 0} Item
-                                            </div>
-                                            {Number(order.shortage_total || 0) > 0 ? (
-                                                <div className="mt-1 text-[11px] font-bold text-rose-600">
-                                                    Kurang: {Number(order.shortage_total || 0)}
-                                                </div>
-                                            ) : (
-                                                <div className="mt-1 text-[11px] font-bold text-emerald-600">
-                                                    Alokasi sudah penuh
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <Link
-                                                href={`/admin/orders/allocation/${order.id}`}
-                                                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canProcess
-                                                    ? 'text-white bg-blue-600 hover:bg-blue-700'
-                                                    : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
-                                                    }`}
-                                            >
-                                                {canProcess ? 'Proses' : 'Lihat'}
-                                                <ArrowRight size={14} />
-                                            </Link>
+                            <>
+                                {groupedOrders.backorders.length > 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="px-6 py-3 bg-amber-50 border-y border-amber-100 text-xs font-black uppercase tracking-widest text-amber-700">
+                                            Backorder (Hasil Split dari Order Terproses)
                                         </td>
                                     </tr>
-                                );
-                            })
+                                )}
+
+                                {groupedOrders.backorders.map((order: any) => {
+                                    const hasShortage = Number(order.shortage_total || 0) > 0;
+                                    const isEditable = ALLOCATION_EDITABLE_STATUSES.includes(String(order.status || '') as typeof ALLOCATION_EDITABLE_STATUSES[number]);
+                                    const canProcess = hasShortage && isEditable;
+
+                                    return (
+                                        <tr key={order.id} className="hover:bg-slate-50">
+                                            <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                                                {order.id.substring(0, 8)}...
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 text-slate-700">
+                                                    <Calendar size={14} className="text-slate-400" />
+                                                    {new Date(order.createdAt).toLocaleDateString('id-ID')}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 font-bold text-slate-900">
+                                                    <User size={14} className="text-slate-400" />
+                                                    {order.Customer?.name || 'Guest'}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <span className={`inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest
+                                                        ${order.status === 'waiting_invoice' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
+                                                            order.status === 'waiting_payment' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
+                                                                order.status === 'ready_to_ship' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                                                    order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
+                                                                        'bg-slate-50 text-slate-700 border border-slate-100'}
+                                                    `}>
+                                                        {order.status}
+                                                    </span>
+                                                    <span className="inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-700 border border-amber-100">
+                                                        Backorder
+                                                    </span>
+                                                </div>
+                                                {order.parent_order_id && (
+                                                    <div className="mt-1 text-[11px] font-bold text-amber-700">
+                                                        Split dari #{String(order.parent_order_id).substring(0, 8)}...
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 text-slate-600">
+                                                    <Box size={14} />
+                                                    {order.OrderItems?.length || 0} Item
+                                                </div>
+                                                {Number(order.shortage_total || 0) > 0 ? (
+                                                    <div className="mt-1 text-[11px] font-bold text-rose-600">
+                                                        Kurang: {Number(order.shortage_total || 0)}
+                                                    </div>
+                                                ) : (
+                                                    <div className="mt-1 text-[11px] font-bold text-emerald-600">
+                                                        Alokasi sudah penuh
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <Link
+                                                    href={`/admin/orders/allocation/${order.id}`}
+                                                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canProcess
+                                                        ? 'text-white bg-blue-600 hover:bg-blue-700'
+                                                        : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                                                        }`}
+                                                >
+                                                    {canProcess ? 'Proses' : 'Lihat'}
+                                                    <ArrowRight size={14} />
+                                                </Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+
+                                {groupedOrders.preorders.length > 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="px-6 py-3 bg-indigo-50 border-y border-indigo-100 text-xs font-black uppercase tracking-widest text-indigo-700">
+                                            Pre-order (Belum Ada Alokasi Terproses)
+                                        </td>
+                                    </tr>
+                                )}
+
+                                {groupedOrders.preorders.map((order: any) => {
+                                    const hasShortage = Number(order.shortage_total || 0) > 0;
+                                    const isEditable = ALLOCATION_EDITABLE_STATUSES.includes(String(order.status || '') as typeof ALLOCATION_EDITABLE_STATUSES[number]);
+                                    const canProcess = hasShortage && isEditable;
+
+                                    return (
+                                        <tr key={order.id} className="hover:bg-slate-50">
+                                            <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                                                {order.id.substring(0, 8)}...
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 text-slate-700">
+                                                    <Calendar size={14} className="text-slate-400" />
+                                                    {new Date(order.createdAt).toLocaleDateString('id-ID')}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 font-bold text-slate-900">
+                                                    <User size={14} className="text-slate-400" />
+                                                    {order.Customer?.name || 'Guest'}
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <span className={`inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest
+                                                        ${order.status === 'waiting_invoice' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
+                                                            order.status === 'waiting_payment' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
+                                                                order.status === 'ready_to_ship' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                                                    order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
+                                                                        'bg-slate-50 text-slate-700 border border-slate-100'}
+                                                    `}>
+                                                        {order.status}
+                                                    </span>
+                                                    <span className="inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                                        Pre-order
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2 text-slate-600">
+                                                    <Box size={14} />
+                                                    {order.OrderItems?.length || 0} Item
+                                                </div>
+                                                {Number(order.shortage_total || 0) > 0 ? (
+                                                    <div className="mt-1 text-[11px] font-bold text-rose-600">
+                                                        Kurang: {Number(order.shortage_total || 0)}
+                                                    </div>
+                                                ) : (
+                                                    <div className="mt-1 text-[11px] font-bold text-emerald-600">
+                                                        Alokasi sudah penuh
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <Link
+                                                    href={`/admin/orders/allocation/${order.id}`}
+                                                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canProcess
+                                                        ? 'text-white bg-blue-600 hover:bg-blue-700'
+                                                        : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                                                        }`}
+                                                >
+                                                    {canProcess ? 'Proses' : 'Lihat'}
+                                                    <ArrowRight size={14} />
+                                                </Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+
+                                {!onlyShortage && groupedOrders.fulfilled.length > 0 && (
+                                    <>
+                                        <tr>
+                                            <td colSpan={6} className="px-6 py-3 bg-emerald-50 border-y border-emerald-100 text-xs font-black uppercase tracking-widest text-emerald-700">
+                                                Fulfilled (Alokasi Sudah Lengkap)
+                                            </td>
+                                        </tr>
+                                        {groupedOrders.fulfilled.map((order: any) => {
+                                            const hasShortage = Number(order.shortage_total || 0) > 0;
+                                            const isEditable = ALLOCATION_EDITABLE_STATUSES.includes(String(order.status || '') as typeof ALLOCATION_EDITABLE_STATUSES[number]);
+                                            const canProcess = hasShortage && isEditable;
+
+                                            return (
+                                                <tr key={order.id} className="hover:bg-slate-50">
+                                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                                                        {order.id.substring(0, 8)}...
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-2 text-slate-700">
+                                                            <Calendar size={14} className="text-slate-400" />
+                                                            {new Date(order.createdAt).toLocaleDateString('id-ID')}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-2 font-bold text-slate-900">
+                                                            <User size={14} className="text-slate-400" />
+                                                            {order.Customer?.name || 'Guest'}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex flex-wrap items-center gap-1.5">
+                                                            <span className={`inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest
+                                                                ${order.status === 'waiting_invoice' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
+                                                                    order.status === 'waiting_payment' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
+                                                                        order.status === 'ready_to_ship' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                                                            order.status === 'hold' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
+                                                                                'bg-slate-50 text-slate-700 border border-slate-100'}
+                                                            `}>
+                                                                {order.status}
+                                                            </span>
+                                                            <span className="inline-flex px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                                                Fulfilled
+                                                            </span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="flex items-center gap-2 text-slate-600">
+                                                            <Box size={14} />
+                                                            {order.OrderItems?.length || 0} Item
+                                                        </div>
+                                                        <div className="mt-1 text-[11px] font-bold text-emerald-600">
+                                                            Alokasi sudah penuh
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <Link
+                                                            href={`/admin/orders/allocation/${order.id}`}
+                                                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canProcess
+                                                                ? 'text-white bg-blue-600 hover:bg-blue-700'
+                                                                : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                                                                }`}
+                                                        >
+                                                            {canProcess ? 'Proses' : 'Lihat'}
+                                                            <ArrowRight size={14} />
+                                                        </Link>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </>
+                                )}
+                            </>
                         )}
                     </tbody>
                 </table>

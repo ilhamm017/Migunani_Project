@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function FinanceReturDetailPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
@@ -37,13 +38,7 @@ export default function FinanceReturDetailPage() {
     const [submitting, setSubmitting] = useState(false);
     const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (allowed && returId) {
-            loadData();
-        }
-    }, [allowed, returId]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.retur.getAll();
@@ -54,7 +49,21 @@ export default function FinanceReturDetailPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [returId]);
+
+    useEffect(() => {
+        if (allowed && returId) {
+            void loadData();
+        }
+    }, [allowed, loadData, returId]);
+
+    useRealtimeRefresh({
+        enabled: allowed && Boolean(returId),
+        onRefresh: loadData,
+        domains: ['retur', 'order', 'cod', 'admin'],
+        pollIntervalMs: 10000,
+        filterReturIds: returId ? [returId] : [],
+    });
 
     const handleDisburse = async () => {
         if (!confirm('Apakah Anda yakin ingin mencairkan dana refund ini? Pastikan Anda sudah melakukan transfer ke customer.')) return;
@@ -106,8 +115,8 @@ export default function FinanceReturDetailPage() {
             case 'approved': return { label: 'Disetujui', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle };
             case 'pickup_assigned': return { label: 'Kurir Ditugaskan', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: Truck };
             case 'picked_up': return { label: 'Sudah Dipickup Kurir', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: Truck };
-            case 'handed_to_warehouse': return { label: 'Menunggu ACC Gudang', color: 'bg-violet-100 text-violet-700 border-violet-200', icon: RotateCcw };
-            case 'received': return { label: 'Barang Diterima Gudang', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: RotateCcw };
+            case 'handed_to_warehouse': return { label: 'Menunggu ACC Kasir', color: 'bg-violet-100 text-violet-700 border-violet-200', icon: RotateCcw };
+            case 'received': return { label: 'Barang Diterima Kasir', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: RotateCcw };
             case 'completed': return { label: 'Selesai', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: CheckCircle };
             case 'rejected': return { label: 'Ditolak', color: 'bg-rose-100 text-rose-700 border-rose-200', icon: Clock };
             default: return { label: status, color: 'bg-slate-100 text-slate-500 border-slate-200', icon: Clock };

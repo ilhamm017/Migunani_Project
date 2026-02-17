@@ -291,44 +291,79 @@ export const allocateOrder = async (req: Request, res: Response) => {
             await allocation.update({ allocated_qty: item.qty }, { transaction: t });
         }
 
-        // --- Determine fulfillment status ---
-        const orderItems = await OrderItem.findAll({ where: { order_id: id }, transaction: t });
-        const allocations = await OrderAllocation.findAll({ where: { order_id: id }, transaction: t });
+        // --- Determine fulfillment status (allocation is stored per product_id) ---
+        const orderItems = await OrderItem.findAll({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const allocations = await OrderAllocation.findAll({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
 
-        let fullyAllocated = true;
-        let partiallyAllocated = false;
-
-        for (const oi of orderItems) {
-            const alloc = allocations.find(a => a.product_id === oi.product_id);
-            const allocQty = alloc ? alloc.allocated_qty : 0;
-            if (allocQty < oi.qty) fullyAllocated = false;
-            if (allocQty > 0) partiallyAllocated = true;
+        const allocatedByProduct = new Map<string, number>();
+        for (const allocation of allocations) {
+            const productId = String((allocation as any).product_id || '');
+            if (!productId) continue;
+            const prev = Number(allocatedByProduct.get(productId) || 0);
+            allocatedByProduct.set(productId, prev + Number((allocation as any).allocated_qty || 0));
         }
 
-        // --- Recalculate total based on what's actually allocated ---
-        let allocatedTotal = 0;
-        for (const oi of orderItems) {
-            const alloc = allocations.find(a => a.product_id === oi.product_id);
-            const allocQty = alloc ? alloc.allocated_qty : 0;
-            allocatedTotal += Number(oi.price_at_purchase) * allocQty;
-        }
+        // Distribute product-level allocation to each order item row.
+        const remainingAllocatedByProduct = new Map<string, number>(allocatedByProduct);
+        const itemBreakdown = orderItems.map((oi: any) => {
+            const productId = String(oi.product_id || '');
+            const orderedQty = Number(oi.qty || 0);
+            const remainingAllocated = Number(remainingAllocatedByProduct.get(productId) || 0);
+            const allocatedQty = Math.min(orderedQty, Math.max(0, remainingAllocated));
+            const shortageQty = Math.max(0, orderedQty - allocatedQty);
+            remainingAllocatedByProduct.set(productId, Math.max(0, remainingAllocated - allocatedQty));
 
-        // --- Handle Split Order for Shortages ---
+            return {
+                oi,
+                product_id: productId,
+                ordered_qty: orderedQty,
+                allocated_qty: allocatedQty,
+                shortage_qty: shortageQty
+            };
+        });
+
+        const fullyAllocated = itemBreakdown.every((row) => row.shortage_qty <= 0);
+        const partiallyAllocated = itemBreakdown.some((row) => row.allocated_qty > 0);
+
+        // --- Recalculate total based on what can be processed now ---
+        const allocatedTotal = itemBreakdown.reduce((sum, row) => {
+            return sum + (Number(row.oi.price_at_purchase || 0) * Number(row.allocated_qty || 0));
+        }, 0);
+
+        const backorderByProduct = new Map<string, { product_id: string; ordered: number; allocated: number; shortage: number }>();
+        for (const row of itemBreakdown) {
+            if (row.shortage_qty <= 0) continue;
+            const prev = backorderByProduct.get(row.product_id) || {
+                product_id: row.product_id,
+                ordered: 0,
+                allocated: 0,
+                shortage: 0
+            };
+            prev.ordered += Number(row.ordered_qty || 0);
+            prev.allocated += Number(row.allocated_qty || 0);
+            prev.shortage += Number(row.shortage_qty || 0);
+            backorderByProduct.set(row.product_id, prev);
+        }
+        const backorderItems = Array.from(backorderByProduct.values());
+
+        // Split only when some qty can be processed now and some must become backorder.
+        const shouldSplitOrder = backorderItems.length > 0 && partiallyAllocated;
         let childOrderId: string | null = null;
-        const itemsWithShortage = orderItems.map(oi => {
-            const alloc = allocations.find(a => a.product_id === oi.product_id);
-            const allocQty = alloc ? alloc.allocated_qty : 0;
-            const shortage = oi.qty - allocQty;
-            return shortage > 0 ? { oi, shortage, allocQty } : null;
-        }).filter(Boolean);
 
-        if (itemsWithShortage.length > 0) {
-            // Create child order
+        if (shouldSplitOrder) {
             const childOrder = await Order.create({
                 customer_id: order.customer_id,
                 customer_name: order.customer_name,
                 source: order.source,
-                status: 'pending', // Child order starts as pending
+                status: 'pending',
                 total_amount: 0,
                 discount_amount: 0,
                 parent_order_id: order.id,
@@ -336,7 +371,6 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }, { transaction: t });
             childOrderId = childOrder.id;
 
-            // Create Invoice for child order
             const parentInvoice = await Invoice.findOne({
                 where: { order_id: id },
                 transaction: t,
@@ -364,32 +398,33 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }
 
             let childTotal = 0;
-            for (const item of itemsWithShortage as any[]) {
-                const { oi, shortage, allocQty } = item;
+            for (const row of itemBreakdown) {
+                if (row.shortage_qty <= 0) continue;
 
-                // Create item in child order
-                await OrderItem.create({
+                const childItem = await OrderItem.create({
                     order_id: childOrderId as string,
-                    product_id: oi.product_id,
-                    qty: shortage,
-                    price_at_purchase: oi.price_at_purchase,
-                    cost_at_purchase: oi.cost_at_purchase
+                    product_id: row.oi.product_id,
+                    qty: row.shortage_qty,
+                    price_at_purchase: row.oi.price_at_purchase,
+                    cost_at_purchase: row.oi.cost_at_purchase
                 }, { transaction: t });
 
-                childTotal += Number(oi.price_at_purchase) * shortage;
+                childTotal += Number(row.oi.price_at_purchase || 0) * Number(row.shortage_qty || 0);
 
-                // Update quantity in original order
-                if (allocQty > 0) {
-                    await oi.update({ qty: allocQty }, { transaction: t });
-                } else {
-                    await oi.update({ qty: 0 }, { transaction: t });
-                }
+                await Backorder.findOrCreate({
+                    where: { order_item_id: childItem.id },
+                    defaults: {
+                        order_item_id: childItem.id,
+                        qty_pending: row.shortage_qty,
+                        status: 'waiting_stock'
+                    },
+                    transaction: t
+                });
+
+                await row.oi.update({ qty: row.allocated_qty }, { transaction: t });
             }
 
-            await childOrder.update({
-                total_amount: childTotal
-            }, { transaction: t });
-
+            await childOrder.update({ total_amount: childTotal }, { transaction: t });
             await Invoice.update({
                 subtotal: childTotal,
                 total: childTotal
@@ -440,31 +475,18 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }
         }
 
-        // --- Build response with backorder info ---
-        const backorderItems = orderItems
-            .map(oi => {
-                const alloc = allocations.find(a => a.product_id === oi.product_id);
-                const allocQty = alloc ? alloc.allocated_qty : 0;
-                const shortage = oi.qty - allocQty;
-                return shortage > 0 ? { product_id: oi.product_id, ordered: oi.qty, allocated: allocQty, shortage } : null;
-            })
-            .filter(Boolean);
-
         // --- Manage Backorders & Order Issues ---
-        const hasShortage = backorderItems.length > 0;
         const now = new Date();
 
-        // 1. Update Backorder Records
-        for (const oi of orderItems) {
-            const alloc = allocations.find(a => a.product_id === oi.product_id);
-            const allocQty = alloc ? alloc.allocated_qty : 0;
-            const shortageRaw = oi.qty - allocQty;
-            const shortage = shortageRaw > 0 ? shortageRaw : 0;
+        // 1. Update Backorder Records on parent order items.
+        // If order was split, parent item shortage is moved to child and parent becomes fulfilled.
+        for (const row of itemBreakdown) {
+            const shortage = shouldSplitOrder ? 0 : Number(row.shortage_qty || 0);
 
             const [backorder, created] = await Backorder.findOrCreate({
-                where: { order_item_id: oi.id },
+                where: { order_item_id: row.oi.id },
                 defaults: {
-                    order_item_id: oi.id,
+                    order_item_id: row.oi.id,
                     qty_pending: shortage,
                     status: 'waiting_stock'
                 },
@@ -496,33 +518,38 @@ export const allocateOrder = async (req: Request, res: Response) => {
 
         // Logic removed.
 
-        // Resolve any open shortage issues
-        const openIssues = await OrderIssue.findAll({
-            where: { order_id: id, issue_type: 'shortage', status: 'open' },
-            transaction: t,
-            lock: t.LOCK.UPDATE
-        });
+        // Resolve open shortage issues only when shortage no longer remains on current order.
+        if (backorderItems.length === 0 || shouldSplitOrder) {
+            const openIssues = await OrderIssue.findAll({
+                where: { order_id: id, issue_type: 'shortage', status: 'open' },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
 
-        for (const issue of openIssues) {
-            await issue.update({
-                status: 'resolved',
-                resolved_at: now,
-                resolved_by: req.user?.id || null
-            }, { transaction: t });
+            for (const issue of openIssues) {
+                await issue.update({
+                    status: 'resolved',
+                    resolved_at: now,
+                    resolved_by: req.user?.id || null
+                }, { transaction: t });
+            }
         }
 
         await t.commit();
         const previousStatus = String(previousStatusForNotification || '');
-        if (String(order.status || '') === 'waiting_invoice' && previousStatus && previousStatus !== 'waiting_invoice') {
+        const nextStatus = String(order.status || '');
+        if (previousStatus && nextStatus && previousStatus !== nextStatus) {
             emitOrderStatusChanged({
                 order_id: order.id,
                 from_status: previousStatus,
-                to_status: 'waiting_invoice',
+                to_status: nextStatus,
                 source: String(order.source || ''),
                 payment_method: String(invoice?.payment_method || ''),
                 courier_id: String(order.courier_id || ''),
                 triggered_by_role: String(req.user?.role || ''),
-                target_roles: ['admin_finance'],
+                target_roles: nextStatus === 'waiting_invoice'
+                    ? ['admin_finance']
+                    : ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
             });
         } else {
             emitAdminRefreshBadges();
@@ -530,7 +557,9 @@ export const allocateOrder = async (req: Request, res: Response) => {
 
         res.json({
             message: 'Alokasi berhasil',
-            status: fullyAllocated ? 'fully_allocated' : 'partially_allocated_with_split',
+            status: fullyAllocated
+                ? 'fully_allocated'
+                : (shouldSplitOrder ? 'partially_allocated_with_split' : (partiallyAllocated ? 'partially_allocated' : 'backorder_pending')),
             allocated_total: allocatedTotal,
             backorder_order_id: childOrderId,
             backorder_items: backorderItems,
@@ -560,6 +589,7 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(404).json({ message: 'Order tidak ditemukan.' });
         }
+        const previousOrderStatus = String(order.status || '');
 
         if (!(REALLOCATABLE_STATUSES as readonly string[]).includes(order.status)) {
             await t.rollback();
@@ -642,7 +672,20 @@ export const cancelBackorder = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
-        emitAdminRefreshBadges();
+        if (previousOrderStatus !== 'canceled') {
+            emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus || null,
+                to_status: 'canceled',
+                source: String(order.source || ''),
+                payment_method: null,
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || ''),
+                target_roles: ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
+            });
+        } else {
+            emitAdminRefreshBadges();
+        }
 
         return res.json({
             message: 'Backorder / pre-order berhasil dibatalkan.',

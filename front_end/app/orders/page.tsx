@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Clock, CheckCircle2, Truck, RotateCcw, CreditCard, Package, ShoppingCart } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import PaymentCountdown from '@/components/orders/PaymentCountdown';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const getOrderListVisual = (status: string) => {
     if (['completed', 'delivered'].includes(status)) {
@@ -64,26 +65,34 @@ export default function OrdersPage() {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
+    const loadOrders = useCallback(async () => {
         if (!isAuthenticated) {
             setOrders([]);
             setLoading(false);
             return;
         }
-
-        const load = async () => {
-            try {
-                const res = await api.orders.getMyOrders({ page: 1, limit: 20 });
-                setOrders(res.data?.orders || []);
-            } catch (error) {
-                console.error('Failed to load orders:', error);
-                setOrders([]);
-            } finally {
-                setLoading(false);
-            }
-        };
-        load();
+        try {
+            setLoading(true);
+            const res = await api.orders.getMyOrders({ page: 1, limit: 20 });
+            setOrders(res.data?.orders || []);
+        } catch (error) {
+            console.error('Failed to load orders:', error);
+            setOrders([]);
+        } finally {
+            setLoading(false);
+        }
     }, [isAuthenticated]);
+
+    useEffect(() => {
+        void loadOrders();
+    }, [loadOrders]);
+
+    useRealtimeRefresh({
+        enabled: isAuthenticated,
+        onRefresh: loadOrders,
+        domains: ['order', 'retur', 'admin'],
+        pollIntervalMs: 10000,
+    });
 
     if (loading) {
         return (

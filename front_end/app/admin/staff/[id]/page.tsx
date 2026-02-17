@@ -1,12 +1,24 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatDateTime, roleLabelMap, roleOptions, StaffRecord, StaffRole, StaffStatus } from '../staffShared';
+
+type ApiErrorShape = {
+  response?: {
+    data?: {
+      message?: string;
+    };
+  };
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  return (error as ApiErrorShape)?.response?.data?.message || fallback;
+};
 
 export default function StaffDetailPage() {
   const allowed = useRequireRoles(['super_admin']);
@@ -30,7 +42,7 @@ export default function StaffDetailPage() {
     password: '',
   });
 
-  const loadDetail = async () => {
+  const loadDetail = useCallback(async () => {
     if (!staffId) return;
     try {
       setLoading(true);
@@ -47,19 +59,19 @@ export default function StaffDetailPage() {
           password: '',
         });
       }
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal memuat detail staff');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Gagal memuat detail staff'));
       setStaff(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, [staffId]);
 
   useEffect(() => {
     if (allowed && staffId) {
       loadDetail();
     }
-  }, [allowed, staffId]);
+  }, [allowed, staffId, loadDetail]);
 
   const handleSave = async () => {
     if (!staffId) return;
@@ -78,8 +90,8 @@ export default function StaffDetailPage() {
         password: form.password.trim() || undefined,
       });
       await loadDetail();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menyimpan perubahan');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Gagal menyimpan perubahan'));
     } finally {
       setSaving(false);
     }
@@ -93,8 +105,8 @@ export default function StaffDetailPage() {
       setError('');
       await api.admin.staff.update(staff.id, { status: nextStatus });
       await loadDetail();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal update status');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Gagal update status'));
     } finally {
       setSaving(false);
     }
@@ -107,8 +119,8 @@ export default function StaffDetailPage() {
       setError('');
       await api.admin.staff.remove(staff.id);
       router.push('/admin/staff/daftar');
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menonaktifkan staff');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Gagal menonaktifkan staff'));
     } finally {
       setSaving(false);
     }

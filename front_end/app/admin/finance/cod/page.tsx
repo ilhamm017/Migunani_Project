@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { Truck, CheckCircle, ChevronRight, Calculator, Wallet, AlertCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function AdminDriverCodPage() {
     const allowed = useRequireRoles(['admin_finance', 'super_admin']);
@@ -19,37 +20,38 @@ export default function AdminDriverCodPage() {
 
     const router = useRouter();
 
-    const loadDrivers = async () => {
+    const loadDrivers = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getDriverCodList();
             const driverList = res.data || [];
             setDrivers(driverList);
 
-            // If only one driver has pending tasks, select them automatically for convenience
-            if (driverList.length === 1 && !selectedDriver) {
-                setSelectedDriver(driverList[0]);
-            }
-
-            // If currently selected driver is updated, refresh selection
-            if (selectedDriver) {
-                const updated = driverList.find((d: any) => d.driver.id === selectedDriver.driver.id);
-                if (updated) {
-                    setSelectedDriver(updated);
-                } else {
-                    setSelectedDriver(null);
+            setSelectedDriver((prev: any) => {
+                if (driverList.length === 1 && !prev) {
+                    return driverList[0];
                 }
-            }
+                if (!prev) return prev;
+                const updated = driverList.find((d: any) => d.driver.id === prev.driver.id);
+                return updated || null;
+            });
         } catch (error) {
             console.error('Failed to load drivers:', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        if (allowed) loadDrivers();
-    }, [allowed]);
+        if (allowed) void loadDrivers();
+    }, [allowed, loadDrivers]);
+
+    useRealtimeRefresh({
+        enabled: allowed,
+        onRefresh: loadDrivers,
+        domains: ['cod', 'order', 'admin'],
+        pollIntervalMs: 10000,
+    });
 
     useEffect(() => {
         if (selectedDriver) {

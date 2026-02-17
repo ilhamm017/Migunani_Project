@@ -22,6 +22,7 @@ export default function SalesMemberCreatePage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [tier, setTier] = useState<TierType>('regular');
+  const [address, setAddress] = useState('');
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
@@ -67,6 +68,7 @@ export default function SalesMemberCreatePage() {
         email: email.trim(),
         password: password.trim(),
         tier,
+        address: address.trim(),
       });
 
       setActionMessage('Member baru berhasil didaftarkan.');
@@ -75,6 +77,7 @@ export default function SalesMemberCreatePage() {
       setEmail('');
       setPassword('');
       setTier('regular');
+      setAddress('');
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Gagal menambahkan customer');
     } finally {
@@ -144,6 +147,13 @@ export default function SalesMemberCreatePage() {
               </option>
             ))}
           </select>
+          <textarea
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="Alamat lengkap customer (opsional)"
+            rows={3}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm md:col-span-2"
+          />
         </div>
 
         {/* OTP section hidden */}

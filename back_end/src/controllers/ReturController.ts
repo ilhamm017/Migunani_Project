@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account } from '../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../services/JournalService';
+import { emitReturStatusChanged } from '../utils/orderNotification';
 
 // --- Customer Endpoints ---
 
@@ -60,7 +61,7 @@ export const requestRetur = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Jumlah retur melebihi jumlah yang dibeli' });
         }
 
-        await Retur.create({
+        const createdRetur = await Retur.create({
             order_id,
             product_id,
             qty,
@@ -71,6 +72,16 @@ export const requestRetur = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
+        emitReturStatusChanged({
+            retur_id: String(createdRetur.id),
+            order_id: String(order_id),
+            from_status: null,
+            to_status: 'pending',
+            courier_id: null,
+            triggered_by_role: String(req.user?.role || 'customer'),
+            target_roles: ['customer', 'kasir', 'super_admin'],
+            target_user_ids: [String(userId)],
+        });
         res.status(201).json({ message: 'Return request submitted successfully' });
 
     } catch (error) {
@@ -159,10 +170,10 @@ export const updateReturStatus = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Retur request not found' });
         }
 
-        const isWarehouseAdmin = ['super_admin', 'admin_gudang'].includes(userRole);
-        if (!isWarehouseAdmin) {
+        const isReturOperator = ['super_admin', 'kasir'].includes(userRole);
+        if (!isReturOperator) {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya Admin Gudang atau Super Admin yang dapat mengubah status retur' });
+            return res.status(403).json({ message: 'Hanya Kasir atau Super Admin yang dapat mengubah status retur' });
         }
 
         const transitionIsValid = (
@@ -215,6 +226,7 @@ export const updateReturStatus = async (req: Request, res: Response) => {
             updateData.is_back_to_stock = Boolean(is_back_to_stock);
         }
 
+        const previousStatus = String(retur.status || '');
         await retur.update(updateData, { transaction: t });
 
         // Logic for completion: if is_back_to_stock is true, increment product stock
@@ -258,6 +270,16 @@ export const updateReturStatus = async (req: Request, res: Response) => {
         }
 
         await t.commit();
+        emitReturStatusChanged({
+            retur_id: String(retur.id),
+            order_id: String(retur.order_id),
+            from_status: previousStatus || null,
+            to_status: nextStatus,
+            courier_id: String(retur.courier_id || updateData.courier_id || ''),
+            triggered_by_role: String(req.user?.role || ''),
+            target_roles: ['customer', 'kasir', 'admin_finance', 'driver', 'super_admin'],
+            target_user_ids: updateData.courier_id ? [String(updateData.courier_id)] : (retur.courier_id ? [String(retur.courier_id)] : []),
+        });
         res.json({ message: `Retur status updated to ${nextStatus}`, retur });
 
     } catch (error) {
@@ -350,6 +372,15 @@ export const disburseRefund = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
+        emitReturStatusChanged({
+            retur_id: String(retur.id),
+            order_id: String(retur.order_id),
+            from_status: String(retur.status || ''),
+            to_status: String(retur.status || ''),
+            courier_id: String((retur as any).courier_id || ''),
+            triggered_by_role: String(req.user?.role || ''),
+            target_roles: ['customer', 'admin_finance', 'kasir', 'super_admin'],
+        });
         res.json({ message: 'Dana refund berhasil dicairkan dan tercatat di pengeluaran', retur });
 
     } catch (error) {

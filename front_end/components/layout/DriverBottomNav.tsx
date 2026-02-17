@@ -27,7 +27,8 @@ export default function DriverBottomNav() {
     const role = String(user?.role || '').trim();
     const canAccessDriverNav = ['driver', 'super_admin', 'admin_gudang'].includes(role);
     const unreadCount = useChatUnreadCount({
-        enabled: !!pathname?.startsWith('/driver') && isAuthenticated && canUseChatUnreadByRole(role)
+        enabled: !!pathname?.startsWith('/driver') && isAuthenticated && canUseChatUnreadByRole(role),
+        userId: user?.id
     });
     const {
         newTaskCount,

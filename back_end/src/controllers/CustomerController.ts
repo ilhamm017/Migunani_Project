@@ -150,6 +150,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         const email = normalizeEmail(req.body?.email);
         const password = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
         const tier = normalizeTier(req.body?.tier);
+        const address = typeof req.body?.address === 'string' ? req.body.address.trim() : '';
 
         if (!name) {
             await t.rollback();
@@ -159,12 +160,6 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: 'Nomor WhatsApp tidak valid' });
         }
-        /* 
-        if (!/^\d{6}$/.test(otpCode)) {
-            await t.rollback();
-            return res.status(400).json({ message: 'Kode OTP harus 6 digit' });
-        }
-        */
         if (!email) {
             await t.rollback();
             return res.status(400).json({ message: 'Email wajib diisi' });
@@ -177,31 +172,6 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: `Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter` });
         }
-
-        /* Temporarily disabled OTP verification
-        const otpSession = customerOtpMap.get(normalizedWhatsapp);
-        const now = Date.now();
-        if (!otpSession || otpSession.expiresAt <= now) {
-            customerOtpMap.delete(normalizedWhatsapp);
-            await t.rollback();
-            return res.status(400).json({ message: 'OTP tidak ditemukan atau sudah kedaluwarsa. Silakan kirim ulang OTP.' });
-        }
-        if (otpSession.requestedBy !== actorId) {
-            await t.rollback();
-            return res.status(403).json({ message: 'OTP ini diminta oleh akun admin lain. Silakan kirim OTP baru.' });
-        }
-        if (otpSession.attempts >= OTP_MAX_VERIFY_ATTEMPTS) {
-            customerOtpMap.delete(normalizedWhatsapp);
-            await t.rollback();
-            return res.status(400).json({ message: 'Percobaan OTP melebihi batas. Silakan kirim OTP baru.' });
-        }
-        if (otpSession.code !== otpCode) {
-            otpSession.attempts += 1;
-            customerOtpMap.set(normalizedWhatsapp, otpSession);
-            await t.rollback();
-            return res.status(400).json({ message: 'Kode OTP salah' });
-        }
-        */
 
         const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
         const conflictConditions: Array<Record<string, unknown>> = [
@@ -232,12 +202,18 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
             debt: 0
         }, { transaction: t });
 
+        const saved_addresses = address ? [{
+            label: 'Rumah Utama',
+            address,
+            isPrimary: true
+        }] : [];
+
         await CustomerProfile.create({
             user_id: user.id,
             tier,
             credit_limit: 0,
             points: 0,
-            saved_addresses: []
+            saved_addresses
         }, { transaction: t });
 
         await t.commit();
@@ -577,7 +553,7 @@ export const updateCustomerStatus = async (req: Request, res: Response) => {
 
         if (!['active', 'banned'].includes(nextStatus)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Status customer harus active atau banned' });
+            return res.status(400).json({ message: 'Status customer harus active or banned' });
         }
 
         const customer = await User.findOne({

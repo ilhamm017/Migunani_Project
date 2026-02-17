@@ -30,7 +30,8 @@ export default function BottomNav() {
     const isCustomerRoute = !pathname?.startsWith('/admin') && !pathname?.startsWith('/auth') && !pathname?.startsWith('/driver');
     const isCustomerRole = !role || role === 'customer';
     const unreadCount = useChatUnreadCount({
-        enabled: !!isCustomerRoute && isAuthenticated && isCustomerRole && canUseChatUnreadByRole(role)
+        enabled: !!isCustomerRoute && isAuthenticated && isCustomerRole && canUseChatUnreadByRole(role),
+        userId: user?.id
     });
 
     // Show customer bottom nav on customer-facing routes.

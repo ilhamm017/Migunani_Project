@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -17,9 +17,10 @@ import {
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function DriverReturDetailPage() {
-    const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
+    const allowed = useRequireRoles(['driver', 'super_admin']);
     const { user } = useAuthStore();
     const params = useParams();
     const router = useRouter();
@@ -29,7 +30,8 @@ export default function DriverReturDetailPage() {
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
 
-    const loadRetur = async () => {
+    const loadRetur = useCallback(async () => {
+        if (!returId) return;
         try {
             setLoading(true);
             const res = await api.driver.getReturById(returId);
@@ -40,13 +42,22 @@ export default function DriverReturDetailPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [returId]);
 
     useEffect(() => {
         if (allowed && returId) {
             void loadRetur();
         }
-    }, [allowed, returId]);
+    }, [allowed, loadRetur, returId]);
+
+    useRealtimeRefresh({
+        enabled: allowed && Boolean(returId),
+        onRefresh: loadRetur,
+        domains: ['retur', 'admin'],
+        pollIntervalMs: 12000,
+        filterReturIds: returId ? [returId] : [],
+        filterDriverIds: user?.id ? [String(user.id)] : [],
+    });
 
     const statusLabel = useMemo(() => {
         switch (retur?.status) {
@@ -55,9 +66,9 @@ export default function DriverReturDetailPage() {
             case 'picked_up':
                 return 'Sudah Dipickup';
             case 'handed_to_warehouse':
-                return 'Sudah Diserahkan ke Gudang';
+                return 'Sudah Diserahkan ke Kasir';
             case 'received':
-                return 'Sudah Di-ACC Gudang';
+                return 'Sudah Di-ACC Kasir';
             case 'completed':
                 return 'Retur Selesai';
             default:
@@ -87,7 +98,7 @@ export default function DriverReturDetailPage() {
     const handleUpdateStatus = async (nextStatus: 'picked_up' | 'handed_to_warehouse') => {
         const confirmationText = nextStatus === 'picked_up'
             ? 'Konfirmasi: barang retur sudah Anda pickup dari customer?'
-            : 'Konfirmasi: barang retur sudah Anda serahkan ke gudang?';
+            : 'Konfirmasi: barang retur sudah Anda serahkan ke kasir?';
 
         if (!confirm(confirmationText)) return;
 
@@ -96,7 +107,7 @@ export default function DriverReturDetailPage() {
             await api.driver.updateReturStatus(returId, nextStatus);
             alert(nextStatus === 'picked_up'
                 ? 'Pickup retur berhasil dikonfirmasi.'
-                : 'Penyerahan ke gudang berhasil dikonfirmasi.');
+                : 'Penyerahan ke kasir berhasil dikonfirmasi.');
             await loadRetur();
         } catch (error: any) {
             console.error('Failed to update retur status:', error);
@@ -190,7 +201,7 @@ export default function DriverReturDetailPage() {
                             disabled={!isDriver || submitting}
                             className="w-full py-4 bg-violet-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-violet-700 transition-colors disabled:opacity-50"
                         >
-                            {submitting ? 'Memproses...' : 'Konfirmasi Diserahkan ke Gudang'}
+                            {submitting ? 'Memproses...' : 'Konfirmasi Diserahkan ke Kasir'}
                         </button>
                     )}
 
@@ -198,7 +209,7 @@ export default function DriverReturDetailPage() {
                         <div className="p-4 bg-violet-50 border border-violet-100 rounded-2xl flex items-start gap-3">
                             <Clock3 size={18} className="text-violet-600 shrink-0 mt-0.5" />
                             <p className="text-xs text-violet-800 leading-relaxed">
-                                Barang sudah Anda serahkan ke gudang. Menunggu <b>ACC Admin Gudang</b>.
+                                Barang sudah Anda serahkan ke kasir. Menunggu <b>ACC Kasir</b>.
                             </p>
                         </div>
                     )}
@@ -207,7 +218,7 @@ export default function DriverReturDetailPage() {
                         <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-start gap-3">
                             <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
                             <p className="text-xs text-emerald-800 leading-relaxed">
-                                Gudang sudah melakukan ACC penerimaan barang retur.
+                                Kasir sudah melakukan ACC penerimaan barang retur.
                             </p>
                         </div>
                     )}

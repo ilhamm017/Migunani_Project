@@ -1,31 +1,40 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { ArRow, sourceLabel } from './arShared';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function FinanceARPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const [rows, setRows] = useState<ArRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const loadRows = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await api.admin.finance.getAR();
+      setRows(Array.isArray(res.data) ? (res.data as ArRow[]) : []);
+    } catch (error) {
+      console.error('Failed to load AR:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true);
-        const res = await api.admin.finance.getAR();
-        setRows(Array.isArray(res.data) ? (res.data as ArRow[]) : []);
-      } catch (error) {
-        console.error('Failed to load AR:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    if (allowed) load();
-  }, [allowed]);
+    if (allowed) void loadRows();
+  }, [allowed, loadRows]);
+
+  useRealtimeRefresh({
+    enabled: allowed,
+    onRefresh: loadRows,
+    domains: ['order', 'retur', 'cod', 'admin'],
+    pollIntervalMs: 30000,
+  });
 
   if (!allowed) return null;
 

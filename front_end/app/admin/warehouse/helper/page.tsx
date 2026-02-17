@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { Camera, CheckCircle, MapPin, Package, RefreshCw, Loader2 } from 'lucide-react';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 interface PickItem {
     id: string;
@@ -62,6 +63,13 @@ export default function WarehouseHelperPage() {
     useEffect(() => {
         void loadPickingItems();
     }, [loadPickingItems]);
+
+    useRealtimeRefresh({
+        enabled: true,
+        onRefresh: loadPickingItems,
+        domains: ['order', 'admin'],
+        pollIntervalMs: 15000,
+    });
 
     const confirmPick = async (pickItem: PickItem) => {
         setConfirming(pickItem.id);

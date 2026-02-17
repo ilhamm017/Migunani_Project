@@ -106,6 +106,9 @@ export const api = {
             items?: Array<{ product_id: string; qty: number }>;
             customer_id?: string; // Optional for admin manual order
             shipping_method_code?: string;
+            promo_code?: string;
+            shipping_address?: string;
+            customer_note?: string;
         }) => apiClient.post('/orders/checkout', data),
         getMyOrders: (params?: { page?: number; limit?: number; status?: string }) =>
             apiClient.get('/orders/my-orders', { params }),
@@ -116,6 +119,17 @@ export const api = {
             }),
         reportMissingItem: (id: string, data: { items: { product_id: string; qty_missing: number }[]; note?: string }) =>
             apiClient.post(`/orders/${id}/missing-item`, data),
+    },
+
+    // Profile (Customer)
+    profile: {
+        getMe: () => apiClient.get('/profile/me'),
+        updateAddresses: (addresses: any[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+    },
+
+    // Promos
+    promos: {
+        validate: (code: string) => apiClient.get(`/promos/validate/${code}`),
     },
 
     // Allocation (Admin)
@@ -178,6 +192,7 @@ export const api = {
                 email: string;
                 password: string;
                 tier?: 'regular' | 'gold' | 'platinum';
+                address?: string;
             }) => apiClient.post('/admin/customers/create', data),
             updateTier: (id: string, tier: 'regular' | 'gold' | 'platinum') =>
                 apiClient.patch(`/admin/customers/${id}/tier`, { tier }),
@@ -186,7 +201,7 @@ export const api = {
             getAll: (params?: { active_only?: boolean }) =>
                 apiClient.get('/admin/shipping-methods', { params }),
             create: (data: {
-                code?: string;
+                code: string;
                 name: string;
                 fee: number;
                 is_active?: boolean;
@@ -234,6 +249,7 @@ export const api = {
                 endDate?: string;
                 is_backorder?: string;
                 exclude_backorder?: string;
+                updatedAfter?: string;
             }) =>
                 apiClient.get('/orders/admin/list', { params }),
             getStats: () => apiClient.get('/orders/admin/stats'),
@@ -243,6 +259,7 @@ export const api = {
                 courier_id?: string;
                 issue_type?: 'shortage';
                 issue_note?: string;
+                resolution_note?: string;
             }) => apiClient.patch(`/orders/admin/${id}/status`, data),
         },
         inventory: {
@@ -533,8 +550,26 @@ export const api = {
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
-        reportIssue: (orderId: string, note: string) =>
-            apiClient.post(`/driver/orders/${orderId}/issue`, { note }),
+        reportIssue: (
+            orderId: string,
+            payload: string | { note: string; checklist_snapshot?: string; evidence?: File | null }
+        ) => {
+            if (typeof payload === 'string') {
+                return apiClient.post(`/driver/orders/${orderId}/issue`, { note: payload });
+            }
+
+            const formData = new FormData();
+            formData.append('note', payload.note);
+            if (payload.checklist_snapshot) {
+                formData.append('checklist_snapshot', payload.checklist_snapshot);
+            }
+            if (payload.evidence) {
+                formData.append('evidence', payload.evidence);
+            }
+            return apiClient.post(`/driver/orders/${orderId}/issue`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+        },
         getWallet: () => apiClient.get('/driver/wallet'),
         getReturs: () => apiClient.get('/driver/retur'),
         getReturById: (returId: string) => apiClient.get(`/driver/retur/${returId}`),

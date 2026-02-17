@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import PaymentCountdown from '@/components/orders/PaymentCountdown';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function OrderDetailPage() {
   const params = useParams();
@@ -16,7 +17,7 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadOrder = async () => {
+  const loadOrder = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.orders.getOrderById(orderId);
@@ -27,11 +28,19 @@ export default function OrderDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [orderId]);
 
   useEffect(() => {
-    if (orderId) loadOrder();
-  }, [orderId]);
+    if (orderId) void loadOrder();
+  }, [orderId, loadOrder]);
+
+  useRealtimeRefresh({
+    enabled: Boolean(orderId),
+    onRefresh: loadOrder,
+    domains: ['order', 'retur', 'admin'],
+    pollIntervalMs: 10000,
+    filterOrderIds: orderId ? [orderId] : [],
+  });
 
   const statusView = useMemo(() => {
     const status = order?.status || 'pending';
