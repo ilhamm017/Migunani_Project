@@ -3,6 +3,36 @@
 import { useEffect, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { MapPin, FileText, Camera, CreditCard } from 'lucide-react';
+import { formatCurrency } from '@/lib/utils';
+
+const paymentMethodLabel = (method?: string) => {
+  if (method === 'transfer_manual') return 'Transfer Manual';
+  if (method === 'cod') return 'COD';
+  if (method === 'cash_store') return 'Tunai Toko';
+  return method || '-';
+};
+
+const paymentStatusLabel = (status?: string) => {
+  if (status === 'unpaid') return 'Belum Lunas';
+  if (status === 'cod_pending') return 'COD Pending';
+  if (status === 'paid') return 'Lunas';
+  return status || '-';
+};
+
+const normalizeProofImageUrl = (raw?: string | null) => {
+  if (!raw) return null;
+  const val = String(raw).trim();
+  if (!val) return null;
+  if (val.startsWith('http://') || val.startsWith('https://')) return val;
+  if (val.startsWith('/uploads/')) return val;
+  if (val.startsWith('uploads/')) return `/${val}`;
+  const normalizedSlash = val.replace(/\\/g, '/');
+  if (normalizedSlash.startsWith('uploads/')) return `/${normalizedSlash}`;
+  const uploadsIndex = normalizedSlash.indexOf('/uploads/');
+  if (uploadsIndex >= 0) return normalizedSlash.slice(uploadsIndex);
+  return val;
+};
 
 export default function DriverHistoryPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
@@ -69,12 +99,12 @@ export default function DriverHistoryPage() {
         <div className="bg-white border border-slate-200 p-4 rounded-2xl">
           <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Total Item</p>
           <p className="text-2xl font-black text-slate-800">
-            {rows.reduce((acc, curr) => acc + (curr.OrderItems?.length || 0), 0)}
-          </p>
-        </div>
-      </div>
+      {rows.reduce((acc, curr) => acc + (curr.OrderItems?.length || 0), 0)}
+    </p>
+  </div>
+  </div>
 
-      <div className="space-y-3">
+  <div className="space-y-3">
         {loading ? (
           <p className="text-center text-xs text-slate-400 py-10">Memuat data...</p>
         ) : rows.length === 0 ? (
@@ -88,6 +118,13 @@ export default function DriverHistoryPage() {
             const date = new Date(r.updatedAt || r.createdAt);
             const dateStr = date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
             const timeStr = date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+            const paymentMethod = String(r?.Invoice?.payment_method || r?.payment_method || '').trim();
+            const paymentStatus = String(r?.Invoice?.payment_status || '').trim();
+            const invoiceNumber = String(r?.Invoice?.invoice_number || '').trim();
+            const totalAmount = Number(r?.Invoice?.total || r?.total_amount || 0);
+            const address = String(r?.shipping_address || '').trim();
+            const customerNote = String(r?.customer_note || '').trim();
+            const deliveryProofUrl = normalizeProofImageUrl(r?.delivery_proof_url);
 
             return (
               <div key={r.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow">
@@ -102,6 +139,56 @@ export default function DriverHistoryPage() {
                     <p className="text-xs font-bold text-slate-900">{dateStr}</p>
                     <p className="text-[10px] text-slate-400">{timeStr}</p>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-600 mb-3">
+                  <div className="flex items-center gap-2">
+                    <CreditCard size={12} className="text-slate-400" />
+                    <span className="font-bold text-slate-700">Metode:</span>
+                    <span>{paymentMethodLabel(paymentMethod)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-700">Status:</span>
+                    <span>{paymentStatusLabel(paymentStatus)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-700">Total:</span>
+                    <span>{formatCurrency(totalAmount)}</span>
+                  </div>
+                  {invoiceNumber && (
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700">Invoice:</span>
+                      <span>{invoiceNumber}</span>
+                    </div>
+                  )}
+                  {address && (
+                    <div className="md:col-span-2 flex items-start gap-2">
+                      <MapPin size={12} className="text-slate-400 mt-0.5" />
+                      <span className="font-bold text-slate-700">Alamat:</span>
+                      <span className="line-clamp-2">{address}</span>
+                    </div>
+                  )}
+                  {customerNote && (
+                    <div className="md:col-span-2 flex items-start gap-2">
+                      <FileText size={12} className="text-slate-400 mt-0.5" />
+                      <span className="font-bold text-slate-700">Catatan:</span>
+                      <span className="line-clamp-2">{customerNote}</span>
+                    </div>
+                  )}
+                  {deliveryProofUrl && (
+                    <div className="md:col-span-2 flex items-center gap-2">
+                      <Camera size={12} className="text-slate-400" />
+                      <span className="font-bold text-slate-700">Bukti:</span>
+                      <a
+                        href={deliveryProofUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 text-emerald-700 font-bold"
+                      >
+                        Lihat foto
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-t border-slate-50 pt-3 flex justify-between items-center">

@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, DragEvent } from 'react';
 import { api } from '@/lib/api';
-import Link from 'next/link';
 import { Package, Clock, User, Hash, GripVertical, RefreshCw } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
@@ -15,6 +14,8 @@ interface OrderCard {
     status: string;
     created_at: string;
     payment_method?: string;
+    courier_id?: string | null;
+    courier_name?: string | null;
 }
 
 interface KanbanColumn {
@@ -61,6 +62,9 @@ export default function WarehouseKanbanPage() {
     const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
     const [updating, setUpdating] = useState<string | null>(null);
     const [lastRefresh, setLastRefresh] = useState(new Date());
+    const [couriers, setCouriers] = useState<Array<{ id: string; name: string }>>([]);
+    const [courierModal, setCourierModal] = useState<{ orderId: string; target: string } | null>(null);
+    const [selectedCourierId, setSelectedCourierId] = useState('');
 
     const loadOrders = useCallback(async () => {
         try {
@@ -81,9 +85,11 @@ export default function WarehouseKanbanPage() {
                 customer_name: o.User?.name || o.customer_name || 'Customer',
                 total_amount: Number(o.total_amount || 0),
                 item_count: o.OrderItems?.length || o.item_count || 0,
-                status: o.status,
+                status: o.status === 'waiting_payment' ? 'ready_to_ship' : o.status,
                 created_at: o.createdAt || o.created_at,
                 payment_method: o.payment_method,
+                courier_id: o.courier_id || o.Courier?.id || null,
+                courier_name: o.Courier?.name || null,
             }));
 
             setOrders(allOrders);
@@ -98,6 +104,24 @@ export default function WarehouseKanbanPage() {
     useEffect(() => {
         void loadOrders();
     }, [loadOrders]);
+
+    const loadCouriers = useCallback(async () => {
+        try {
+            const res = await api.admin.orderManagement.getCouriers();
+            const rows = Array.isArray(res.data?.employees) ? res.data.employees : [];
+            const mapped = rows.map((row: any) => ({
+                id: String(row.id),
+                name: String(row.name || row.display_name || 'Driver'),
+            }));
+            setCouriers(mapped);
+        } catch {
+            setCouriers([]);
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadCouriers();
+    }, [loadCouriers]);
 
     useRealtimeRefresh({
         enabled: true,
@@ -143,14 +167,22 @@ export default function WarehouseKanbanPage() {
             return;
         }
 
-        // Optimistic update
-        setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: targetColumn } : o));
-        setDraggedOrder(null);
-        setUpdating(orderId);
+        if (targetColumn === 'shipped' && !order.courier_id) {
+            setCourierModal({ orderId, target: targetColumn });
+            setSelectedCourierId('');
+            setDraggedOrder(null);
+            return;
+        }
 
+        setUpdating(orderId);
         try {
             const apiStatus = STATUS_MAP_TO_API[targetColumn] || targetColumn;
-            await api.admin.orderManagement.updateStatus(orderId, { status: apiStatus });
+            const payload: any = { status: apiStatus };
+            if (targetColumn === 'shipped' && order.courier_id) {
+                payload.courier_id = order.courier_id;
+            }
+            await api.admin.orderManagement.updateStatus(orderId, payload);
+            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: targetColumn } : o));
             alert(`Status berhasil diupdate ke: ${targetColumn === 'shipped' ? 'Dikirim' : 'Siap Dikirim'}`);
             void loadOrders();
         } catch (error) {
@@ -163,6 +195,29 @@ export default function WarehouseKanbanPage() {
     const onDragEnd = () => {
         setDraggedOrder(null);
         setDragOverColumn(null);
+    };
+
+    const confirmCourier = async () => {
+        if (!courierModal) return;
+        if (!selectedCourierId) {
+            alert('Pilih driver terlebih dahulu.');
+            return;
+        }
+        const { orderId, target } = courierModal;
+        setUpdating(orderId);
+        try {
+            const apiStatus = STATUS_MAP_TO_API[target] || target;
+            await api.admin.orderManagement.updateStatus(orderId, { status: apiStatus, courier_id: selectedCourierId });
+            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: target, courier_id: selectedCourierId } : o));
+            alert('Status berhasil diupdate ke: Dikirim');
+            void loadOrders();
+        } catch {
+            alert('Gagal update status.');
+        } finally {
+            setUpdating(null);
+            setCourierModal(null);
+            setSelectedCourierId('');
+        }
     };
 
     const formatCurrency = (amount: number) =>
@@ -308,6 +363,47 @@ export default function WarehouseKanbanPage() {
                     })}
                 </div>
             </div>
+
+            {courierModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+                    <div className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-xl p-4 space-y-4">
+                        <div>
+                            <p className="text-xs font-black uppercase tracking-widest text-slate-400">Pilih Driver</p>
+                            <h3 className="text-base font-black text-slate-900 mt-1">Kirim Pesanan</h3>
+                            <p className="text-xs text-slate-500 mt-1">Pilih driver/kurir sebelum mengubah status ke dikirim.</p>
+                        </div>
+                        <select
+                            value={selectedCourierId}
+                            onChange={(e) => setSelectedCourierId(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        >
+                            <option value="">Pilih driver...</option>
+                            {couriers.map((courier) => (
+                                <option key={courier.id} value={courier.id}>{courier.name}</option>
+                            ))}
+                        </select>
+                        <div className="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setCourierModal(null);
+                                    setSelectedCourierId('');
+                                }}
+                                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                onClick={confirmCourier}
+                                className="rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold"
+                            >
+                                Konfirmasi
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

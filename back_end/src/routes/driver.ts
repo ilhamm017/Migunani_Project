@@ -23,12 +23,15 @@ const createDriverUpload = (folderName: string, prefix: string) => multer({
 });
 const proofUpload = createDriverUpload('proofs', 'proof');
 const issueUpload = createDriverUpload('issues', 'issue');
+const paymentUpload = createDriverUpload('payments', 'payment');
 const router = Router();
 
 router.use(authenticateToken);
 
 router.get('/orders', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedOrders);
 router.post('/orders/:id/complete', authorizeRoles('driver'), proofUpload.single('proof'), DriverController.completeDelivery);
+router.post('/orders/:id/payment', authorizeRoles('driver'), paymentUpload.single('proof'), DriverController.recordPayment);
+router.patch('/orders/:id/payment-method', authorizeRoles('driver'), DriverController.updatePaymentMethod);
 router.post('/orders/:id/issue', authorizeRoles('driver'), issueUpload.single('evidence'), DriverController.reportIssue);
 router.get('/wallet', authorizeRoles('driver', 'admin_finance', 'super_admin'), DriverController.getDriverWallet);
 router.get('/retur', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturs);

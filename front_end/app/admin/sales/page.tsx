@@ -51,7 +51,6 @@ type CustomerOrder = {
 const CANCELABLE_ORDER_STATUSES = new Set([
   'pending',
   'waiting_invoice',
-  'waiting_payment',
   'ready_to_ship',
   'allocated',
   'partially_fulfilled',

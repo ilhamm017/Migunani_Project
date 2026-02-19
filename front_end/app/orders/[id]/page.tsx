@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, Download, Upload, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Download, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
-import PaymentCountdown from '@/components/orders/PaymentCountdown';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function OrderDetailPage() {
@@ -43,7 +42,8 @@ export default function OrderDetailPage() {
   });
 
   const statusView = useMemo(() => {
-    const status = order?.status || 'pending';
+    const rawStatus = order?.status || 'pending';
+    const status = rawStatus === 'waiting_payment' ? 'ready_to_ship' : rawStatus;
 
     if (status === 'pending') {
       return {
@@ -77,14 +77,6 @@ export default function OrderDetailPage() {
       return {
         icon: AlertCircle,
         label: 'partially_fulfilled (Stok Tersedia Sebagian)',
-        className: 'text-amber-700 bg-amber-50'
-      };
-    }
-    if (status === 'waiting_payment') {
-      const hasProof = !!order?.Invoice?.payment_proof_url;
-      return {
-        icon: Clock3,
-        label: 'waiting_payment (Invoice Terbit — Menunggu Pembayaran)',
         className: 'text-amber-700 bg-amber-50'
       };
     }
@@ -232,14 +224,6 @@ export default function OrderDetailPage() {
           </div>
         </div>
 
-        {order.status === 'waiting_payment' && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex flex-col items-center gap-3">
-            <p className="text-[10px] font-black uppercase text-amber-700 tracking-widest">Sisa Waktu Pembayaran</p>
-            <PaymentCountdown expiryDate={order.expiry_date} className="scale-125" />
-            <p className="text-[10px] text-amber-600 font-medium text-center">Pesanan akan dibatalkan otomatis jika waktu habis.</p>
-          </div>
-        )}
-
         <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
           <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>
           <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{order.Invoice?.payment_method || '-'}</span></p>
@@ -335,7 +319,7 @@ export default function OrderDetailPage() {
             const sentQty = allocation ? Number(allocation.allocated_qty || 0) : 0;
 
             // Check if status implies allocation has happened
-            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status);
+            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status);
 
             const isPartial = isAllocatedStatus && sentQty < item.qty;
             const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
@@ -376,11 +360,6 @@ export default function OrderDetailPage() {
           <button onClick={handleDownloadInvoice} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
             <Download size={14} /> Invoice PDF
           </button>
-          {order.status === 'waiting_payment' && !order.Invoice?.payment_proof_url && (
-            <Link href={`/orders/${order.id}/upload-proof`} className="py-3 bg-emerald-600 text-white rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
-              <Upload size={14} /> Upload Bukti
-            </Link>
-          )}
           {['delivered', 'completed'].includes(order.status) && (
             <>
               <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">

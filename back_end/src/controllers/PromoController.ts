@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Setting } from '../models';
+import { Product, Setting } from '../models';
 
 const DISCOUNT_VOUCHERS_SETTING_KEY = 'discount_vouchers';
 
@@ -40,12 +40,25 @@ export const validatePromo = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Kuota kode promo sudah habis' });
         }
 
+        const productId = typeof voucher.product_id === 'string' ? voucher.product_id.trim() : '';
+        if (!productId) {
+            return res.status(400).json({ message: 'Kode promo tidak valid untuk produk.' });
+        }
+
+        const product = await Product.findByPk(productId, { attributes: ['id', 'name', 'sku'] });
+        if (!product) {
+            return res.status(404).json({ message: 'Produk voucher tidak ditemukan' });
+        }
+
         res.json({
             message: 'Kode promo valid',
             promo: {
                 code: voucher.code,
                 discount_pct: voucher.discount_pct,
-                max_discount_rupiah: voucher.max_discount_rupiah
+                max_discount_rupiah: voucher.max_discount_rupiah,
+                product_id: productId,
+                product_name: product.name,
+                product_sku: product.sku
             }
         });
     } catch (error) {

@@ -7,10 +7,16 @@ interface OrderAttributes {
     customer_name?: string;
     source: 'web' | 'whatsapp';
     status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
+    payment_method?: 'transfer_manual' | 'cod' | 'cash_store' | null;
     total_amount: number;
     discount_amount: number;
+    shipping_method_code?: string | null;
+    shipping_method_name?: string | null;
+    shipping_fee?: number | null;
+    shipping_address?: string | null;
+    customer_note?: string | null;
     courier_id?: string; // UUID
-    expiry_date?: Date;
+    expiry_date?: Date | null;
     delivery_proof_url?: string;
     createdAt?: Date;
     updatedAt?: Date;
@@ -28,10 +34,16 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     declare customer_name: string;
     declare source: 'web' | 'whatsapp';
     declare status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
+    declare payment_method: 'transfer_manual' | 'cod' | 'cash_store' | null;
     declare total_amount: number;
     declare discount_amount: number;
+    declare shipping_method_code: string | null;
+    declare shipping_method_name: string | null;
+    declare shipping_fee: number | null;
+    declare shipping_address: string | null;
+    declare customer_note: string | null;
     declare courier_id: string;
-    declare expiry_date: Date;
+    declare expiry_date: Date | null;
     declare delivery_proof_url: string;
     declare stock_released: boolean;
     declare parent_order_id: string | null;
@@ -66,6 +78,10 @@ Order.init(
             type: DataTypes.ENUM('pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'expired', 'hold', 'waiting_admin_verification'),
             defaultValue: 'pending',
         },
+        payment_method: {
+            type: DataTypes.ENUM('transfer_manual', 'cod', 'cash_store'),
+            allowNull: true,
+        },
         total_amount: {
             type: DataTypes.DECIMAL(15, 2),
             defaultValue: 0,
@@ -73,6 +89,27 @@ Order.init(
         discount_amount: {
             type: DataTypes.DECIMAL(15, 2),
             defaultValue: 0,
+        },
+        shipping_method_code: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        shipping_method_name: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        shipping_fee: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        shipping_address: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        customer_note: {
+            type: DataTypes.TEXT,
+            allowNull: true,
         },
         courier_id: {
             type: DataTypes.UUID,

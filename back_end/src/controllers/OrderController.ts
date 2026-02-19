@@ -1,16 +1,16 @@
 import { Request, Response } from 'express';
-import { Order, OrderIssue, OrderItem, Product, Invoice, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting } from '../models';
+import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting } from '../models';
 import { Op } from 'sequelize';
-import { generateInvoiceNumber, resolveInitialInvoiceStatus } from '../utils/invoice';
 import { resolveShippingMethodByCode } from './ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../services/whatsappClient';
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
+import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
 
 
 // --- Customer Endpoints ---
 const DELIVERY_EMPLOYEE_ROLES = ['driver'] as const;
-const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
+const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
 const ISSUE_SLA_HOURS = 24;
 const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
 type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
@@ -98,6 +98,7 @@ const withOrderTrackingFields = (orderLike: any) => {
         issue_overdue: isOverdue,
     };
 };
+
 
 const normalizeIssueNote = (value: unknown): string | null => {
     if (typeof value !== 'string') return null;
@@ -276,7 +277,7 @@ export const checkout = async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id; // Authenticated user
         const userRole = req.user!.role;
-        const { items, payment_method, from_cart, customer_id, source, shipping_method_code, promo_code } = req.body;
+        const { items, payment_method, from_cart, customer_id, source, shipping_method_code, promo_code, shipping_address, customer_note } = req.body;
         // items: [{ product_id, qty }]
         // payment_method: 'transfer_manual' | 'cod'
         // from_cart: boolean
@@ -434,10 +435,24 @@ export const checkout = async (req: Request, res: Response) => {
                 return res.status(400).json({ message: 'Kuota kode promo sudah habis' });
             }
 
-            // Calculate promo discount on the total items amount (before shipping)
-            const itemsTotal = totalAmount - shippingFee;
+            const voucherProductId = typeof voucher.product_id === 'string' ? voucher.product_id.trim() : '';
+            if (!voucherProductId) {
+                await t.rollback();
+                return res.status(400).json({ message: 'Kode promo tidak valid untuk produk.' });
+            }
+
+            const eligibleSubtotal = orderItemsData.reduce((sum, item: any) => {
+                if (String(item.product_id) !== voucherProductId) return sum;
+                return sum + (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
+            }, 0);
+
+            if (eligibleSubtotal <= 0) {
+                await t.rollback();
+                return res.status(400).json({ message: 'Kode promo tidak berlaku untuk produk di keranjang.' });
+            }
+
             promoDiscountAmount = Math.min(
-                Math.round(itemsTotal * (voucher.discount_pct / 100)),
+                Math.round(eligibleSubtotal * (voucher.discount_pct / 100)),
                 voucher.max_discount_rupiah || Infinity
             );
 
@@ -461,10 +476,16 @@ export const checkout = async (req: Request, res: Response) => {
             customer_name: customerName,
             source: (source === 'whatsapp') ? 'whatsapp' : 'web',
             status: 'pending', // All orders start as pending — admin reviews and allocates
+            payment_method: resolvedPaymentMethod,
             total_amount: totalAmount,
             discount_amount: totalDiscountAmount,
             expiry_date: expiryDate,
-            stock_released: false
+            stock_released: false,
+            shipping_method_code: selectedShippingMethod?.code || null,
+            shipping_method_name: selectedShippingMethod?.name || null,
+            shipping_fee: shippingFee,
+            shipping_address: typeof shipping_address === 'string' ? shipping_address.trim() : null,
+            customer_note: typeof customer_note === 'string' ? customer_note.trim() : null
         }, { transaction: t });
 
         // Create Order Items
@@ -486,25 +507,6 @@ export const checkout = async (req: Request, res: Response) => {
                 }, { transaction: t });
             }
         }
-
-        // Create Invoice
-        const invoiceNumber = generateInvoiceNumber(order.id);
-        const initialPaymentStatus = await resolveInitialInvoiceStatus();
-
-        await Invoice.create({
-            order_id: order.id,
-            invoice_number: invoiceNumber,
-            payment_method: resolvedPaymentMethod,
-            payment_status: initialPaymentStatus,
-            amount_paid: 0,
-            change_amount: 0,
-            subtotal: totalAmount,
-            tax_percent: 0,
-            tax_amount: 0,
-            total: totalAmount,
-            tax_mode_snapshot: 'non_pkp',
-            pph_final_amount: 0
-        }, { transaction: t });
 
         if (pointsEarned > 0) {
             if (customerProfile) {
@@ -552,7 +554,6 @@ export const checkout = async (req: Request, res: Response) => {
         res.status(201).json({
             message: 'Order placed successfully',
             order_id: order.id,
-            invoice_number: invoiceNumber,
             total_amount: totalAmount,
             points_earned: pointsEarned,
             customer_points_balance: customerPointsBalance,
@@ -581,24 +582,51 @@ export const getMyOrders = async (req: Request, res: Response) => {
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = { customer_id: userId };
-        if (status) whereClause.status = status;
+        if (status) {
+            const statusStr = String(status);
+            if (statusStr === 'ready_to_ship') {
+                whereClause.status = { [Op.in]: ['ready_to_ship', 'waiting_payment'] };
+            } else {
+                whereClause.status = statusStr;
+            }
+        }
 
         const orders = await Order.findAndCountAll({
             where: whereClause,
             include: [
-                { model: Invoice, attributes: ['invoice_number', 'payment_status', 'payment_method'] },
-                { model: Retur, attributes: ['id', 'status'] }
+                { model: Retur, attributes: ['id', 'status'] },
+                { model: OrderItem, attributes: ['qty'] },
+                { model: OrderAllocation, as: 'Allocations', attributes: ['allocated_qty', 'status'] }
             ],
             limit: Number(limit),
             offset: Number(offset),
             order: [['createdAt', 'DESC']]
         });
 
+        const plainOrders = orders.rows.map((row) => {
+            const plain = row.get({ plain: true }) as any;
+            const total_qty = (plain.OrderItems || []).reduce((sum: number, item: any) => sum + Number(item.qty || 0), 0);
+            const shipped_qty = (plain.Allocations || []).reduce((sum: number, alloc: any) => {
+                if (alloc.status === 'shipped') return sum + Number(alloc.allocated_qty || 0);
+                return sum;
+            }, 0);
+            const indent_qty = Math.max(0, total_qty - shipped_qty);
+
+            return {
+                ...plain,
+                total_qty,
+                shipped_qty,
+                indent_qty
+            };
+        });
+
+        const ordersWithInvoices = await attachInvoicesToOrders(plainOrders);
+
         res.json({
             total: orders.count,
             totalPages: Math.ceil(orders.count / Number(limit)),
             currentPage: Number(page),
-            orders: orders.rows
+            orders: ordersWithInvoices
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching orders', error });
@@ -608,15 +636,20 @@ export const getMyOrders = async (req: Request, res: Response) => {
 export const getOrderDetails = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
+        const orderId = String(id);
         const userId = req.user!.id;
         const userRole = req.user!.role;
 
-        const whereClause: any = { id };
+        const whereClause: any = { id: orderId };
 
         // Customers can only see their own orders
         if (userRole === 'customer') {
             whereClause.customer_id = userId;
         }
+
+        const productAttributes = userRole === 'customer'
+            ? ['name', 'sku', 'unit']
+            : ['name', 'sku', 'unit', 'stock_quantity', 'allocated_quantity'];
 
         const order = await Order.findOne({
             where: whereClause,
@@ -624,8 +657,7 @@ export const getOrderDetails = async (req: Request, res: Response) => {
                 { model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number', 'email'] },
                 { model: User, as: 'Courier', attributes: ['id', 'name', 'role', 'whatsapp_number'] },
                 { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
-                { model: OrderItem, include: [{ model: Product, attributes: ['name', 'sku', 'unit'] }] },
-                { model: Invoice },
+                { model: OrderItem, include: [{ model: Product, attributes: productAttributes }] },
                 { model: OrderAllocation, as: 'Allocations' },
                 { model: Order, as: 'Children' },
                 { model: Retur }
@@ -637,7 +669,8 @@ export const getOrderDetails = async (req: Request, res: Response) => {
         }
 
         const plainOrder = order.get({ plain: true }) as any;
-        res.json(withOrderTrackingFields(plainOrder));
+        const [orderWithInvoices] = await attachInvoicesToOrders([plainOrder]);
+        res.json(withOrderTrackingFields(orderWithInvoices));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching order details', error });
     }
@@ -647,6 +680,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
+        const orderId = String(id);
         const userId = req.user!.id;
         const file = req.file;
 
@@ -656,7 +690,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
         }
 
         const order = await Order.findOne({
-            where: { id, customer_id: userId },
+            where: { id: orderId, customer_id: userId },
             include: [{ model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number'] }],
             transaction: t,
             lock: t.LOCK.UPDATE
@@ -667,12 +701,7 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
         }
         const prevStatus = String(order.status || '');
 
-        // Update Invoice
-        const invoice = await Invoice.findOne({
-            where: { order_id: id },
-            transaction: t,
-            lock: t.LOCK.UPDATE
-        });
+        const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
         if (!invoice) {
             await t.rollback();
             return res.status(404).json({ message: 'Invoice not found' });
@@ -698,14 +727,16 @@ export const uploadPaymentProof = async (req: Request, res: Response) => {
             verified_at: null,
         }, { transaction: t });
 
-        // Update Order Status to 'waiting_admin_verification' (Waiting for Verification)
-        await order.update({ status: 'waiting_admin_verification' }, { transaction: t });        // Schema has: 'pending', 'waiting_payment', 'waiting_admin_verification'.
-        // Let's assume 'waiting_payment' = Waiting for Transfer. 
-        // Once uploaded, maybe 'processing' or stay 'waiting_payment' but Invoice is marked?
-        // Let's stick to Schema: 'waiting_payment' is usually BEFORE upload.
-        // After upload, maybe it becomes 'processing' (verification needed)? or we need a new status 'verifying'?
-        // The Prompt US-C04 says "Menunggu Verifikasi".
-        // Let's update order status to 'processing' to indicate it moved forward, or keep it simple.
+        const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
+        if (relatedOrderIds.length === 0) {
+            relatedOrderIds.push(String(order.id));
+        }
+
+        await Order.update(
+            { status: 'waiting_admin_verification' },
+            { where: { id: { [Op.in]: relatedOrderIds } }, transaction: t }
+        );
+        // After upload, status becomes waiting_admin_verification until finance approves.
 
         await t.commit();
         if (prevStatus !== 'waiting_admin_verification') {
@@ -786,25 +817,73 @@ export const getAllOrders = async (req: Request, res: Response) => {
         if (status && status !== 'all') {
             const statusStr = String(status);
             if (statusStr.includes(',')) {
-                whereClause.status = { [Op.in]: statusStr.split(',').map(s => s.trim()) };
+                const statuses = statusStr.split(',').map(s => s.trim()).filter(Boolean);
+                if (statuses.includes('ready_to_ship') && !statuses.includes('waiting_payment')) {
+                    statuses.push('waiting_payment');
+                }
+                whereClause.status = { [Op.in]: statuses };
+            } else if (statusStr === 'ready_to_ship') {
+                whereClause.status = { [Op.in]: ['ready_to_ship', 'waiting_payment'] };
             } else {
                 whereClause.status = statusStr;
             }
         }
 
-        if (is_backorder === 'true') {
-            whereClause.parent_order_id = { [Op.ne]: null };
-        } else if (exclude_backorder === 'true') {
-            whereClause.parent_order_id = null;
+        const wantsBackorder = is_backorder === 'true';
+        const wantsExcludeBackorder = exclude_backorder === 'true';
+        if (wantsBackorder || wantsExcludeBackorder) {
+            const backorderRows = await Backorder.findAll({
+                where: {
+                    qty_pending: { [Op.gt]: 0 },
+                    status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+                },
+                include: [{ model: OrderItem, attributes: ['order_id'] }],
+                attributes: ['order_item_id']
+            });
+            const backorderOrderIds = Array.from(new Set(
+                backorderRows
+                    .map((row: any) => row?.OrderItem?.order_id)
+                    .filter(Boolean)
+                    .map((id: any) => String(id))
+            ));
+
+            if (wantsBackorder) {
+                if (backorderOrderIds.length === 0) {
+                    return res.json({
+                        total: 0,
+                        totalPages: 0,
+                        currentPage: Number(page),
+                        orders: []
+                    });
+                }
+                whereClause.id = { [Op.in]: backorderOrderIds };
+            } else if (wantsExcludeBackorder && backorderOrderIds.length > 0) {
+                whereClause.id = { [Op.notIn]: backorderOrderIds };
+            }
         }
 
         const searchText = typeof search === 'string' ? search.trim() : '';
         if (searchText) {
+            const invoiceMatches = await Invoice.findAll({
+                where: { invoice_number: { [Op.like]: `%${searchText}%` } },
+                attributes: ['id']
+            });
+            const invoiceIds = invoiceMatches.map((inv: any) => String(inv.id));
+            const invoiceItems = invoiceIds.length > 0
+                ? await InvoiceItem.findAll({
+                    where: { invoice_id: { [Op.in]: invoiceIds } },
+                    include: [{ model: OrderItem, attributes: ['order_id'] }]
+                })
+                : [];
+            const orderIdsFromInvoice = Array.from(new Set(
+                invoiceItems.map((item: any) => String(item?.OrderItem?.order_id || '')).filter(Boolean)
+            ));
+
             whereClause[Op.or] = [
                 { id: { [Op.like]: `%${searchText}%` } },
                 { customer_name: { [Op.like]: `%${searchText}%` } },
                 { customer_id: { [Op.like]: `%${searchText}%` } },
-                { '$Invoice.invoice_number$': { [Op.like]: `%${searchText}%` } },
+                ...(orderIdsFromInvoice.length > 0 ? [{ id: { [Op.in]: orderIdsFromInvoice } }] : []),
                 { '$Customer.name$': { [Op.like]: `%${searchText}%` } },
             ];
         }
@@ -847,7 +926,6 @@ export const getAllOrders = async (req: Request, res: Response) => {
         const orders = await Order.findAndCountAll({
             where: whereClause,
             include: [
-                { model: Invoice },
                 { model: User, as: 'Customer', attributes: ['id', 'name'] },
                 { model: User, as: 'Courier', attributes: ['id', 'name'] },
                 { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
@@ -860,7 +938,9 @@ export const getAllOrders = async (req: Request, res: Response) => {
             order: [['createdAt', 'DESC']]
         });
 
-        const rows = orders.rows.map((row) => withOrderTrackingFields(row.get({ plain: true }) as any));
+        const plainRows = orders.rows.map((row) => row.get({ plain: true }) as any);
+        const rowsWithInvoices = await attachInvoicesToOrders(plainRows);
+        const rows = rowsWithInvoices.map((row) => withOrderTrackingFields(row as any));
 
         res.json({
             total: orders.count,
@@ -919,13 +999,17 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(404).json({ message: 'Order not found' });
         }
-        const prevStatus = String(order.status || '');
+        let prevStatus = String(order.status || '');
+        if (prevStatus === 'waiting_payment') {
+            await order.update({ status: 'ready_to_ship', expiry_date: null }, { transaction: t });
+            order.status = 'ready_to_ship' as any;
+            prevStatus = 'ready_to_ship';
+        }
 
         // --- STRICT TRANSITION MAP ---
         // Other transitions are handled by dedicated endpoints:
         //   pending → waiting_invoice              (allocateOrder)
-        //   waiting_invoice → waiting_payment/ready_to_ship  (issueInvoice)
-        //   waiting_payment → ready_to_ship         (verifyPayment)
+        //   waiting_invoice → ready_to_ship        (issueInvoice)
         //   shipped → delivered                     (completeDelivery)
         const ALLOWED_TRANSITIONS: Record<string, { roles: string[]; to: string[] }> = {
             'ready_to_ship': { roles: ['admin_gudang'], to: ['shipped'] },
@@ -935,7 +1019,6 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         const CANCELABLE_STATUSES = [
             'pending',
             'waiting_invoice',
-            'waiting_payment',
             'ready_to_ship',
             'allocated',
             'partially_fulfilled',
@@ -999,7 +1082,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         await order.update(updatePayload, { transaction: t });
 
         if (nextStatus === 'shipped') {
-            const invoice = await Invoice.findOne({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
+            const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
             if (invoice && invoice.payment_method !== 'cod') {
                 await AccountingPostingService.postGoodsOutForOrder(orderId, String(req.user!.id), t, 'non_cod');
             }
@@ -1219,10 +1302,17 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         };
 
         counts.forEach(item => {
-            if (item.status && (stats as any)[item.status] !== undefined) {
-                (stats as any)[item.status] = Number(item.count);
+            const status = String(item.status || '');
+            const count = Number(item.count || 0);
+            if (status === 'waiting_payment') {
+                stats.ready_to_ship += count;
+                stats.total += count;
+                return;
             }
-            stats.total += Number(item.count);
+            if (status && (stats as any)[status] !== undefined) {
+                (stats as any)[status] = count;
+            }
+            stats.total += count;
         });
 
         res.json(stats);

@@ -41,30 +41,7 @@ cron.schedule('0 0 * * *', async () => {
 });
 
 // 1.5. The 24-Hour Payment Reaper
-// Runs every 15 minutes
-cron.schedule('*/15 * * * *', async () => {
-    console.log('Running The 24-Hour Payment Reaper...');
-    try {
-        const result = await Order.update(
-            {
-                status: 'expired'
-            },
-            {
-                where: {
-                    status: 'waiting_payment',
-                    expiry_date: {
-                        [Op.lt]: new Date()
-                    }
-                }
-            }
-        );
-
-        console.log(`Expired ${result[0]} orders waiting for payment past their deadline.`);
-
-    } catch (error) {
-        console.error('Error running 24-Hour Payment Reaper:', error);
-    }
-});
+// Disabled: payment is handled by driver, no waiting_payment status.
 
 // 2. Bot Session Timeout
 // Runs every 5 minutes

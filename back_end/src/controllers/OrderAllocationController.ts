@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, OrderAllocation, Product, sequelize, User, Invoice, OrderIssue, Backorder } from '../models';
-import { generateInvoiceNumber, resolveInitialInvoiceStatus } from '../utils/invoice';
+import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder } from '../models';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
+import { attachInvoicesToOrders } from '../utils/invoiceLookup';
 
 
-const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
+const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 const TERMINAL_ORDER_STATUSES = ['completed', 'canceled', 'expired'] as const;
 const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
 
@@ -108,8 +108,8 @@ export const getPendingAllocations = async (req: Request, res: Response) => {
                     allocated_total: allocatedTotal,
                     shortage_total: shortageTotal,
                     needs_allocation: needsAllocation,
-                    is_backorder: (needsAllocation && allocatedTotal > 0) || !!plain.parent_order_id,
-                    status_label: !needsAllocation ? 'fulfilled' : (plain.parent_order_id ? 'backorder' : (allocatedTotal > 0 ? 'backorder' : 'preorder')),
+                    is_backorder: needsAllocation && allocatedTotal > 0,
+                    status_label: !needsAllocation ? 'fulfilled' : (allocatedTotal > 0 ? 'backorder' : 'preorder'),
                     shortage_items: shortageItems,
                 };
             })
@@ -143,12 +143,24 @@ export const getProductAllocations = async (req: Request, res: Response) => {
                     attributes: ['id', 'status', 'customer_name', 'createdAt'],
                     include: [
                         { model: User, as: 'Customer', attributes: ['id', 'name'], required: false },
-                        { model: Invoice, attributes: ['invoice_number', 'payment_status'], required: false }
                     ],
                     required: false
                 }
             ],
             order: [['updatedAt', 'DESC']]
+        });
+
+        const orderMap = new Map<string, any>();
+        allocations.forEach((item: any) => {
+            const order = item.Order;
+            if (order) orderMap.set(String(order.id), order);
+        });
+        const ordersWithInvoices = await attachInvoicesToOrders(
+            Array.from(orderMap.values()).map((order: any) => order.get({ plain: true }) as any)
+        );
+        const invoiceByOrderId = new Map<string, any>();
+        ordersWithInvoices.forEach((order: any) => {
+            invoiceByOrderId.set(String(order.id), order.Invoice || null);
         });
 
         const closedOrderStatuses = new Set(['completed', 'canceled', 'expired']);
@@ -157,6 +169,7 @@ export const getProductAllocations = async (req: Request, res: Response) => {
             const order = item.Order;
             const customerName = order?.Customer?.name || order?.customer_name || 'Customer';
             const orderStatus = String(order?.status || '').toLowerCase();
+            const invoice = invoiceByOrderId.get(String(order?.id || '')) || null;
 
             return {
                 allocation_id: item.id,
@@ -166,8 +179,8 @@ export const getProductAllocations = async (req: Request, res: Response) => {
                 order_status: order?.status || null,
                 order_created_at: order?.createdAt || null,
                 customer_name: customerName,
-                invoice_number: order?.Invoice?.invoice_number || null,
-                payment_status: order?.Invoice?.payment_status || null,
+                invoice_number: invoice?.invoice_number || null,
+                payment_status: invoice?.payment_status || null,
                 is_order_open: orderStatus ? !closedOrderStatuses.has(orderStatus) : true,
             };
         });
@@ -354,94 +367,9 @@ export const allocateOrder = async (req: Request, res: Response) => {
         }
         const backorderItems = Array.from(backorderByProduct.values());
 
-        // Split only when some qty can be processed now and some must become backorder.
-        const shouldSplitOrder = backorderItems.length > 0 && partiallyAllocated;
-        let childOrderId: string | null = null;
+        // Backorder stays in the same order (no child order creation).
 
-        if (shouldSplitOrder) {
-            const childOrder = await Order.create({
-                customer_id: order.customer_id,
-                customer_name: order.customer_name,
-                source: order.source,
-                status: 'pending',
-                total_amount: 0,
-                discount_amount: 0,
-                parent_order_id: order.id,
-                stock_released: false
-            }, { transaction: t });
-            childOrderId = childOrder.id;
-
-            const parentInvoice = await Invoice.findOne({
-                where: { order_id: id },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
-
-            if (parentInvoice) {
-                const childInvoiceNumber = generateInvoiceNumber(childOrder.id);
-                const initialStatus = await resolveInitialInvoiceStatus();
-
-                await Invoice.create({
-                    order_id: childOrder.id,
-                    invoice_number: childInvoiceNumber,
-                    payment_method: parentInvoice.payment_method,
-                    payment_status: initialStatus,
-                    amount_paid: 0,
-                    change_amount: 0,
-                    subtotal: 0,
-                    tax_percent: 0,
-                    tax_amount: 0,
-                    total: 0,
-                    tax_mode_snapshot: parentInvoice.tax_mode_snapshot || 'non_pkp',
-                    pph_final_amount: parentInvoice.pph_final_amount || 0
-                }, { transaction: t });
-            }
-
-            let childTotal = 0;
-            for (const row of itemBreakdown) {
-                if (row.shortage_qty <= 0) continue;
-
-                const childItem = await OrderItem.create({
-                    order_id: childOrderId as string,
-                    product_id: row.oi.product_id,
-                    qty: row.shortage_qty,
-                    price_at_purchase: row.oi.price_at_purchase,
-                    cost_at_purchase: row.oi.cost_at_purchase
-                }, { transaction: t });
-
-                childTotal += Number(row.oi.price_at_purchase || 0) * Number(row.shortage_qty || 0);
-
-                await Backorder.findOrCreate({
-                    where: { order_item_id: childItem.id },
-                    defaults: {
-                        order_item_id: childItem.id,
-                        qty_pending: row.shortage_qty,
-                        status: 'waiting_stock'
-                    },
-                    transaction: t
-                });
-
-                await row.oi.update({ qty: row.allocated_qty }, { transaction: t });
-            }
-
-            await childOrder.update({ total_amount: childTotal }, { transaction: t });
-            await Invoice.update({
-                subtotal: childTotal,
-                total: childTotal
-            }, {
-                where: { order_id: childOrder.id },
-                transaction: t
-            });
-        }
-
-        await order.update({ total_amount: allocatedTotal }, { transaction: t });
-
-        // --- Auto-transition order & invoice status based on payment method ---
-        const invoice = await Invoice.findOne({
-            where: { order_id: id },
-            transaction: t,
-            lock: t.LOCK.UPDATE
-        });
+        // --- Auto-transition order status based on allocation progress ---
         let previousStatusForNotification: string | null = null;
 
         if (fullyAllocated || partiallyAllocated) {
@@ -452,7 +380,6 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 debt_pending: 1,
                 hold: 1,
                 waiting_invoice: 2,
-                waiting_payment: 3,
                 ready_to_ship: 4,
                 shipped: 5,
                 delivered: 6,
@@ -469,10 +396,6 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 await order.update({ status: nextStatus }, { transaction: t });
             }
             previousStatusForNotification = previousOrderStatus;
-
-            if (invoice) {
-                // Keep invoice in draft — Finance will issue it
-            }
         }
 
         // --- Manage Backorders & Order Issues ---
@@ -481,7 +404,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
         // 1. Update Backorder Records on parent order items.
         // If order was split, parent item shortage is moved to child and parent becomes fulfilled.
         for (const row of itemBreakdown) {
-            const shortage = shouldSplitOrder ? 0 : Number(row.shortage_qty || 0);
+            const shortage = Number(row.shortage_qty || 0);
 
             const [backorder, created] = await Backorder.findOrCreate({
                 where: { order_item_id: row.oi.id },
@@ -519,7 +442,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
         // Logic removed.
 
         // Resolve open shortage issues only when shortage no longer remains on current order.
-        if (backorderItems.length === 0 || shouldSplitOrder) {
+        if (backorderItems.length === 0) {
             const openIssues = await OrderIssue.findAll({
                 where: { order_id: id, issue_type: 'shortage', status: 'open' },
                 transaction: t,
@@ -544,11 +467,11 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 from_status: previousStatus,
                 to_status: nextStatus,
                 source: String(order.source || ''),
-                payment_method: String(invoice?.payment_method || ''),
+                payment_method: String(order.payment_method || ''),
                 courier_id: String(order.courier_id || ''),
                 triggered_by_role: String(req.user?.role || ''),
                 target_roles: nextStatus === 'waiting_invoice'
-                    ? ['admin_finance']
+                    ? ['kasir', 'super_admin']
                     : ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
             });
         } else {
@@ -559,9 +482,9 @@ export const allocateOrder = async (req: Request, res: Response) => {
             message: 'Alokasi berhasil',
             status: fullyAllocated
                 ? 'fully_allocated'
-                : (shouldSplitOrder ? 'partially_allocated_with_split' : (partiallyAllocated ? 'partially_allocated' : 'backorder_pending')),
+                : (partiallyAllocated ? 'partially_allocated' : 'backorder_pending'),
             allocated_total: allocatedTotal,
-            backorder_order_id: childOrderId,
+            backorder_order_id: null,
             backorder_items: backorderItems,
         });
 
@@ -614,32 +537,78 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Order ini tidak memiliki kekurangan alokasi (bukan backorder/pre-order).' });
         }
 
-        if (order.stock_released === false) {
-            for (const alloc of allocations) {
-                const allocatedQty = Number(alloc.allocated_qty || 0);
-                if (allocatedQty <= 0) continue;
+        const allocatedByProduct = new Map<string, number>();
+        for (const allocation of allocations) {
+            const productId = String((allocation as any).product_id || '');
+            if (!productId) continue;
+            const prev = Number(allocatedByProduct.get(productId) || 0);
+            allocatedByProduct.set(productId, prev + Number((allocation as any).allocated_qty || 0));
+        }
 
-                const product = await Product.findByPk(alloc.product_id, { transaction: t, lock: t.LOCK.UPDATE });
-                if (!product) continue;
+        const remainingAllocatedByProduct = new Map<string, number>(allocatedByProduct);
+        const itemBreakdown = orderItems.map((oi: any) => {
+            const productId = String(oi.product_id || '');
+            const orderedQty = Number(oi.qty || 0);
+            const remainingAllocated = Number(remainingAllocatedByProduct.get(productId) || 0);
+            const allocatedQty = Math.min(orderedQty, Math.max(0, remainingAllocated));
+            const shortageQty = Math.max(0, orderedQty - allocatedQty);
+            remainingAllocatedByProduct.set(productId, Math.max(0, remainingAllocated - allocatedQty));
+            return {
+                oi,
+                product_id: productId,
+                ordered_qty: orderedQty,
+                allocated_qty: allocatedQty,
+                shortage_qty: shortageQty
+            };
+        });
 
-                await product.update({
-                    stock_quantity: Number(product.stock_quantity || 0) + allocatedQty,
-                    allocated_quantity: Math.max(0, Number(product.allocated_quantity || 0) - allocatedQty),
+        // --- Cancel shortage only (do not cancel entire order) ---
+        let originalSubtotal = 0;
+        let remainingSubtotal = 0;
+
+        for (const row of itemBreakdown) {
+            const price = Number(row.oi.price_at_purchase || 0);
+            originalSubtotal += price * Number(row.ordered_qty || 0);
+            remainingSubtotal += price * Number(row.allocated_qty || 0);
+
+            if (row.shortage_qty > 0) {
+                await row.oi.update({ qty: row.allocated_qty }, { transaction: t });
+            }
+
+            const backorder = await Backorder.findOne({
+                where: { order_item_id: row.oi.id },
+                transaction: t
+            });
+            if (backorder && row.shortage_qty > 0) {
+                await backorder.update({
+                    qty_pending: 0,
+                    status: 'canceled',
+                    notes: `Reason: ${reason}`
+                }, { transaction: t });
+            } else if (backorder && row.shortage_qty <= 0 && backorder.status === 'waiting_stock') {
+                await backorder.update({
+                    qty_pending: 0,
+                    status: 'fulfilled'
                 }, { transaction: t });
             }
         }
 
-        // --- Update Backorder Records Status to canceled ---
-        for (const item of orderItems) {
-            const backorder = await Backorder.findOne({
-                where: { order_item_id: item.id },
-                transaction: t
-            });
+        const shippingFee = Number(order.shipping_fee || 0);
+        const currentDiscount = Number(order.discount_amount || 0);
+        const discountRatio = originalSubtotal > 0 ? Math.min(1, Math.max(0, remainingSubtotal / originalSubtotal)) : 0;
+        const nextDiscount = Math.round(currentDiscount * discountRatio * 100) / 100;
+        const nextTotal = Math.max(0, Math.round((remainingSubtotal + shippingFee - nextDiscount) * 100) / 100);
 
-            if (backorder) {
-                await backorder.update({ status: 'canceled', notes: `Reason: ${reason}` }, { transaction: t });
-            }
-        }
+        const nextStatus = remainingSubtotal <= 0
+            ? 'canceled'
+            : (order.status === 'hold' ? 'waiting_invoice' : order.status);
+
+        await order.update({
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+            status: nextStatus,
+            stock_released: remainingSubtotal <= 0 ? true : order.stock_released
+        }, { transaction: t });
 
         const openIssues = await OrderIssue.findAll({
             where: { order_id: id, status: 'open' },
@@ -666,17 +635,13 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             resolved_by: req.user?.id || null,
         }, { transaction: t });
 
-        await order.update({
-            status: 'canceled',
-            stock_released: true
-        }, { transaction: t });
-
         await t.commit();
-        if (previousOrderStatus !== 'canceled') {
+        const finalStatus = String(nextStatus || order.status || '');
+        if (previousOrderStatus !== finalStatus) {
             emitOrderStatusChanged({
                 order_id: String(order.id),
                 from_status: previousOrderStatus || null,
-                to_status: 'canceled',
+                to_status: finalStatus,
                 source: String(order.source || ''),
                 payment_method: null,
                 courier_id: String(order.courier_id || ''),

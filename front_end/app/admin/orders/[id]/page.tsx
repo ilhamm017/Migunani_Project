@@ -13,7 +13,7 @@ const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'pending', label: 'pending (Menunggu Review Admin)' },
   { key: 'allocated', label: 'allocated (Stok Dialokasikan)' },
   { key: 'partially_fulfilled', label: 'partially_fulfilled (Stok Tersedia Sebagian)' },
-  { key: 'waiting_payment', label: 'waiting_payment (Menunggu Pembayaran)' },
+  { key: 'ready_to_ship', label: 'ready_to_ship (Siap Dikirim)' },
   { key: 'waiting_admin_verification', label: 'waiting_admin_verification (Menunggu Verifikasi Admin)' },
   { key: 'debt_pending', label: 'debt_pending (Utang Belum Lunas)' },
   { key: 'shipped', label: 'shipped (Dikirim)' },
@@ -93,7 +93,8 @@ export default function AdminOrderDetailPage() {
       setLoading(true);
       const res = await api.orders.getOrderById(orderId);
       setOrder(res.data);
-      setSelectedStatus(res.data?.status || 'pending');
+      const normalizedStatus = res.data?.status === 'waiting_payment' ? 'ready_to_ship' : res.data?.status;
+      setSelectedStatus(normalizedStatus || 'pending');
       setSelectedCourierId(res.data?.courier_id || '');
       setIssueNote(res.data?.active_issue?.note || '');
       setProofLoadError(false);
@@ -173,7 +174,7 @@ export default function AdminOrderDetailPage() {
     if (status === 'allocated') return 'bg-teal-100 text-teal-700';
     if (status === 'partially_fulfilled') return 'bg-amber-100 text-amber-700';
     if (status === 'canceled') return 'bg-rose-100 text-rose-700';
-    if (status === 'waiting_payment' || status === 'debt_pending') return 'bg-amber-100 text-amber-700';
+    if (status === 'debt_pending') return 'bg-amber-100 text-amber-700';
     if (status === 'hold') return 'bg-violet-100 text-violet-700';
     return 'bg-slate-100 text-slate-700';
   };
@@ -182,15 +183,16 @@ export default function AdminOrderDetailPage() {
   const activeIssue = order?.active_issue || null;
   const issueDueAt = activeIssue?.due_at ? new Date(activeIssue.due_at) : null;
   const isIssueOverdue = Boolean(order?.issue_overdue);
+  const normalizedOrderStatus = order?.status === 'waiting_payment' ? 'ready_to_ship' : order?.status;
   const needsCourier = selectedStatus === 'shipped' && order?.source !== 'pos_store';
-  const statusChanged = selectedStatus !== order?.status;
+  const statusChanged = selectedStatus !== normalizedOrderStatus;
   const courierChanged = needsCourier && (selectedCourierId || '') !== (order?.courier_id || '');
   const issueNoteChanged = selectedStatus === 'hold' && ((issueNote || '').trim() !== (activeIssue?.note || '').trim());
   const canSubmitUpdate = canUpdateStatus && !updating && (statusChanged || courierChanged || issueNoteChanged);
-  const CANCELABLE_ORDER_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'processing', 'hold'];
-  const BACKORDER_CANCELABLE_STATUSES = ['pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'];
+  const CANCELABLE_ORDER_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'processing', 'hold'];
+  const BACKORDER_CANCELABLE_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'];
   const canCancelByRole = ['kasir', 'super_admin'].includes(user?.role || '');
-  const isOrderCancelable = canCancelByRole && CANCELABLE_ORDER_STATUSES.includes(String(order?.status || ''));
+  const isOrderCancelable = canCancelByRole && CANCELABLE_ORDER_STATUSES.includes(String(normalizedOrderStatus || ''));
 
   const orderQtyByProduct = (order?.OrderItems || []).reduce((acc: Record<string, number>, item: any) => {
     const key = String(item?.product_id || '');
@@ -210,7 +212,7 @@ export default function AdminOrderDetailPage() {
   }, 0);
   const isBackorderCancelable =
     canCancelByRole &&
-    BACKORDER_CANCELABLE_STATUSES.includes(String(order?.status || '')) &&
+    BACKORDER_CANCELABLE_STATUSES.includes(String(normalizedOrderStatus || '')) &&
     shortageTotal > 0;
 
   if (!allowed) return null;
@@ -319,14 +321,6 @@ export default function AdminOrderDetailPage() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-sm font-black text-slate-900">Item Pesanan</p>
-            {canUpdateStatus && ['pending', 'partially_fulfilled', 'waiting_payment', 'hold'].includes(order.status) && ['kasir', 'super_admin'].includes(user?.role || '') && (
-              <Link
-                href={`/admin/orders/allocation/${order.id}`}
-                className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors"
-              >
-                Proses Alokasi →
-              </Link>
-            )}
           </div>
           {(order.OrderItems || []).length === 0 ? (
             <div className="bg-slate-50 rounded-2xl p-4">
@@ -352,7 +346,7 @@ export default function AdminOrderDetailPage() {
                           Dialokasikan: {allocQty}{isPartial && ` (kurang ${item.qty - allocQty})`}
                         </p>
                       )}
-                      {isUnallocated && ['allocated', 'partially_fulfilled', 'waiting_payment', 'waiting_admin_verification'].includes(order.status) && (
+                      {isUnallocated && ['allocated', 'partially_fulfilled', 'waiting_admin_verification'].includes(order.status) && (
                         <p className="text-xs mt-0.5 font-bold text-rose-500">Belum dialokasikan</p>
                       )}
                     </div>
@@ -393,18 +387,7 @@ export default function AdminOrderDetailPage() {
         <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
           <p className="text-sm font-black text-slate-900">Aksi Order</p>
 
-          {/* Step 1: Kasir — Alokasi (pending/partially_fulfilled) */}
-          {['pending', 'partially_fulfilled', 'hold'].includes(order.status) && ['kasir', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Aksi Stok (Kasir)</p>
-              <Link
-                href={`/admin/orders/allocation/${order.id}`}
-                className="block w-full text-center px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-200"
-              >
-                Proses Alokasi Stok →
-              </Link>
-            </div>
-          )}
+          {/* Step 1: Kasir — Alokasi sekarang dikelola di halaman Orders */}
 
           {(isOrderCancelable || isBackorderCancelable) && (
             <div className="space-y-2">
@@ -442,10 +425,10 @@ export default function AdminOrderDetailPage() {
             </div>
           )}
 
-          {/* Step 2: Finance — Terbitkan Invoice (waiting_invoice) */}
-          {order.status === 'waiting_invoice' && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
+          {/* Step 2: Kasir — Terbitkan Invoice (waiting_invoice) */}
+          {order.status === 'waiting_invoice' && ['kasir', 'super_admin'].includes(user?.role || '') && (
             <div className="space-y-2">
-              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Aksi Finance</p>
+              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Aksi Kasir</p>
               <button
                 onClick={async () => {
                   try {
@@ -467,8 +450,8 @@ export default function AdminOrderDetailPage() {
             </div>
           )}
 
-          {/* Step 3: Finance — Approve/Reject Payment (waiting_payment, waiting_admin_verification) */}
-          {['waiting_payment', 'waiting_admin_verification'].includes(order.status) && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
+          {/* Step 3: Finance — Approve/Reject Payment (waiting_admin_verification) */}
+          {['waiting_admin_verification'].includes(order.status) && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
             <div className="space-y-3">
               <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Verifikasi Pembayaran (Finance)</p>
               <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 italic">
@@ -508,7 +491,7 @@ export default function AdminOrderDetailPage() {
           )}
 
           {/* Step 4: Gudang — Assign Driver (ready_to_ship) */}
-          {order.status === 'ready_to_ship' && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
+          {normalizedOrderStatus === 'ready_to_ship' && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
             <div className="space-y-2">
               <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Aksi Gudang / Logistik</p>
               <p className="text-xs text-slate-600">Barang siap dikirim. Pilih driver.</p>
@@ -548,7 +531,7 @@ export default function AdminOrderDetailPage() {
           )}
 
           {/* Step 6: Gudang/Finance — Mark Completed (delivered) */}
-          {order.status === 'delivered' && ['admin_gudang', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
+          {normalizedOrderStatus === 'delivered' && ['admin_gudang', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
             <div className="space-y-2">
               <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Konfirmasi Akhir</p>
               <button
@@ -617,7 +600,7 @@ export default function AdminOrderDetailPage() {
                       setUpdating(false);
                     }
                   }}
-                  disabled={updating || selectedStatus === order.status}
+                  disabled={updating || selectedStatus === normalizedOrderStatus}
                   className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold disabled:opacity-50"
                 >
                   Override

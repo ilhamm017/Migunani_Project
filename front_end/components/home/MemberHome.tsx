@@ -7,6 +7,7 @@ import ProductGrid from '@/components/product/ProductGrid';
 import { useCartStore } from '@/store/cartStore';
 import { api } from '@/lib/api';
 import { useEffect, useState } from 'react';
+import { formatCurrency } from '@/lib/utils';
 
 const combinedStats = [
   { label: 'Produk', value: '120+', color: 'bg-emerald-500', trend: 'Tersedia', icon: Package },
@@ -19,7 +20,7 @@ export default function MemberHome() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
-  const [waitingPaymentCount, setWaitingPaymentCount] = useState(0);
+  const [invoiceSummary, setInvoiceSummary] = useState({ count: 0, total: 0 });
 
   useEffect(() => {
     const load = async () => {
@@ -27,10 +28,30 @@ export default function MemberHome() {
         setLoading(true);
         const [productsRes, ordersRes] = await Promise.all([
           api.catalog.getProducts({ limit: 4 }),
-          api.orders.getMyOrders({ status: 'waiting_payment', limit: 1 })
+          api.orders.getMyOrders({ page: 1, limit: 200 })
         ]);
         setProducts(productsRes.data?.products || []);
-        setWaitingPaymentCount(ordersRes.data?.total || 0);
+        const orders = ordersRes.data?.orders || [];
+        const invoiceMap = new Map<string, any>();
+        orders.forEach((order: any) => {
+          const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
+            ? order.Invoices
+            : order?.Invoice
+              ? [order.Invoice]
+              : [];
+          invoices.forEach((invoice: any) => {
+            const id = String(invoice?.id || '');
+            if (!id) return;
+            const existing = invoiceMap.get(id) || { ...invoice, orderIds: [] as string[] };
+            if (!existing.orderIds.includes(String(order.id))) {
+              existing.orderIds.push(String(order.id));
+            }
+            invoiceMap.set(id, existing);
+          });
+        });
+        const unpaidInvoices = Array.from(invoiceMap.values()).filter((inv) => String(inv?.payment_status || '') !== 'paid');
+        const total = unpaidInvoices.reduce((sum, inv) => sum + Number(inv?.total || 0), 0);
+        setInvoiceSummary({ count: unpaidInvoices.length, total });
       } catch (error) {
         console.error('Failed to load home data:', error);
       } finally {
@@ -62,22 +83,27 @@ export default function MemberHome() {
 
   return (
     <div className="p-6 space-y-8">
-      {waitingPaymentCount > 0 && (
-        <Link href="/orders/waiting-payment" className="block">
-          <div className="bg-amber-500 rounded-3xl p-5 text-white flex items-center justify-between shadow-lg shadow-amber-200 active:scale-[0.98] transition-all">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center shrink-0">
-                <CreditCard size={24} className="animate-pulse" />
-              </div>
-              <div>
-                <h4 className="text-sm font-black uppercase tracking-tight">Tagihan Belum Bayar</h4>
-                <p className="text-[10px] font-bold opacity-80 uppercase tracking-widest">Ada {waitingPaymentCount} pesanan wajib bayar segera</p>
-              </div>
+      <Link href="/invoices" className="block">
+        <div className={`rounded-3xl p-5 text-white flex items-center justify-between shadow-lg active:scale-[0.98] transition-all ${invoiceSummary.count > 0 ? 'bg-amber-500 shadow-amber-200' : 'bg-slate-700 shadow-slate-200'}`}>
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center shrink-0">
+              <CreditCard size={24} className={invoiceSummary.count > 0 ? 'animate-pulse' : ''} />
             </div>
-            <ArrowRight size={20} className="opacity-60" />
+            <div>
+              <h4 className="text-sm font-black uppercase tracking-tight">Invoice Customer</h4>
+              <p className="text-[10px] font-bold opacity-80 uppercase tracking-widest">
+                {invoiceSummary.count > 0
+                  ? `${invoiceSummary.count} invoice perlu dibayar`
+                  : 'Belum ada invoice berjalan'}
+              </p>
+              <p className="text-[11px] font-black opacity-90 mt-1">
+                {invoiceSummary.count > 0 ? formatCurrency(invoiceSummary.total) : 'Rp 0'}
+              </p>
+            </div>
           </div>
-        </Link>
-      )}
+          <ArrowRight size={20} className="opacity-60" />
+        </div>
+      </Link>
 
       <section className="grid grid-cols-2 gap-3">
         {combinedStats.map((stat, i) => {
@@ -165,4 +191,3 @@ export default function MemberHome() {
     </div>
   );
 }
-

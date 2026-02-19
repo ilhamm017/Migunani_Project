@@ -11,6 +11,9 @@ type DiscountVoucher = {
   code: string;
   discount_pct: number;
   max_discount_rupiah: number;
+  product_id?: string | null;
+  product_name?: string | null;
+  product_sku?: string | null;
   starts_at: string;
   expires_at: string;
   usage_limit: number;
@@ -21,10 +24,17 @@ type DiscountVoucher = {
 type DiscountVoucherDraft = {
   discount_pct: string;
   max_discount_rupiah: string;
+  product_id: string;
   starts_at: string;
   expires_at: string;
   usage_limit: string;
   is_active: boolean;
+};
+
+type ProductOption = {
+  id: string;
+  name: string;
+  sku: string;
 };
 
 const normalizeCode = (value: string) =>
@@ -172,6 +182,34 @@ export default function DiscountVouchersPage() {
   const [newExpiresAt, setNewExpiresAt] = useState('');
   const [newUsageLimit, setNewUsageLimit] = useState('100');
   const [newIsActive, setNewIsActive] = useState(true);
+  const [newProductId, setNewProductId] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [productLoading, setProductLoading] = useState(false);
+
+  const loadProductOptions = useCallback(async (query?: string) => {
+    try {
+      setProductLoading(true);
+      const res = await api.admin.inventory.getProducts({
+        page: 1,
+        limit: 20,
+        search: query?.trim() || undefined,
+        status: 'active',
+      });
+      const rows = Array.isArray(res.data?.products) ? res.data.products : [];
+      const mapped: ProductOption[] = rows.map((item: any) => ({
+        id: String(item.id),
+        name: String(item.name || ''),
+        sku: String(item.sku || ''),
+      }));
+      setProductOptions(mapped);
+    } catch (e: any) {
+      setProductOptions([]);
+      setError(e?.response?.data?.message || 'Gagal memuat daftar produk');
+    } finally {
+      setProductLoading(false);
+    }
+  }, []);
 
   const loadVouchers = useCallback(async () => {
     try {
@@ -188,6 +226,7 @@ export default function DiscountVouchersPage() {
         nextDrafts[row.code] = {
           discount_pct: String(Number(row.discount_pct || 0)),
           max_discount_rupiah: String(Number(row.max_discount_rupiah || 0)),
+          product_id: String(row.product_id || ''),
           starts_at: toDateInputValue(row.starts_at),
           expires_at: toDateInputValue(row.expires_at),
           usage_limit: String(Number(row.usage_limit || 1)),
@@ -209,6 +248,11 @@ export default function DiscountVouchersPage() {
     void loadVouchers();
   }, [allowed, loadVouchers]);
 
+  useEffect(() => {
+    if (!allowed) return;
+    void loadProductOptions('');
+  }, [allowed, loadProductOptions]);
+
   const handleCreate = async () => {
     const code = normalizeCode(newCode);
     const discountPct = Number(newDiscountPct);
@@ -216,6 +260,7 @@ export default function DiscountVouchersPage() {
     const usageLimit = Number(newUsageLimit);
     const startsAtIso = toIsoFromDateInput(newStartsAt, false);
     const expiresAtIso = toIsoFromDateInput(newExpiresAt, true);
+    const productId = String(newProductId || '').trim();
 
     if (!code || code.length < 3 || code.length > 40) {
       setError('Kode voucher wajib 3-40 karakter (A-Z, 0-9, _, -).');
@@ -241,6 +286,10 @@ export default function DiscountVouchersPage() {
       setError('Tanggal berakhir harus lebih besar dari tanggal mulai.');
       return;
     }
+    if (!productId) {
+      setError('Produk voucher wajib dipilih.');
+      return;
+    }
 
     try {
       setCreating(true);
@@ -250,6 +299,7 @@ export default function DiscountVouchersPage() {
         code,
         discount_pct: discountPct,
         max_discount_rupiah: maxDiscount,
+        product_id: productId,
         starts_at: startsAtIso || undefined,
         expires_at: expiresAtIso,
         usage_limit: Math.floor(usageLimit),
@@ -263,6 +313,7 @@ export default function DiscountVouchersPage() {
       setNewExpiresAt('');
       setNewUsageLimit('100');
       setNewIsActive(true);
+      setNewProductId('');
       await loadVouchers();
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Gagal menambahkan voucher diskon.');
@@ -280,6 +331,7 @@ export default function DiscountVouchersPage() {
     const usageLimit = Number(draft.usage_limit);
     const startsAtIso = toIsoFromDateInput(draft.starts_at, false);
     const expiresAtIso = toIsoFromDateInput(draft.expires_at, true);
+    const productId = String(draft.product_id || '').trim();
 
     if (!Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100) {
       setError(`Persen diskon voucher ${code} harus angka 0-100.`);
@@ -287,6 +339,10 @@ export default function DiscountVouchersPage() {
     }
     if (!Number.isFinite(maxDiscount) || maxDiscount < 0) {
       setError(`Maksimal potongan voucher ${code} harus angka >= 0.`);
+      return;
+    }
+    if (!productId) {
+      setError(`Produk voucher ${code} wajib dipilih.`);
       return;
     }
     if (!Number.isFinite(usageLimit) || usageLimit < 1) {
@@ -309,6 +365,7 @@ export default function DiscountVouchersPage() {
       const res = await api.admin.discountVouchers.update(code, {
         discount_pct: discountPct,
         max_discount_rupiah: maxDiscount,
+        product_id: productId,
         starts_at: startsAtIso || undefined,
         expires_at: expiresAtIso,
         usage_limit: Math.floor(usageLimit),
@@ -365,6 +422,34 @@ export default function DiscountVouchersPage() {
 
       <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
         <h2 className="text-sm font-black text-slate-900">Tambah Voucher Baru</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <input
+            value={productSearch}
+            onChange={(event) => setProductSearch(event.target.value)}
+            placeholder="Cari produk (nama/SKU)"
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+          />
+          <button
+            type="button"
+            onClick={() => void loadProductOptions(productSearch)}
+            disabled={productLoading}
+            className="inline-flex items-center justify-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-50"
+          >
+            {productLoading ? 'Mencari...' : 'Cari Produk'}
+          </button>
+          <select
+            value={newProductId}
+            onChange={(event) => setNewProductId(event.target.value)}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+          >
+            <option value="">Pilih produk voucher</option>
+            {productOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name} {option.sku ? `(${option.sku})` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-7 gap-2">
           <input
             value={newCode}
@@ -452,11 +537,22 @@ export default function DiscountVouchersPage() {
               const draft = drafts[voucher.code] || {
                 discount_pct: String(Number(voucher.discount_pct || 0)),
                 max_discount_rupiah: String(Number(voucher.max_discount_rupiah || 0)),
+                product_id: String(voucher.product_id || ''),
                 starts_at: toDateInputValue(voucher.starts_at),
                 expires_at: toDateInputValue(voucher.expires_at),
                 usage_limit: String(Number(voucher.usage_limit || 1)),
                 is_active: voucher.is_active !== false,
               };
+              const rowOptions = voucher.product_id && !productOptions.some((option) => option.id === voucher.product_id)
+                ? [
+                  {
+                    id: String(voucher.product_id),
+                    name: String(voucher.product_name || 'Produk'),
+                    sku: String(voucher.product_sku || ''),
+                  },
+                  ...productOptions
+                ]
+                : productOptions;
               const status = getVoucherStatus({
                 ...voucher,
                 is_active: draft.is_active,
@@ -481,7 +577,22 @@ export default function DiscountVouchersPage() {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-7 gap-2">
+                    <select
+                      value={draft.product_id}
+                      onChange={(event) => setDrafts((prev) => ({
+                        ...prev,
+                        [voucher.code]: { ...draft, product_id: event.target.value }
+                      }))}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                    >
+                      <option value="">Pilih produk voucher</option>
+                      {rowOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name} {option.sku ? `(${option.sku})` : ''}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="number"
                       value={draft.discount_pct}
@@ -547,6 +658,8 @@ export default function DiscountVouchersPage() {
 
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-500">
+                      Produk: <span className="font-bold text-slate-700">{voucher.product_name || 'Belum diset'}</span>
+                      {voucher.product_sku ? ` • ${voucher.product_sku}` : ''} •
                       Diskon: <span className="font-bold text-slate-700">{Number(draft.discount_pct || 0)}%</span> •
                       Maks Potongan: <span className="font-bold text-slate-700"> {formatCurrency(Number(draft.max_discount_rupiah || 0))}</span> •
                       Umur: <span className="font-bold text-slate-700"> {durationDays} hari</span> •

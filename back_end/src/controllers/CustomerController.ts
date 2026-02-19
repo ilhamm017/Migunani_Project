@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Op, Transaction } from 'sequelize';
-import { User, CustomerProfile, Order, Invoice, OrderAllocation, Product, sequelize } from '../models';
+import { User, CustomerProfile, Order, OrderAllocation, Product, sequelize } from '../models';
+import { attachInvoicesToOrders } from '../utils/invoiceLookup';
 import bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import waClient, { getStatus as getWhatsappStatus } from '../services/whatsappClient';
@@ -9,7 +10,6 @@ import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/w
 const OPEN_ORDER_STATUSES = [
     'pending',
     'waiting_invoice',
-    'waiting_payment',
     'ready_to_ship',
     'allocated',
     'partially_fulfilled',
@@ -516,23 +516,20 @@ export const getCustomerOrders = async (req: Request, res: Response) => {
 
         const orders = await Order.findAndCountAll({
             where: whereClause,
-            include: [
-                {
-                    model: Invoice,
-                    attributes: ['invoice_number', 'payment_method', 'payment_status']
-                }
-            ],
             distinct: true,
             limit: safeLimit,
             offset,
             order: [['createdAt', 'DESC']]
         });
 
+        const plainOrders = orders.rows.map((row) => row.get({ plain: true }) as any);
+        const ordersWithInvoices = await attachInvoicesToOrders(plainOrders);
+
         res.json({
             total: orders.count,
             totalPages: Math.ceil(orders.count / safeLimit),
             currentPage: safePage,
-            orders: orders.rows,
+            orders: ordersWithInvoices,
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching customer orders', error });

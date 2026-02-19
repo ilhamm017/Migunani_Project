@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
-import { sequelize, ChatSession, ChatThread } from './models';
+import { sequelize, ChatSession, ChatThread, Order } from './models';
 import { normalizeWhatsappNumber } from './utils/whatsappNumber';
 import { createThreadMessage, resolveThreadForIncomingWebSocket } from './services/ChatThreadService';
 import { buildUnreadBadgePayloadsForThread } from './services/ChatBadgeService';
@@ -195,6 +195,7 @@ import authRoutes from './routes/auth';
 import orderRoutes from './routes/order';
 import cartRoutes from './routes/cart';
 import financeRoutes from './routes/finance';
+import invoiceRoutes from './routes/invoice';
 // import posRoutes from './routes/pos';
 import driverRoutes from './routes/driver';
 import chatRoutes from './routes/chat';
@@ -215,6 +216,7 @@ import promoRoutes from './routes/promo';
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/cart', cartRoutes);
 app.use('/api/v1/orders', orderRoutes);
+app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/admin/finance', financeRoutes);
 // app.use('/api/v1/pos', posRoutes); // Removed
 app.use('/api/v1/driver', driverRoutes);
@@ -421,6 +423,21 @@ const ensureOrderStatusEnumReady = async () => {
     }
 };
 
+const normalizeWaitingPaymentOrders = async () => {
+    try {
+        const [updated] = await Order.update(
+            { status: 'ready_to_ship', expiry_date: null },
+            { where: { status: 'waiting_payment' } }
+        );
+        if (updated > 0) {
+            console.log(`Normalized ${updated} orders from waiting_payment to ready_to_ship.`);
+        }
+    } catch (error) {
+        console.error('Failed to normalize waiting_payment orders:', error);
+        throw error;
+    }
+};
+
 const ensureReturStatusEnumReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -481,6 +498,7 @@ const startServer = async () => {
             console.log(`[SchemaLock] Acquired '${schemaLock.lockName}'`);
 
             await runStartupStep('Database sync', syncDatabaseWithRetry);
+            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
             await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
             await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
             await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);

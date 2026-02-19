@@ -11,6 +11,7 @@ import PurchaseOrderItem from './PurchaseOrderItem';
 import Order from './Order';
 import OrderItem from './OrderItem';
 import Invoice from './Invoice';
+import InvoiceItem from './InvoiceItem';
 import OrderIssue from './OrderIssue';
 import ChatSession from './ChatSession';
 import Message from './Message';
@@ -139,6 +140,11 @@ Invoice.hasMany(CreditNote, { foreignKey: 'invoice_id', as: 'CreditNotes' });
 CreditNote.belongsTo(Invoice, { foreignKey: 'invoice_id' });
 CreditNote.hasMany(CreditNoteLine, { foreignKey: 'credit_note_id', as: 'Lines' });
 CreditNoteLine.belongsTo(CreditNote, { foreignKey: 'credit_note_id' });
+
+Invoice.hasMany(InvoiceItem, { foreignKey: 'invoice_id', as: 'Items' });
+InvoiceItem.belongsTo(Invoice, { foreignKey: 'invoice_id' });
+OrderItem.hasMany(InvoiceItem, { foreignKey: 'order_item_id', as: 'InvoiceItems' });
+InvoiceItem.belongsTo(OrderItem, { foreignKey: 'order_item_id' });
 CreditNoteLine.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 
 Order.hasMany(OrderIssue, { foreignKey: 'order_id', as: 'Issues' });
@@ -241,6 +247,7 @@ export {
     Order,
     OrderItem,
     Invoice,
+    InvoiceItem,
     OrderIssue,
     ChatSession,
     ChatThread,

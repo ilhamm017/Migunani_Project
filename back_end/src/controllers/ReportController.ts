@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op, QueryTypes } from 'sequelize';
-import { Account, Journal, JournalLine, Product, SupplierInvoice, Invoice, User, Order, sequelize, Backorder, OrderItem, ProductCostState } from '../models';
+import { Account, Journal, JournalLine, Product, SupplierInvoice, Invoice, User, Order, sequelize, Backorder, OrderItem, ProductCostState, OrderAllocation } from '../models';
 
 // --- Helper Functions ---
 const getJournalBalance = async (
@@ -449,6 +449,20 @@ export const getBackorderPreorderReport = async (req: Request, res: Response) =>
             order: [['createdAt', 'DESC']]
         });
 
+        const orderIds = Array.from(new Set(backorders.map((bo: any) => String(bo?.OrderItem?.Order?.id || '')).filter(Boolean)));
+        const allocationRows = orderIds.length > 0
+            ? await OrderAllocation.findAll({
+                where: { order_id: { [Op.in]: orderIds } },
+                attributes: ['order_id', 'allocated_qty']
+            })
+            : [];
+        const allocatedByOrder = new Map<string, number>();
+        allocationRows.forEach((row: any) => {
+            const key = String(row.order_id || '');
+            const prev = Number(allocatedByOrder.get(key) || 0);
+            allocatedByOrder.set(key, prev + Number(row.allocated_qty || 0));
+        });
+
         const rows = backorders.map((bo: any) => {
             const item = bo.OrderItem;
             const product = item?.Product;
@@ -458,7 +472,8 @@ export const getBackorderPreorderReport = async (req: Request, res: Response) =>
             // Preorder logic: if no allocation was made yet (allocated_total = 0 on order level)
             // But we can simplify: if bo records exist and are waiting, they are backorders/preorders.
             // In our system, 'preorder' is just a backorder with 0 allocation.
-            const isPreorder = !order?.parent_order_id && bo.qty_pending === item?.qty;
+            const allocatedQty = Number(allocatedByOrder.get(String(order?.id || '')) || 0);
+            const isPreorder = allocatedQty <= 0 && bo.qty_pending === item?.qty;
 
             return {
                 id: bo.id,

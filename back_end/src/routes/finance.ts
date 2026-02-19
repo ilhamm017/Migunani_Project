@@ -38,7 +38,9 @@ router.put('/expense-labels/:id', authorizeRoles('super_admin', 'admin_finance')
 router.delete('/expense-labels/:id', authorizeRoles('super_admin', 'admin_finance'), FinanceController.deleteExpenseLabel);
 
 // Verification (Admin Finance)
-router.post('/orders/:id/issue-invoice', authorizeRoles('super_admin', 'admin_finance'), FinanceController.issueInvoice);
+router.post('/orders/:id/issue-invoice', authorizeRoles('super_admin', 'kasir'), FinanceController.issueInvoice);
+router.post('/invoices/issue-batch', authorizeRoles('super_admin', 'kasir'), FinanceController.issueInvoiceBatch);
+router.post('/invoices/issue-items', authorizeRoles('super_admin', 'kasir'), FinanceController.issueInvoiceByItems);
 router.patch('/orders/:id/verify', authorizeRoles('super_admin', 'admin_finance'), FinanceController.verifyPayment);
 router.post('/invoices/:id/void', authorizeRoles('super_admin', 'admin_finance'), FinanceController.voidPayment);
 router.get('/settings/tax', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getTaxSettings);

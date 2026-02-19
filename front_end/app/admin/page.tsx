@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, ClipboardCheck, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
+import { AlertTriangle, Boxes, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -84,11 +84,11 @@ export default function AdminOverviewPage() {
 
         let actionableCount = 0;
         if (user?.role === 'admin_finance') {
-          // Finance tasks: issue invoice, verify transfer (processing), verify COD settlement
-          actionableCount = Number(stats.waiting_invoice || 0) + Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
+          // Finance tasks: verify transfer, verify COD settlement
+          actionableCount = Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
 
           // --- Fetch Additional Finance Specific Stats ---
-          // 1. Pending Verification (Waiting Payment) - already in stats.waiting_payment but let's be explicit if needed
+          // 1. Pending Verification (waiting_admin_verification)
           // 2. Pending COD
           const resCod = await api.admin.finance.getDriverCodList();
           let codCount = 0;
@@ -110,8 +110,8 @@ export default function AdminOverviewPage() {
           // Warehouse tasks: ship ready_to_ship + follow-up shortage (hold)
           actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.hold || 0);
         } else if (user?.role === 'kasir') {
-          // Kasir tasks: Allocate pending orders
-          actionableCount = pendingAllocCount;
+          // Kasir tasks: allocate pending orders + issue invoice
+          actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0);
         } else {
           // Super admin / Others: actionable admin tasks only (exclude customer-action statuses).
           actionableCount =
@@ -236,14 +236,6 @@ export default function AdminOverviewPage() {
         tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white',
       },
       {
-        href: '/admin/orders/allocation',
-        title: 'Alokasi Order',
-        desc: 'Alokasi stok pesanan masuk.',
-        icon: ClipboardCheck,
-        tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white',
-        badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0
-      },
-      {
         href: '/admin/warehouse/retur',
         title: 'Kelola Retur Barang',
         desc: 'Validasi retur, tugaskan pickup, dan lanjutkan proses barang kembali.',
@@ -264,6 +256,13 @@ export default function AdminOverviewPage() {
         desc: 'Input pesanan manual dari WhatsApp atau offline.',
         icon: Plus,
         tone: 'bg-slate-100 text-slate-900 group-hover:bg-slate-900 group-hover:text-white',
+      },
+      {
+        href: '/admin/invoices',
+        title: 'Invoice Customer',
+        desc: 'Pantau invoice aktif dan sisa tagihan customer.',
+        icon: FileText,
+        tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white',
       },
       {
         href: '/admin/sales/tier-pricing',
@@ -710,7 +709,6 @@ export default function AdminOverviewPage() {
 
   const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
   const quickActionCards = [
-    { href: '/admin/orders/allocation', title: 'Alokasi Order', desc: 'Order baru belum dialokasikan.', icon: ClipboardCheck, badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0, tone: 'bg-orange-100 text-orange-700 group-hover:bg-orange-700 group-hover:text-white' },
     { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
     { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Setoran driver menunggu proses.', icon: Wallet, badge: financeCardBadges.codSettlement, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
     { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
@@ -730,7 +728,6 @@ export default function AdminOverviewPage() {
         { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
         { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
         { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
-        { href: '/admin/orders/allocation', title: 'Alokasi Order', desc: 'Alokasi stok order.', icon: ClipboardCheck, badge: warehouseCardBadges['/admin/warehouse/allocation'] || 0 },
         { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
         { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
         { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
@@ -750,6 +747,7 @@ export default function AdminOverviewPage() {
         { href: '/admin/sales/member-baru', title: 'Register Member', desc: 'Onboarding WA OTP.', icon: UserCheck },
         { href: '/admin/orders/create', title: 'Input Order', desc: 'Manual order entry.', icon: Plus },
         { href: '/admin/orders', title: 'Monitor Order', desc: 'Kontrol order aktif.', icon: ClipboardList },
+        { href: '/admin/invoices', title: 'Invoice Customer', desc: 'Daftar invoice customer aktif.', icon: FileText },
         { href: '/admin/orders/issues', title: 'Issue Pesanan', desc: 'Kendala order di lapangan.', icon: AlertTriangle },
         { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer support.', icon: MessageSquare, badge: summary.chats },
         { href: '/admin/chat/broadcast', title: 'Broadcast Chat', desc: 'Kirim pesan massal.', icon: Megaphone },
@@ -853,7 +851,7 @@ export default function AdminOverviewPage() {
           <p className="text-lg max-[360px]:text-base leading-none font-black text-slate-900 mt-1.5">{summary.pendingOrders}</p>
           <p className="text-[9px] text-amber-700 font-black uppercase mt-1">Order</p>
         </Link>
-        <Link href="/admin/finance/piutang" className="rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 shadow-sm">
+        <Link href="/admin/invoices" className="rounded-2xl border border-slate-200 bg-white p-3 max-[360px]:p-2.5 shadow-sm">
           <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Piutang</p>
           <p className="text-sm max-[360px]:text-[11px] leading-none font-black text-slate-900 mt-2">Rp {compactCurrency.format(summary.unpaidTotal)}</p>
           <p className="text-[9px] text-rose-700 font-black uppercase mt-1">{summary.unpaid} invoice</p>
@@ -884,7 +882,7 @@ export default function AdminOverviewPage() {
           </div>
         </Link>
 
-        <Link href="/admin/finance/piutang" className="group relative overflow-hidden bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm hover:border-rose-300 hover:shadow-xl hover:shadow-rose-100 transition-all">
+        <Link href="/admin/invoices" className="group relative overflow-hidden bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm hover:border-rose-300 hover:shadow-xl hover:shadow-rose-100 transition-all">
           <div className="flex justify-between items-start">
             <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center group-hover:scale-110 group-hover:-rotate-3 transition-transform">
               <Wallet size={24} />

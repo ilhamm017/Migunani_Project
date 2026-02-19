@@ -7,7 +7,7 @@ import AdminOrdersListView from '@/components/orders/AdminOrdersListView';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
-  waiting_payment: 'Waiting Payment',
+  ready_to_ship: 'Siap Dikirim',
   waiting_admin_verification: 'Waiting Admin Verification',
   debt_pending: 'Utang Belum Lunas',
   shipped: 'Shipped',
@@ -22,14 +22,15 @@ export default function AdminOrdersByStatusPage() {
   const params = useParams();
   const router = useRouter();
   const status = String(params?.status || '');
+  const normalizedStatus = status === 'waiting_payment' ? 'ready_to_ship' : status;
 
-  const label = useMemo(() => STATUS_LABELS[status], [status]);
+  const label = useMemo(() => STATUS_LABELS[normalizedStatus], [normalizedStatus]);
 
   useEffect(() => {
-    if (!status || !STATUS_LABELS[status]) {
+    if (!normalizedStatus || !STATUS_LABELS[normalizedStatus]) {
       router.replace('/admin/orders');
     }
-  }, [status, router]);
+  }, [normalizedStatus, router]);
 
   if (!allowed) return null;
   if (!label) return null;
@@ -38,7 +39,7 @@ export default function AdminOrdersByStatusPage() {
     <AdminOrdersListView
       title={`Order Status: ${label}`}
       description="Halaman status khusus agar monitoring order besar lebih fokus."
-      fixedStatus={status}
+      fixedStatus={normalizedStatus}
     />
   );
 }

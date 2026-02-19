@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, CheckCircle2, CreditCard, Package2, Tag, Truck } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle2, Package2, Tag } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
@@ -21,6 +21,9 @@ type PromoPayload = {
   code: string;
   discount_pct: number;
   max_discount_rupiah: number;
+  product_id: string;
+  product_name?: string | null;
+  product_sku?: string | null;
 };
 
 type ShippingOption = {
@@ -30,32 +33,10 @@ type ShippingOption = {
   fee: number;
 };
 
-type PaymentOption = {
-  id: 'transfer_manual' | 'cod';
-  label: string;
-  description: string;
-  icon: typeof CreditCard;
-};
-
 const SHIPPING_OPTIONS: ShippingOption[] = [
   { id: 'kurir_reguler', label: 'Kurir Reguler', eta: 'Estimasi 2-3 hari', fee: 12000 },
   { id: 'same_day', label: 'Same Day', eta: 'Tiba di hari yang sama', fee: 25000 },
   { id: 'pickup', label: 'Ambil di Toko', eta: 'Tanpa ongkir', fee: 0 },
-];
-
-const PAYMENT_OPTIONS: PaymentOption[] = [
-  {
-    id: 'transfer_manual',
-    label: 'Transfer Manual',
-    description: 'Bayar via transfer bank, lalu upload bukti.',
-    icon: CreditCard,
-  },
-  {
-    id: 'cod',
-    label: 'COD (Bayar di Tempat)',
-    description: 'Pembayaran dilakukan saat pesanan diterima.',
-    icon: Truck,
-  },
 ];
 
 export default function CheckoutPage() {
@@ -64,7 +45,6 @@ export default function CheckoutPage() {
   const { items, totalPrice, totalItems, clearCart } = useCartStore();
 
   const [shippingMethod, setShippingMethod] = useState<string>(SHIPPING_OPTIONS[0].id);
-  const [paymentMethod, setPaymentMethod] = useState<'transfer_manual' | 'cod'>('transfer_manual');
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -109,15 +89,23 @@ export default function CheckoutPage() {
     [items]
   );
 
+  const promoEligibleTotal = useMemo(() => {
+    if (!promoData) return 0;
+    return items.reduce((sum, item) => {
+      if (item.productId !== promoData.product_id) return sum;
+      return sum + (Number(item.price || 0) * Number(item.quantity || 0));
+    }, 0);
+  }, [items, promoData]);
+
   const promoDiscount = useMemo(() => {
     if (!promoData) return 0;
-    const itemsTotal = totalPrice;
+    if (promoEligibleTotal <= 0) return 0;
     const discount = Math.min(
-      Math.round(itemsTotal * (promoData.discount_pct / 100)),
+      Math.round(promoEligibleTotal * (promoData.discount_pct / 100)),
       promoData.max_discount_rupiah || Infinity
     );
     return discount;
-  }, [promoData, totalPrice]);
+  }, [promoData, promoEligibleTotal]);
 
   const grandTotal = Math.max(0, totalPrice + shippingFee - promoDiscount);
 
@@ -163,10 +151,20 @@ export default function CheckoutPage() {
         setPromoError('Kode promo tidak valid.');
         return;
       }
+      const normalizedProductId = String(promo.product_id || '').trim();
+      const hasEligibleProduct = items.some((item) => item.productId === normalizedProductId);
+      if (!normalizedProductId || !hasEligibleProduct) {
+        setPromoData(null);
+        setPromoError('Voucher tidak berlaku untuk produk di keranjang.');
+        return;
+      }
       setPromoData({
         code: String(promo.code || '').trim().toUpperCase(),
         discount_pct: Number(promo.discount_pct || 0),
         max_discount_rupiah: Number(promo.max_discount_rupiah || 0),
+        product_id: normalizedProductId,
+        product_name: promo.product_name || null,
+        product_sku: promo.product_sku || null,
       });
     } catch (error: unknown) {
       const maybeMessage = typeof (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message === 'string'
@@ -178,6 +176,15 @@ export default function CheckoutPage() {
       setValidatingPromo(false);
     }
   };
+
+  useEffect(() => {
+    if (!promoData) return;
+    const hasEligibleProduct = items.some((item) => item.productId === promoData.product_id);
+    if (!hasEligibleProduct) {
+      setPromoData(null);
+      setPromoError('Voucher tidak berlaku untuk produk di keranjang.');
+    }
+  }, [items, promoData]);
 
   const removePromo = () => {
     setPromoData(null);
@@ -256,7 +263,6 @@ export default function CheckoutPage() {
 
       const res = await api.orders.checkout({
         from_cart: false,
-        payment_method: paymentMethod,
         shipping_method_code: shippingMethod,
         items: payloadItems,
         promo_code: promoData?.code || undefined,
@@ -419,40 +425,6 @@ export default function CheckoutPage() {
             </div>
           )}
 
-          <div className="space-y-3">
-            <h2 className="text-sm font-bold text-slate-900">Metode Pembayaran</h2>
-            <div className="grid grid-cols-1 gap-2">
-              {PAYMENT_OPTIONS.map((option) => {
-                const Icon = option.icon;
-                return (
-                  <label
-                    key={option.id}
-                    className={`flex items-center justify-between rounded-2xl px-4 py-3 cursor-pointer border transition-all ${
-                      paymentMethod === option.id
-                        ? 'border-emerald-500 bg-emerald-50'
-                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center">
-                        <Icon size={16} />
-                      </div>
-                      <div className="space-y-0.5">
-                        <p className="text-sm font-bold text-slate-900">{option.label}</p>
-                        <p className="text-[11px] text-slate-500">{option.description}</p>
-                      </div>
-                    </div>
-                    <input
-                      type="radio"
-                      checked={paymentMethod === option.id}
-                      onChange={() => setPaymentMethod(option.id)}
-                    />
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-900">Catatan (Opsional)</label>
             <textarea
@@ -520,7 +492,10 @@ export default function CheckoutPage() {
             {promoError && <p className="text-[10px] font-bold text-red-600 pl-1">{promoError}</p>}
             {promoData && (
               <p className="text-[10px] font-bold text-emerald-600 pl-1">
-                Promo aktif: {promoData.code} ({promoData.discount_pct}% maks {formatCurrency(promoData.max_discount_rupiah)})
+                Promo aktif: {promoData.code} ({promoData.discount_pct}% maks {formatCurrency(promoData.max_discount_rupiah)}) •
+                <span className="text-emerald-900">
+                  {promoData.product_name || 'Produk'}{promoData.product_sku ? ` (${promoData.product_sku})` : ''}
+                </span>
               </p>
             )}
           </div>

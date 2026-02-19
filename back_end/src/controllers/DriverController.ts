@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, Account, OrderAllocation } from '../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../models';
 import { JournalService } from '../services/JournalService';
 import { Op } from 'sequelize';
 import { AccountingPostingService } from '../services/AccountingPostingService';
-import { emitOrderStatusChanged, emitReturStatusChanged } from '../utils/orderNotification';
+import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../utils/orderNotification';
+import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
 
 export const getAssignedOrders = async (req: Request, res: Response) => {
     try {
@@ -43,7 +44,6 @@ export const getAssignedOrders = async (req: Request, res: Response) => {
         const orders = await Order.findAll({
             where: whereClause,
             include: [
-                { model: Invoice },
                 { model: OrderItem, include: [Product] },
                 {
                     model: User,
@@ -54,7 +54,10 @@ export const getAssignedOrders = async (req: Request, res: Response) => {
             order: [['updatedAt', 'DESC']]
         });
 
-        res.json(orders);
+        const plainOrders = orders.map((order: any) => order.get({ plain: true }) as any);
+        const ordersWithInvoices = await attachInvoicesToOrders(plainOrders);
+
+        res.json(ordersWithInvoices);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching assigned orders', error });
     }
@@ -69,8 +72,7 @@ export const completeDelivery = async (req: Request, res: Response) => {
 
         // Check ownership
         const order = await Order.findOne({
-            where: { id, courier_id: userId },
-            include: [Invoice]
+            where: { id, courier_id: userId }
         });
 
         if (!order) {
@@ -78,7 +80,7 @@ export const completeDelivery = async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'Order not found or not assigned to you' });
         }
 
-        const invoice = await Invoice.findOne({ where: { order_id: id }, transaction: t });
+        const invoice = await findLatestInvoiceByOrderId(String(id), { transaction: t });
         if (!invoice) {
             await t.rollback();
             return res.status(400).json({ message: 'Invoice missing' });
@@ -88,15 +90,18 @@ export const completeDelivery = async (req: Request, res: Response) => {
         // Handle COD logic
         if (invoice.payment_method === 'cod') {
             const amountToCollect = Number(invoice.total || order.total_amount || 0);
+            const shouldCollectCod = invoice.payment_status !== 'cod_pending';
 
             // 1. Update invoice status & record validation
-            await invoice.update({
-                payment_status: 'cod_pending', // Money with driver
-                amount_paid: amountToCollect, // Assume full payment collected by driver
-            }, { transaction: t });
+            if (shouldCollectCod) {
+                await invoice.update({
+                    payment_status: 'cod_pending', // Money with driver
+                    amount_paid: amountToCollect, // Assume full payment collected by driver
+                }, { transaction: t });
+            }
 
             // 2. Create COD Collection Record
-            if (amountToCollect > 0) {
+            if (amountToCollect > 0 && shouldCollectCod) {
                 await CodCollection.create({
                     invoice_id: invoice.id,
                     driver_id: userId,
@@ -142,6 +147,184 @@ export const completeDelivery = async (req: Request, res: Response) => {
     }
 };
 
+export const recordPayment = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const userId = req.user!.id;
+        const file = req.file;
+        const rawAmount = req.body?.amount_received ?? req.body?.amount;
+
+        const order = await Order.findOne({
+            where: { id, courier_id: userId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Order tidak ditemukan atau tidak ditugaskan ke driver ini.' });
+        }
+
+        const invoice = await findLatestInvoiceByOrderId(String(id), { transaction: t });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Invoice tidak ditemukan.' });
+        }
+
+        if (invoice.payment_method !== 'cod') {
+            await t.rollback();
+            return res.status(400).json({ message: 'Metode pembayaran bukan COD.' });
+        }
+
+        if (invoice.payment_status === 'paid') {
+            await t.rollback();
+            return res.status(409).json({ message: 'Invoice sudah lunas.' });
+        }
+
+        const invoiceTotal = Number(invoice.total || order.total_amount || 0);
+        const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
+            ? invoiceTotal
+            : Number(rawAmount);
+        if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Jumlah pembayaran tidak valid.' });
+        }
+        const amountReceived = parsedAmount;
+        if (Math.abs(amountReceived - invoiceTotal) > 0.01) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Nominal pembayaran harus sesuai total invoice.' });
+        }
+
+        const existingCollection = await CodCollection.findOne({
+            where: { invoice_id: invoice.id, driver_id: userId, status: 'collected' },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
+        const delta = amountReceived - previousAmount;
+
+        if (existingCollection) {
+            await existingCollection.update({ amount: amountReceived }, { transaction: t });
+        } else {
+            await CodCollection.create({
+                invoice_id: invoice.id,
+                driver_id: userId,
+                amount: amountReceived,
+                status: 'collected'
+            }, { transaction: t });
+        }
+
+        if (delta !== 0) {
+            const driver = await User.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
+            if (!driver) {
+                await t.rollback();
+                return res.status(404).json({ message: 'Driver tidak ditemukan.' });
+            }
+            const previousDebt = Number(driver.debt || 0);
+            const nextDebt = Math.max(0, previousDebt + delta);
+            await driver.update({ debt: nextDebt }, { transaction: t });
+        }
+
+        const invoiceUpdate: any = {
+            payment_status: 'cod_pending',
+            amount_paid: amountReceived
+        };
+        if (file) {
+            invoiceUpdate.payment_proof_url = file.path;
+        }
+        await invoice.update(invoiceUpdate, { transaction: t });
+
+        await t.commit();
+        emitAdminRefreshBadges();
+
+        return res.json({
+            message: 'Pembayaran COD berhasil dicatat.',
+            invoice_id: invoice.id,
+            amount_received: amountReceived
+        });
+    } catch (error) {
+        await t.rollback();
+        return res.status(500).json({ message: 'Gagal mencatat pembayaran.', error });
+    }
+};
+
+export const updatePaymentMethod = async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const userId = req.user!.id;
+        const rawMethod = String(req.body?.payment_method || '').trim().toLowerCase();
+        if (!['cod', 'transfer_manual'].includes(rawMethod)) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Metode pembayaran tidak valid.' });
+        }
+        const nextMethod = rawMethod as 'cod' | 'transfer_manual';
+
+        const order = await Order.findOne({
+            where: { id, courier_id: userId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Order tidak ditemukan atau tidak ditugaskan ke driver ini.' });
+        }
+
+        const invoice = await findLatestInvoiceByOrderId(String(id), { transaction: t });
+        if (!invoice) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Invoice tidak ditemukan.' });
+        }
+
+        if (invoice.payment_status === 'paid') {
+            await t.rollback();
+            return res.status(409).json({ message: 'Invoice sudah lunas, metode pembayaran tidak bisa diubah.' });
+        }
+
+        if (invoice.payment_status === 'cod_pending' && invoice.payment_method !== nextMethod) {
+            await t.rollback();
+            return res.status(409).json({ message: 'Pembayaran COD sudah dicatat, metode tidak bisa diubah.' });
+        }
+
+        const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
+        if (invoice.order_id) {
+            relatedOrderIds.push(String(invoice.order_id));
+        }
+        const uniqueOrderIds = Array.from(new Set(relatedOrderIds.filter(Boolean)));
+        if (uniqueOrderIds.length > 0) {
+            const orders = await Order.findAll({
+                where: { id: { [Op.in]: uniqueOrderIds } },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            const hasMismatch = orders.some((row) => String(row.courier_id || '') !== String(userId));
+            if (hasMismatch) {
+                await t.rollback();
+                return res.status(403).json({ message: 'Metode pembayaran hanya bisa diubah oleh driver yang menangani semua order di invoice.' });
+            }
+        }
+
+        await invoice.update({ payment_method: nextMethod }, { transaction: t });
+        if (uniqueOrderIds.length > 0) {
+            await Order.update(
+                { payment_method: nextMethod },
+                { where: { id: { [Op.in]: uniqueOrderIds } }, transaction: t }
+            );
+        }
+
+        await t.commit();
+        emitAdminRefreshBadges();
+
+        return res.json({
+            message: 'Metode pembayaran diperbarui.',
+            payment_method: nextMethod
+        });
+    } catch (error) {
+        await t.rollback();
+        return res.status(500).json({ message: 'Gagal memperbarui metode pembayaran.', error });
+    }
+};
+
 export const getDriverWallet = async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id;
@@ -152,28 +335,60 @@ export const getDriverWallet = async (req: Request, res: Response) => {
                 courier_id: userId,
                 status: { [Op.in]: ['delivered', 'completed'] }
             },
-            include: [{
-                model: Invoice,
-                where: {
-                    payment_method: 'cod',
-                    payment_status: 'cod_pending'
-                }
-            }]
+            attributes: ['id']
         });
 
+        const orderIds = orders.map((order) => String(order.id));
         let totalCash = 0;
         const details = [];
 
-        for (const order of orders) {
-            const inv = (order as any).Invoice; // HasOne relationship
-            if (inv) {
-                const invoiceTotal = Number(inv.total || order.total_amount || 0);
-                totalCash += Number(inv.amount_paid) > 0 ? Number(inv.amount_paid) : invoiceTotal;
-                details.push({
-                    order_id: order.id,
-                    invoice_number: inv.invoice_number,
-                    amount: invoiceTotal
+        if (orderIds.length > 0) {
+            const orderItems = await OrderItem.findAll({
+                where: { order_id: { [Op.in]: orderIds } },
+                attributes: ['id', 'order_id']
+            });
+            const orderItemIds = orderItems.map((item: any) => String(item.id));
+            const orderItemToOrderId = new Map<string, string>();
+            orderItems.forEach((item: any) => {
+                orderItemToOrderId.set(String(item.id), String(item.order_id));
+            });
+
+            if (orderItemIds.length > 0) {
+                const invoiceItems = await InvoiceItem.findAll({
+                    where: { order_item_id: { [Op.in]: orderItemIds } },
+                    include: [{
+                        model: Invoice,
+                        where: {
+                            payment_method: 'cod',
+                            payment_status: 'cod_pending'
+                        },
+                        required: true
+                    }]
                 });
+
+                const invoiceMap = new Map<string, { invoice: any; orderIds: Set<string> }>();
+                invoiceItems.forEach((item: any) => {
+                    const invoice = item.Invoice;
+                    if (!invoice) return;
+                    const invoiceId = String(invoice.id);
+                    const orderId = orderItemToOrderId.get(String(item.order_item_id)) || '';
+                    const entry = invoiceMap.get(invoiceId) || { invoice, orderIds: new Set<string>() };
+                    if (orderId) entry.orderIds.add(orderId);
+                    invoiceMap.set(invoiceId, entry);
+                });
+
+                for (const entry of invoiceMap.values()) {
+                    const inv = entry.invoice;
+                    const invoiceTotal = Number(inv.total || 0);
+                    const amount = Number(inv.amount_paid) > 0 ? Number(inv.amount_paid) : invoiceTotal;
+                    totalCash += amount;
+                    details.push({
+                        order_id: Array.from(entry.orderIds)[0] || null,
+                        invoice_number: inv.invoice_number,
+                        amount,
+                        order_ids: Array.from(entry.orderIds)
+                    });
+                }
             }
         }
 
@@ -216,7 +431,6 @@ export const reportIssue = async (req: Request, res: Response) => {
 
         const order = await Order.findOne({
             where: { id, courier_id: userId },
-            include: [{ model: Invoice }],
             transaction: t,
             lock: t.LOCK.UPDATE
         });
@@ -285,12 +499,13 @@ export const reportIssue = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
+        const invoice = await findLatestInvoiceByOrderId(String(order.id), { transaction: t });
         emitOrderStatusChanged({
             order_id: String(order.id),
             from_status: previousStatus || null,
             to_status: 'hold',
             source: String(order.source || ''),
-            payment_method: String((order as any)?.Invoice?.payment_method || ''),
+            payment_method: String(invoice?.payment_method || ''),
             courier_id: null,
             triggered_by_role: String(req.user?.role || 'driver'),
             target_roles: ['admin_gudang', 'super_admin'],

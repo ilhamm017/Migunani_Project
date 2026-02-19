@@ -10,14 +10,11 @@ import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
-type ChecklistIndicator = 'not_checked' | 'mismatch' | 'ready';
-
 export default function DriverTaskPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
   const [wallet, setWallet] = useState<any>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [returs, setReturs] = useState<any[]>([]);
-  const [checklistStatusByOrder, setChecklistStatusByOrder] = useState<Record<string, ChecklistIndicator>>({});
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
@@ -76,31 +73,6 @@ export default function DriverTaskPage() {
     pollIntervalMs: 12000,
     filterDriverIds: user?.id ? [String(user.id)] : [],
   });
-
-  useEffect(() => {
-    if (!allowed || typeof window === 'undefined') return;
-    const nextMap: Record<string, ChecklistIndicator> = {};
-
-    for (const order of orders) {
-      const orderId = String(order?.id || '');
-      if (!orderId) continue;
-      const raw = sessionStorage.getItem(`driver-checklist-${orderId}`);
-      if (!raw) {
-        nextMap[orderId] = 'not_checked';
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(raw);
-        const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-        const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
-        nextMap[orderId] = mismatchCount > 0 ? 'mismatch' : 'ready';
-      } catch {
-        nextMap[orderId] = 'not_checked';
-      }
-    }
-
-    setChecklistStatusByOrder(nextMap);
-  }, [allowed, orders]);
 
   if (!allowed) return null;
 
@@ -195,18 +167,6 @@ export default function DriverTaskPage() {
             const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
             const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
             const whatsapp = customer.whatsapp_number || '-';
-            const checklistStatus = checklistStatusByOrder[String(o.id)] || 'not_checked';
-            const checklistLabel = checklistStatus === 'ready'
-              ? 'Siap berangkat'
-              : checklistStatus === 'mismatch'
-                ? 'Ada mismatch'
-                : 'Belum dicek';
-            const checklistBadgeClass = checklistStatus === 'ready'
-              ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-              : checklistStatus === 'mismatch'
-                ? 'bg-rose-100 text-rose-700 border-rose-200'
-                : 'bg-amber-100 text-amber-700 border-amber-200';
-
             return (
               <div
                 key={o.id}
@@ -223,10 +183,6 @@ export default function DriverTaskPage() {
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-slate-50 space-y-3">
-                  <div className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${checklistBadgeClass}`}>
-                    Checklist: {checklistLabel}
-                  </div>
-
                   {/* Customer Name */}
                   <div className="flex items-center gap-2 text-slate-600">
                     <User size={14} className="min-w-[14px] opacity-40" />
@@ -263,18 +219,12 @@ export default function DriverTaskPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Link
-                    href={`/driver/orders/${o.id}/checklist`}
-                    className="py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-black uppercase text-center"
-                  >
-                    Cek Barang
-                  </Link>
+                <div className="mt-4">
                   <Link
                     href={`/driver/orders/${o.id}`}
-                    className="py-3 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                    className="w-full py-3 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
                   >
-                    Detail <ChevronRight size={14} />
+                    Detail Pengiriman <ChevronRight size={14} />
                   </Link>
                 </div>
               </div>

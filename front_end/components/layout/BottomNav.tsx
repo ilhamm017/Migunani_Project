@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, ShoppingBag, ShoppingCart, Package, MessageSquare } from 'lucide-react';
+import { ShoppingBag, ShoppingCart, Package, MessageSquare, FileText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
@@ -15,9 +15,9 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-    { href: '/', label: 'Home', icon: Home },
     { href: '/catalog', label: 'Katalog', icon: ShoppingBag },
     { href: '/cart', label: 'Keranjang', icon: ShoppingCart },
+    { href: '/invoices', label: 'Invoice', icon: FileText },
     { href: '/orders', label: 'Pesanan', icon: Package },
     { href: '/chat', label: 'Chat', icon: MessageSquare },
 ];
@@ -28,6 +28,7 @@ export default function BottomNav() {
     const { isAuthenticated, user } = useAuthStore();
     const role = String(user?.role || '').trim();
     const isCustomerRoute = !pathname?.startsWith('/admin') && !pathname?.startsWith('/auth') && !pathname?.startsWith('/driver');
+    const isPrintRoute = pathname?.includes('/print');
     const isCustomerRole = !role || role === 'customer';
     const unreadCount = useChatUnreadCount({
         enabled: !!isCustomerRoute && isAuthenticated && isCustomerRole && canUseChatUnreadByRole(role),
@@ -35,7 +36,7 @@ export default function BottomNav() {
     });
 
     // Show customer bottom nav on customer-facing routes.
-    if (!isCustomerRoute) {
+    if (!isCustomerRoute || isPrintRoute) {
         return null;
     }
 

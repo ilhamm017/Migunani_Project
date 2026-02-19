@@ -2,6 +2,7 @@ import { Transaction } from 'sequelize';
 import { Account, Invoice, Order, OrderItem, OrderAllocation } from '../models';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
+import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
 
 const n = (v: unknown) => Number(v || 0);
 
@@ -13,7 +14,7 @@ export class AccountingPostingService {
         if (!order) throw new Error('Order not found for goods out posting');
         if (order.goods_out_posted_at) return { revenue: 0, cogs: 0 };
 
-        const invoice = await Invoice.findOne({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
+        const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
         if (!invoice) throw new Error('Invoice not found for goods out posting');
 
         const orderItems = await OrderItem.findAll({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
@@ -39,8 +40,11 @@ export class AccountingPostingService {
             await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
         }
 
-        const revenueDpp = n(invoice.subtotal);
-        const outputVat = n(invoice.tax_mode_snapshot === 'pkp' ? invoice.tax_amount : 0);
+        const orderSubtotal = orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0);
+        const orderDiscount = n(order.discount_amount);
+        const orderShipping = n(order.shipping_fee);
+        const revenueDpp = Math.max(0, orderSubtotal - orderDiscount + orderShipping);
+        const outputVat = n(invoice.tax_mode_snapshot === 'pkp' ? invoice.tax_amount : 0) * (n(invoice.total) > 0 ? (revenueDpp / n(invoice.total)) : 0);
 
         if (mode === 'non_cod') {
             const deferredRevenueAcc = await getAccount('2300', t);

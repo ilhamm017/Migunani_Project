@@ -62,6 +62,9 @@ export default function WebChatWidget() {
     if (pathname?.startsWith('/admin') || pathname?.startsWith('/auth') || pathname?.startsWith('/driver') || pathname === '/chat') {
       return true;
     }
+    if (pathname?.includes('/print')) {
+      return true;
+    }
     if (user?.role && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver'].includes(user.role)) {
       return true;
     }

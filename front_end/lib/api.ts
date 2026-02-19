@@ -132,6 +132,10 @@ export const api = {
         validate: (code: string) => apiClient.get(`/promos/validate/${code}`),
     },
 
+    invoices: {
+        getById: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}`),
+    },
+
     // Allocation (Admin)
     allocation: {
         getPending: (params?: { scope?: 'shortage' | 'all' }) =>
@@ -222,6 +226,7 @@ export const api = {
                 code: string;
                 discount_pct: number;
                 max_discount_rupiah: number;
+                product_id: string;
                 starts_at?: string;
                 expires_at?: string;
                 valid_days?: number;
@@ -231,6 +236,7 @@ export const api = {
             update: (code: string, data: {
                 discount_pct?: number;
                 max_discount_rupiah?: number;
+                product_id?: string;
                 starts_at?: string;
                 expires_at?: string;
                 valid_days?: number;
@@ -362,6 +368,10 @@ export const api = {
                 apiClient.delete(`/admin/finance/expense-labels/${id}`),
             issueInvoice: (orderId: string) =>
                 apiClient.post(`/admin/finance/orders/${orderId}/issue-invoice`),
+            issueInvoiceBatch: (orderIds: string[]) =>
+                apiClient.post('/admin/finance/invoices/issue-batch', { order_ids: orderIds }),
+            issueInvoiceByItems: (items: Array<{ order_item_id: string | number; qty: number }>) =>
+                apiClient.post('/admin/finance/invoices/issue-items', { items }),
             verifyPayment: (orderId: string, action: 'approve' | 'reject') =>
                 apiClient.patch(`/admin/finance/orders/${orderId}/verify`, { action }),
             getAR: () => apiClient.get('/admin/finance/ar'),
@@ -550,6 +560,18 @@ export const api = {
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
+        recordPayment: (orderId: string, payload: { amount_received?: number; proof?: File | null }) => {
+            const formData = new FormData();
+            if (payload.amount_received !== undefined && payload.amount_received !== null) {
+                formData.append('amount_received', String(payload.amount_received));
+            }
+            if (payload.proof) {
+                formData.append('proof', payload.proof);
+            }
+            return apiClient.post(`/driver/orders/${orderId}/payment`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+        },
         reportIssue: (
             orderId: string,
             payload: string | { note: string; checklist_snapshot?: string; evidence?: File | null }
@@ -570,6 +592,8 @@ export const api = {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
         },
+        updatePaymentMethod: (orderId: string, payment_method: 'cod' | 'transfer_manual') =>
+            apiClient.patch(`/driver/orders/${orderId}/payment-method`, { payment_method }),
         getWallet: () => apiClient.get('/driver/wallet'),
         getReturs: () => apiClient.get('/driver/retur'),
         getReturById: (returId: string) => apiClient.get(`/driver/retur/${returId}`),

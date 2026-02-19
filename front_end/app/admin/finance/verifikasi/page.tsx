@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
@@ -29,10 +28,8 @@ const normalizeProofImageUrl = (raw?: string | null) => {
 
 export default function FinanceVerifyPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance']);
-  const { user } = useAuthStore();
-  const canVerify = useMemo(() => ['admin_finance', 'super_admin'].includes(user?.role || ''), [user?.role]);
 
-  const [activeTab, setActiveTab] = useState<'invoice' | 'verify' | 'cod' | 'completed'>('invoice');
+  const [activeTab, setActiveTab] = useState<'verify' | 'cod' | 'completed'>('verify');
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -43,7 +40,7 @@ export default function FinanceVerifyPage() {
       setLoading(true);
       const res = await api.admin.orderManagement.getAll({
         page: 1, limit: 100,
-        status: 'waiting_invoice,waiting_payment,waiting_admin_verification,delivered,completed,canceled'
+        status: 'waiting_admin_verification,delivered,completed,canceled'
       });
       setOrders(res.data?.orders || []);
     } catch (error) {
@@ -77,14 +74,13 @@ export default function FinanceVerifyPage() {
   // Client-side filtering for tabs
   const tabOrders = useMemo(() => {
     return orders.filter(o => {
-      if (activeTab === 'invoice') return o.status === 'waiting_invoice';
       if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
       if (activeTab === 'cod') {
         const isCod = ['cod', 'cash_store'].includes(o.Invoice?.payment_method);
         return o.status === 'delivered' && isCod && o.Invoice?.payment_status !== 'paid';
       }
       if (activeTab === 'completed') {
-        return o.status === 'completed' || o.status === 'waiting_payment' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
+        return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
       }
       return false;
     });
@@ -92,14 +88,10 @@ export default function FinanceVerifyPage() {
 
   if (!allowed) return null;
 
-  const handleAction = async (id: string, actionType: 'issue' | 'verify', verifyAction?: 'approve' | 'reject') => {
+  const handleAction = async (id: string, actionType: 'verify', verifyAction?: 'approve' | 'reject') => {
     try {
       setBusyId(id);
-      if (actionType === 'issue') {
-        await api.admin.finance.issueInvoice(id);
-      } else if (actionType === 'verify') {
-        await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
-      }
+      await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
       await load();
     } catch (error: any) {
       console.error('Action failed:', error);
@@ -115,13 +107,6 @@ export default function FinanceVerifyPage() {
         <FinanceHeader title="Verifikasi Command" />
 
         <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-          <button
-            onClick={() => setActiveTab('invoice')}
-            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'invoice' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'
-              }`}
-          >
-            Issue Invoice
-          </button>
           <button
             onClick={() => setActiveTab('verify')}
             className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'verify' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'
@@ -193,16 +178,6 @@ export default function FinanceVerifyPage() {
 
                 {/* Actions */}
                 <div className="flex gap-2">
-                  {activeTab === 'invoice' && (
-                    <button
-                      onClick={() => handleAction(o.id, 'issue')}
-                      disabled={busyId === o.id}
-                      className="flex-1 bg-slate-900 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-slate-800"
-                    >
-                      {busyId === o.id ? '...' : 'Issue Invoice'}
-                    </button>
-                  )}
-
                   {activeTab === 'verify' && (
                     <>
                       {proofUrl ? (

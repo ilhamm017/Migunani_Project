@@ -18,6 +18,10 @@ export default function Header() {
     if (pathname?.startsWith('/admin')) {
         return null;
     }
+
+    if (pathname?.includes('/print')) {
+        return null;
+    }
     const isCatalogPage = pathname?.startsWith('/catalog');
 
     const initials = user?.name

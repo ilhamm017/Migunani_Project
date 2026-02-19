@@ -92,19 +92,23 @@ const handleBotCommands = async (msg: WaMessage, session: ChatSession) => {
 
         // Try to find by Invoice Number
         // We need to import Invoice model.
-        const { Invoice } = require('../models');
+        const { Invoice, Order } = require('../models');
+        const { findOrderIdsByInvoiceId } = require('../utils/invoiceLookup');
         const invoice = await Invoice.findOne({
-            where: { invoice_number: query },
-            include: [{ model: Order }]
+            where: { invoice_number: query }
         });
 
-        if (invoice && invoice.Order) {
-            const order = invoice.Order;
+        if (invoice) {
+            const orderIds = await findOrderIdsByInvoiceId(String(invoice.id));
+            const orders = orderIds.length > 0
+                ? await Order.findAll({ where: { id: orderIds } })
+                : [];
+            const statusList = orders.map((order: any) => `#${String(order.id).slice(-6)}: ${String(order.status || '').toUpperCase()}`);
             await msg.reply(
                 `📦 *Status Pesanan*\n` +
                 `No. Invoice: ${invoice.invoice_number}\n` +
-                `Status: *${order.status.toUpperCase()}*\n` +
-                `Pembayaran: ${invoice.payment_status.toUpperCase()}\n\n` +
+                `Pembayaran: ${String(invoice.payment_status || '').toUpperCase()}\n` +
+                (statusList.length ? `Status Order:\n${statusList.join('\n')}\n\n` : '') +
                 `Terima kasih sudah berbelanja!`
             );
         } else {

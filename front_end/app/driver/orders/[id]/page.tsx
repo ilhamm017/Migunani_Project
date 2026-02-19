@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { AlertTriangle, ArrowLeft, Camera, CheckCircle2, ClipboardCheck, MessageCircle, Send, Upload } from 'lucide-react';
+import { ArrowLeft, Camera, ClipboardCheck, MessageCircle, Send, Upload, Coins, CreditCard } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -33,21 +33,39 @@ export default function DriverOrderDetailPage() {
     exists: false,
     mismatchCount: 0,
   });
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentProof, setPaymentProof] = useState<File | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentMessage, setPaymentMessage] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'transfer_manual' | ''>('');
+  const [paymentMethodLoading, setPaymentMethodLoading] = useState(false);
+  const [paymentMethodMessage, setPaymentMethodMessage] = useState('');
+
+  const loadOrder = useCallback(async () => {
+    try {
+      const res = await api.driver.getOrders();
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const selected = rows.find((x: any) => String(x.id) === orderId) || null;
+      setOrder(selected);
+      if (selected?.Invoice?.total !== undefined && selected?.Invoice?.total !== null) {
+        setPaymentAmount(String(selected.Invoice.total));
+      }
+      const method = String(selected?.Invoice?.payment_method || selected?.payment_method || '').toLowerCase();
+      if (method === 'cod' || method === 'transfer_manual') {
+        setPaymentMethod(method);
+      } else {
+        setPaymentMethod('');
+      }
+    } catch (error) {
+      console.error('Load driver order failed:', error);
+    }
+  }, [orderId]);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await api.driver.getOrders();
-        const rows = Array.isArray(res.data) ? res.data : [];
-        setOrder(rows.find((x: any) => String(x.id) === orderId) || null);
-      } catch (error) {
-        console.error('Load driver order failed:', error);
-      }
-    };
     if (allowed && orderId) {
-      void load();
+      void loadOrder();
     }
-  }, [allowed, orderId]);
+  }, [allowed, orderId, loadOrder]);
 
   useEffect(() => {
     if (!allowed || !orderId || typeof window === 'undefined') return;
@@ -83,6 +101,15 @@ export default function DriverOrderDetailPage() {
 
   if (!allowed) return null;
 
+  const isCod = (paymentMethod || order?.Invoice?.payment_method) === 'cod';
+  const paymentRecorded = isCod && ['cod_pending', 'paid'].includes(String(order?.Invoice?.payment_status || ''));
+  const paymentAmountValue = paymentAmount.trim() ? Number(paymentAmount) : undefined;
+  const paymentAmountValid = paymentAmountValue === undefined || Number.isFinite(paymentAmountValue);
+  const paymentMethodLocked = ['paid', 'cod_pending'].includes(String(order?.Invoice?.payment_status || ''));
+  const missingChecklist = !checklistState.exists;
+  const hasChecklistMismatch = checklistState.exists && checklistState.mismatchCount > 0;
+  const missingProof = !proof;
+
   const complete = async () => {
     try {
       setLoading(true);
@@ -96,6 +123,52 @@ export default function DriverOrderDetailPage() {
       alert('Gagal konfirmasi pengiriman.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const recordPayment = async () => {
+    if (!isCod) return;
+    if (!paymentAmountValid) {
+      setPaymentMessage('Nominal pembayaran tidak valid.');
+      return;
+    }
+    if (!window.confirm('Catat pembayaran COD dari customer?')) return;
+    try {
+      setPaymentLoading(true);
+      setPaymentMessage('');
+      await api.driver.recordPayment(orderId, {
+        amount_received: paymentAmountValue,
+        proof: paymentProof
+      });
+      setPaymentMessage('Pembayaran berhasil dicatat.');
+      setPaymentProof(null);
+      await loadOrder();
+    } catch (error) {
+      console.error('Record payment failed:', error);
+      setPaymentMessage('Gagal mencatat pembayaran.');
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  const handlePaymentMethodChange = async (nextMethod: 'cod' | 'transfer_manual') => {
+    if (paymentMethodLocked || paymentMethodLoading || nextMethod === paymentMethod) return;
+    const confirmText = nextMethod === 'cod'
+      ? 'Gunakan metode COD? Driver akan membawa uang untuk disetor ke finance.'
+      : 'Gunakan metode transfer? Pembayaran akan ditangani finance.';
+    if (!window.confirm(confirmText)) return;
+    try {
+      setPaymentMethodLoading(true);
+      setPaymentMethodMessage('');
+      await api.driver.updatePaymentMethod(orderId, nextMethod);
+      setPaymentMethod(nextMethod);
+      setPaymentMethodMessage('Metode pembayaran diperbarui.');
+      await loadOrder();
+    } catch (error) {
+      console.error('Update payment method failed:', error);
+      setPaymentMethodMessage('Gagal memperbarui metode pembayaran.');
+    } finally {
+      setPaymentMethodLoading(false);
     }
   };
 
@@ -135,7 +208,11 @@ export default function DriverOrderDetailPage() {
     }
   };
 
-  const canComplete = !!proof && checklistState.exists && checklistState.mismatchCount === 0 && !loading;
+  const canComplete = !!proof
+    && checklistState.exists
+    && checklistState.mismatchCount === 0
+    && !loading
+    && (!isCod || paymentRecorded);
   const customer = order?.Customer || {};
 
   return (
@@ -173,33 +250,111 @@ export default function DriverOrderDetailPage() {
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500 font-bold uppercase">Metode</span>
             <span className="text-xs font-black text-slate-900 uppercase">
-              {order?.Invoice?.payment_method || 'COD'}
+              {paymentMethod || order?.Invoice?.payment_method || 'COD'}
             </span>
           </div>
         </div>
 
-        <div className={`rounded-2xl border p-4 ${checklistState.exists && checklistState.mismatchCount === 0 ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
-          <div className="flex items-start gap-2">
-            {checklistState.exists && checklistState.mismatchCount === 0 ? (
-              <CheckCircle2 size={18} className="text-emerald-600 mt-0.5" />
-            ) : (
-              <AlertTriangle size={18} className="text-amber-600 mt-0.5" />
-            )}
+        <div className="rounded-[28px] border border-slate-200 bg-white p-5 space-y-3">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <p className={`text-sm font-black ${checklistState.exists && checklistState.mismatchCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {checklistState.exists
-                  ? checklistState.mismatchCount === 0
-                    ? 'Checklist barang sudah sesuai.'
-                    : `Checklist mendeteksi ${checklistState.mismatchCount} item tidak sesuai.`
-                  : 'Checklist barang belum dilakukan.'}
-              </p>
-              <p className="text-xs text-slate-600 mt-1">
-                Driver wajib cek barang sebelum konfirmasi pengiriman.
-                {checklistState.savedAt ? ` (Disimpan: ${new Date(checklistState.savedAt).toLocaleString('id-ID')})` : ''}
-              </p>
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Opsi Pembayaran</p>
+              <p className="text-sm font-black text-slate-900">Pilih metode pembayaran customer.</p>
             </div>
+            {paymentMethodLocked && (
+              <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-slate-100 text-slate-600">
+                Terkunci
+              </span>
+            )}
           </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => handlePaymentMethodChange('cod')}
+              disabled={paymentMethodLocked || paymentMethodLoading}
+              className={`rounded-2xl border px-4 py-3 text-left space-y-1 transition-all ${paymentMethod === 'cod'
+                ? 'border-emerald-300 bg-emerald-50'
+                : 'border-slate-200 bg-white hover:border-emerald-200'}`}
+            >
+              <div className="flex items-center gap-2 text-emerald-700">
+                <Coins size={16} />
+                <span className="text-xs font-black uppercase">COD</span>
+              </div>
+              <p className="text-[11px] text-slate-600">Driver membawa uang untuk disetor ke finance.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePaymentMethodChange('transfer_manual')}
+              disabled={paymentMethodLocked || paymentMethodLoading}
+              className={`rounded-2xl border px-4 py-3 text-left space-y-1 transition-all ${paymentMethod === 'transfer_manual'
+                ? 'border-blue-300 bg-blue-50'
+                : 'border-slate-200 bg-white hover:border-blue-200'}`}
+            >
+              <div className="flex items-center gap-2 text-blue-700">
+                <CreditCard size={16} />
+                <span className="text-xs font-black uppercase">Transfer</span>
+              </div>
+              <p className="text-[11px] text-slate-600">Pembayaran ditangani finance.</p>
+            </button>
+          </div>
+
+          {paymentMethodMessage && (
+            <p className="text-xs font-bold text-slate-600">{paymentMethodMessage}</p>
+          )}
         </div>
+
+        {isCod && (
+          <div className="rounded-[28px] border border-amber-200 bg-amber-50/60 p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">Pembayaran Customer</p>
+                <p className="text-sm font-black text-slate-900">Catat pembayaran COD sebelum selesai.</p>
+              </div>
+              <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${paymentRecorded ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-amber-700 border border-amber-200'}`}>
+                {paymentRecorded ? 'Sudah Dicatat' : 'Belum Dicatat'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nominal Diterima</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={paymentAmount}
+                  readOnly
+                  className="w-full rounded-2xl border border-amber-200 px-4 py-3 text-sm font-bold bg-white/80 text-slate-700"
+                  placeholder="Total invoice"
+                />
+                <p className="text-[10px] text-slate-500">Nominal otomatis mengikuti total invoice.</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Bukti (Opsional)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => setPaymentProof(e.target.files?.[0] || null)}
+                  className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-200 file:px-3 file:py-2 file:text-[10px] file:font-black file:uppercase file:text-amber-900"
+                />
+              </div>
+            </div>
+
+            {paymentMessage && (
+              <p className="text-xs font-bold text-amber-700">{paymentMessage}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={recordPayment}
+              disabled={paymentRecorded || paymentLoading || !paymentAmountValid}
+              className="w-full py-3 rounded-2xl bg-amber-600 text-white text-xs font-black uppercase disabled:opacity-60"
+            >
+              {paymentLoading ? 'Mencatat...' : 'Catat Pembayaran COD'}
+            </button>
+          </div>
+        )}
 
         <div className="space-y-3">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
@@ -223,14 +378,6 @@ export default function DriverOrderDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 pt-2">
-          <Link
-            href={`/driver/orders/${orderId}/checklist`}
-            className="w-full py-4 bg-white border-2 border-emerald-200 text-emerald-700 rounded-[24px] font-black text-xs uppercase inline-flex items-center justify-center gap-2"
-          >
-            <ClipboardCheck size={16} />
-            Cek Barang Dulu
-          </Link>
-
           {customer.id ? (
             <Link
               href={`/driver/chat?userId=${encodeURIComponent(String(customer.id))}&phone=${encodeURIComponent(String(customer.whatsapp_number || ''))}`}
@@ -240,6 +387,36 @@ export default function DriverOrderDetailPage() {
               Hubungi Customer (Chat App)
             </Link>
           ) : null}
+
+          {(checklistState.exists && checklistState.mismatchCount === 0) ? null : (
+            <Link
+              href={`/driver/orders/${orderId}/checklist`}
+              className="w-full py-4 bg-white border-2 border-emerald-200 text-emerald-700 rounded-[24px] font-black text-xs uppercase inline-flex items-center justify-center gap-2"
+            >
+              <ClipboardCheck size={16} />
+              Buka Checklist Barang
+            </Link>
+          )}
+
+          {isCod && !paymentRecorded && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
+              Catat pembayaran COD terlebih dahulu sebelum konfirmasi selesai.
+            </div>
+          )}
+          {!isCod && (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-[11px] font-bold text-blue-700">
+              Pembayaran transfer akan ditangani finance.
+            </div>
+          )}
+
+          {(missingChecklist || hasChecklistMismatch || missingProof) && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600 space-y-1">
+              <p className="uppercase text-[10px] tracking-widest text-slate-400">Belum Bisa Selesai</p>
+              {missingChecklist && <p>Checklist belum disimpan. Buka checklist lalu klik Simpan.</p>}
+              {hasChecklistMismatch && <p>Checklist masih ada selisih. Perbaiki atau laporkan terlebih dahulu.</p>}
+              {missingProof && <p>Upload bukti foto pengiriman (bukan bukti pembayaran).</p>}
+            </div>
+          )}
 
           <button
             onClick={() => setIsConfirmOpen(true)}

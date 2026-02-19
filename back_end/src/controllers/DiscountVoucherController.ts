@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
-import { Transaction } from 'sequelize';
-import { Setting } from '../models';
+import { Op, Transaction } from 'sequelize';
+import { Product, Setting } from '../models';
 
 type DiscountVoucher = {
     code: string;
     discount_pct: number;
     max_discount_rupiah: number;
+    product_id: string | null;
     starts_at: string;
     expires_at: string;
     usage_limit: number;
@@ -40,6 +41,12 @@ const parseMoney = (value: unknown): number | null => {
     return Math.round(parsed);
 };
 
+const normalizeProductId = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+};
+
 const parsePositiveInt = (value: unknown): number | null => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return null;
@@ -71,11 +78,12 @@ const normalizeVoucher = (value: unknown): DiscountVoucher | null => {
     const code = normalizeCode(row.code);
     const discountPct = parseDiscountPct(row.discount_pct);
     const maxDiscount = parseMoney(row.max_discount_rupiah);
+    const productId = normalizeProductId(row.product_id);
     const startsAt = parseDateIso(row.starts_at);
     const expiresAt = parseDateIso(row.expires_at);
     const usageLimit = parsePositiveInt(row.usage_limit);
     const usageCount = parseNonNegativeInt(row.usage_count, 0);
-    const isActive = row.is_active !== false;
+    const isActive = row.is_active !== false && !!productId;
     const createdAt = parseDateIso(row.created_at) || new Date().toISOString();
     const updatedAt = parseDateIso(row.updated_at) || new Date().toISOString();
 
@@ -91,6 +99,7 @@ const normalizeVoucher = (value: unknown): DiscountVoucher | null => {
         code,
         discount_pct: discountPct,
         max_discount_rupiah: maxDiscount,
+        product_id: productId,
         starts_at: startsAt,
         expires_at: expiresAt,
         usage_limit: usageLimit,
@@ -242,7 +251,32 @@ export const getDiscountVouchers = async (req: Request, res: Response) => {
             return true;
         });
 
-        return res.json({ discount_vouchers: rows });
+        const productIds = Array.from(new Set(rows.map((voucher) => voucher.product_id).filter(Boolean))) as string[];
+        const products = productIds.length > 0
+            ? await Product.findAll({
+                where: { id: { [Op.in]: productIds } },
+                attributes: ['id', 'name', 'sku']
+            })
+            : [];
+        const productMap = new Map<string, { name: string; sku: string }>();
+        products.forEach((product: any) => {
+            productMap.set(String(product.id), {
+                name: String(product.name || ''),
+                sku: String(product.sku || '')
+            });
+        });
+
+        const payload = rows.map((voucher) => {
+            const productId = voucher.product_id ? String(voucher.product_id) : '';
+            const product = productId ? productMap.get(productId) : null;
+            return {
+                ...voucher,
+                product_name: product?.name || null,
+                product_sku: product?.sku || null
+            };
+        });
+
+        return res.json({ discount_vouchers: payload });
     } catch (error) {
         return res.status(500).json({ message: 'Gagal memuat voucher diskon', error });
     }
@@ -256,6 +290,7 @@ export const createDiscountVoucher = async (req: Request, res: Response) => {
         const code = normalizeCode(req.body?.code);
         const discountPct = parseDiscountPct(req.body?.discount_pct);
         const maxDiscountRupiah = parseMoney(req.body?.max_discount_rupiah);
+        const productId = normalizeProductId(req.body?.product_id);
         const usageLimit = parsePositiveInt(req.body?.usage_limit);
         const startsAt = parseDateIso(req.body?.starts_at) || new Date().toISOString();
         const expiresAt = resolveExpiresAt(req.body?.expires_at, req.body?.valid_days, startsAt);
@@ -272,6 +307,15 @@ export const createDiscountVoucher = async (req: Request, res: Response) => {
         if (maxDiscountRupiah === null) {
             await t.rollback();
             return res.status(400).json({ message: 'Maksimal potongan rupiah tidak valid.' });
+        }
+        if (!productId) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Produk voucher wajib dipilih.' });
+        }
+        const product = await Product.findByPk(productId, { transaction: t });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Produk voucher tidak ditemukan.' });
         }
         if (usageLimit === null) {
             await t.rollback();
@@ -295,6 +339,7 @@ export const createDiscountVoucher = async (req: Request, res: Response) => {
             code,
             discount_pct: discountPct,
             max_discount_rupiah: maxDiscountRupiah,
+            product_id: productId,
             starts_at: startsAt,
             expires_at: expiresAt,
             usage_limit: usageLimit,
@@ -339,6 +384,9 @@ export const updateDiscountVoucher = async (req: Request, res: Response) => {
         const nextMaxDiscount = req.body?.max_discount_rupiah !== undefined
             ? parseMoney(req.body.max_discount_rupiah)
             : current.max_discount_rupiah;
+        const nextProductId = req.body?.product_id !== undefined
+            ? normalizeProductId(req.body.product_id)
+            : current.product_id;
         const nextUsageLimit = req.body?.usage_limit !== undefined
             ? parsePositiveInt(req.body.usage_limit)
             : current.usage_limit;
@@ -375,6 +423,15 @@ export const updateDiscountVoucher = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(400).json({ message: 'Maksimal potongan rupiah tidak valid.' });
         }
+        if (!nextProductId) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Produk voucher wajib dipilih.' });
+        }
+        const product = await Product.findByPk(nextProductId, { transaction: t });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ message: 'Produk voucher tidak ditemukan.' });
+        }
         if (nextUsageLimit === null) {
             await t.rollback();
             return res.status(400).json({ message: 'Batas pemakaian voucher harus angka bulat >= 1.' });
@@ -393,6 +450,7 @@ export const updateDiscountVoucher = async (req: Request, res: Response) => {
             ...current,
             discount_pct: nextDiscountPct,
             max_discount_rupiah: nextMaxDiscount,
+            product_id: nextProductId,
             usage_limit: nextUsageLimit,
             starts_at: nextStartsAt,
             expires_at: nextExpiresAt,
