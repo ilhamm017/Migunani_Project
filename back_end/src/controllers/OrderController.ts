@@ -79,10 +79,19 @@ const withOrderTrackingFields = (orderLike: any) => {
     const dueAt = activeIssue?.due_at ? new Date(activeIssue.due_at) : null;
     const isOverdue = !!(dueAt && dueAt.getTime() < Date.now());
 
+    const reporterName = activeIssue?.IssueCreator
+        ? resolveEmployeeDisplayName(activeIssue.IssueCreator)
+        : null;
+
+    let courierDisplayName = orderLike?.Courier ? resolveEmployeeDisplayName(orderLike.Courier) : null;
+    if (!courierDisplayName && reporterName) {
+        courierDisplayName = reporterName;
+    }
+
     return {
         ...orderLike,
         customer_name: resolveCustomerName(orderLike),
-        courier_display_name: orderLike?.Courier ? resolveEmployeeDisplayName(orderLike.Courier) : null,
+        courier_display_name: courierDisplayName,
         active_issue: activeIssue
             ? {
                 id: activeIssue.id,
@@ -93,6 +102,7 @@ const withOrderTrackingFields = (orderLike: any) => {
                 resolution_note: activeIssue.resolution_note || null,
                 due_at: activeIssue.due_at,
                 resolved_at: activeIssue.resolved_at,
+                reporter_name: reporterName,
             }
             : null,
         issue_overdue: isOverdue,
@@ -606,10 +616,15 @@ export const getMyOrders = async (req: Request, res: Response) => {
         const plainOrders = orders.rows.map((row) => {
             const plain = row.get({ plain: true }) as any;
             const total_qty = (plain.OrderItems || []).reduce((sum: number, item: any) => sum + Number(item.qty || 0), 0);
-            const shipped_qty = (plain.Allocations || []).reduce((sum: number, alloc: any) => {
-                if (alloc.status === 'shipped') return sum + Number(alloc.allocated_qty || 0);
-                return sum;
-            }, 0);
+            const status = String(plain.status || '').toLowerCase();
+            const deliveredLikeStatus = ['shipped', 'delivered', 'completed'].includes(status);
+            const allocated_qty = (plain.Allocations || []).reduce(
+                (sum: number, alloc: any) => sum + Number(alloc.allocated_qty || 0),
+                0
+            );
+            const shipped_qty = deliveredLikeStatus
+                ? Math.min(total_qty, allocated_qty > 0 ? allocated_qty : total_qty)
+                : 0;
             const indent_qty = Math.max(0, total_qty - shipped_qty);
 
             return {
@@ -814,18 +829,19 @@ export const getAllOrders = async (req: Request, res: Response) => {
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = {};
+        let prioritizeRecentIssueUpdates = false;
         if (status && status !== 'all') {
             const statusStr = String(status);
-            if (statusStr.includes(',')) {
-                const statuses = statusStr.split(',').map(s => s.trim()).filter(Boolean);
+            const statuses = statusStr.split(',').map(s => s.trim()).filter(Boolean);
+
+            if (statuses.length > 0) {
                 if (statuses.includes('ready_to_ship') && !statuses.includes('waiting_payment')) {
                     statuses.push('waiting_payment');
                 }
+                if (statuses.includes('hold')) {
+                    prioritizeRecentIssueUpdates = true;
+                }
                 whereClause.status = { [Op.in]: statuses };
-            } else if (statusStr === 'ready_to_ship') {
-                whereClause.status = { [Op.in]: ['ready_to_ship', 'waiting_payment'] };
-            } else {
-                whereClause.status = statusStr;
             }
         }
 
@@ -928,14 +944,19 @@ export const getAllOrders = async (req: Request, res: Response) => {
             include: [
                 { model: User, as: 'Customer', attributes: ['id', 'name'] },
                 { model: User, as: 'Courier', attributes: ['id', 'name'] },
-                { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
+                {
+                    model: OrderIssue,
+                    as: 'Issues',
+                    include: [{ model: User, as: 'IssueCreator', attributes: ['id', 'name', 'role'] }]
+                },
                 { model: Order, as: 'Children', attributes: ['id'] },
             ],
             distinct: true,
-            subQuery: false,
             limit: Number(limit),
             offset: Number(offset),
-            order: [['createdAt', 'DESC']]
+            order: prioritizeRecentIssueUpdates
+                ? [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+                : [['createdAt', 'DESC']]
         });
 
         const plainRows = orders.rows.map((row) => row.get({ plain: true }) as any);

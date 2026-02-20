@@ -1,10 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { Truck, CheckCircle, ChevronRight, Calculator, Wallet, AlertCircle } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function AdminDriverCodPage() {
@@ -14,11 +13,9 @@ export default function AdminDriverCodPage() {
     const [loading, setLoading] = useState(false);
 
     // Form State
-    const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+    const [selectedInvoiceKeys, setSelectedInvoiceKeys] = useState<string[]>([]);
     const [amountReceived, setAmountReceived] = useState<string>('');
     const [submitting, setSubmitting] = useState(false);
-
-    const router = useRouter();
 
     const loadDrivers = useCallback(async () => {
         try {
@@ -55,30 +52,95 @@ export default function AdminDriverCodPage() {
 
     useEffect(() => {
         if (selectedDriver) {
-            // Default select all orders
-            setSelectedOrderIds(selectedDriver.orders.map((o: any) => o.id));
+            const invoiceKeys = Array.from(new Set(
+                selectedDriver.orders
+                    .map((o: any) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                    .filter(Boolean)
+            ));
+            setSelectedInvoiceKeys(invoiceKeys);
             // Default amount to total pending? No, let user input to force verification.
             setAmountReceived('');
         }
     }, [selectedDriver]);
 
-    if (!allowed) return null;
-
     const handleSelectDriver = (driverData: any) => {
         setSelectedDriver(driverData);
     };
 
-    const toggleOrder = (orderId: string) => {
-        setSelectedOrderIds(prev =>
-            prev.includes(orderId) ? prev.filter(id => id !== orderId) : [...prev, orderId]
+    const invoiceRows = useMemo(() => {
+        if (!selectedDriver) return [];
+        const grouped = new Map<string, {
+            key: string;
+            invoice_number: string;
+            invoice_total: number;
+            created_at: string;
+            order_ids: string[];
+            customer_names: string[];
+        }>();
+
+        selectedDriver.orders.forEach((order: any) => {
+            const key = String(order.invoice_id || order.invoice_number || order.id || '').trim();
+            if (!key) return;
+
+            const existing = grouped.get(key) || {
+                key,
+                invoice_number: String(order.invoice_number || '').trim(),
+                invoice_total: 0,
+                created_at: String(order.created_at || ''),
+                order_ids: [],
+                customer_names: []
+            };
+
+            const invoiceTotalRaw = Number(order.invoice_total ?? order.total_amount ?? 0);
+            const invoiceTotal = Number.isFinite(invoiceTotalRaw) ? invoiceTotalRaw : 0;
+            if (existing.invoice_total <= 0 && invoiceTotal > 0) {
+                existing.invoice_total = invoiceTotal;
+            }
+
+            const createdAt = String(order.created_at || '');
+            if (createdAt && (!existing.created_at || new Date(createdAt).getTime() > new Date(existing.created_at).getTime())) {
+                existing.created_at = createdAt;
+            }
+
+            const orderId = String(order.id || '').trim();
+            if (orderId && !existing.order_ids.includes(orderId)) {
+                existing.order_ids.push(orderId);
+            }
+
+            const customerName = String(order.customer_name || '').trim();
+            if (customerName && !existing.customer_names.includes(customerName)) {
+                existing.customer_names.push(customerName);
+            }
+
+            grouped.set(key, existing);
+        });
+
+        return Array.from(grouped.values()).sort((a, b) => {
+            return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        });
+    }, [selectedDriver]);
+
+    const selectedOrderIds = useMemo(() => {
+        if (!selectedDriver) return [];
+        const selectedSet = new Set(selectedInvoiceKeys);
+        return selectedDriver.orders
+            .filter((order: any) => selectedSet.has(String(order.invoice_id || order.invoice_number || order.id || '').trim()))
+            .map((order: any) => String(order.id || '').trim())
+            .filter(Boolean);
+    }, [selectedDriver, selectedInvoiceKeys]);
+
+    const toggleInvoice = (invoiceKey: string) => {
+        setSelectedInvoiceKeys(prev =>
+            prev.includes(invoiceKey) ? prev.filter(key => key !== invoiceKey) : [...prev, invoiceKey]
         );
     };
 
     const getSelectedTotal = () => {
         if (!selectedDriver) return 0;
-        return selectedDriver.orders
-            .filter((o: any) => selectedOrderIds.includes(o.id))
-            .reduce((sum: number, o: any) => sum + Number(o.total_amount), 0);
+        const selectedSet = new Set(selectedInvoiceKeys);
+        return invoiceRows
+            .filter((row: any) => selectedSet.has(row.key))
+            .reduce((sum: number, row: any) => sum + Number(row.invoice_total || 0), 0);
     };
 
     const handleVerify = async () => {
@@ -116,6 +178,8 @@ Lanjutkan?
     };
 
     const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+
+    if (!allowed) return null;
 
     return (
         <div className="p-6 space-y-6">
@@ -163,9 +227,18 @@ Lanjutkan?
                                                         </span>
                                                     )}
                                                 </div>
-                                                <p className="text-[10px] text-slate-500 font-medium">
-                                                    {item.orders.length} Order Pending • {formatCurrency(item.total_pending)}
-                                                </p>
+                                                {(() => {
+                                                    const invoiceCount = new Set(
+                                                        (item.orders || [])
+                                                            .map((o: any) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                                                            .filter(Boolean)
+                                                    ).size || item.orders.length;
+                                                    return (
+                                                        <p className="text-[10px] text-slate-500 font-medium">
+                                                            {invoiceCount} Invoice Pending • {formatCurrency(item.total_pending)}
+                                                        </p>
+                                                    );
+                                                })()}
                                             </div>
                                         </div>
                                         <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
@@ -202,23 +275,26 @@ Lanjutkan?
                             </div>
 
                             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest sticky top-0 bg-white py-2 z-10">Rincian Order</h3>
-                                {selectedDriver.orders.map((order: any) => (
+                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest sticky top-0 bg-white py-2 z-10">Rincian Invoice</h3>
+                                {invoiceRows.map((row: any) => (
                                     <div
-                                        key={order.id}
-                                        className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer select-none transition-colors ${selectedOrderIds.includes(order.id) ? 'bg-slate-50 border-emerald-200' : 'bg-white border-slate-100 opacity-60'}`}
-                                        onClick={() => toggleOrder(order.id)}
+                                        key={row.key}
+                                        className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer select-none transition-colors ${selectedInvoiceKeys.includes(row.key) ? 'bg-slate-50 border-emerald-200' : 'bg-white border-slate-100 opacity-60'}`}
+                                        onClick={() => toggleInvoice(row.key)}
                                     >
                                         <div className="flex items-center gap-4">
-                                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${selectedOrderIds.includes(order.id) ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300'}`}>
-                                                {selectedOrderIds.includes(order.id) && <CheckCircle size={12} className="text-white" />}
+                                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${selectedInvoiceKeys.includes(row.key) ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300'}`}>
+                                                {selectedInvoiceKeys.includes(row.key) && <CheckCircle size={12} className="text-white" />}
                                             </div>
                                             <div>
-                                                <p className="text-xs font-bold text-slate-900">#{order.order_number?.slice(-8) || order.id.slice(0, 8)}</p>
-                                                <p className="text-[10px] text-slate-500">{order.customer_name} • {new Date(order.created_at).toLocaleDateString('id-ID')}</p>
+                                                <p className="text-xs font-bold text-slate-900">{row.invoice_number || row.key}</p>
+                                                <p className="text-[10px] text-slate-500">
+                                                    {row.order_ids.length} order • {new Date(row.created_at).toLocaleDateString('id-ID')}
+                                                </p>
+                                                <p className="text-[10px] text-slate-400 font-semibold">{row.customer_names.join(', ') || 'Customer'}</p>
                                             </div>
                                         </div>
-                                        <p className="text-sm font-bold text-slate-900">{formatCurrency(order.total_amount)}</p>
+                                        <p className="text-sm font-bold text-slate-900">{formatCurrency(Number(row.invoice_total || 0))}</p>
                                     </div>
                                 ))}
                             </div>
@@ -270,7 +346,7 @@ Lanjutkan?
 
                                 <button
                                     onClick={handleVerify}
-                                    disabled={submitting || !amountReceived || (selectedOrderIds.length === 0 && Number(amountReceived) <= 0)}
+                                    disabled={submitting || !amountReceived || (selectedInvoiceKeys.length === 0 && Number(amountReceived) <= 0)}
                                     className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-slate-200 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2"
                                 >
                                     {submitting ? 'Memproses...' : 'Konfirmasi Setoran'}

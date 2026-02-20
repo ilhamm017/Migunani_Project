@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, RefreshCw, Search, Send } from 'lucide-react';
+import { ArrowLeft, Search, Send } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import getSocket from '@/lib/socket';
@@ -239,6 +239,7 @@ function DriverChatContent() {
     if (!allowed) return;
 
     const socket = getSocket();
+
     const onChatMessage = (payload: ChatSocketPayload) => {
       if (payload?.session_id && payload.session_id === selectedSessionId) {
         void loadMessages(payload.session_id);
@@ -247,8 +248,14 @@ function DriverChatContent() {
     };
 
     socket.on('chat:message', onChatMessage);
+
+    socket.on('connect', () => {
+      void loadSessions();
+    });
+
     return () => {
       socket.off('chat:message', onChatMessage);
+      socket.off('connect');
     };
   }, [allowed, selectedSessionId, loadMessages, loadSessions]);
 
@@ -319,14 +326,6 @@ function DriverChatContent() {
       <div className="flex items-center justify-between gap-3">
         <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali
-        </button>
-        <button
-          onClick={() => void loadSessions()}
-          disabled={inboxLoading}
-          className="inline-flex items-center gap-2 text-xs font-black uppercase text-slate-700 border border-slate-200 rounded-xl px-3 py-2"
-        >
-          <RefreshCw size={14} className={inboxLoading ? 'animate-spin' : ''} />
-          Refresh
         </button>
       </div>
 

@@ -1,13 +1,13 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder } from '../models';
+import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder, InvoiceItem } from '../models';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 import { attachInvoicesToOrders } from '../utils/invoiceLookup';
 
 
-const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
+const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold', 'delivered'] as const;
 const TERMINAL_ORDER_STATUSES = ['completed', 'canceled', 'expired'] as const;
-const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'] as const;
+const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold', 'delivered'] as const;
 
 const buildShortageSummary = (orderItemsRaw: any[], allocationsRaw: any[]) => {
     const orderItems = Array.isArray(orderItemsRaw) ? orderItemsRaw : [];
@@ -256,52 +256,141 @@ export const allocateOrder = async (req: Request, res: Response) => {
             });
         }
 
-        for (const item of items) {
-            const product = await Product.findByPk(item.product_id, {
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
-            if (!product) continue;
+        const incomingItems = Array.isArray(items) ? items : [];
+        if (incomingItems.length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'items wajib diisi' });
+        }
 
-            // Get existing allocation (if any)
-            const [allocation] = await OrderAllocation.findOrCreate({
-                where: { order_id: id, product_id: item.product_id },
-                defaults: {
-                    order_id: id,
-                    product_id: item.product_id,
-                    allocated_qty: 0,
-                    status: 'pending'
-                },
-                transaction: t
-            });
+        const requestedQtyByProduct = new Map<string, number>();
+        for (const rawItem of incomingItems) {
+            const productId = String(rawItem?.product_id || '').trim();
+            if (!productId) {
+                await t.rollback();
+                return res.status(400).json({ message: 'product_id wajib diisi' });
+            }
+            const parsedQty = Number(rawItem?.qty);
+            if (!Number.isFinite(parsedQty) || parsedQty < 0) {
+                await t.rollback();
+                return res.status(400).json({ message: `Qty alokasi untuk produk ${productId} tidak valid` });
+            }
+            requestedQtyByProduct.set(productId, Math.trunc(parsedQty));
+        }
 
-            const previouslyAllocated = Number(allocation.allocated_qty || 0);
-            const delta = Number(item.qty) - previouslyAllocated;
+        const requestedProductIds = Array.from(requestedQtyByProduct.keys());
+        if (requestedProductIds.length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Tidak ada item alokasi yang valid' });
+        }
 
-            // Check actual physical stock availability for additional quantity
-            if (delta > 0 && delta > product.stock_quantity) {
+        const orderItemsForValidation = await OrderItem.findAll({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const orderedByProduct = new Map<string, number>();
+        for (const row of orderItemsForValidation as any[]) {
+            const productId = String(row?.product_id || '');
+            if (!productId) continue;
+            const prev = Number(orderedByProduct.get(productId) || 0);
+            orderedByProduct.set(productId, prev + Number(row?.qty || 0));
+        }
+
+        for (const productId of requestedProductIds) {
+            const orderedQty = Number(orderedByProduct.get(productId) || 0);
+            const requestedQty = Number(requestedQtyByProduct.get(productId) || 0);
+            if (orderedQty <= 0) {
+                await t.rollback();
+                return res.status(400).json({ message: `Produk ${productId} tidak ada pada order ini` });
+            }
+            if (requestedQty > orderedQty) {
                 await t.rollback();
                 return res.status(400).json({
-                    message: `Stok tidak cukup untuk ${product.name}. Fisik tersedia: ${product.stock_quantity}, tambahan yang diminta: ${delta}`
+                    message: `Qty alokasi untuk produk ${productId} melebihi qty order (${requestedQty}/${orderedQty})`
+                });
+            }
+        }
+
+        const products = await Product.findAll({
+            where: { id: { [Op.in]: requestedProductIds } },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const productById = new Map<string, any>();
+        for (const product of products as any[]) {
+            productById.set(String(product.id), product);
+        }
+        if (productById.size !== requestedProductIds.length) {
+            const missingProductIds = requestedProductIds.filter((productId) => !productById.has(productId));
+            await t.rollback();
+            return res.status(404).json({ message: `Produk tidak ditemukan: ${missingProductIds.join(', ')}` });
+        }
+
+        const existingAllocations = await OrderAllocation.findAll({
+            where: {
+                order_id: id,
+                product_id: { [Op.in]: requestedProductIds }
+            },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+            order: [['createdAt', 'ASC'], ['id', 'ASC']]
+        });
+        const allocationsByProduct = new Map<string, any[]>();
+        for (const allocation of existingAllocations as any[]) {
+            const productId = String(allocation?.product_id || '');
+            if (!productId) continue;
+            const rows = allocationsByProduct.get(productId) || [];
+            rows.push(allocation);
+            allocationsByProduct.set(productId, rows);
+        }
+
+        for (const productId of requestedProductIds) {
+            const product = productById.get(productId);
+            const rows = allocationsByProduct.get(productId) || [];
+            const requestedQty = Number(requestedQtyByProduct.get(productId) || 0);
+            const previouslyAllocatedTotal = rows.reduce((sum, row) => sum + Number(row?.allocated_qty || 0), 0);
+            const currentStockQty = Number(product?.stock_quantity || 0);
+            const maxAllocatableQty = previouslyAllocatedTotal + Math.max(0, currentStockQty);
+
+            if (requestedQty > maxAllocatableQty) {
+                await t.rollback();
+                return res.status(400).json({
+                    message: `Stok tidak cukup untuk ${product?.name || productId}. Sisa stok: ${Math.max(0, currentStockQty)}, maksimal alokasi saat ini: ${maxAllocatableQty}`
                 });
             }
 
+            const delta = requestedQty - previouslyAllocatedTotal;
             if (delta > 0) {
-                // Allocating more: decrement stock_quantity
                 await product.update({
-                    stock_quantity: product.stock_quantity - delta,
-                    allocated_quantity: product.allocated_quantity + delta,
+                    stock_quantity: currentStockQty - delta,
+                    allocated_quantity: Number(product?.allocated_quantity || 0) + delta,
                 }, { transaction: t });
             } else if (delta < 0) {
-                // Reducing allocation: return stock
                 const absDelta = Math.abs(delta);
                 await product.update({
-                    stock_quantity: product.stock_quantity + absDelta,
-                    allocated_quantity: Math.max(0, product.allocated_quantity - absDelta),
+                    stock_quantity: currentStockQty + absDelta,
+                    allocated_quantity: Math.max(0, Number(product?.allocated_quantity || 0) - absDelta),
                 }, { transaction: t });
             }
 
-            await allocation.update({ allocated_qty: item.qty }, { transaction: t });
+            if (rows.length === 0) {
+                if (requestedQty > 0) {
+                    await OrderAllocation.create({
+                        order_id: id,
+                        product_id: productId,
+                        allocated_qty: requestedQty,
+                        status: 'pending'
+                    }, { transaction: t });
+                }
+                continue;
+            }
+
+            const [primaryAllocation, ...extraAllocations] = rows;
+            await primaryAllocation.update({ allocated_qty: requestedQty }, { transaction: t });
+            for (const extra of extraAllocations) {
+                if (Number(extra?.allocated_qty || 0) === 0) continue;
+                await extra.update({ allocated_qty: 0 }, { transaction: t });
+            }
         }
 
         // --- Determine fulfillment status (allocation is stored per product_id) ---
@@ -346,6 +435,30 @@ export const allocateOrder = async (req: Request, res: Response) => {
         const fullyAllocated = itemBreakdown.every((row) => row.shortage_qty <= 0);
         const partiallyAllocated = itemBreakdown.some((row) => row.allocated_qty > 0);
 
+        const orderItemIds = itemBreakdown
+            .map((row) => String(row?.oi?.id || ''))
+            .filter(Boolean);
+        const priorInvoiceItems = orderItemIds.length > 0
+            ? await InvoiceItem.findAll({
+                where: { order_item_id: { [Op.in]: orderItemIds } },
+                transaction: t
+            })
+            : [];
+        const invoicedQtyByOrderItemId = new Map<string, number>();
+        priorInvoiceItems.forEach((item: any) => {
+            const key = String(item?.order_item_id || '');
+            if (!key) return;
+            const prev = Number(invoicedQtyByOrderItemId.get(key) || 0);
+            invoicedQtyByOrderItemId.set(key, prev + Number(item?.qty || 0));
+        });
+        const hasNewInvoiceableQty = itemBreakdown.some((row) => {
+            const orderItemId = String(row?.oi?.id || '');
+            if (!orderItemId) return false;
+            const allocatedQty = Number(row?.allocated_qty || 0);
+            const alreadyInvoiced = Number(invoicedQtyByOrderItemId.get(orderItemId) || 0);
+            return allocatedQty > alreadyInvoiced;
+        });
+
         // --- Recalculate total based on what can be processed now ---
         const allocatedTotal = itemBreakdown.reduce((sum, row) => {
             return sum + (Number(row.oi.price_at_purchase || 0) * Number(row.allocated_qty || 0));
@@ -388,12 +501,17 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 expired: 7,
             };
             const previousOrderStatus = String(order.status || '');
-            const currentRank = Number(statusProgressRank[order.status] || 0);
-            const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
-            const nextStatus = currentRank >= waitingInvoiceRank ? order.status : 'waiting_invoice';
+            let nextStatus = previousOrderStatus;
+            if (hasNewInvoiceableQty) {
+                nextStatus = 'waiting_invoice';
+            } else {
+                const currentRank = Number(statusProgressRank[previousOrderStatus] || 0);
+                const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
+                nextStatus = currentRank >= waitingInvoiceRank ? previousOrderStatus : 'waiting_invoice';
+            }
 
-            if (nextStatus !== order.status) {
-                await order.update({ status: nextStatus }, { transaction: t });
+            if (nextStatus !== previousOrderStatus) {
+                await order.update({ status: nextStatus as any }, { transaction: t });
             }
             previousStatusForNotification = previousOrderStatus;
         }

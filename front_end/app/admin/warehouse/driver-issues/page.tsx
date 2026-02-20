@@ -13,6 +13,7 @@ type FollowUpFormState = {
   submitting: boolean;
   feedback: string;
 };
+const PAGE_SIZE = 100;
 
 const toDate = (value: string | Date | null | undefined): Date | null => {
   if (!value) return null;
@@ -48,28 +49,62 @@ export default function WarehouseDriverIssuesPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [couriers, setCouriers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [forms, setForms] = useState<Record<string, FollowUpFormState>>({});
 
-  const loadData = useCallback(async (searchValue: string) => {
+  const loadData = useCallback(async (
+    searchValue: string,
+    options?: { append?: boolean; page?: number }
+  ) => {
+    const append = options?.append === true;
+    const targetPage = options?.page && options.page > 0 ? options.page : 1;
     try {
-      setLoading(true);
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
+
+      const ordersPromise = api.admin.orderManagement.getAll({
+        status: 'hold',
+        page: targetPage,
+        limit: PAGE_SIZE,
+        search: searchValue || undefined,
+      });
       const [ordersRes, couriersRes] = await Promise.all([
-        api.admin.orderManagement.getAll({
-          status: 'hold',
-          limit: 100,
-          search: searchValue || undefined,
-        }),
-        api.admin.orderManagement.getCouriers(),
+        ordersPromise,
+        append ? Promise.resolve(null) : api.admin.orderManagement.getCouriers(),
       ]);
 
       const rows = (ordersRes.data?.orders || []) as any[];
-      setOrders(rows);
-      setCouriers(couriersRes.data?.employees || []);
+      let mergedRows: any[] = rows;
+      setOrders((prev) => {
+        const merged = append ? [...prev, ...rows] : rows;
+        const dedupMap = new Map<string, any>();
+        for (const row of merged) {
+          dedupMap.set(String(row?.id || ''), row);
+        }
+        mergedRows = Array.from(dedupMap.values());
+        return mergedRows;
+      });
+      if (couriersRes) {
+        setCouriers(couriersRes.data?.employees || []);
+      }
+      setCurrentPage(targetPage);
+      setHasMore(rows.length >= PAGE_SIZE);
+
       setForms((prev) => {
+        const dedupMap = new Map<string, any>();
+        for (const row of mergedRows) {
+          dedupMap.set(String(row?.id || ''), row);
+        }
+
         const next: Record<string, FollowUpFormState> = {};
-        for (const row of rows) {
+        for (const row of dedupMap.values()) {
           const orderId = String(row.id || '');
           const existing = prev[orderId];
           next[orderId] = existing || {
@@ -83,9 +118,16 @@ export default function WarehouseDriverIssuesPage() {
       });
     } catch (error) {
       console.error('Failed to load driver shortage issues', error);
-      setOrders([]);
+      if (!append) {
+        setOrders([]);
+        setHasMore(false);
+      }
     } finally {
-      setLoading(false);
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -100,6 +142,11 @@ export default function WarehouseDriverIssuesPage() {
   const refreshCurrent = useCallback(() => {
     void loadData(search.trim());
   }, [loadData, search]);
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || loading || !hasMore) return;
+    void loadData(search.trim(), { append: true, page: currentPage + 1 });
+  }, [currentPage, hasMore, loadData, loading, loadingMore, search]);
 
   useRealtimeRefresh({
     enabled: allowed,
@@ -242,7 +289,7 @@ export default function WarehouseDriverIssuesPage() {
                       Customer: <span className="font-semibold text-slate-800">{order.customer_name || '-'}</span>
                     </p>
                     <p className="text-xs text-slate-600">
-                      Driver pelapor: <span className="font-semibold text-slate-800">{order.courier_display_name || order.Courier?.name || '-'}</span>
+                      Driver pelapor: <span className="font-semibold text-slate-800">{activeIssue?.reporter_name || order.courier_display_name || order.Courier?.name || '-'}</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-1">
                       Dibuat: {formatDateTime(order.createdAt)}
@@ -330,6 +377,18 @@ export default function WarehouseDriverIssuesPage() {
               </div>
             );
           })}
+          {hasMore && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-bold disabled:opacity-60"
+              >
+                {loadingMore ? 'Memuat...' : 'Muat Lebih Banyak'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

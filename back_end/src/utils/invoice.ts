@@ -48,6 +48,8 @@ export const generateInvoiceNumber = (orderId: string, now = new Date()): string
     const uniquePart = String(orderId || '')
         .replace(/[^a-zA-Z0-9]/g, '')
         .toUpperCase()
-        .slice(0, 12);
-    return `INV/${datePart}/${uniquePart || Date.now().toString().slice(-8)}`;
+        .slice(0, 8);
+    const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}${String(now.getMilliseconds()).padStart(3, '0')}`;
+    const randomPart = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `INV/${datePart}/${uniquePart || 'ORDER'}-${timePart}${randomPart}`;
 };

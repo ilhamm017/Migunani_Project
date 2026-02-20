@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, Download, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
@@ -109,29 +109,6 @@ export default function OrderDetailPage() {
     return { icon: Clock3, label: 'Status Pesanan', className: 'text-slate-700 bg-slate-100' };
   }, [order?.status]);
 
-  const handleDownloadInvoice = () => {
-    if (!order) return;
-    const html = `
-      <html>
-        <head><title>Invoice ${order.Invoice?.invoice_number || order.id}</title></head>
-        <body style="font-family: Arial, sans-serif; padding: 24px;">
-          <h2>Invoice ${order.Invoice?.invoice_number || '-'}</h2>
-          <p>Order ID: ${order.id}</p>
-          <p>Tanggal: ${formatDateTime(order.createdAt)}</p>
-          <p>Status: ${order.status}</p>
-          <hr />
-          <p><strong>Total: ${formatCurrency(Number(order.total_amount || 0))}</strong></p>
-        </body>
-      </html>
-    `;
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-  };
-
   // --- Missing Item Logic ---
   const [showMissingModal, setShowMissingModal] = useState(false);
   const [missingItems, setMissingItems] = useState<{ product_id: string; qty_missing: number; max_qty: number; name: string }[]>([]);
@@ -205,6 +182,37 @@ export default function OrderDetailPage() {
   }
 
   const StatusIcon = statusView.icon;
+  const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+  const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
+  const hasAnyAllocationData = allocations.length > 0;
+  const allocatedQtyByProduct = allocations.reduce((acc: Record<string, number>, allocation: any) => {
+    const productId = String(allocation?.product_id || '');
+    if (!productId) return acc;
+    acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
+    return acc;
+  }, {});
+  const allocatedQtyByItemId = (() => {
+    const result: Record<string, number> = {};
+    const itemsByProduct = new Map<string, any[]>();
+    orderItems.forEach((item: any) => {
+      const productId = String(item?.product_id || '');
+      if (!productId) return;
+      const rows = itemsByProduct.get(productId) || [];
+      rows.push(item);
+      itemsByProduct.set(productId, rows);
+    });
+    itemsByProduct.forEach((rows, productId) => {
+      let remaining = Number(allocatedQtyByProduct[productId] || 0);
+      const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+      sortedRows.forEach((row: any) => {
+        const qty = Number(row?.qty || 0);
+        const allocated = Math.max(0, Math.min(remaining, qty));
+        result[String(row?.id || '')] = allocated;
+        remaining -= allocated;
+      });
+    });
+    return result;
+  })();
 
   return (
     <div className="p-6 space-y-5 pb-20">
@@ -314,12 +322,18 @@ export default function OrderDetailPage() {
         <div className="space-y-2">
 
           <h2 className="text-sm font-bold text-slate-900">Item Pesanan</h2>
-          {(order.OrderItems || []).map((item: any) => {
-            const allocation = order.Allocations?.find((a: any) => a.product_id === item.product_id);
-            const sentQty = allocation ? Number(allocation.allocated_qty || 0) : 0;
+          {orderItems.map((item: any) => {
+            const orderStatus = String(order.status || '').toLowerCase();
+            const sentQtyRaw = Number(allocatedQtyByItemId[String(item?.id || '')] || 0);
 
             // Check if status implies allocation has happened
-            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(order.status);
+            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(orderStatus);
+            const isDeliveredStatus = ['delivered', 'completed'].includes(orderStatus);
+            const isShippingStatus = orderStatus === 'shipped';
+            const sentQty = (isDeliveredStatus && !hasAnyAllocationData && sentQtyRaw <= 0)
+              ? Number(item.qty || 0)
+              : sentQtyRaw;
+            const progressLabel = isDeliveredStatus ? 'Diterima' : isShippingStatus ? 'Dikirim' : 'Dialokasikan';
 
             const isPartial = isAllocatedStatus && sentQty < item.qty;
             const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
@@ -332,7 +346,7 @@ export default function OrderDetailPage() {
                     <p className="text-xs text-slate-500">Dipesan: <span className="font-bold text-slate-700">{item.qty}</span></p>
                     {isAllocatedStatus ? (
                       <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
-                        Dialokasikan: {sentQty}
+                        {progressLabel}: {sentQty}
                       </p>
                     ) : null}
                   </div>
@@ -341,7 +355,7 @@ export default function OrderDetailPage() {
                   <p className="text-sm font-bold text-slate-900">{formatCurrency(effectivePrice)}</p>
                   {isPartial && isAllocatedStatus && (
                     <p className="text-[10px] text-amber-600 font-bold">
-                      {item.qty - sentQty} Belum Tersedia (Backorder)
+                      {item.qty - sentQty} {isDeliveredStatus ? 'Belum Diterima' : isShippingStatus ? 'Belum Dikirim' : 'Belum Tersedia (Backorder)'}
                     </p>
                   )}
                 </div>
@@ -357,9 +371,6 @@ export default function OrderDetailPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <button onClick={loadOrder} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm">Refresh Status</button>
-          <button onClick={handleDownloadInvoice} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2">
-            <Download size={14} /> Invoice PDF
-          </button>
           {['delivered', 'completed'].includes(order.status) && (
             <>
               <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">

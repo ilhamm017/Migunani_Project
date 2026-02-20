@@ -406,17 +406,19 @@ const ensureOrderStatusEnumReady = async () => {
             return;
         }
 
-        const columnType = statusColumn.columnType || '';
-        // Check if new statuses exist. If 'allocated' and 'waiting_admin_verification' are missing, we need to run ALTER.
-        if (typeof columnType === 'string' && columnType.includes('allocated') && columnType.includes('partially_fulfilled') && columnType.includes('waiting_admin_verification')) return;
+        const currentValues = parseEnumValuesFromColumnType(statusColumn.columnType);
+        const missingRequired = ORDER_STATUS_ENUM_VALUES.filter((value) => !currentValues.includes(value));
+        if (missingRequired.length === 0) return;
 
-        const enumValuesSql = ORDER_STATUS_ENUM_VALUES.map((value) => `'${value}'`).join(', ');
+        // Keep any legacy values already in DB to avoid ALTER failure from existing rows.
+        const mergedValues = Array.from(new Set([...currentValues, ...ORDER_STATUS_ENUM_VALUES]));
+        const enumValuesSql = mergedValues.map((value) => `'${value.replace(/'/g, "\\'")}'`).join(', ');
         await sequelize.query(
             `ALTER TABLE orders
              MODIFY COLUMN status ENUM(${enumValuesSql})
              NOT NULL DEFAULT 'pending'`
         );
-        console.log('Order status enum updated: ensured latest values');
+        console.log(`Order status enum updated: added [${missingRequired.join(', ')}]`);
     } catch (error) {
         console.error('Failed to ensure orders.status enum values:', error);
         throw error;

@@ -899,6 +899,15 @@ export const verifyPayment = async (req: Request, res: Response) => {
             await t.rollback();
             return res.status(404).json({ message: 'Order tidak ditemukan untuk invoice ini' });
         }
+        const previousStatusByOrderId: Record<string, string> = {};
+        const nextStatusByOrderId: Record<string, string> = {};
+        orders.forEach((order: any) => {
+            const orderId = String(order.id || '');
+            if (!orderId) return;
+            const status = String(order.status || '');
+            previousStatusByOrderId[orderId] = status;
+            nextStatusByOrderId[orderId] = status;
+        });
         if (action === 'approve') {
             const isNoProofMethod = ['cod', 'cash_store'].includes(invoice.payment_method);
 
@@ -943,11 +952,40 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 }, t);
             }
 
-            // Transition logic based on current status
-            await Order.update(
-                { status: 'ready_to_ship', expiry_date: null },
-                { where: { id: { [Op.in]: uniqueOrderIds } }, transaction: t }
-            );
+            const toCompletedIds: string[] = [];
+            const toReadyToShipIds: string[] = [];
+            orders.forEach((order: any) => {
+                const orderId = String(order.id || '');
+                const currentStatus = String(order.status || '').toLowerCase();
+                if (!orderId) return;
+                if (['completed', 'canceled', 'expired'].includes(currentStatus)) {
+                    nextStatusByOrderId[orderId] = currentStatus;
+                    return;
+                }
+                if (currentStatus === 'delivered') {
+                    toCompletedIds.push(orderId);
+                    nextStatusByOrderId[orderId] = 'completed';
+                    return;
+                }
+                if (currentStatus === 'shipped') {
+                    nextStatusByOrderId[orderId] = 'shipped';
+                    return;
+                }
+                toReadyToShipIds.push(orderId);
+                nextStatusByOrderId[orderId] = 'ready_to_ship';
+            });
+            if (toReadyToShipIds.length > 0) {
+                await Order.update(
+                    { status: 'ready_to_ship', expiry_date: null },
+                    { where: { id: { [Op.in]: toReadyToShipIds } }, transaction: t }
+                );
+            }
+            if (toCompletedIds.length > 0) {
+                await Order.update(
+                    { status: 'completed' },
+                    { where: { id: { [Op.in]: toCompletedIds } }, transaction: t }
+                );
+            }
 
         } else {
             // Payment rejected but order should still proceed to warehouse (payment handled by driver).
@@ -957,28 +995,42 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 verified_by: null,
                 verified_at: null
             }, { transaction: t });
-            await Order.update({
-                status: 'ready_to_ship',
-                expiry_date: null
-            }, { where: { id: { [Op.in]: uniqueOrderIds } }, transaction: t });
+            const toReadyToShipIds: string[] = [];
+            orders.forEach((order: any) => {
+                const orderId = String(order.id || '');
+                const currentStatus = String(order.status || '').toLowerCase();
+                if (!orderId) return;
+                if (['delivered', 'shipped', 'completed', 'canceled', 'expired'].includes(currentStatus)) {
+                    nextStatusByOrderId[orderId] = currentStatus;
+                    return;
+                }
+                toReadyToShipIds.push(orderId);
+                nextStatusByOrderId[orderId] = 'ready_to_ship';
+            });
+            if (toReadyToShipIds.length > 0) {
+                await Order.update({
+                    status: 'ready_to_ship',
+                    expiry_date: null
+                }, { where: { id: { [Op.in]: toReadyToShipIds } }, transaction: t });
+            }
         }
-
-        const nextOrderStatus = 'ready_to_ship';
 
         await t.commit();
         orders.forEach((order: any) => {
-            const prevStatus = String(order.status || '');
-            if (prevStatus !== nextOrderStatus) {
+            const orderId = String(order.id || '');
+            const prevStatus = String(previousStatusByOrderId[orderId] || order.status || '');
+            const nextStatus = String(nextStatusByOrderId[orderId] || prevStatus);
+            if (prevStatus !== nextStatus) {
                 emitOrderStatusChanged({
-                    order_id: String(order.id),
+                    order_id: orderId,
                     from_status: prevStatus,
-                    to_status: nextOrderStatus,
+                    to_status: nextStatus,
                     source: String(order.source || ''),
                     payment_method: String(invoice.payment_method || ''),
                     courier_id: String(order.courier_id || ''),
                     triggered_by_role: verifierRole,
                     target_roles: action === 'approve'
-                        ? ['admin_gudang', 'customer']
+                        ? (nextStatus === 'completed' ? ['admin_finance', 'customer'] : ['admin_gudang', 'customer'])
                         : ['customer'],
                 });
             }
@@ -1749,6 +1801,7 @@ export const getDriverCodList = async (req: Request, res: Response) => {
             : [];
 
         const grouped: Record<string, any> = {};
+        const driverInvoiceTotals = new Map<string, Map<string, number>>();
 
         // Initialize from debtors
         debtors.forEach(driver => {
@@ -1762,6 +1815,7 @@ export const getDriverCodList = async (req: Request, res: Response) => {
                 orders: [],
                 total_pending: 0
             };
+            driverInvoiceTotals.set(String(driver.id), new Map<string, number>());
         });
 
         // Merge/Add from invoices
@@ -1782,17 +1836,38 @@ export const getDriverCodList = async (req: Request, res: Response) => {
                     orders: [],
                     total_pending: 0
                 };
+                driverInvoiceTotals.set(String(courier.id), new Map<string, number>());
             }
 
-            const amount = Number((order as any).total_amount || inv.total || 0);
+            const invoiceId = String((inv as any).id || '');
+            const invoiceNumber = String((inv as any).invoice_number || '');
+            const invoiceTotalRaw = Number((inv as any).total);
+            const invoiceTotal = Number.isFinite(invoiceTotalRaw) ? invoiceTotalRaw : 0;
             grouped[courier.id].orders.push({
                 id: order.id,
                 order_number: order.id,
                 customer_name: (order as any).Customer?.name || 'Customer',
-                total_amount: amount,
+                total_amount: invoiceTotal,
+                invoice_id: invoiceId || null,
+                invoice_number: invoiceNumber || null,
+                invoice_total: invoiceTotal,
                 created_at: order.createdAt
             });
-            grouped[courier.id].total_pending += amount;
+
+            const driverInvoiceMap = driverInvoiceTotals.get(String(courier.id)) || new Map<string, number>();
+            const invoiceKey = invoiceId || `order-${String(order.id)}`;
+            if (!driverInvoiceMap.has(invoiceKey)) {
+                driverInvoiceMap.set(invoiceKey, invoiceTotal);
+            }
+            driverInvoiceTotals.set(String(courier.id), driverInvoiceMap);
+        });
+
+        Object.keys(grouped).forEach((driverId) => {
+            const driverInvoiceMap = driverInvoiceTotals.get(String(driverId));
+            const totalPending = driverInvoiceMap
+                ? Array.from(driverInvoiceMap.values()).reduce((sum, value) => sum + Number(value || 0), 0)
+                : 0;
+            grouped[driverId].total_pending = totalPending;
         });
 
         res.json(Object.values(grouped));
@@ -1938,7 +2013,10 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             }
 
             invoices = Array.from(invoiceMap.values());
-            totalExpected = allOrders.reduce((sum, order: any) => sum + Number(order.total_amount || 0), 0);
+            totalExpected = invoices.reduce((sum, invoice: any) => {
+                const invoiceTotal = Number(invoice?.total);
+                return sum + (Number.isFinite(invoiceTotal) ? invoiceTotal : 0);
+            }, 0);
 
             affectedOrderIds = allOrderIds;
             allOrders.forEach((order: any) => {

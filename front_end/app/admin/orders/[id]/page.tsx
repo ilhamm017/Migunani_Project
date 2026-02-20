@@ -1,235 +1,478 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, X, AlertTriangle, ExternalLink } from 'lucide-react';
+import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
-const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
-  { key: 'pending', label: 'pending (Menunggu Review Admin)' },
-  { key: 'allocated', label: 'allocated (Stok Dialokasikan)' },
-  { key: 'partially_fulfilled', label: 'partially_fulfilled (Stok Tersedia Sebagian)' },
-  { key: 'ready_to_ship', label: 'ready_to_ship (Siap Dikirim)' },
-  { key: 'waiting_admin_verification', label: 'waiting_admin_verification (Menunggu Verifikasi Admin)' },
-  { key: 'debt_pending', label: 'debt_pending (Utang Belum Lunas)' },
-  { key: 'shipped', label: 'shipped (Dikirim)' },
-  { key: 'delivered', label: 'delivered (Sampai)' },
-  { key: 'completed', label: 'completed (Selesai)' },
-  { key: 'canceled', label: 'canceled (Dibatalkan)' },
-  { key: 'hold', label: 'hold (Bermasalah)' },
-];
+const normalizeStatus = (raw: unknown) => {
+  const status = String(raw || '').trim();
+  return status === 'waiting_payment' ? 'ready_to_ship' : status;
+};
+
+const statusLabel = (raw: unknown) => {
+  const status = normalizeStatus(raw);
+  if (status === 'pending') return 'pending';
+  if (status === 'allocated') return 'allocated';
+  if (status === 'partially_fulfilled') return 'partially_fulfilled';
+  if (status === 'ready_to_ship') return 'ready_to_ship';
+  if (status === 'waiting_admin_verification') return 'waiting_admin_verification';
+  if (status === 'debt_pending') return 'debt_pending';
+  if (status === 'shipped') return 'shipped';
+  if (status === 'delivered') return 'delivered';
+  if (status === 'completed') return 'completed';
+  if (status === 'canceled') return 'canceled';
+  if (status === 'hold') return 'hold';
+  return status || '-';
+};
+
+const statusBadgeClass = (raw: unknown) => {
+  const status = normalizeStatus(raw);
+  if (['completed', 'delivered'].includes(status)) return 'bg-emerald-100 text-emerald-700';
+  if (['shipped', 'waiting_admin_verification'].includes(status)) return 'bg-blue-100 text-blue-700';
+  if (status === 'allocated') return 'bg-teal-100 text-teal-700';
+  if (status === 'partially_fulfilled') return 'bg-amber-100 text-amber-700';
+  if (status === 'canceled') return 'bg-rose-100 text-rose-700';
+  if (status === 'debt_pending') return 'bg-amber-100 text-amber-700';
+  if (status === 'hold') return 'bg-violet-100 text-violet-700';
+  return 'bg-slate-100 text-slate-700';
+};
 
 const normalizeProofImageUrl = (raw?: string | null) => {
   if (!raw) return null;
   const val = String(raw).trim();
   if (!val) return null;
-
-  if (val.startsWith('http://') || val.startsWith('https://')) {
-    return val;
-  }
-
-  if (val.startsWith('/uploads/')) {
-    return val;
-  }
-
-  if (val.startsWith('uploads/')) {
-    return `/${val}`;
-  }
-
+  if (val.startsWith('http://') || val.startsWith('https://')) return val;
+  if (val.startsWith('/uploads/')) return val;
+  if (val.startsWith('uploads/')) return `/${val}`;
   const normalizedSlash = val.replace(/\\/g, '/');
-  if (normalizedSlash.startsWith('uploads/')) {
-    return `/${normalizedSlash}`;
-  }
+  if (normalizedSlash.startsWith('uploads/')) return `/${normalizedSlash}`;
   const uploadsIndex = normalizedSlash.indexOf('/uploads/');
-  if (uploadsIndex >= 0) {
-    return normalizedSlash.slice(uploadsIndex);
-  }
-
+  if (uploadsIndex >= 0) return normalizedSlash.slice(uploadsIndex);
   return val;
 };
 
-export default function AdminOrderDetailPage() {
+const collectOrderIdsFromInvoice = (invoiceData: any): string[] => {
+  const ids = new Set<string>();
+  const rows = Array.isArray(invoiceData?.Orders) ? invoiceData.Orders : [];
+  rows.forEach((row: any) => {
+    const id = String(row?.id || row?.order_id || row?.Order?.id || '').trim();
+    if (id) ids.add(id);
+  });
+  const items = Array.isArray(invoiceData?.InvoiceItems) ? invoiceData.InvoiceItems : [];
+  items.forEach((item: any) => {
+    const id = String(item?.OrderItem?.order_id || item?.order_id || item?.Order?.id || '').trim();
+    if (id) ids.add(id);
+  });
+  return Array.from(ids);
+};
+
+const getInvoiceRefFromOrder = (orderData: any): string => {
+  const invoiceId = String(orderData?.invoice_id || orderData?.Invoice?.id || '').trim();
+  if (invoiceId) return invoiceId;
+  return '';
+};
+
+export default function AdminInvoiceDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   const { user } = useAuthStore();
   const params = useParams();
   const router = useRouter();
-  const orderId = String(params?.id || '');
+  const routeRefId = String(params?.id || '').trim();
 
-  const [order, setOrder] = useState<any>(null);
+  const [invoice, setInvoice] = useState<any>(null);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
+  const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState('pending');
-  const [couriers, setCouriers] = useState<any[]>([]);
-  const [selectedCourierId, setSelectedCourierId] = useState('');
-  const [issueNote, setIssueNote] = useState('');
   const [error, setError] = useState('');
   const [proofLoadError, setProofLoadError] = useState(false);
-  const [isProofPreviewOpen, setIsProofPreviewOpen] = useState(false);
-  const [isVerifyPaymentOpen, setIsVerifyPaymentOpen] = useState(false);
-  const [isCancelBackorderOpen, setIsCancelBackorderOpen] = useState(false);
-  const [cancelBackorderReason, setCancelBackorderReason] = useState('');
 
-  const canUpdateStatus = useMemo(
-    () => !!user && ['super_admin', 'admin_gudang', 'admin_finance'].includes(user.role),
-    [user]
+  const [couriers, setCouriers] = useState<any[]>([]);
+  const [selectedCourierId, setSelectedCourierId] = useState('');
+
+  const canManageWarehouseFlow = useMemo(
+    () => ['admin_gudang', 'super_admin'].includes(user?.role || ''),
+    [user?.role]
   );
 
-  const loadCouriers = async () => {
+  const loadCouriers = useCallback(async () => {
     try {
       const res = await api.admin.orderManagement.getCouriers();
       setCouriers(res.data?.employees || []);
     } catch (e) {
       console.error('Failed to load couriers:', e);
     }
-  };
+  }, []);
 
-  const loadOrder = async () => {
+  const loadInvoiceDetail = useCallback(async () => {
+    if (!routeRefId) {
+      setInvoice(null);
+      setOrders([]);
+      setResolvedInvoiceId('');
+      setResolvedFromOrderId('');
+      setLoading(false);
+      return;
+    }
+
     try {
-      setError('');
       setLoading(true);
-      const res = await api.orders.getOrderById(orderId);
-      setOrder(res.data);
-      const normalizedStatus = res.data?.status === 'waiting_payment' ? 'ready_to_ship' : res.data?.status;
-      setSelectedStatus(normalizedStatus || 'pending');
-      setSelectedCourierId(res.data?.courier_id || '');
-      setIssueNote(res.data?.active_issue?.note || '');
+      setError('');
       setProofLoadError(false);
+
+      let invoiceData: any = null;
+      let invoiceId = '';
+      let fallbackOrderData: any = null;
+      let fallbackOrderId = '';
+
+      try {
+        const invoiceRes = await api.invoices.getById(routeRefId);
+        invoiceData = invoiceRes.data || null;
+        invoiceId = String(invoiceData?.id || routeRefId).trim();
+      } catch {
+        const orderRes = await api.orders.getOrderById(routeRefId);
+        fallbackOrderData = orderRes.data || null;
+        fallbackOrderId = String(fallbackOrderData?.id || '').trim();
+        invoiceId = getInvoiceRefFromOrder(fallbackOrderData);
+        if (!invoiceId) throw new Error('Invoice tidak ditemukan dari order ini.');
+        const invoiceRes = await api.invoices.getById(invoiceId);
+        invoiceData = invoiceRes.data || null;
+      }
+
+      const orderIds = new Set<string>(collectOrderIdsFromInvoice(invoiceData));
+      if (fallbackOrderId) orderIds.add(fallbackOrderId);
+
+      const orderDetailsResults = await Promise.allSettled(
+        Array.from(orderIds).map((id) => api.orders.getOrderById(id))
+      );
+      const fetchedOrders = orderDetailsResults
+        .map((result) => (result.status === 'fulfilled' ? result.value.data : null))
+        .filter(Boolean);
+      if (fallbackOrderData && !fetchedOrders.some((row: any) => String(row?.id || '') === String(fallbackOrderData?.id || ''))) {
+        fetchedOrders.push(fallbackOrderData);
+      }
+      fetchedOrders.sort((a: any, b: any) => {
+        const bTs = Date.parse(String(b?.createdAt || ''));
+        const aTs = Date.parse(String(a?.createdAt || ''));
+        const bVal = Number.isFinite(bTs) ? bTs : 0;
+        const aVal = Number.isFinite(aTs) ? aTs : 0;
+        return bVal - aVal;
+      });
+
+      setInvoice(invoiceData);
+      setOrders(fetchedOrders);
+      setResolvedInvoiceId(String(invoiceData?.id || invoiceId || '').trim());
+      setResolvedFromOrderId(fallbackOrderId);
+
+      const assignedCourierIds = Array.from(
+        new Set(
+          fetchedOrders
+            .map((row: any) => String(row?.courier_id || '').trim())
+            .filter(Boolean)
+        )
+      );
+      setSelectedCourierId(assignedCourierIds.length === 1 ? assignedCourierIds[0] : '');
     } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal memuat detail order');
-      setOrder(null);
+      setInvoice(null);
+      setOrders([]);
+      setResolvedInvoiceId('');
+      setResolvedFromOrderId('');
+      setError(e?.response?.data?.message || e?.message || 'Gagal memuat detail invoice');
     } finally {
       setLoading(false);
     }
-  };
+  }, [routeRefId]);
 
   useEffect(() => {
-    if (allowed && orderId) {
-      loadOrder();
-    }
-  }, [allowed, orderId]);
+    if (!allowed) return;
+    void loadInvoiceDetail();
+  }, [allowed, loadInvoiceDetail]);
 
   useEffect(() => {
-    if (allowed && canUpdateStatus) {
-      loadCouriers();
-    }
-  }, [allowed, canUpdateStatus]);
+    if (!allowed || !canManageWarehouseFlow) return;
+    void loadCouriers();
+  }, [allowed, canManageWarehouseFlow, loadCouriers]);
 
-  useEffect(() => {
-    if (allowed && canUpdateStatus && selectedStatus === 'shipped') {
-      loadCouriers();
-    }
-  }, [allowed, canUpdateStatus, selectedStatus]);
+  const invoiceItemLines = useMemo(() => {
+    const rawItems = Array.isArray(invoice?.InvoiceItems)
+      ? invoice.InvoiceItems
+      : Array.isArray(invoice?.Items)
+        ? invoice.Items
+        : [];
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsProofPreviewOpen(false);
-        setIsVerifyPaymentOpen(false);
-        setIsCancelBackorderOpen(false);
-      }
+    return rawItems
+      .map((item: any) => {
+        const orderItem = item?.OrderItem || {};
+        const product = orderItem?.Product || {};
+        const orderId = String(orderItem?.order_id || item?.order_id || '').trim();
+        const productId = String(orderItem?.product_id || item?.product_id || '').trim();
+        const qty = Number(item?.qty || 0);
+        return {
+          orderId,
+          productId,
+          qty,
+          name: String(product?.name || 'Produk'),
+          sku: String(product?.sku || productId || '-'),
+        };
+      })
+      .filter((line: any) => line.orderId && line.productId && line.qty > 0);
+  }, [invoice]);
+
+  const invoiceQtyByOrderId = useMemo(() => {
+    const map = new Map<string, number>();
+    invoiceItemLines.forEach((line: any) => {
+      map.set(line.orderId, Number(map.get(line.orderId) || 0) + Number(line.qty || 0));
+    });
+    return map;
+  }, [invoiceItemLines]);
+
+  const invoiceSkuCountByOrderId = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    invoiceItemLines.forEach((line: any) => {
+      const set = map.get(line.orderId) || new Set<string>();
+      set.add(line.productId);
+      map.set(line.orderId, set);
+    });
+    const result = new Map<string, number>();
+    map.forEach((set, orderId) => result.set(orderId, set.size));
+    return result;
+  }, [invoiceItemLines]);
+
+  const orderRows = useMemo(() => {
+    const hasInvoiceSnapshot = invoiceItemLines.length > 0;
+    return orders.map((order: any) => {
+      const orderId = String(order?.id || '');
+      const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+      const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
+      const orderedQty = items.reduce((sum: number, item: any) => sum + Number(item?.qty || 0), 0);
+      const allocatedQtyRaw = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
+      const allocatedQtyFromInvoice = Number(invoiceQtyByOrderId.get(orderId) || 0);
+      const allocatedQtyFromOrder = Math.max(0, Math.min(orderedQty || allocatedQtyRaw, allocatedQtyRaw));
+      const allocatedSkuSet = new Set<string>();
+      allocations.forEach((alloc: any) => {
+        const productId = String(alloc?.product_id || '').trim();
+        const qty = Number(alloc?.allocated_qty || 0);
+        if (productId && qty > 0) allocatedSkuSet.add(productId);
+      });
+      const allocatedQty = hasInvoiceSnapshot ? allocatedQtyFromInvoice : allocatedQtyFromOrder;
+      const allocatedSkuCount = hasInvoiceSnapshot
+        ? Number(invoiceSkuCountByOrderId.get(orderId) || 0)
+        : allocatedSkuSet.size;
+      return {
+        id: orderId,
+        status: normalizeStatus(order?.status),
+        createdAt: order?.createdAt,
+        source: String(order?.source || '-'),
+        customerName: String(order?.customer_name || order?.Customer?.name || '-'),
+        totalAmount: Number(order?.total_amount || 0),
+        allocatedQty,
+        allocatedSkuCount,
+        courierName: String(order?.courier_display_name || order?.Courier?.name || '-'),
+      };
+    });
+  }, [orders, invoiceItemLines.length, invoiceQtyByOrderId, invoiceSkuCountByOrderId]);
+
+  const activeDispatchOrderIds = useMemo(() => {
+    return orderRows
+      .filter((row) => ['ready_to_ship', 'shipped', 'delivered'].includes(row.status) && row.id)
+      .map((row) => row.id);
+  }, [orderRows]);
+
+  const readyToShipOrderIds = useMemo(() => {
+    return orderRows
+      .filter((row) => row.status === 'ready_to_ship' && row.id)
+      .map((row) => row.id);
+  }, [orderRows]);
+
+  const pickingItems = useMemo(() => {
+    const activeOrderSet = new Set(activeDispatchOrderIds);
+    type PickingRow = {
+      productId: string;
+      name: string;
+      sku: string;
+      allocatedQty: number;
+      orderRefs: Array<{ orderId: string; qty: number }>;
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+    if (invoiceItemLines.length > 0) {
+      const map = new Map<string, PickingRow>();
 
-  const handleUpdateStatus = async () => {
-    if (!orderId || !selectedStatus) return;
+      invoiceItemLines.forEach((line: any) => {
+        const orderId = String(line.orderId || '').trim();
+        if (!orderId || !activeOrderSet.has(orderId)) return;
+        const productId = String(line.productId || '').trim();
+        const qty = Number(line.qty || 0);
+        if (!productId || qty <= 0) return;
+
+        const row: PickingRow = map.get(productId) || {
+          productId,
+          name: line.name || 'Produk',
+          sku: line.sku || productId,
+          allocatedQty: 0,
+          orderRefs: [],
+        };
+        row.allocatedQty += qty;
+        const existingOrderRef = row.orderRefs.find((ref) => ref.orderId === orderId);
+        if (existingOrderRef) {
+          existingOrderRef.qty += qty;
+        } else {
+          row.orderRefs.push({ orderId, qty });
+        }
+        map.set(productId, row);
+      });
+
+      return Array.from(map.values())
+        .map((row) => ({
+          ...row,
+          orderRefs: [...row.orderRefs].sort((a, b) => b.qty - a.qty),
+        }))
+        .sort((a, b) => {
+          const qtyDiff = b.allocatedQty - a.allocatedQty;
+          if (qtyDiff !== 0) return qtyDiff;
+          return a.name.localeCompare(b.name);
+        });
+    }
+
+    const map = new Map<string, PickingRow>();
+
+    orders.forEach((order: any) => {
+      const orderId = String(order?.id || '').trim();
+      if (!orderId || !activeOrderSet.has(orderId)) return;
+
+      const itemMeta = new Map<string, { name: string; sku: string }>();
+      const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+      orderItems.forEach((item: any) => {
+        const productId = String(item?.product_id || '').trim();
+        if (!productId) return;
+        const product = item?.Product || {};
+        if (!itemMeta.has(productId)) {
+          itemMeta.set(productId, {
+            name: String(product?.name || 'Produk'),
+            sku: String(product?.sku || productId),
+          });
+        }
+      });
+
+      const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
+      allocations.forEach((allocation: any) => {
+        const productId = String(allocation?.product_id || '').trim();
+        const qty = Number(allocation?.allocated_qty || 0);
+        if (!productId || qty <= 0) return;
+
+        const meta = itemMeta.get(productId) || { name: 'Produk', sku: productId };
+        const row: PickingRow = map.get(productId) || {
+          productId,
+          name: meta.name,
+          sku: meta.sku,
+          allocatedQty: 0,
+          orderRefs: [],
+        };
+        row.allocatedQty += qty;
+        const existingOrderRef = row.orderRefs.find((ref) => ref.orderId === orderId);
+        if (existingOrderRef) {
+          existingOrderRef.qty += qty;
+        } else {
+          row.orderRefs.push({ orderId, qty });
+        }
+        map.set(productId, row);
+      });
+    });
+
+    return Array.from(map.values())
+      .map((row) => ({
+        ...row,
+        orderRefs: [...row.orderRefs].sort((a, b) => b.qty - a.qty),
+      }))
+      .sort((a, b) => {
+        const qtyDiff = b.allocatedQty - a.allocatedQty;
+        if (qtyDiff !== 0) return qtyDiff;
+        return a.name.localeCompare(b.name);
+      });
+  }, [orders, activeDispatchOrderIds, invoiceItemLines]);
+
+  const allocatedSummary = useMemo(() => {
+    return orderRows.reduce(
+      (acc, row) => {
+        acc.qty += Number(row.allocatedQty || 0);
+        acc.sku += Number(row.allocatedSkuCount || 0);
+        acc.total += Number(row.totalAmount || 0);
+        return acc;
+      },
+      { qty: 0, sku: 0, total: 0 }
+    );
+  }, [orderRows]);
+
+  const invoiceNumber = String(invoice?.invoice_number || '-');
+  const paymentMethod = String(invoice?.payment_method || '-');
+  const paymentStatus = String(invoice?.payment_status || '-');
+  const amountPaid = Number(invoice?.amount_paid || 0);
+  const invoiceTotal = Number(invoice?.total || allocatedSummary.total || 0);
+  const customerName = String(
+    invoice?.customer?.name ||
+    invoice?.Customer?.name ||
+    orderRows[0]?.customerName ||
+    '-'
+  );
+  const proofImageUrl = normalizeProofImageUrl(invoice?.payment_proof_url);
+
+  const handleAssignDriver = async () => {
+    if (!selectedCourierId) {
+      setError('Pilih driver terlebih dahulu.');
+      return;
+    }
+    const targetIds = orderRows
+      .filter((row) => row.status === 'ready_to_ship' && row.id)
+      .map((row) => row.id);
+    if (targetIds.length === 0) {
+      setError('Tidak ada order ready_to_ship pada invoice ini.');
+      return;
+    }
+    const proceed = confirm(
+      `Assign driver untuk ${targetIds.length} order di invoice ${invoiceNumber}? Semua order ready_to_ship akan dikirim dengan driver yang sama.`
+    );
+    if (!proceed) return;
+
     try {
-      const needsCourier = selectedStatus === 'shipped' && order?.source !== 'pos_store';
-      if (needsCourier && !selectedCourierId) {
-        setError('Status dikirim wajib memilih driver/kurir.');
-        return;
-      }
-
       setUpdating(true);
       setError('');
-      await api.admin.orderManagement.updateStatus(orderId, {
-        status: selectedStatus,
-        courier_id: needsCourier ? selectedCourierId : undefined,
-        issue_type: selectedStatus === 'hold' ? 'shortage' : undefined,
-        issue_note: selectedStatus === 'hold' ? issueNote : undefined,
-      });
-      await loadOrder();
+      const results = await Promise.allSettled(
+        targetIds.map((id) => api.admin.orderManagement.updateStatus(id, { status: 'shipped', courier_id: selectedCourierId }))
+      );
+      const failedIds = results
+        .map((result, idx) => (result.status === 'rejected' ? String(targetIds[idx]) : ''))
+        .filter(Boolean);
+      if (failedIds.length > 0) {
+        setError(`Sebagian order gagal assign driver (${failedIds.length}/${targetIds.length}): ${failedIds.join(', ')}`);
+      }
+      await loadInvoiceDetail();
     } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal update status order');
+      setError(e?.response?.data?.message || 'Gagal assign driver invoice');
     } finally {
       setUpdating(false);
     }
   };
-
-  const handleRefresh = async () => {
-    await loadOrder();
-    if (canUpdateStatus) {
-      await loadCouriers();
-    }
-  };
-
-  const statusBadgeClass = (status: string) => {
-    if (['completed', 'delivered'].includes(status)) return 'bg-emerald-100 text-emerald-700';
-    if (['shipped', 'waiting_admin_verification'].includes(status)) return 'bg-blue-100 text-blue-700';
-    if (status === 'allocated') return 'bg-teal-100 text-teal-700';
-    if (status === 'partially_fulfilled') return 'bg-amber-100 text-amber-700';
-    if (status === 'canceled') return 'bg-rose-100 text-rose-700';
-    if (status === 'debt_pending') return 'bg-amber-100 text-amber-700';
-    if (status === 'hold') return 'bg-violet-100 text-violet-700';
-    return 'bg-slate-100 text-slate-700';
-  };
-
-  const proofImageUrl = normalizeProofImageUrl(order?.Invoice?.payment_proof_url);
-  const activeIssue = order?.active_issue || null;
-  const issueDueAt = activeIssue?.due_at ? new Date(activeIssue.due_at) : null;
-  const isIssueOverdue = Boolean(order?.issue_overdue);
-  const normalizedOrderStatus = order?.status === 'waiting_payment' ? 'ready_to_ship' : order?.status;
-  const needsCourier = selectedStatus === 'shipped' && order?.source !== 'pos_store';
-  const statusChanged = selectedStatus !== normalizedOrderStatus;
-  const courierChanged = needsCourier && (selectedCourierId || '') !== (order?.courier_id || '');
-  const issueNoteChanged = selectedStatus === 'hold' && ((issueNote || '').trim() !== (activeIssue?.note || '').trim());
-  const canSubmitUpdate = canUpdateStatus && !updating && (statusChanged || courierChanged || issueNoteChanged);
-  const CANCELABLE_ORDER_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'processing', 'hold'];
-  const BACKORDER_CANCELABLE_STATUSES = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold'];
-  const canCancelByRole = ['kasir', 'super_admin'].includes(user?.role || '');
-  const isOrderCancelable = canCancelByRole && CANCELABLE_ORDER_STATUSES.includes(String(normalizedOrderStatus || ''));
-
-  const orderQtyByProduct = (order?.OrderItems || []).reduce((acc: Record<string, number>, item: any) => {
-    const key = String(item?.product_id || '');
-    if (!key) return acc;
-    acc[key] = Number(acc[key] || 0) + Number(item?.qty || 0);
-    return acc;
-  }, {});
-  const allocQtyByProduct = (order?.Allocations || []).reduce((acc: Record<string, number>, allocation: any) => {
-    const key = String(allocation?.product_id || '');
-    if (!key) return acc;
-    acc[key] = Number(acc[key] || 0) + Number(allocation?.allocated_qty || 0);
-    return acc;
-  }, {});
-  const shortageTotal = Object.entries(orderQtyByProduct).reduce((sum, [productId, orderedQty]) => {
-    const allocatedQty = Number(allocQtyByProduct[productId] || 0);
-    return sum + Math.max(0, Number(orderedQty || 0) - allocatedQty);
-  }, 0);
-  const isBackorderCancelable =
-    canCancelByRole &&
-    BACKORDER_CANCELABLE_STATUSES.includes(String(normalizedOrderStatus || '')) &&
-    shortageTotal > 0;
 
   if (!allowed) return null;
 
   if (loading) {
     return (
       <div className="p-6">
-        <p className="text-sm text-slate-500">Memuat detail order...</p>
+        <p className="text-sm text-slate-500">Memuat detail invoice...</p>
       </div>
     );
   }
 
-  if (!order) {
+  if (!invoice) {
     return (
       <div className="p-6 space-y-3">
-        <p className="text-sm text-rose-600">{error || 'Order tidak ditemukan'}</p>
-        <Link href="/admin/orders" className="text-sm font-bold text-emerald-700">Kembali ke daftar order</Link>
+        <p className="text-sm text-rose-600">{error || 'Invoice tidak ditemukan.'}</p>
+        <Link href="/admin/orders" className="text-sm font-bold text-emerald-700">
+          Kembali ke daftar order
+        </Link>
       </div>
     );
   }
@@ -241,535 +484,219 @@ export default function AdminOrderDetailPage() {
       </button>
 
       <div className="bg-white border border-slate-200 rounded-[28px] p-6 shadow-sm space-y-5">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
-            <p className="text-xs text-slate-600">Customer Name: <span className="font-bold text-slate-900">{order.customer_name || '-'}</span></p>
-            <p className="text-xs text-slate-600">Customer ID: <span className="font-bold text-slate-900">{order.customer_id || '-'}</span></p>
-            <p className="text-xs text-slate-600">Source: <span className="font-bold text-slate-900 uppercase">{order.source || '-'}</span></p>
-            <p className="text-xs text-slate-600">Courier ID: <span className="font-bold text-slate-900">{order.courier_id || '-'}</span></p>
-            <p className="text-xs text-slate-600">Courier Name: <span className="font-bold text-slate-900">{order.courier_display_name || order.Courier?.name || '-'}</span></p>
-            <p className="text-xs text-slate-600">Expiry Date: <span className="font-bold text-slate-900">{order.expiry_date ? formatDateTime(order.expiry_date) : '-'}</span></p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Detail Invoice Gudang</p>
+            <p className="text-lg font-black text-slate-900">{invoiceNumber}</p>
+            <p className="text-xs text-slate-500">Invoice ID: {resolvedInvoiceId || '-'}</p>
+            {resolvedFromOrderId && (
+              <p className="text-[11px] text-amber-700">Dibuka dari order #{resolvedFromOrderId.slice(-8).toUpperCase()}, otomatis dialihkan ke invoice ini.</p>
+            )}
           </div>
-
-          <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
-            <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>
-            <p className="text-xs text-slate-600">Payment Method: <span className="font-bold text-slate-900">{order.Invoice?.payment_method || '-'}</span></p>
-            <p className="text-xs text-slate-600">Payment Status: <span className="font-bold text-slate-900">{order.Invoice?.payment_status || '-'}</span></p>
-            <p className="text-xs text-slate-600">Amount Paid: <span className="font-bold text-slate-900">{formatCurrency(Number(order.Invoice?.amount_paid || 0))}</span></p>
-            <div className="pt-1">
-              <p className="text-xs text-slate-600 mb-2">Bukti Transfer:</p>
-              {!proofImageUrl ? (
-                <p className="text-xs font-bold text-slate-900">-</p>
-              ) : proofLoadError ? (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  <p className="text-xs text-amber-700">
-                    Gambar tidak bisa dimuat. URL: <span className="font-bold">{proofImageUrl}</span>
-                  </p>
-                </div>
-              ) : (
-                <div className="bg-white border border-slate-200 rounded-xl p-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsProofPreviewOpen(true)}
-                    className="w-full cursor-zoom-in"
-                  >
-                    <img
-                      src={proofImageUrl}
-                      alt="Bukti pembayaran"
-                      className="w-full max-h-72 object-contain rounded-lg bg-slate-100"
-                      onError={() => setProofLoadError(true)}
-                    />
-                  </button>
-                  <p className="text-[11px] text-slate-500 mt-2">Klik gambar untuk memperbesar.</p>
-                </div>
-              )}
-            </div>
+          <div className="text-right">
+            <p className="text-xs text-slate-500">Total Invoice</p>
+            <p className="text-lg font-black text-slate-900">{formatCurrency(invoiceTotal)}</p>
           </div>
         </div>
 
-        {/* Order Relationships (Split/Backorder) */}
-        {(order.parent_order_id || (order.Children && order.Children.length > 0)) && (
-          <div className="bg-slate-900 text-white rounded-[24px] p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <ExternalLink size={18} className="text-blue-400" />
-              <p className="text-sm font-black">Relasi Order (Split / Backorder)</p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {order.parent_order_id && (
-                <Link
-                  href={`/admin/orders/${order.parent_order_id}`}
-                  className="bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl p-3 transition-colors"
-                >
-                  <p className="text-[10px] font-bold text-blue-200 uppercase tracking-wider">Order Induk (Parent)</p>
-                  <p className="text-xs font-black mt-0.5">#{order.parent_order_id.slice(-8).toUpperCase()}</p>
-                </Link>
-              )}
-              {order.Children?.map((child: any) => (
-                <Link
-                  key={child.id}
-                  href={`/admin/orders/${child.id}`}
-                  className="bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl p-3 transition-colors"
-                >
-                  <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">Order Anak (Backorder)</p>
-                  <p className="text-xs font-black mt-0.5">#{child.id.slice(-8).toUpperCase()}</p>
-                </Link>
-              ))}
-            </div>
+        {orders.some((o: any) => o.active_issue) && (
+          <div className="space-y-3">
+            {orders.filter((o: any) => o.active_issue).map((order: any) => (
+              <div key={`issue-${order.id}`} className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm space-y-3">
+                <div className="flex items-center gap-3 text-amber-700">
+                  <div className="bg-amber-200 p-2 rounded-xl">
+                    <AlertCircle size={20} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest leading-none">Laporan Masalah Driver</p>
+                    <p className="text-sm font-black text-slate-900 mt-1">Order #{String(order.id).slice(-8).toUpperCase()}</p>
+                  </div>
+                  <div className="ml-auto px-3 py-1 bg-amber-600 text-white rounded-lg text-[10px] font-black uppercase">
+                    Status: {order.status}
+                  </div>
+                </div>
+                <div className="bg-white/60 rounded-2xl p-4 border border-amber-100">
+                  <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Catatan Driver:</p>
+                  <p className="text-sm font-semibold text-slate-800 italic whitespace-pre-wrap">
+                    "{order.active_issue.note}"
+                  </p>
+                </div>
+                {order.active_issue.evidence_url && (
+                  <div className="space-y-1">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">Lampiran Bukti:</p>
+                    <img
+                      src={normalizeProofImageUrl(order.active_issue.evidence_url) || ''}
+                      alt="Bukti Masalah"
+                      className="max-h-60 rounded-xl border border-amber-200 shadow-sm"
+                    />
+                  </div>
+                )}
+                <p className="text-[10px] text-amber-600 font-medium italic">
+                  Dilaporkan pada: {formatDateTime(order.updatedAt)} • Batas waktu tindak lanjut: {formatDateTime(order.active_issue.due_at)}
+                </p>
+              </div>
+            ))}
           </div>
         )}
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-black text-slate-900">Item Pesanan</p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
+            <p className="text-xs text-slate-600">Customer: <span className="font-bold text-slate-900">{customerName}</span></p>
+            <p className="text-xs text-slate-600">Order dalam invoice: <span className="font-bold text-slate-900">{orderRows.length}</span></p>
+            <p className="text-xs text-slate-600">Qty dialokasikan: <span className="font-bold text-slate-900">{allocatedSummary.qty}</span></p>
+            <p className="text-xs text-slate-600">SKU dialokasikan: <span className="font-bold text-slate-900">{allocatedSummary.sku}</span></p>
+            <p className="text-xs text-slate-600">Ready to ship: <span className="font-bold text-slate-900">{readyToShipOrderIds.length}</span></p>
           </div>
-          {(order.OrderItems || []).length === 0 ? (
-            <div className="bg-slate-50 rounded-2xl p-4">
-              <p className="text-sm text-slate-500">Tidak ada item.</p>
+
+          <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
+            <p className="text-xs text-slate-600">Payment Method: <span className="font-bold text-slate-900">{paymentMethod}</span></p>
+            <p className="text-xs text-slate-600">Payment Status: <span className="font-bold text-slate-900">{paymentStatus}</span></p>
+            <p className="text-xs text-slate-600">Amount Paid: <span className="font-bold text-slate-900">{formatCurrency(amountPaid)}</span></p>
+            <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoice?.createdAt ? formatDateTime(invoice.createdAt) : '-'}</span></p>
+            {proofImageUrl && !proofLoadError && (
+              <div className="pt-1">
+                <img
+                  src={proofImageUrl}
+                  alt="Bukti pembayaran"
+                  className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
+                  onError={() => setProofLoadError(true)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>
+          {orderRows.length === 0 ? (
+            <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
+              Tidak ada order yang terhubung ke invoice ini.
             </div>
           ) : (
             <div className="space-y-2">
-              {(order.OrderItems || []).map((item: any) => {
-                const allocation = order.Allocations?.find((a: any) => a.product_id === item.product_id);
-                const allocQty = allocation ? allocation.allocated_qty : 0;
-                const isPartial = allocQty > 0 && allocQty < item.qty;
-                const isUnallocated = allocQty === 0;
-
-                return (
-                  <div key={item.id} className="bg-slate-50 rounded-2xl p-3 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">{item.Product?.name || '-'}</p>
-                      <p className="text-xs text-slate-600">
-                        SKU: {item.Product?.sku || '-'} | Dipesan: {item.qty} | Harga: {formatCurrency(Number(item.price_at_purchase || 0))}
-                      </p>
-                      {allocQty > 0 && (
-                        <p className={`text-xs mt-0.5 font-bold ${isPartial ? 'text-amber-600' : 'text-emerald-600'}`}>
-                          Dialokasikan: {allocQty}{isPartial && ` (kurang ${item.qty - allocQty})`}
-                        </p>
-                      )}
-                      {isUnallocated && ['allocated', 'partially_fulfilled', 'waiting_admin_verification'].includes(order.status) && (
-                        <p className="text-xs mt-0.5 font-bold text-rose-500">Belum dialokasikan</p>
-                      )}
-                    </div>
-                    <p className="text-sm font-black text-slate-900">
-                      {formatCurrency(
-                        Number(item.price_at_purchase || 0) *
-                        Number((['pending', 'canceled'].includes(order.status) ? item.qty : allocQty) || 0)
-                      )}
+              {orderRows.map((row) => (
+                <div key={row.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-slate-900">#{row.id}</p>
+                    <p className="text-[11px] text-slate-500">
+                      {row.createdAt ? formatDateTime(row.createdAt) : '-'} • Source {row.source}
                     </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                      <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
+                      <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
+                    </div>
                   </div>
-                );
-              })}
+                  <div className="text-left sm:text-right">
+                    <p className={`inline-flex px-2 py-1 rounded-full text-[10px] font-bold ${statusBadgeClass(row.status)}`}>
+                      {statusLabel(row.status)}
+                    </p>
+                    <p className="text-sm font-black text-slate-900 mt-1">{formatCurrency(row.totalAmount)}</p>
+                    <p className="text-[11px] text-slate-500">Driver: {row.courierName}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        <div className="bg-slate-900 text-white rounded-2xl p-4 flex items-center justify-between">
-          <p className="text-sm">Total Order</p>
-          <p className="text-lg font-black">{formatCurrency(Number(order.total_amount || 0))}</p>
+        <div className="space-y-2">
+          <p className="text-sm font-black text-slate-900">
+            {orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? 'Rincian Barang Dikirim' : 'Rincian Barang Siap Disiapkan Gudang'}
+          </p>
+          <p className="text-xs text-slate-500">
+            Daftar ini menghitung barang dari order berstatus <span className="font-bold">ready_to_ship, shipped, atau delivered</span>.
+          </p>
+          {pickingItems.length === 0 ? (
+            <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
+              Belum ada barang siap kirim untuk disiapkan.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {pickingItems.map((item) => (
+                <div key={item.productId} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black text-slate-900">{item.name}</p>
+                      <p className="text-[11px] text-slate-500">SKU: {item.sku}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-slate-500">Qty siap kirim</p>
+                      <p className="text-base font-black text-emerald-700">{item.allocatedQty}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                    {item.orderRefs.map((ref) => (
+                      <span key={`${item.productId}-${ref.orderId}`} className="px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700">
+                        #{ref.orderId.slice(-8).toUpperCase()} • Qty {ref.qty}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {activeIssue && (
-          <div className={`border rounded-2xl p-4 ${isIssueOverdue ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
-            <p className={`text-sm font-black ${isIssueOverdue ? 'text-rose-700' : 'text-amber-700'}`}>
-              Order Bermasalah: Barang Kurang
-            </p>
-            <p className={`text-xs mt-1 ${isIssueOverdue ? 'text-rose-700' : 'text-amber-700'}`}>
-              Deadline penyelesaian: <span className="font-bold">{issueDueAt ? formatDateTime(issueDueAt) : '-'}</span> (maks 2x24 jam)
-            </p>
-            {activeIssue.note && (
-              <p className={`text-xs mt-1 ${isIssueOverdue ? 'text-rose-700' : 'text-amber-700'}`}>
-                Catatan masalah: <span className="font-semibold">{activeIssue.note}</span>
+        {canManageWarehouseFlow && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+            <p className="text-sm font-black text-slate-900">Aksi Gudang / Logistik</p>
+            {readyToShipOrderIds.length > 0 ? (
+              <>
+                <p className="text-xs text-slate-600">
+                  Pilih driver untuk kirim <span className="font-bold">{readyToShipOrderIds.length} order ready_to_ship</span> dalam invoice ini sekaligus.
+                </p>
+                <select
+                  value={selectedCourierId}
+                  onChange={(e) => setSelectedCourierId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-amber-400 outline-none"
+                  disabled={updating}
+                >
+                  <option value="">Pilih driver/kurir</option>
+                  {couriers.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.display_name || item.name || 'Driver'}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => void handleAssignDriver()}
+                  disabled={updating || !selectedCourierId}
+                  className="w-full px-4 py-2.5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200"
+                >
+                  {updating ? 'Memproses...' : `Kirim ${readyToShipOrderIds.length} Order (1 Invoice)`}
+                </button>
+              </>
+            ) : orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? (
+              <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest leading-none mb-1">Driver Ditugaskan</p>
+                  <p className="text-sm font-black text-slate-900">
+                    {orderRows.find(r => r.courierName && r.courierName !== '-')?.courierName || 'Driver sedang bertugas'}
+                  </p>
+                </div>
+                <div className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-black uppercase">
+                  {orderRows.find(r => r.status === 'shipped') ? 'Sedang Dikirim' : 'Sudah Terkirim'}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Belum ada order berstatus <span className="font-bold">ready_to_ship</span> pada invoice ini.
               </p>
             )}
           </div>
         )}
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
-          <p className="text-sm font-black text-slate-900">Aksi Order</p>
-
-          {/* Step 1: Kasir — Alokasi sekarang dikelola di halaman Orders */}
-
-          {(isOrderCancelable || isBackorderCancelable) && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Aksi Pembatalan (Kasir / Super Admin)</p>
-              {isOrderCancelable && (
-                <button
-                  onClick={async () => {
-                    if (!confirm(`Batalkan order #${order.id.slice(-8).toUpperCase()}?`)) return;
-                    try {
-                      setUpdating(true);
-                      setError('');
-                      await api.admin.orderManagement.updateStatus(orderId, { status: 'canceled' });
-                      await loadOrder();
-                    } catch (e: any) {
-                      setError(e?.response?.data?.message || 'Gagal membatalkan order');
-                    } finally {
-                      setUpdating(false);
-                    }
-                  }}
-                  disabled={updating}
-                  className="w-full px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-rose-700 transition-colors"
-                >
-                  {updating ? 'Memproses...' : 'Cancel Order'}
-                </button>
-              )}
-              {isBackorderCancelable && (
-                <button
-                  onClick={() => setIsCancelBackorderOpen(true)}
-                  disabled={updating}
-                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-rose-200 text-rose-700 text-sm font-bold disabled:opacity-50 hover:bg-rose-50 transition-colors"
-                >
-                  Cancel Backorder ({shortageTotal} item kurang)
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Step 2: Kasir — Terbitkan Invoice (waiting_invoice) */}
-          {order.status === 'waiting_invoice' && ['kasir', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Aksi Kasir</p>
-              <button
-                onClick={async () => {
-                  try {
-                    setUpdating(true);
-                    setError('');
-                    await api.admin.finance.issueInvoice(orderId);
-                    await loadOrder();
-                  } catch (e: any) {
-                    setError(e?.response?.data?.message || 'Gagal menerbitkan invoice');
-                  } finally {
-                    setUpdating(false);
-                  }
-                }}
-                disabled={updating}
-                className="w-full px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-blue-700 transition-colors shadow-sm shadow-blue-200"
-              >
-                {updating ? 'Memproses...' : 'Terbitkan Invoice'}
-              </button>
-            </div>
-          )}
-
-          {/* Step 3: Finance — Approve/Reject Payment (waiting_admin_verification) */}
-          {['waiting_admin_verification'].includes(order.status) && ['admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-3">
-              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Verifikasi Pembayaran (Finance)</p>
-              <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 italic">
-                {proofImageUrl ? 'Bukti pembayaran sudah diunggah. Silakan verifikasi di bawah.' : 'Menunggu customer mengunggah bukti pembayaran.'}
-              </p>
-              {proofImageUrl && (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setIsVerifyPaymentOpen(true)}
-                    disabled={updating}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-                  >
-                    Setujui (Approve)
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!confirm('Tolak pembayaran ini?')) return;
-                      try {
-                        setUpdating(true);
-                        setError('');
-                        await api.admin.finance.verifyPayment(orderId, 'reject');
-                        await loadOrder();
-                      } catch (e: any) {
-                        setError(e?.response?.data?.message || 'Gagal reject');
-                      } finally {
-                        setUpdating(false);
-                      }
-                    }}
-                    disabled={updating}
-                    className="px-4 py-2.5 rounded-xl bg-rose-500 text-white text-sm font-bold disabled:opacity-50"
-                  >
-                    Tolak
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Step 4: Gudang — Assign Driver (ready_to_ship) */}
-          {normalizedOrderStatus === 'ready_to_ship' && ['admin_gudang', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Aksi Gudang / Logistik</p>
-              <p className="text-xs text-slate-600">Barang siap dikirim. Pilih driver.</p>
-              <select
-                value={selectedCourierId}
-                onChange={(e) => setSelectedCourierId(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-amber-400 outline-none"
-                disabled={updating}
-              >
-                <option value="">Pilih driver/kurir</option>
-                {couriers.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.display_name || item.name || 'Driver'}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={async () => {
-                  if (!selectedCourierId) { setError('Pilih driver terlebih dahulu'); return; }
-                  try {
-                    setUpdating(true);
-                    setError('');
-                    await api.admin.orderManagement.updateStatus(orderId, { status: 'shipped', courier_id: selectedCourierId });
-                    await loadOrder();
-                  } catch (e: any) {
-                    setError(e?.response?.data?.message || 'Gagal assign driver');
-                  } finally {
-                    setUpdating(false);
-                  }
-                }}
-                disabled={updating || !selectedCourierId}
-                className="w-full px-4 py-2.5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200"
-              >
-                {updating ? 'Memproses...' : 'Kirim dengan Driver →'}
-              </button>
-            </div>
-          )}
-
-          {/* Step 6: Gudang/Finance — Mark Completed (delivered) */}
-          {normalizedOrderStatus === 'delivered' && ['admin_gudang', 'admin_finance', 'super_admin'].includes(user?.role || '') && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Konfirmasi Akhir</p>
-              <button
-                onClick={async () => {
-                  try {
-                    setUpdating(true);
-                    setError('');
-                    await api.admin.orderManagement.updateStatus(orderId, { status: 'completed' });
-                    await loadOrder();
-                  } catch (e: any) {
-                    setError(e?.response?.data?.message || 'Gagal tandai selesai');
-                  } finally {
-                    setUpdating(false);
-                  }
-                }}
-                disabled={updating}
-                className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-200"
-              >
-                {updating ? 'Memproses...' : 'Selesaikan Order ✓'}
-              </button>
-            </div>
-          )}
-
-          {/* Delivery proof display */}
-          {order.delivery_proof_url && (
-            <div className="pt-1">
-              <p className="text-xs text-slate-600 mb-2">Bukti Serah Terima Driver:</p>
-              <div className="bg-white border border-slate-200 rounded-xl p-2">
-                <img
-                  src={normalizeProofImageUrl(order.delivery_proof_url) || ''}
-                  alt="Bukti serah terima"
-                  className="w-full max-h-72 object-contain rounded-lg bg-slate-100"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Super Admin Override */}
-          {user?.role === 'super_admin' && (
-            <div className="border-t border-slate-200 pt-3 mt-3 space-y-2">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Override Manual (Super Admin)</p>
-              <div className="flex gap-2">
-                <select
-                  value={selectedStatus}
-                  onChange={(e) => setSelectedStatus(e.target.value)}
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
-                  disabled={updating}
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s.key} value={s.key}>{s.label}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={async () => {
-                    try {
-                      setUpdating(true);
-                      setError('');
-                      const payload: any = { status: selectedStatus };
-                      if (selectedStatus === 'shipped' && selectedCourierId) payload.courier_id = selectedCourierId;
-                      if (selectedStatus === 'hold') { payload.issue_type = 'shortage'; payload.issue_note = issueNote; }
-                      await api.admin.orderManagement.updateStatus(orderId, payload);
-                      await loadOrder();
-                    } catch (e: any) {
-                      setError(e?.response?.data?.message || 'Gagal update status');
-                    } finally {
-                      setUpdating(false);
-                    }
-                  }}
-                  disabled={updating || selectedStatus === normalizedOrderStatus}
-                  className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold disabled:opacity-50"
-                >
-                  Override
-                </button>
-              </div>
-              {selectedStatus === 'shipped' && (
-                <select
-                  value={selectedCourierId}
-                  onChange={(e) => setSelectedCourierId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
-                >
-                  <option value="">Pilih driver</option>
-                  {couriers.map((item) => (
-                    <option key={item.id} value={item.id}>{item.display_name || item.name || 'Driver'}</option>
-                  ))}
-                </select>
-              )}
-              {selectedStatus === 'hold' && (
-                <textarea
-                  value={issueNote}
-                  onChange={(e) => setIssueNote(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm min-h-20"
-                  placeholder="Catatan masalah"
-                />
-              )}
-            </div>
-          )}
-
-          <button
-            onClick={handleRefresh}
-            disabled={loading || updating}
-            className="w-full px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-
-          {error && <p className="text-xs text-rose-600">{error}</p>}
-        </div>
-      </div>
-
-      {isProofPreviewOpen && proofImageUrl && (
-        <div
-          className="fixed inset-0 z-[120] bg-black/75 p-4 sm:p-8 flex items-center justify-center"
-          onClick={() => setIsProofPreviewOpen(false)}
+        <button
+          onClick={() => void loadInvoiceDetail()}
+          disabled={loading || updating}
+          className="w-full px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2"
         >
-          <button
-            type="button"
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/90 text-slate-800 flex items-center justify-center"
-            onClick={() => setIsProofPreviewOpen(false)}
-          >
-            <X size={18} />
-          </button>
-          <img
-            src={proofImageUrl}
-            alt="Preview bukti pembayaran"
-            className="max-w-full max-h-[90vh] object-contain rounded-xl bg-white"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      )}
+          <RefreshCw size={14} />
+          Refresh
+        </button>
 
-      {/* Confirmation Modal for Payment Verification */}
-      {isVerifyPaymentOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 space-y-4 animate-in fade-in zoom-in duration-200">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 text-amber-600">
-                <AlertTriangle size={20} />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-bold text-slate-900 text-lg">Konfirmasi Verifikasi</h3>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Pastikan uang sudah masuk ke rekening toko. Apakah Anda yakin ingin melanjutkan?
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                onClick={() => setIsVerifyPaymentOpen(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors"
-                disabled={updating}
-              >
-                Batal
-              </button>
-              <button
-                onClick={async () => {
-                  try {
-                    setUpdating(true);
-                    setError('');
-                    await api.admin.finance.verifyPayment(orderId, 'approve');
-                    setIsVerifyPaymentOpen(false);
-                    await loadOrder();
-                  } catch (e: any) {
-                    setError(e?.response?.data?.message || 'Gagal approve');
-                    setIsVerifyPaymentOpen(false);
-                  } finally {
-                    setUpdating(false);
-                  }
-                }}
-                disabled={updating}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors inline-flex items-center justify-center gap-2"
-              >
-                {updating ? 'Memproses...' : 'Ya, Verifikasi'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isCancelBackorderOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4">
-            <div className="space-y-1">
-              <h3 className="font-bold text-slate-900 text-lg">Cancel Backorder</h3>
-              <p className="text-sm text-slate-600">
-                Order ini masih kekurangan alokasi <span className="font-bold text-rose-600">{shortageTotal}</span> item.
-                Isi alasan pembatalan untuk catatan order.
-              </p>
-            </div>
-            <textarea
-              value={cancelBackorderReason}
-              onChange={(e) => setCancelBackorderReason(e.target.value)}
-              rows={4}
-              placeholder="Contoh: customer tidak ingin menunggu restock."
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-rose-400"
-            />
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => {
-                  if (updating) return;
-                  setIsCancelBackorderOpen(false);
-                  setCancelBackorderReason('');
-                }}
-                disabled={updating}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors"
-              >
-                Batal
-              </button>
-              <button
-                onClick={async () => {
-                  const reason = cancelBackorderReason.trim();
-                  if (reason.length < 5) {
-                    setError('Alasan cancel backorder minimal 5 karakter.');
-                    return;
-                  }
-                  try {
-                    setUpdating(true);
-                    setError('');
-                    await api.allocation.cancelBackorder(orderId, reason);
-                    setIsCancelBackorderOpen(false);
-                    setCancelBackorderReason('');
-                    await loadOrder();
-                  } catch (e: any) {
-                    setError(e?.response?.data?.message || 'Gagal cancel backorder');
-                  } finally {
-                    setUpdating(false);
-                  }
-                }}
-                disabled={updating}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 transition-colors"
-              >
-                {updating ? 'Memproses...' : 'Ya, Cancel Backorder'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+      </div>
     </div>
   );
 }

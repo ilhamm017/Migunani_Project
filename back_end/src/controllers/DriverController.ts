@@ -6,6 +6,13 @@ import { AccountingPostingService } from '../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
 
+const FINAL_ORDER_STATUSES = new Set(['delivered', 'completed', 'canceled', 'cancelled']);
+const COURIER_OWNERSHIP_REQUIRED_STATUSES = new Set(['ready_to_ship', 'shipped']);
+const isDeadlockError = (error: any): boolean => {
+    const code = error?.parent?.code || error?.original?.code || error?.code;
+    return code === 'ER_LOCK_DEADLOCK';
+};
+
 export const getAssignedOrders = async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id; // Driver ID
@@ -87,43 +94,21 @@ export const completeDelivery = async (req: Request, res: Response) => {
         }
         const previousOrderStatus = String(order.status || '');
 
-        // Handle COD logic
-        if (invoice.payment_method === 'cod') {
-            const amountToCollect = Number(invoice.total || order.total_amount || 0);
-            const shouldCollectCod = invoice.payment_status !== 'cod_pending';
-
-            // 1. Update invoice status & record validation
-            if (shouldCollectCod) {
-                await invoice.update({
-                    payment_status: 'cod_pending', // Money with driver
-                    amount_paid: amountToCollect, // Assume full payment collected by driver
-                }, { transaction: t });
-            }
-
-            // 2. Create COD Collection Record
-            if (amountToCollect > 0 && shouldCollectCod) {
-                await CodCollection.create({
-                    invoice_id: invoice.id,
-                    driver_id: userId,
-                    amount: amountToCollect,
-                    status: 'collected'
-                }, { transaction: t });
-
-                // 3. Increment driver's debt (Utang ke Finance)
-                await User.increment('debt', {
-                    by: amountToCollect,
-                    where: { id: userId },
-                    transaction: t
-                });
-            }
-        }
-
         if (invoice.payment_method === 'cod') {
             await AccountingPostingService.postGoodsOutForOrder(order.id, String(userId), t, 'cod');
         }
 
+        const paymentMethod = String(invoice.payment_method || '').toLowerCase();
+        const paymentStatus = String(invoice.payment_status || '').toLowerCase();
+        const nextOrderStatus =
+            (paymentMethod === 'cod' && paymentStatus === 'cod_pending')
+                || (paymentMethod === 'transfer_manual' && paymentStatus === 'paid')
+                || (paymentMethod === 'cash_store' && paymentStatus === 'paid')
+                ? 'completed'
+                : 'delivered';
+
         // Save delivery proof photo to order (separate from payment proof)
-        const updatePayload: any = { status: 'delivered' };
+        const updatePayload: any = { status: nextOrderStatus };
         if (file) {
             updatePayload.delivery_proof_url = file.path;
         }
@@ -133,14 +118,14 @@ export const completeDelivery = async (req: Request, res: Response) => {
         emitOrderStatusChanged({
             order_id: String(order.id),
             from_status: previousOrderStatus,
-            to_status: 'delivered',
+            to_status: nextOrderStatus,
             source: String(order.source || ''),
             payment_method: String(invoice.payment_method || ''),
             courier_id: String(order.courier_id || userId),
             triggered_by_role: String(req.user?.role || 'driver'),
-            target_roles: ['admin_finance'],
+            target_roles: nextOrderStatus === 'completed' ? ['admin_finance', 'customer'] : ['admin_finance'],
         });
-        res.json({ message: 'Delivery completed' });
+        res.json({ message: `Delivery ${nextOrderStatus === 'completed' ? 'completed' : 'marked delivered'}` });
     } catch (error) {
         await t.rollback();
         res.status(500).json({ message: 'Error completing delivery', error });
@@ -157,8 +142,7 @@ export const recordPayment = async (req: Request, res: Response) => {
 
         const order = await Order.findOne({
             where: { id, courier_id: userId },
-            transaction: t,
-            lock: t.LOCK.UPDATE
+            transaction: t
         });
         if (!order) {
             await t.rollback();
@@ -234,8 +218,50 @@ export const recordPayment = async (req: Request, res: Response) => {
         }
         await invoice.update(invoiceUpdate, { transaction: t });
 
+        const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
+        if (invoice.order_id) {
+            relatedOrderIds.push(String(invoice.order_id));
+        }
+        const uniqueOrderIds = Array.from(new Set(relatedOrderIds.filter(Boolean)));
+        const relatedOrders = uniqueOrderIds.length > 0
+            ? await Order.findAll({
+                where: { id: { [Op.in]: uniqueOrderIds } },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            })
+            : [order];
+        const previousStatusByOrderId: Record<string, string> = {};
+        relatedOrders.forEach((row: any) => {
+            previousStatusByOrderId[String(row.id)] = String(row.status || '');
+        });
+
+        const deliveredOrderIds = relatedOrders
+            .filter((row: any) => String(row.status || '') === 'delivered')
+            .map((row: any) => String(row.id));
+        if (deliveredOrderIds.length > 0) {
+            await Order.update(
+                { status: 'completed' },
+                { where: { id: { [Op.in]: deliveredOrderIds } }, transaction: t }
+            );
+        }
+
         await t.commit();
         emitAdminRefreshBadges();
+        deliveredOrderIds.forEach((orderId) => {
+            const prevStatus = previousStatusByOrderId[orderId] || '';
+            if (prevStatus === 'completed') return;
+            emitOrderStatusChanged({
+                order_id: orderId,
+                from_status: prevStatus || null,
+                to_status: 'completed',
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || userId),
+                triggered_by_role: String(req.user?.role || 'driver'),
+                target_roles: ['admin_finance', 'customer', 'driver'],
+                target_user_ids: [String(userId)],
+            });
+        });
 
         return res.json({
             message: 'Pembayaran COD berhasil dicatat.',
@@ -250,39 +276,43 @@ export const recordPayment = async (req: Request, res: Response) => {
 
 export const updatePaymentMethod = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
+    const safeRollback = async () => {
+        if (!(t as any).finished) {
+            await t.rollback();
+        }
+    };
     try {
         const { id } = req.params;
         const userId = req.user!.id;
         const rawMethod = String(req.body?.payment_method || '').trim().toLowerCase();
         if (!['cod', 'transfer_manual'].includes(rawMethod)) {
-            await t.rollback();
+            await safeRollback();
             return res.status(400).json({ message: 'Metode pembayaran tidak valid.' });
         }
         const nextMethod = rawMethod as 'cod' | 'transfer_manual';
 
         const order = await Order.findOne({
             where: { id, courier_id: userId },
-            transaction: t,
-            lock: t.LOCK.UPDATE
+            transaction: t
         });
         if (!order) {
-            await t.rollback();
+            await safeRollback();
             return res.status(404).json({ message: 'Order tidak ditemukan atau tidak ditugaskan ke driver ini.' });
         }
 
         const invoice = await findLatestInvoiceByOrderId(String(id), { transaction: t });
         if (!invoice) {
-            await t.rollback();
+            await safeRollback();
             return res.status(400).json({ message: 'Invoice tidak ditemukan.' });
         }
 
         if (invoice.payment_status === 'paid') {
-            await t.rollback();
+            await safeRollback();
             return res.status(409).json({ message: 'Invoice sudah lunas, metode pembayaran tidak bisa diubah.' });
         }
 
         if (invoice.payment_status === 'cod_pending' && invoice.payment_method !== nextMethod) {
-            await t.rollback();
+            await safeRollback();
             return res.status(409).json({ message: 'Pembayaran COD sudah dicatat, metode tidak bisa diubah.' });
         }
 
@@ -294,13 +324,26 @@ export const updatePaymentMethod = async (req: Request, res: Response) => {
         if (uniqueOrderIds.length > 0) {
             const orders = await Order.findAll({
                 where: { id: { [Op.in]: uniqueOrderIds } },
-                transaction: t,
-                lock: t.LOCK.UPDATE
+                transaction: t
             });
-            const hasMismatch = orders.some((row) => String(row.courier_id || '') !== String(userId));
+            const activeOrders = orders.filter((row) => {
+                const status = String(row.status || '').toLowerCase();
+                return !FINAL_ORDER_STATUSES.has(status);
+            });
+            const mismatchOrders = activeOrders.filter((row) => {
+                const status = String(row.status || '').toLowerCase();
+                if (!COURIER_OWNERSHIP_REQUIRED_STATUSES.has(status)) return false;
+                const courierId = String(row.courier_id || '').trim();
+                if (!courierId) return false;
+                return courierId !== String(userId);
+            });
+            const hasMismatch = mismatchOrders.length > 0;
             if (hasMismatch) {
-                await t.rollback();
-                return res.status(403).json({ message: 'Metode pembayaran hanya bisa diubah oleh driver yang menangani semua order di invoice.' });
+                await safeRollback();
+                return res.status(403).json({
+                    message: 'Metode pembayaran hanya bisa diubah oleh driver yang menangani semua order aktif di invoice.',
+                    conflicting_order_ids: mismatchOrders.map((row) => String(row.id)),
+                });
             }
         }
 
@@ -320,7 +363,19 @@ export const updatePaymentMethod = async (req: Request, res: Response) => {
             payment_method: nextMethod
         });
     } catch (error) {
-        await t.rollback();
+        await safeRollback();
+        if (isDeadlockError(error)) {
+            return res.status(409).json({
+                message: 'Terjadi konflik transaksi saat ubah metode pembayaran. Silakan coba lagi.',
+                code: 'PAYMENT_METHOD_DEADLOCK'
+            });
+        }
+        console.error('[DriverController.updatePaymentMethod] Failed to update payment method', {
+            order_id: String(req.params?.id || ''),
+            driver_id: String(req.user?.id || ''),
+            payment_method: String(req.body?.payment_method || ''),
+            error: error instanceof Error ? error.message : String(error)
+        });
         return res.status(500).json({ message: 'Gagal memperbarui metode pembayaran.', error });
     }
 };
@@ -415,6 +470,7 @@ export const getDriverWallet = async (req: Request, res: Response) => {
 
 export const reportIssue = async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
+    let isCommitted = false;
     try {
         const { id } = req.params; // Order ID
         const noteRaw = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
@@ -499,20 +555,43 @@ export const reportIssue = async (req: Request, res: Response) => {
         }, { transaction: t });
 
         await t.commit();
-        const invoice = await findLatestInvoiceByOrderId(String(order.id), { transaction: t });
+        isCommitted = true;
+
+        let paymentMethod: string | null = null;
+        try {
+            const invoice = await findLatestInvoiceByOrderId(String(order.id));
+            paymentMethod = typeof invoice?.payment_method === 'string'
+                ? String(invoice.payment_method)
+                : null;
+        } catch (invoiceLookupError) {
+            console.warn('[DriverController.reportIssue] Invoice lookup failed after commit', {
+                order_id: String(order.id),
+                driver_id: String(userId),
+                error: invoiceLookupError instanceof Error ? invoiceLookupError.message : String(invoiceLookupError)
+            });
+        }
+
         emitOrderStatusChanged({
             order_id: String(order.id),
             from_status: previousStatus || null,
             to_status: 'hold',
             source: String(order.source || ''),
-            payment_method: String(invoice?.payment_method || ''),
+            payment_method: paymentMethod,
             courier_id: null,
             triggered_by_role: String(req.user?.role || 'driver'),
             target_roles: ['admin_gudang', 'super_admin'],
         });
         res.json({ message: 'Masalah berhasil dilaporkan' });
     } catch (error) {
-        await t.rollback();
+        if (!isCommitted) {
+            await t.rollback();
+        }
+        console.error('[DriverController.reportIssue] Failed to submit driver issue report', {
+            order_id: String(req.params?.id || ''),
+            driver_id: String(req.user?.id || ''),
+            driver_role: String(req.user?.role || ''),
+            error: error instanceof Error ? error.message : String(error)
+        });
         res.status(500).json({ message: 'Gagal melaporkan masalah', error });
     }
 };
