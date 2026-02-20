@@ -58,7 +58,7 @@ export default function CustomerInvoicesPage() {
         invoices.forEach((invoice: any) => {
           const id = String(invoice?.id || '');
           if (!id) return;
-          const existing = invoiceMap.get(id) || {
+          const existing: InvoiceRow = invoiceMap.get(id) || {
             id,
             invoice_number: String(invoice?.invoice_number || id),
             payment_status: String(invoice?.payment_status || ''),

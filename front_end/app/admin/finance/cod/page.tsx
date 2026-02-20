@@ -52,7 +52,7 @@ export default function AdminDriverCodPage() {
 
     useEffect(() => {
         if (selectedDriver) {
-            const invoiceKeys = Array.from(new Set(
+            const invoiceKeys: string[] = Array.from(new Set(
                 selectedDriver.orders
                     .map((o: any) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
                     .filter(Boolean)
