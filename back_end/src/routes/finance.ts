@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as FinanceController from '../controllers/FinanceController';
+import * as FinanceController from '../controllers/finance';
 import * as ReportController from '../controllers/ReportController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateToken as authenticate, authorizeRoles as requireRole } from '../middleware/authMiddleware';
-import * as CustomerController from '../controllers/CustomerController';
+import * as CustomerController from '../controllers/customer';
 
 const router = Router();
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateToken as authenticate, authorizeRoles as requireRole } from '../middleware/authMiddleware';
-import * as OrderAllocationController from '../controllers/OrderAllocationController';
+import * as OrderAllocationController from '../controllers/allocation';
 
 const router = Router();
 

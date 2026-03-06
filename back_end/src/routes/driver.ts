@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-import * as DriverController from '../controllers/DriverController';
+import * as DriverController from '../controllers/driver';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 
 const createDriverUpload = (folderName: string, prefix: string) => multer({

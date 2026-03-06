@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import multer from 'multer';
-import * as InventoryController from '../controllers/InventoryController';
+import * as InventoryController from '../controllers/inventory';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 
 const router = Router();

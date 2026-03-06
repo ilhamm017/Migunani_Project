@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-import * as OrderController from '../controllers/OrderController';
+import * as OrderController from '../controllers/order';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 
 const router = Router();
