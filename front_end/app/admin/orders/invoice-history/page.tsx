@@ -20,9 +20,13 @@ type HistoryRow = {
   latestTs: number;
 };
 
+type LooseRecord = Record<string, unknown>;
+
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
+const asRecord = (value: unknown): LooseRecord =>
+  value && typeof value === 'object' ? (value as LooseRecord) : {};
 
 const normalizeOrderStatus = (raw: unknown) => {
   const status = String(raw || '').trim();
@@ -94,22 +98,25 @@ export default function AdminCompletedInvoiceHistoryPage() {
       const groups = new Map<string, HistoryRow & { paymentStatuses: Set<string>; shipmentStatuses: Set<string> }>();
 
       allOrders.forEach((order: unknown) => {
-        const rawStatus = String(order?.status || '').trim();
+        const orderRow = asRecord(order);
+        const invoiceRow = asRecord(orderRow.Invoice);
+        const customerRow = asRecord(orderRow.Customer);
+        const rawStatus = String(orderRow.status || '').trim();
         if (!COMPLETED_STATUSES.has(rawStatus)) return;
-        if (scopedCustomerId && String(order?.customer_id || '').trim() !== scopedCustomerId) return;
-        const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
-        const invoiceNumber = normalizeInvoiceRef(order?.invoice_number || order?.Invoice?.invoice_number);
+        if (scopedCustomerId && String(orderRow.customer_id || '').trim() !== scopedCustomerId) return;
+        const invoiceId = normalizeInvoiceRef(orderRow.invoice_id || invoiceRow.id);
+        const invoiceNumber = normalizeInvoiceRef(orderRow.invoice_number || invoiceRow.invoice_number);
         if (!invoiceId && !invoiceNumber) return;
 
         const groupKey = invoiceId ? `id:${invoiceId}` : `num:${invoiceNumber.toLowerCase()}`;
-        const paymentStatus = String(order?.Invoice?.payment_status || '').trim().toLowerCase();
-        const shipmentStatus = normalizeOrderStatus(order?.Invoice?.shipment_status || rawStatus);
-        const latestTs = Date.parse(String(order?.updatedAt || order?.createdAt || ''));
+        const paymentStatus = String(invoiceRow.payment_status || '').trim().toLowerCase();
+        const shipmentStatus = normalizeOrderStatus(invoiceRow.shipment_status || rawStatus);
+        const latestTs = Date.parse(String(orderRow.updatedAt || orderRow.createdAt || ''));
         const row = groups.get(groupKey) || {
           groupKey,
           invoiceId,
           invoiceNumber,
-          customerName: String(order?.customer_name || order?.Customer?.name || 'Customer'),
+          customerName: String(orderRow.customer_name || customerRow.name || 'Customer'),
           orderIds: [],
           totalAmount: 0,
           paymentStatus: '',
@@ -119,9 +126,9 @@ export default function AdminCompletedInvoiceHistoryPage() {
           shipmentStatuses: new Set<string>(),
         };
 
-        row.orderIds.push(String(order?.id || ''));
-        row.totalAmount += Number(order?.total_amount || 0);
-        row.customerName = row.customerName || String(order?.customer_name || order?.Customer?.name || 'Customer');
+        row.orderIds.push(String(orderRow.id || ''));
+        row.totalAmount += Number(orderRow.total_amount || 0);
+        row.customerName = row.customerName || String(orderRow.customer_name || customerRow.name || 'Customer');
         if (paymentStatus) row.paymentStatuses.add(paymentStatus);
         if (shipmentStatus) row.shipmentStatuses.add(shipmentStatus);
         if (Number.isFinite(latestTs)) row.latestTs = Math.max(row.latestTs, latestTs);
@@ -244,7 +251,7 @@ export default function AdminCompletedInvoiceHistoryPage() {
                       {row.customerName} • {row.orderIds.length} order
                     </p>
                     <p className="text-[10px] text-slate-500">
-                      Update terakhir {formatDateTime(row.latestTs)}
+                      Update terakhir {row.latestTs ? formatDateTime(new Date(row.latestTs)) : '-'}
                     </p>
                   </div>
                   <div className="text-right">
