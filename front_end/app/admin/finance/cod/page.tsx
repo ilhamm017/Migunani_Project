@@ -6,10 +6,39 @@ import { useRequireRoles } from '@/lib/guards';
 import { Truck, CheckCircle, ChevronRight, Calculator, Wallet, AlertCircle } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
+type DriverCodOrder = {
+    id: string;
+    invoice_id?: string | null;
+    invoice_number?: string | null;
+    invoice_total?: number | null;
+    total_amount?: number | null;
+    created_at?: string | null;
+    customer_name?: string | null;
+};
+
+type DriverCodSummary = {
+    driver: {
+        id: string;
+        name: string;
+        debt: number;
+    };
+    orders: DriverCodOrder[];
+    total_pending: number;
+};
+
+type InvoiceRow = {
+    key: string;
+    invoice_number: string;
+    invoice_total: number;
+    created_at: string;
+    order_ids: string[];
+    customer_names: string[];
+};
+
 export default function AdminDriverCodPage() {
     const allowed = useRequireRoles(['admin_finance', 'super_admin']);
-    const [drivers, setDrivers] = useState<unknown[]>([]);
-    const [selectedDriver, setSelectedDriver] = useState<unknown>(null);
+    const [drivers, setDrivers] = useState<DriverCodSummary[]>([]);
+    const [selectedDriver, setSelectedDriver] = useState<DriverCodSummary | null>(null);
     const [loading, setLoading] = useState(false);
 
     // Form State
@@ -34,15 +63,15 @@ export default function AdminDriverCodPage() {
         try {
             setLoading(true);
             const res = await api.admin.finance.getDriverCodList();
-            const driverList = res.data || [];
+            const driverList = Array.isArray(res.data) ? (res.data as DriverCodSummary[]) : [];
             setDrivers(driverList);
 
-            setSelectedDriver((prev: unknown) => {
+            setSelectedDriver((prev) => {
                 if (driverList.length === 1 && !prev) {
                     return driverList[0];
                 }
                 if (!prev) return prev;
-                const updated = driverList.find((d: unknown) => d.driver.id === prev.driver.id);
+                const updated = driverList.find((d) => d.driver.id === prev.driver.id);
                 return updated || null;
             });
         } catch (error) {
@@ -67,7 +96,7 @@ export default function AdminDriverCodPage() {
         if (selectedDriver) {
             const invoiceKeys: string[] = Array.from(new Set(
                 selectedDriver.orders
-                    .map((o: unknown) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                    .map((o) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
                     .filter(Boolean)
             ));
             setSelectedInvoiceKeys(invoiceKeys);
@@ -76,22 +105,15 @@ export default function AdminDriverCodPage() {
         }
     }, [selectedDriver]);
 
-    const handleSelectDriver = (driverData: unknown) => {
+    const handleSelectDriver = (driverData: DriverCodSummary) => {
         setSelectedDriver(driverData);
     };
 
-    const invoiceRows = useMemo(() => {
+    const invoiceRows = useMemo<InvoiceRow[]>(() => {
         if (!selectedDriver) return [];
-        const grouped = new Map<string, {
-            key: string;
-            invoice_number: string;
-            invoice_total: number;
-            created_at: string;
-            order_ids: string[];
-            customer_names: string[];
-        }>();
+        const grouped = new Map<string, InvoiceRow>();
 
-        selectedDriver.orders.forEach((order: unknown) => {
+        selectedDriver.orders.forEach((order) => {
             const key = String(order.invoice_id || order.invoice_number || order.id || '').trim();
             if (!key) return;
 
@@ -137,8 +159,8 @@ export default function AdminDriverCodPage() {
         if (!selectedDriver) return [];
         const selectedSet = new Set(selectedInvoiceKeys);
         return selectedDriver.orders
-            .filter((order: unknown) => selectedSet.has(String(order.invoice_id || order.invoice_number || order.id || '').trim()))
-            .map((order: unknown) => String(order.id || '').trim())
+            .filter((order) => selectedSet.has(String(order.invoice_id || order.invoice_number || order.id || '').trim()))
+            .map((order) => String(order.id || '').trim())
             .filter(Boolean);
     }, [selectedDriver, selectedInvoiceKeys]);
 
@@ -152,8 +174,8 @@ export default function AdminDriverCodPage() {
         if (!selectedDriver) return 0;
         const selectedSet = new Set(selectedInvoiceKeys);
         return invoiceRows
-            .filter((row: unknown) => selectedSet.has(row.key))
-            .reduce((sum: number, row: unknown) => sum + Number(row.invoice_total || 0), 0);
+            .filter((row) => selectedSet.has(row.key))
+            .reduce((sum, row) => sum + Number(row.invoice_total || 0), 0);
     };
 
     const closeVerifyModal = () => {
@@ -183,6 +205,10 @@ export default function AdminDriverCodPage() {
 
     const handleVerify = async () => {
         const received = parseAmountInput(amountReceived);
+        if (!selectedDriver) {
+            setFeedback({ type: 'error', message: 'Driver COD belum dipilih.' });
+            return;
+        }
         try {
             setSubmitting(true);
             await api.admin.finance.verifyDriverCod({
@@ -277,7 +303,7 @@ export default function AdminDriverCodPage() {
                                                 {(() => {
                                                     const invoiceCount = new Set(
                                                         (item.orders || [])
-                                                            .map((o: unknown) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                                                            .map((o) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
                                                             .filter(Boolean)
                                                     ).size || item.orders.length;
                                                     return (
@@ -323,7 +349,7 @@ export default function AdminDriverCodPage() {
 
                             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
                                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest sticky top-0 bg-white py-2 z-10">Rincian Invoice</h3>
-                                {invoiceRows.map((row: unknown) => (
+                                {invoiceRows.map((row) => (
                                     <div
                                         key={row.key}
                                         className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer select-none transition-colors ${selectedInvoiceKeys.includes(row.key) ? 'bg-slate-50 border-emerald-200' : 'bg-white border-slate-100 opacity-60'}`}
@@ -468,7 +494,7 @@ export default function AdminDriverCodPage() {
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                                 <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Invoice yang akan disettle</p>
                                 <div className="space-y-2">
-                                    {invoiceRows.filter((row: unknown) => selectedInvoiceKeys.includes(row.key)).map((row: unknown) => (
+                                    {invoiceRows.filter((row) => selectedInvoiceKeys.includes(row.key)).map((row) => (
                                         <div key={row.key} className="rounded-xl bg-white px-3 py-3 border border-slate-100">
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
