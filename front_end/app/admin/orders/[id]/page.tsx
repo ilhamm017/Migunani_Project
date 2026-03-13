@@ -10,21 +10,29 @@ import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
+type LooseRecord = Record<string, any>;
+
 const normalizeStatus = (raw: unknown) => {
   const status = String(raw || '').trim();
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
 
+const asRecord = (value: unknown): LooseRecord =>
+  value && typeof value === 'object' ? (value as LooseRecord) : {};
+
 const resolveInvoiceScopedOrderStatus = (orderData: unknown, invoiceData: unknown) => {
+  const invoiceRow = asRecord(invoiceData);
+  const orderRow = asRecord(orderData);
+  const orderInvoiceRow = asRecord(orderRow.Invoice);
   const invoiceShipmentStatus = String(
-    invoiceData?.shipment_status ||
-    orderData?.Invoice?.shipment_status ||
+    invoiceRow.shipment_status ||
+    orderInvoiceRow.shipment_status ||
     ''
   ).trim();
   if (invoiceShipmentStatus) {
     return normalizeStatus(invoiceShipmentStatus);
   }
-  return normalizeStatus(orderData?.status);
+  return normalizeStatus(orderRow.status);
 };
 
 const statusLabel = (raw: unknown) => {
@@ -70,36 +78,48 @@ const normalizeProofImageUrl = (raw?: string | null) => {
 };
 
 const collectOrderIdsFromInvoice = (invoiceData: unknown): string[] => {
+  const invoiceRow = asRecord(invoiceData);
   const ids = new Set<string>();
-  const rows = Array.isArray(invoiceData?.Orders) ? invoiceData.Orders : [];
+  const rows = Array.isArray(invoiceRow.Orders) ? invoiceRow.Orders : [];
   rows.forEach((row: unknown) => {
-    const id = String(row?.id || row?.order_id || row?.Order?.id || '').trim();
+    const rowData = asRecord(row);
+    const orderRef = asRecord(rowData.Order);
+    const id = String(rowData.id || rowData.order_id || orderRef.id || '').trim();
     if (id) ids.add(id);
   });
-  const items = Array.isArray(invoiceData?.InvoiceItems) ? invoiceData.InvoiceItems : [];
+  const items = Array.isArray(invoiceRow.InvoiceItems) ? invoiceRow.InvoiceItems : [];
   items.forEach((item: unknown) => {
-    const id = String(item?.OrderItem?.order_id || item?.order_id || item?.Order?.id || '').trim();
+    const itemData = asRecord(item);
+    const orderItemRef = asRecord(itemData.OrderItem);
+    const orderRef = asRecord(itemData.Order);
+    const id = String(orderItemRef.order_id || itemData.order_id || orderRef.id || '').trim();
     if (id) ids.add(id);
   });
   return Array.from(ids);
 };
 
 const getInvoiceRefFromOrder = (orderData: unknown): string => {
-  const invoiceId = String(orderData?.invoice_id || orderData?.Invoice?.id || '').trim();
+  const orderRow = asRecord(orderData);
+  const invoiceRow = asRecord(orderRow.Invoice);
+  const invoiceId = String(orderRow.invoice_id || invoiceRow.id || '').trim();
   if (invoiceId) return invoiceId;
   return '';
 };
 
 const getOrderItemSuppliedQty = (orderData: unknown, invoiceData: unknown, itemId: string) => {
-  const summaries = Array.isArray(orderData?.item_summaries) ? orderData.item_summaries : [];
-  const summaryRow = summaries.find((row: unknown) => String(row?.order_item_id || '') === itemId);
-  if (summaryRow) return Number(summaryRow?.invoiced_qty_total || 0);
+  const orderRow = asRecord(orderData);
+  const invoiceRow = asRecord(invoiceData);
+  const summaries = Array.isArray(orderRow.item_summaries) ? orderRow.item_summaries : [];
+  const summaryRow = summaries.find((row: unknown) => String(asRecord(row).order_item_id || '') === itemId);
+  if (summaryRow) return Number(asRecord(summaryRow).invoiced_qty_total || 0);
 
-  const invoiceItems = Array.isArray(invoiceData?.InvoiceItems) ? invoiceData.InvoiceItems : [];
+  const invoiceItems = Array.isArray(invoiceRow.InvoiceItems) ? invoiceRow.InvoiceItems : [];
   return invoiceItems.reduce((sum: number, invoiceItem: unknown) => {
-    const targetItemId = String(invoiceItem?.order_item_id || invoiceItem?.OrderItem?.id || '').trim();
+    const invoiceItemRow = asRecord(invoiceItem);
+    const orderItemRef = asRecord(invoiceItemRow.OrderItem);
+    const targetItemId = String(invoiceItemRow.order_item_id || orderItemRef.id || '').trim();
     if (targetItemId !== itemId) return sum;
-    return sum + Number(invoiceItem?.qty || 0);
+    return sum + Number(invoiceItemRow.qty || 0);
   }, 0);
 };
 
@@ -110,8 +130,8 @@ export default function AdminInvoiceDetailPage() {
   const router = useRouter();
   const routeRefId = String(params?.id || '').trim();
 
-  const [invoice, setInvoice] = useState<unknown>(null);
-  const [orders, setOrders] = useState<unknown[]>([]);
+  const [invoice, setInvoice] = useState<LooseRecord | null>(null);
+  const [orders, setOrders] = useState<LooseRecord[]>([]);
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -119,7 +139,7 @@ export default function AdminInvoiceDetailPage() {
   const [error, setError] = useState('');
   const [proofLoadError, setProofLoadError] = useState(false);
 
-  const [couriers, setCouriers] = useState<unknown[]>([]);
+  const [couriers, setCouriers] = useState<LooseRecord[]>([]);
   const [selectedCourierId, setSelectedCourierId] = useState('');
 
   const canManageWarehouseFlow = useMemo(
@@ -130,7 +150,7 @@ export default function AdminInvoiceDetailPage() {
   const loadCouriers = useCallback(async () => {
     try {
       const res = await api.admin.orderManagement.getCouriers();
-      setCouriers(res.data?.employees || []);
+      setCouriers(Array.isArray(res.data?.employees) ? res.data.employees : []);
     } catch (e) {
       console.error('Failed to load couriers:', e);
     }
@@ -151,23 +171,23 @@ export default function AdminInvoiceDetailPage() {
       setError('');
       setProofLoadError(false);
 
-      let invoiceData: unknown = null;
+      let invoiceData: LooseRecord | null = null;
       let invoiceId = '';
-      let fallbackOrderData: unknown = null;
+      let fallbackOrderData: LooseRecord | null = null;
       let fallbackOrderId = '';
 
       try {
         const invoiceRes = await api.invoices.getById(routeRefId);
-        invoiceData = invoiceRes.data || null;
-        invoiceId = String(invoiceData?.id || routeRefId).trim();
+        invoiceData = invoiceRes.data && typeof invoiceRes.data === 'object' ? (invoiceRes.data as LooseRecord) : null;
+        invoiceId = String(asRecord(invoiceData).id || routeRefId).trim();
       } catch {
         const orderRes = await api.orders.getOrderById(routeRefId);
-        fallbackOrderData = orderRes.data || null;
-        fallbackOrderId = String(fallbackOrderData?.id || '').trim();
+        fallbackOrderData = orderRes.data && typeof orderRes.data === 'object' ? (orderRes.data as LooseRecord) : null;
+        fallbackOrderId = String(asRecord(fallbackOrderData).id || '').trim();
         invoiceId = getInvoiceRefFromOrder(fallbackOrderData);
         if (!invoiceId) throw new Error('Invoice tidak ditemukan dari order ini.');
         const invoiceRes = await api.invoices.getById(invoiceId);
-        invoiceData = invoiceRes.data || null;
+        invoiceData = invoiceRes.data && typeof invoiceRes.data === 'object' ? (invoiceRes.data as LooseRecord) : null;
       }
 
       const orderIds = new Set<string>(collectOrderIdsFromInvoice(invoiceData));
@@ -176,15 +196,15 @@ export default function AdminInvoiceDetailPage() {
       const orderDetailsResults = await Promise.allSettled(
         Array.from(orderIds).map((id) => api.orders.getOrderById(id))
       );
-      const fetchedOrders = orderDetailsResults
+      const fetchedOrders: LooseRecord[] = orderDetailsResults
         .map((result) => (result.status === 'fulfilled' ? result.value.data : null))
-        .filter(Boolean);
-      if (fallbackOrderData && !fetchedOrders.some((row: unknown) => String(row?.id || '') === String(fallbackOrderData?.id || ''))) {
+        .filter((row): row is LooseRecord => Boolean(row && typeof row === 'object'));
+      if (fallbackOrderData && !fetchedOrders.some((row) => String(row.id || '') === String(asRecord(fallbackOrderData).id || ''))) {
         fetchedOrders.push(fallbackOrderData);
       }
-      fetchedOrders.sort((a: unknown, b: unknown) => {
-        const bTs = Date.parse(String(b?.createdAt || ''));
-        const aTs = Date.parse(String(a?.createdAt || ''));
+      fetchedOrders.sort((a, b) => {
+        const bTs = Date.parse(String(b.createdAt || ''));
+        const aTs = Date.parse(String(a.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
         const aVal = Number.isFinite(aTs) ? aTs : 0;
         return bVal - aVal;
@@ -192,13 +212,13 @@ export default function AdminInvoiceDetailPage() {
 
       setInvoice(invoiceData);
       setOrders(fetchedOrders);
-      setResolvedInvoiceId(String(invoiceData?.id || invoiceId || '').trim());
+      setResolvedInvoiceId(String(asRecord(invoiceData).id || invoiceId || '').trim());
       setResolvedFromOrderId(fallbackOrderId);
 
       const assignedCourierIds = Array.from(
         new Set(
           fetchedOrders
-            .map((row: unknown) => String(row?.courier_id || '').trim())
+            .map((row) => String(row.courier_id || '').trim())
             .filter(Boolean)
         )
       );
@@ -208,11 +228,17 @@ export default function AdminInvoiceDetailPage() {
       setOrders([]);
       setResolvedInvoiceId('');
       setResolvedFromOrderId('');
-      setError(e?.response?.data?.message || e?.message || 'Gagal memuat detail invoice');
+      setError(
+        typeof e === 'object' && e !== null
+          ? String((e as { response?: { data?: { message?: unknown } }; message?: unknown }).response?.data?.message || (e as { message?: unknown }).message || 'Gagal memuat detail invoice')
+          : 'Gagal memuat detail invoice'
+      );
     } finally {
       setLoading(false);
     }
   }, [routeRefId]);
+
+  const invoiceRow = asRecord(invoice);
 
   useEffect(() => {
     if (!allowed) return;
@@ -225,33 +251,34 @@ export default function AdminInvoiceDetailPage() {
   }, [allowed, canManageWarehouseFlow, loadCouriers]);
 
   const invoiceItemLines = useMemo(() => {
-    const rawItems = Array.isArray(invoice?.InvoiceItems)
-      ? invoice.InvoiceItems
-      : Array.isArray(invoice?.Items)
-        ? invoice.Items
+    const rawItems = Array.isArray(invoiceRow.InvoiceItems)
+      ? invoiceRow.InvoiceItems
+      : Array.isArray(invoiceRow.Items)
+        ? invoiceRow.Items
         : [];
 
     return rawItems
-      .map((item: unknown) => {
-        const orderItem = item?.OrderItem || {};
-        const product = orderItem?.Product || {};
-        const orderId = String(orderItem?.order_id || item?.order_id || '').trim();
-        const productId = String(orderItem?.product_id || item?.product_id || '').trim();
-        const qty = Number(item?.qty || 0);
+      .map((item: LooseRecord) => {
+        const itemRow = asRecord(item);
+        const orderItem = asRecord(itemRow.OrderItem);
+        const product = asRecord(orderItem.Product);
+        const orderId = String(orderItem.order_id || itemRow.order_id || '').trim();
+        const productId = String(orderItem.product_id || itemRow.product_id || '').trim();
+        const qty = Number(itemRow.qty || 0);
         return {
           orderId,
           productId,
           qty,
-          name: String(product?.name || 'Produk'),
-          sku: String(product?.sku || productId || '-'),
+          name: String(product.name || 'Produk'),
+          sku: String(product.sku || productId || '-'),
         };
       })
-      .filter((line: unknown) => line.orderId && line.productId && line.qty > 0);
-  }, [invoice]);
+      .filter((line) => line.orderId && line.productId && line.qty > 0);
+  }, [invoiceRow]);
 
   const invoiceQtyByOrderId = useMemo(() => {
     const map = new Map<string, number>();
-    invoiceItemLines.forEach((line: unknown) => {
+    invoiceItemLines.forEach((line) => {
       map.set(line.orderId, Number(map.get(line.orderId) || 0) + Number(line.qty || 0));
     });
     return map;
@@ -259,7 +286,7 @@ export default function AdminInvoiceDetailPage() {
 
   const invoiceSkuCountByOrderId = useMemo(() => {
     const map = new Map<string, Set<string>>();
-    invoiceItemLines.forEach((line: unknown) => {
+    invoiceItemLines.forEach((line) => {
       const set = map.get(line.orderId) || new Set<string>();
       set.add(line.productId);
       map.set(line.orderId, set);
@@ -269,31 +296,33 @@ export default function AdminInvoiceDetailPage() {
     return result;
   }, [invoiceItemLines]);
 
-  const hasActualInvoice = Boolean(invoice?.invoice_number);
+  const hasActualInvoice = Boolean(invoiceRow.invoice_number);
 
   const orderRows = useMemo(() => {
     const hasInvoiceSnapshot = invoiceItemLines.length > 0;
-    return orders.map((order: unknown) => {
-      const orderId = String(order?.id || '');
-      const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-      const itemSummaries = Array.isArray(order?.item_summaries) ? order.item_summaries : [];
-      const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
-      const orderedQty = items.reduce((sum: number, item: unknown) => sum + Number(item?.qty || 0), 0);
-      const allocatedQtyRaw = allocations.reduce((sum: number, alloc: unknown) => sum + Number(alloc?.allocated_qty || 0), 0);
+    return orders.map((order) => {
+      const orderRow = asRecord(order);
+      const orderId = String(orderRow.id || '');
+      const items = Array.isArray(orderRow.OrderItems) ? orderRow.OrderItems : [];
+      const itemSummaries = Array.isArray(orderRow.item_summaries) ? orderRow.item_summaries : [];
+      const allocations = Array.isArray(orderRow.Allocations) ? orderRow.Allocations : [];
+      const orderedQty = items.reduce((sum: number, item: LooseRecord) => sum + Number(asRecord(item).qty || 0), 0);
+      const allocatedQtyRaw = allocations.reduce((sum: number, alloc: LooseRecord) => sum + Number(asRecord(alloc).allocated_qty || 0), 0);
       const allocatedQtyFromInvoice = Number(invoiceQtyByOrderId.get(orderId) || 0);
       const allocatedQtyFromOrder = Math.max(0, Math.min(orderedQty || allocatedQtyRaw, allocatedQtyRaw));
       const suppliedQtyFromSummaries = itemSummaries.reduce(
-        (sum: number, row: unknown) => sum + Number(row?.invoiced_qty_total || 0),
+        (sum: number, row: LooseRecord) => sum + Number(asRecord(row).invoiced_qty_total || 0),
         0
       );
       const backorderQtyFromSummaries = itemSummaries.reduce(
-        (sum: number, row: unknown) => sum + Number(row?.backorder_open_qty || 0),
+        (sum: number, row: LooseRecord) => sum + Number(asRecord(row).backorder_open_qty || 0),
         0
       );
       const allocatedSkuSet = new Set<string>();
-      allocations.forEach((alloc: unknown) => {
-        const productId = String(alloc?.product_id || '').trim();
-        const qty = Number(alloc?.allocated_qty || 0);
+      allocations.forEach((alloc: LooseRecord) => {
+        const allocationRow = asRecord(alloc);
+        const productId = String(allocationRow.product_id || '').trim();
+        const qty = Number(allocationRow.allocated_qty || 0);
         if (productId && qty > 0) allocatedSkuSet.add(productId);
       });
       const allocatedQty = hasInvoiceSnapshot ? allocatedQtyFromInvoice : allocatedQtyFromOrder;
@@ -308,17 +337,17 @@ export default function AdminInvoiceDetailPage() {
         id: orderId,
         status: hasActualInvoice
           ? resolveInvoiceScopedOrderStatus(order, invoice)
-          : normalizeStatus(order?.status),
-        createdAt: order?.createdAt,
-        source: String(order?.source || '-'),
-        customerName: String(order?.customer_name || order?.Customer?.name || '-'),
-        totalAmount: Number(order?.total_amount || 0),
+          : normalizeStatus(orderRow.status),
+        createdAt: orderRow.createdAt,
+        source: String(orderRow.source || '-'),
+        customerName: String(orderRow.customer_name || asRecord(orderRow.Customer).name || '-'),
+        totalAmount: Number(orderRow.total_amount || 0),
         orderedQty,
         allocatedQty,
         suppliedQty,
         backorderQty,
         allocatedSkuCount,
-        courierName: String(order?.courier_display_name || order?.Courier?.name || '-'),
+        courierName: String(orderRow.courier_display_name || asRecord(orderRow.Courier).name || '-'),
       };
     });
   }, [hasActualInvoice, invoice, orders, invoiceItemLines.length, invoiceQtyByOrderId, invoiceSkuCountByOrderId]);
@@ -347,7 +376,7 @@ export default function AdminInvoiceDetailPage() {
     if (invoiceItemLines.length > 0) {
       const map = new Map<string, PickingRow>();
 
-      invoiceItemLines.forEach((line: unknown) => {
+      invoiceItemLines.forEach((line) => {
         const orderId = String(line.orderId || '').trim();
         if (!orderId || !activeOrderSet.has(orderId)) return;
         const productId = String(line.productId || '').trim();
@@ -385,28 +414,31 @@ export default function AdminInvoiceDetailPage() {
 
     const map = new Map<string, PickingRow>();
 
-    orders.forEach((order: unknown) => {
-      const orderId = String(order?.id || '').trim();
+    orders.forEach((order) => {
+      const orderRow = asRecord(order);
+      const orderId = String(orderRow.id || '').trim();
       if (!orderId || !activeOrderSet.has(orderId)) return;
 
       const itemMeta = new Map<string, { name: string; sku: string }>();
-      const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-      orderItems.forEach((item: unknown) => {
-        const productId = String(item?.product_id || '').trim();
+      const orderItems = Array.isArray(orderRow.OrderItems) ? orderRow.OrderItems : [];
+      orderItems.forEach((item: LooseRecord) => {
+        const itemRow = asRecord(item);
+        const productId = String(itemRow.product_id || '').trim();
         if (!productId) return;
-        const product = item?.Product || {};
+        const product = asRecord(itemRow.Product);
         if (!itemMeta.has(productId)) {
           itemMeta.set(productId, {
-            name: String(product?.name || 'Produk'),
-            sku: String(product?.sku || productId),
+            name: String(product.name || 'Produk'),
+            sku: String(product.sku || productId),
           });
         }
       });
 
-      const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
-      allocations.forEach((allocation: unknown) => {
-        const productId = String(allocation?.product_id || '').trim();
-        const qty = Number(allocation?.allocated_qty || 0);
+      const allocations = Array.isArray(orderRow.Allocations) ? orderRow.Allocations : [];
+      allocations.forEach((allocation: LooseRecord) => {
+        const allocationRow = asRecord(allocation);
+        const productId = String(allocationRow.product_id || '').trim();
+        const qty = Number(allocationRow.allocated_qty || 0);
         if (!productId || qty <= 0) return;
 
         const meta = itemMeta.get(productId) || { name: 'Produk', sku: productId };
@@ -455,34 +487,34 @@ export default function AdminInvoiceDetailPage() {
     );
   }, [orderRows]);
 
-  const invoiceNumber = String(invoice?.invoice_number || '-');
-  const paymentMethod = String(invoice?.payment_method || '-');
-  const paymentStatus = String(invoice?.payment_status || '-');
-  const amountPaid = Number(invoice?.amount_paid || 0);
+  const invoiceNumber = String(invoiceRow.invoice_number || '-');
+  const paymentMethod = String(invoiceRow.payment_method || '-');
+  const paymentStatus = String(invoiceRow.payment_status || '-');
+  const amountPaid = Number(invoiceRow.amount_paid || 0);
 
   // If we have an actual invoice, prioritize its total field.
   // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
   const invoiceTotal = hasActualInvoice
-    ? Number(invoice?.total || 0)
+    ? Number(invoiceRow.total || 0)
     : Number(allocatedSummary.total || 0);
 
   const customerName = String(
-    invoice?.customer?.name ||
-    invoice?.Customer?.name ||
+    asRecord(invoiceRow.customer).name ||
+    asRecord(invoiceRow.Customer).name ||
     orderRows[0]?.customerName ||
     '-'
   );
   const customerId = String(
-    invoice?.customer?.id ||
-    invoice?.Customer?.id ||
-    orders[0]?.customer_id ||
+    asRecord(invoiceRow.customer).id ||
+    asRecord(invoiceRow.Customer).id ||
+    asRecord(orders[0]).customer_id ||
     ''
   ).trim();
   const customerWorkspaceKey = customerId || (customerName && customerName !== '-' ? `guest:${customerName}` : '');
   const customerWorkspaceHref = customerWorkspaceKey
     ? `/admin/orders/customer/${encodeURIComponent(customerWorkspaceKey)}?customerName=${encodeURIComponent(customerName)}`
     : '';
-  const proofImageUrl = normalizeProofImageUrl(invoice?.payment_proof_url);
+  const proofImageUrl = normalizeProofImageUrl(invoiceRow.payment_proof_url);
 
   const handleAssignDriver = async () => {
     if (!selectedCourierId) {
@@ -515,7 +547,11 @@ export default function AdminInvoiceDetailPage() {
       }
       await loadInvoiceDetail();
     } catch (e: unknown) {
-      setError(e?.response?.data?.message || 'Gagal assign driver invoice');
+      setError(
+        typeof e === 'object' && e !== null
+          ? String((e as { response?: { data?: { message?: unknown } } }).response?.data?.message || 'Gagal assign driver invoice')
+          : 'Gagal assign driver invoice'
+      );
     } finally {
       setUpdating(false);
     }
@@ -569,9 +605,12 @@ export default function AdminInvoiceDetailPage() {
           </div>
         </div>
 
-        {orders.some((o: unknown) => o.active_issue) && (
+        {orders.some((o) => asRecord(o).active_issue) && (
           <div className="space-y-3">
-            {orders.filter((o: unknown) => o.active_issue).map((order: unknown) => (
+            {orders.filter((o) => asRecord(o).active_issue).map((order) => {
+              const orderRow = asRecord(order);
+              const activeIssue = asRecord(orderRow.active_issue);
+              return (
               <div key={`issue-${order.id}`} className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm space-y-3">
                 <div className="flex items-center gap-3 text-amber-700">
                   <div className="bg-amber-200 p-2 rounded-xl">
@@ -579,23 +618,23 @@ export default function AdminInvoiceDetailPage() {
                   </div>
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-widest leading-none">Laporan Masalah Driver</p>
-                    <p className="text-sm font-black text-slate-900 mt-1">Order #{String(order.id).slice(-8).toUpperCase()}</p>
+                    <p className="text-sm font-black text-slate-900 mt-1">Order #{String(orderRow.id).slice(-8).toUpperCase()}</p>
                   </div>
                   <div className="ml-auto px-3 py-1 bg-amber-600 text-white rounded-lg text-[10px] font-black uppercase">
-                    Status: {order.status}
+                    Status: {orderRow.status}
                   </div>
                 </div>
                 <div className="bg-white/60 rounded-2xl p-4 border border-amber-100">
                   <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Catatan Driver:</p>
                   <p className="text-sm font-semibold text-slate-800 italic whitespace-pre-wrap">
-                    {order.active_issue.note}
+                    {activeIssue.note}
                   </p>
                 </div>
-                {order.active_issue.evidence_url && (
+                {activeIssue.evidence_url && (
                   <div className="space-y-1">
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">Lampiran Bukti:</p>
                     <Image
-                      src={normalizeProofImageUrl(order.active_issue.evidence_url) || ''}
+                      src={normalizeProofImageUrl(activeIssue.evidence_url) || ''}
                       alt="Bukti Masalah"
                       width={640}
                       height={360}
@@ -604,10 +643,10 @@ export default function AdminInvoiceDetailPage() {
                   </div>
                 )}
                 <p className="text-[10px] text-amber-600 font-medium italic">
-                  Dilaporkan pada: {formatDateTime(order.updatedAt)} • Batas waktu tindak lanjut: {formatDateTime(order.active_issue.due_at)}
+                  Dilaporkan pada: {orderRow.updatedAt ? formatDateTime(orderRow.updatedAt) : '-'} • Batas waktu tindak lanjut: {activeIssue.due_at ? formatDateTime(activeIssue.due_at) : '-'}
                 </p>
               </div>
-            ))}
+            );})}
           </div>
         )}
 
@@ -633,7 +672,7 @@ export default function AdminInvoiceDetailPage() {
             <p className="text-xs text-slate-600">Payment Method: <span className="font-bold text-slate-900">{paymentMethod}</span></p>
             <p className="text-xs text-slate-600">Payment Status: <span className="font-bold text-slate-900">{paymentStatus}</span></p>
             <p className="text-xs text-slate-600">Amount Paid: <span className="font-bold text-slate-900">{formatCurrency(amountPaid)}</span></p>
-            <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoice?.createdAt ? formatDateTime(invoice.createdAt) : '-'}</span></p>
+            <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoiceRow.createdAt ? formatDateTime(invoiceRow.createdAt) : '-'}</span></p>
             {proofImageUrl && !proofLoadError && (
               <div className="pt-1">
                 <Image
@@ -671,23 +710,26 @@ export default function AdminInvoiceDetailPage() {
                       <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
                       <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
                     </div>
-                    {Array.isArray(orders.find((order: unknown) => String(order?.id || '') === row.id)?.OrderItems) && (
+                    {Array.isArray(asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id)).OrderItems) && (
                       <div className="mt-3 space-y-2">
-                        {(orders.find((order: unknown) => String(order?.id || '') === row.id)?.OrderItems || []).map((item: unknown) => {
-                          const itemId = String(item?.id || '');
-                          const productName = String(item?.Product?.name || 'Produk');
-                          const sku = String(item?.Product?.sku || '-');
-                          const orderedQty = Number(item?.qty || 0);
+                        {(asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id)).OrderItems || []).map((item: LooseRecord) => {
+                          const itemRow = asRecord(item);
+                          const itemId = String(itemRow.id || '');
+                          const product = asRecord(itemRow.Product);
+                          const productName = String(product.name || 'Produk');
+                          const sku = String(product.sku || '-');
+                          const orderedQty = Number(itemRow.qty || 0);
                           const suppliedQty = getOrderItemSuppliedQty(
-                            orders.find((order: unknown) => String(order?.id || '') === row.id),
+                            orders.find((order) => String(asRecord(order).id || '') === row.id),
                             invoice,
                             itemId
                           );
-                          const summaryRow = Array.isArray(orders.find((order: unknown) => String(order?.id || '') === row.id)?.item_summaries)
-                            ? orders.find((order: unknown) => String(order?.id || '') === row.id)?.item_summaries.find((summary: unknown) => String(summary?.order_item_id || '') === itemId)
+                          const targetOrder = asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id));
+                          const summaryRow = Array.isArray(targetOrder.item_summaries)
+                            ? targetOrder.item_summaries.find((summary: LooseRecord) => String(asRecord(summary).order_item_id || '') === itemId)
                             : null;
                           const backorderQty = summaryRow
-                            ? Number(summaryRow?.backorder_open_qty || 0)
+                            ? Number(asRecord(summaryRow).backorder_open_qty || 0)
                             : Math.max(0, orderedQty - suppliedQty);
                           return (
                             <div key={itemId} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -783,8 +825,8 @@ export default function AdminInvoiceDetailPage() {
                 >
                   <option value="">Pilih driver/kurir</option>
                   {couriers.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.display_name || item.name || 'Driver'}
+                    <option key={String(asRecord(item).id || '')} value={String(asRecord(item).id || '')}>
+                      {String(asRecord(item).display_name || asRecord(item).name || 'Driver')}
                     </option>
                   ))}
                 </select>
