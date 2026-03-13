@@ -212,7 +212,7 @@ export default function FinanceReturDetailPage() {
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                         <Calendar size={14} />
-                        <span>{formatDateTime(retur.createdAt)}</span>
+                        <span>{retur.createdAt ? formatDateTime(retur.createdAt) : '-'}</span>
                     </div>
                 </div>
             </div>
