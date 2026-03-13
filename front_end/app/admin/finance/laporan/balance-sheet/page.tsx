@@ -11,7 +11,7 @@ type BalanceSheetData = {
     assets: number;
     liabilities: number;
     balance_check: number;
-    equity?: {
+    equity: {
         initial: number;
         current_earnings: number;
         total: number;
@@ -104,7 +104,7 @@ export default function BalanceSheetPage() {
                                     <div className="text-emerald-300 flex items-center">+</div>
                                     <div>
                                         <span className="block text-emerald-200 mb-1">Ekuitas</span>
-                                        <span className="font-bold text-lg">{formatCurrency(data.equity?.total)}</span>
+                                        <span className="font-bold text-lg">{formatCurrency(data.equity.total)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -151,15 +151,15 @@ export default function BalanceSheetPage() {
                             <div className="divide-y divide-slate-50">
                                 <div className="p-4 flex justify-between items-center hover:bg-slate-50">
                                     <span className="text-sm text-slate-600">Modal Awal & Ditahan</span>
-                                    <span className="font-bold text-slate-900">{formatCurrency(data.equity?.initial)}</span>
+                                    <span className="font-bold text-slate-900">{formatCurrency(data.equity.initial)}</span>
                                 </div>
                                 <div className="p-4 flex justify-between items-center hover:bg-slate-50">
                                     <span className="text-sm text-slate-600">Laba Tahun Berjalan</span>
-                                    <span className="font-bold text-emerald-600">{formatCurrency(data.equity?.current_earnings)}</span>
+                                    <span className="font-bold text-emerald-600">{formatCurrency(data.equity.current_earnings)}</span>
                                 </div>
                                 <div className="p-4 flex justify-between items-center bg-slate-50/50">
                                     <span className="text-sm font-bold text-slate-800">Total Ekuitas</span>
-                                    <span className="font-bold text-blue-600">{formatCurrency(data.equity?.total)}</span>
+                                    <span className="font-bold text-blue-600">{formatCurrency(data.equity.total)}</span>
                                 </div>
                             </div>
                         </div>
