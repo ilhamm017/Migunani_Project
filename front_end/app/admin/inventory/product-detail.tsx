@@ -147,7 +147,9 @@ export default function ProductDetailView({ product, onClose }: ProductDetailVie
                                     {mutations.map((mut) => (
                                         <tr key={mut.id}>
                                             <td className="px-3 py-2 text-xs text-slate-500">
-                                                {new Date(mut.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                                                {mut.createdAt
+                                                    ? new Date(mut.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+                                                    : '-'}
                                             </td>
                                             <td className="px-3 py-2 text-xs font-bold capitalize">
                                                 {mut.type}
