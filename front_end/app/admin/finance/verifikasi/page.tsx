@@ -120,7 +120,7 @@ export default function FinanceVerifyPage() {
           payment_method: (row.Invoice as Record<string, unknown>).payment_method ? String((row.Invoice as Record<string, unknown>).payment_method) : null,
           payment_proof_url: (row.Invoice as Record<string, unknown>).payment_proof_url ? String((row.Invoice as Record<string, unknown>).payment_proof_url) : null,
         } : null,
-      })).filter((row) => Boolean(row.id));
+      })).filter((row: FinanceOrderRow) => Boolean(row.id));
       setOrders(mapped);
     } catch (error) {
       console.error('Failed to load orders:', error);
@@ -152,10 +152,11 @@ export default function FinanceVerifyPage() {
 
   // Client-side filtering for tabs
   const tabOrders = useMemo(() => {
-    const filtered = orders.filter(o => {
-      if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
-      if (activeTab === 'cod') {
-        const isCod = ['cod', 'cash_store'].includes(o.Invoice?.payment_method);
+      const filtered = orders.filter(o => {
+        if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
+        if (activeTab === 'cod') {
+        const paymentMethod = o.Invoice?.payment_method || '';
+        const isCod = ['cod', 'cash_store'].includes(paymentMethod);
         return o.status === 'delivered' && isCod && o.Invoice?.payment_status !== 'paid';
       }
       if (activeTab === 'completed') {
@@ -306,7 +307,7 @@ export default function FinanceVerifyPage() {
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-500">Tanggal</span>
-                    <span className="font-medium text-slate-700">{formatDateTime(o.createdAt)}</span>
+                    <span className="font-medium text-slate-700">{o.createdAt ? formatDateTime(o.createdAt) : '-'}</span>
                   </div>
                 </div>
 
