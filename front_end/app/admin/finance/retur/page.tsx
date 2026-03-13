@@ -157,7 +157,7 @@ export default function FinanceReturPage() {
                                 </div>
                                 <div className="flex items-center gap-1.5">
                                     <Calendar size={14} className="text-slate-400" />
-                                    <span>{formatDateTime(r.createdAt)}</span>
+                                    <span>{r.createdAt ? formatDateTime(r.createdAt) : '-'}</span>
                                 </div>
                             </div>
 
