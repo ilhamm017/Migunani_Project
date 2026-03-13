@@ -217,7 +217,9 @@ export default function FinanceIssueInvoicePage() {
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-500">Tanggal</span>
-                    <span className="font-medium text-slate-700">{formatDateTime(order.createdAt)}</span>
+                    <span className="font-medium text-slate-700">
+                      {order.createdAt ? formatDateTime(order.createdAt) : '-'}
+                    </span>
                   </div>
                 </div>
 
