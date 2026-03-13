@@ -101,6 +101,10 @@ export default function FinanceReturDetailPage() {
     });
 
     const handleDisburse = async () => {
+        if (!retur) {
+            alert('Data retur tidak ditemukan.');
+            return;
+        }
         if (!confirm('Apakah Anda yakin ingin mencairkan dana refund ini? Pastikan Anda sudah melakukan transfer ke customer.')) return;
 
         try {
