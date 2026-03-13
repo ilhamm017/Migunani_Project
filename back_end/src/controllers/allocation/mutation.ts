@@ -57,11 +57,27 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             throw new CustomError('Order not found', 404);
         }
 
-        if (!isReallocatableStatus(order.status)) {
+        const activeBackorderRows = await Backorder.findAll({
+            include: [{
+                model: OrderItem,
+                required: true,
+                where: { order_id: id }
+            }],
+            where: {
+                qty_pending: { [Op.gt]: 0 },
+                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+            },
+            attributes: ['id'],
+            transaction: t
+        });
+        const allowCompletedBackorderRecovery =
+            String(order.status || '').trim().toLowerCase() === 'completed' && activeBackorderRows.length > 0;
+
+        if (!isReallocatableStatus(order.status) && !allowCompletedBackorderRecovery) {
             await t.rollback();
             throw new CustomError(`Order dengan status '${order.status}' tidak bisa dialokasikan`, 400);
         }
-        if (!isAllocationEditableStatus(order.status)) {
+        if (!isAllocationEditableStatus(order.status) && !allowCompletedBackorderRecovery) {
             await t.rollback();
             throw new CustomError(`Alokasi dikunci karena order sudah masuk proses finance/pengiriman (status: '${order.status}').`, 400);
         }

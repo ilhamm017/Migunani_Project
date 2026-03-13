@@ -15,6 +15,18 @@ const normalizeStatus = (raw: unknown) => {
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
 
+const resolveInvoiceScopedOrderStatus = (orderData: unknown, invoiceData: unknown) => {
+  const invoiceShipmentStatus = String(
+    invoiceData?.shipment_status ||
+    orderData?.Invoice?.shipment_status ||
+    ''
+  ).trim();
+  if (invoiceShipmentStatus) {
+    return normalizeStatus(invoiceShipmentStatus);
+  }
+  return normalizeStatus(orderData?.status);
+};
+
 const statusLabel = (raw: unknown) => {
   const status = normalizeStatus(raw);
   if (status === 'pending') return 'pending';
@@ -257,6 +269,8 @@ export default function AdminInvoiceDetailPage() {
     return result;
   }, [invoiceItemLines]);
 
+  const hasActualInvoice = Boolean(invoice?.invoice_number);
+
   const orderRows = useMemo(() => {
     const hasInvoiceSnapshot = invoiceItemLines.length > 0;
     return orders.map((order: unknown) => {
@@ -292,7 +306,9 @@ export default function AdminInvoiceDetailPage() {
         : allocatedSkuSet.size;
       return {
         id: orderId,
-        status: normalizeStatus(order?.status),
+        status: hasActualInvoice
+          ? resolveInvoiceScopedOrderStatus(order, invoice)
+          : normalizeStatus(order?.status),
         createdAt: order?.createdAt,
         source: String(order?.source || '-'),
         customerName: String(order?.customer_name || order?.Customer?.name || '-'),
@@ -305,7 +321,7 @@ export default function AdminInvoiceDetailPage() {
         courierName: String(order?.courier_display_name || order?.Courier?.name || '-'),
       };
     });
-  }, [orders, invoiceItemLines.length, invoiceQtyByOrderId, invoiceSkuCountByOrderId]);
+  }, [hasActualInvoice, invoice, orders, invoiceItemLines.length, invoiceQtyByOrderId, invoiceSkuCountByOrderId]);
 
   const activeDispatchOrderIds = useMemo(() => {
     return orderRows
@@ -446,7 +462,6 @@ export default function AdminInvoiceDetailPage() {
 
   // If we have an actual invoice, prioritize its total field.
   // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
-  const hasActualInvoice = Boolean(invoice?.invoice_number);
   const invoiceTotal = hasActualInvoice
     ? Number(invoice?.total || 0)
     : Number(allocatedSummary.total || 0);
@@ -457,6 +472,16 @@ export default function AdminInvoiceDetailPage() {
     orderRows[0]?.customerName ||
     '-'
   );
+  const customerId = String(
+    invoice?.customer?.id ||
+    invoice?.Customer?.id ||
+    orders[0]?.customer_id ||
+    ''
+  ).trim();
+  const customerWorkspaceKey = customerId || (customerName && customerName !== '-' ? `guest:${customerName}` : '');
+  const customerWorkspaceHref = customerWorkspaceKey
+    ? `/admin/orders/customer/${encodeURIComponent(customerWorkspaceKey)}?customerName=${encodeURIComponent(customerName)}`
+    : '';
   const proofImageUrl = normalizeProofImageUrl(invoice?.payment_proof_url);
 
   const handleAssignDriver = async () => {
@@ -594,6 +619,14 @@ export default function AdminInvoiceDetailPage() {
             <p className="text-xs text-slate-600">Sudah tersuplai: <span className="font-bold text-emerald-700">{allocatedSummary.supplied}</span></p>
             <p className="text-xs text-slate-600">Backorder aktif: <span className="font-bold text-amber-700">{allocatedSummary.backorder}</span></p>
             <p className="text-xs text-slate-600">Ready to ship: <span className="font-bold text-slate-900">{readyToShipOrderIds.length}</span></p>
+            {allocatedSummary.backorder > 0 && customerWorkspaceHref && (
+              <Link
+                href={`${customerWorkspaceHref}&section=backorder`}
+                className="inline-flex items-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+              >
+                Edit Backorder Customer
+              </Link>
+            )}
           </div>
 
           <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
@@ -681,6 +714,14 @@ export default function AdminInvoiceDetailPage() {
                     </p>
                     <p className="text-sm font-black text-slate-900 mt-1">{formatCurrency(row.totalAmount)}</p>
                     <p className="text-[11px] text-slate-500">Driver: {row.courierName}</p>
+                    {row.backorderQty > 0 && customerWorkspaceHref && (
+                      <Link
+                        href={`${customerWorkspaceHref}&section=backorder&orderId=${encodeURIComponent(row.id)}`}
+                        className="mt-2 inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
+                      >
+                        Edit Backorder
+                      </Link>
+                    )}
                   </div>
                 </div>
               ))}

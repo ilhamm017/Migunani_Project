@@ -12,15 +12,11 @@ export const getDriverWallet = asyncWrapper(async (req: Request, res: Response) 
     try {
         const userId = req.user!.id;
 
-        // Calculated COD exposure from open COD invoices (for audit/comparison).
-        // We join via OrderItem -> Order to find the courier assignment.
+        // Calculated COD exposure from the latest open COD invoice per order only.
+        // Older COD invoices must not keep inflating wallet exposure.
         const invoiceItems = await InvoiceItem.findAll({
             include: [{
                 model: Invoice,
-                where: {
-                    payment_method: 'cod',
-                    payment_status: 'cod_pending'
-                },
                 required: true
             }, {
                 model: OrderItem,
@@ -33,19 +29,34 @@ export const getDriverWallet = asyncWrapper(async (req: Request, res: Response) 
             }]
         });
 
-        const invoiceIdMap = new Map<string, any>();
-        const invoiceOrdersMap = new Map<string, Set<string>>();
+        const latestInvoiceByOrderId = new Map<string, any>();
 
         invoiceItems.forEach((item: any) => {
             const invoice = item.Invoice;
             const orderId = item.OrderItem?.order_id;
-            if (!invoice) return;
+            if (!invoice || !orderId) return;
+
+            const orderIdKey = String(orderId);
+            const existing = latestInvoiceByOrderId.get(orderIdKey);
+            const invoiceTime = new Date(String(invoice.createdAt || 0)).getTime();
+            const existingTime = existing ? new Date(String(existing.createdAt || 0)).getTime() : -1;
+            if (!existing || invoiceTime > existingTime) {
+                latestInvoiceByOrderId.set(orderIdKey, invoice);
+            }
+        });
+
+        const invoiceIdMap = new Map<string, any>();
+        const invoiceOrdersMap = new Map<string, Set<string>>();
+        latestInvoiceByOrderId.forEach((invoice, orderId) => {
+            if (String(invoice.payment_method || '') !== 'cod' || String(invoice.payment_status || '') !== 'cod_pending') {
+                return;
+            }
 
             const invId = String(invoice.id);
             invoiceIdMap.set(invId, invoice);
 
             const orders = invoiceOrdersMap.get(invId) || new Set<string>();
-            if (orderId) orders.add(String(orderId));
+            orders.add(String(orderId));
             invoiceOrdersMap.set(invId, orders);
         });
 

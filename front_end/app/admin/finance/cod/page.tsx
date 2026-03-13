@@ -20,6 +20,16 @@ export default function AdminDriverCodPage() {
     const [showVerifyModal, setShowVerifyModal] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+    const parseAmountInput = useCallback((value: string) => {
+        const digits = String(value || '').replace(/\D/g, '');
+        return digits ? Number(digits) : 0;
+    }, []);
+
+    const formatAmountInput = useCallback((value: string) => {
+        const parsed = parseAmountInput(value);
+        return parsed > 0 ? new Intl.NumberFormat('id-ID').format(parsed) : '';
+    }, [parseAmountInput]);
+
     const loadDrivers = useCallback(async () => {
         try {
             setLoading(true);
@@ -153,7 +163,7 @@ export default function AdminDriverCodPage() {
     };
 
     const openVerifyModal = () => {
-        const received = Number(amountReceived.replace(/\D/g, '')); // simple parse
+        const received = parseAmountInput(amountReceived);
         if (!selectedDriver || selectedInvoiceKeys.length === 0) {
             setFeedback({ type: 'error', message: 'Pilih invoice COD yang akan disettle terlebih dahulu.' });
             return;
@@ -172,7 +182,7 @@ export default function AdminDriverCodPage() {
     };
 
     const handleVerify = async () => {
-        const received = Number(amountReceived.replace(/\D/g, '')); // simple parse
+        const received = parseAmountInput(amountReceived);
         try {
             setSubmitting(true);
             await api.admin.finance.verifyDriverCod({
@@ -198,7 +208,7 @@ export default function AdminDriverCodPage() {
 
     const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
     const selectedTotal = getSelectedTotal();
-    const receivedAmount = Number(amountReceived.replace(/\D/g, '')) || 0;
+    const receivedAmount = parseAmountInput(amountReceived);
     const settlementDiff = receivedAmount - selectedTotal;
     const settlementEffectLabel = settlementDiff < 0
         ? 'Tambahan utang driver'
@@ -347,9 +357,10 @@ export default function AdminDriverCodPage() {
                                         <div className="relative">
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">Rp</span>
                                             <input
-                                                type="number"
-                                                value={amountReceived}
-                                                onChange={(e) => setAmountReceived(e.target.value)}
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={formatAmountInput(amountReceived)}
+                                                onChange={(e) => setAmountReceived(String(e.target.value || '').replace(/\D/g, ''))}
                                                 placeholder="0"
                                                 className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-10 pr-4 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                             />
@@ -357,9 +368,9 @@ export default function AdminDriverCodPage() {
                                     </div>
 
                                     {amountReceived && (
-                                        <div className={`p-3 rounded-xl flex items-center gap-3 ${(Number(amountReceived) - getSelectedTotal()) < 0
+                                        <div className={`p-3 rounded-xl flex items-center gap-3 ${(receivedAmount - getSelectedTotal()) < 0
                                             ? 'bg-rose-50 text-rose-700'
-                                            : (Number(amountReceived) - getSelectedTotal()) > 0
+                                            : (receivedAmount - getSelectedTotal()) > 0
                                                 ? 'bg-emerald-50 text-emerald-700'
                                                 : 'bg-blue-50 text-blue-700'
                                             }`}>
@@ -367,13 +378,13 @@ export default function AdminDriverCodPage() {
                                                 <Calculator size={16} />
                                             </div>
                                             <div className="text-xs font-medium">
-                                                {(Number(amountReceived) - getSelectedTotal()) < 0 && (
-                                                <span>Kurang Bayar <span className="font-black">{formatCurrency(Math.abs(Number(amountReceived) - getSelectedTotal()))}</span>. Akan tercatat sebagai UTANG driver.</span>
+                                                {(receivedAmount - getSelectedTotal()) < 0 && (
+                                                <span>Kurang Bayar <span className="font-black">{formatCurrency(Math.abs(receivedAmount - getSelectedTotal()))}</span>. Akan tercatat sebagai UTANG driver.</span>
                                                 )}
-                                                {(Number(amountReceived) - getSelectedTotal()) > 0 && (
-                                                <span>Lebih Bayar <span className="font-black">{formatCurrency(Number(amountReceived) - getSelectedTotal())}</span>. Akan mengurangi utang driver.</span>
+                                                {(receivedAmount - getSelectedTotal()) > 0 && (
+                                                <span>Lebih Bayar <span className="font-black">{formatCurrency(receivedAmount - getSelectedTotal())}</span>. Akan mengurangi utang driver.</span>
                                                 )}
-                                                {(Number(amountReceived) - getSelectedTotal()) === 0 && (
+                                                {(receivedAmount - getSelectedTotal()) === 0 && (
                                                     <span>Pembayaran Pas. Lunas.</span>
                                                 )}
                                             </div>
@@ -383,7 +394,7 @@ export default function AdminDriverCodPage() {
 
                                 <button
                                     onClick={openVerifyModal}
-                                    disabled={submitting || !amountReceived || (selectedInvoiceKeys.length === 0 && Number(amountReceived) <= 0)}
+                                    disabled={submitting || !amountReceived || (selectedInvoiceKeys.length === 0 && receivedAmount <= 0)}
                                     className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-slate-200 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2"
                                 >
                                     {submitting ? 'Memproses...' : 'Konfirmasi Setoran'}

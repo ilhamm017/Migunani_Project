@@ -12,6 +12,10 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
     try {
         const userId = req.user!.id; // Driver ID
         const { status, startDate, endDate } = req.query;
+        const requestedStatuses = String(status || '')
+            .split(',')
+            .map((value) => value.trim().toLowerCase())
+            .filter(Boolean);
 
         const whereClause: any = { courier_id: userId };
 
@@ -70,9 +74,16 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
         // exactly which invoices they are delivering and how much they collected.
         const explodedOrders: any[] = [];
         ordersWithInvoices.forEach((order: any) => {
-            const invoices = order.Invoices || [];
-            if (invoices.length > 0) {
-                invoices.forEach((inv: any) => {
+            const invoices = Array.isArray(order.Invoices) ? order.Invoices : [];
+            const normalizedOrderStatus = String(order.status || '').trim().toLowerCase();
+            const shouldOnlyShowLatestInvoice =
+                COURIER_OWNERSHIP_REQUIRED_STATUSES.has(normalizedOrderStatus)
+                || requestedStatuses.every((row) => COURIER_OWNERSHIP_REQUIRED_STATUSES.has(row));
+            const visibleInvoices = shouldOnlyShowLatestInvoice
+                ? invoices.slice(0, 1)
+                : invoices;
+            if (visibleInvoices.length > 0) {
+                visibleInvoices.forEach((inv: any) => {
                     explodedOrders.push({
                         ...order,
                         id: inv.id, // Using Invoice ID as unique list key

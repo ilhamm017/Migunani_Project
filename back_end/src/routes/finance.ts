@@ -70,6 +70,8 @@ router.post('/credit-notes/:id/post', authorizeRoles('super_admin', 'admin_finan
 
 // Journals
 router.get('/journals', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getJournals);
+router.get('/audit-logs', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAuditLogs);
+router.get('/audit-logs/:id', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAuditLogDetail);
 
 // Accounting Periods & Adjustments
 router.get('/periods', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountingPeriods);

@@ -30,7 +30,7 @@ export const resolveLegacyOrderStatusAlias = (statusRaw: unknown, context = 'ord
 const ALLOWED_ORDER_TRANSITIONS: Record<string, Set<string>> = {
     pending: new Set(['waiting_invoice', 'hold', 'canceled']),
     waiting_invoice: new Set(['ready_to_ship', 'hold', 'canceled']),
-    ready_to_ship: new Set(['shipped', 'hold', 'canceled']),
+    ready_to_ship: new Set(['shipped', 'completed', 'partially_fulfilled', 'hold', 'canceled']),
     hold: new Set(['waiting_invoice', 'ready_to_ship', 'shipped', 'canceled']),
     shipped: new Set(['delivered', 'completed', 'partially_fulfilled', 'hold', 'canceled']),
     delivered: new Set(['completed', 'hold', 'canceled']),
@@ -38,7 +38,7 @@ const ALLOWED_ORDER_TRANSITIONS: Record<string, Set<string>> = {
     waiting_admin_verification: new Set(['ready_to_ship', 'completed', 'hold', 'canceled']),
     allocated: new Set(['waiting_invoice', 'hold', 'canceled']),
     debt_pending: new Set(['waiting_invoice', 'hold', 'canceled']),
-    completed: new Set([]),
+    completed: new Set(['waiting_invoice']),
     canceled: new Set([]),
     expired: new Set([]),
 };

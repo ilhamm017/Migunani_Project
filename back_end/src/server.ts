@@ -17,6 +17,7 @@ import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadServic
 import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
 import { TaxConfigService } from './services/TaxConfigService';
 import { startNotificationOutboxWorker } from './services/TransactionNotificationOutboxService';
+import { auditLogMiddleware } from './middleware/auditLogMiddleware';
 
 dotenv.config();
 
@@ -43,6 +44,7 @@ app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
+app.use(auditLogMiddleware);
 
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {

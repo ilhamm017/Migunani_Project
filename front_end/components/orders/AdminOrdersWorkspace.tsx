@@ -13,6 +13,8 @@ type AdminOrdersWorkspaceProps = {
   forcedCustomerId?: string;
   forcedCustomerName?: string;
   forcedCustomerKey?: string;
+  initialSection?: OrderSectionFilter;
+  initialFocusOrderId?: string;
 };
 
 type CustomerGroup = {
@@ -185,6 +187,18 @@ const normalizeOrderStatus = (raw: unknown) => {
   const status = String(raw || '').trim();
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
+
+const resolveWorkspaceShipmentStatus = (order: unknown, detail?: unknown) => {
+  const invoiceShipmentStatus = String(
+    detail?.Invoice?.shipment_status ||
+    order?.Invoice?.shipment_status ||
+    ''
+  ).trim();
+  if (invoiceShipmentStatus) {
+    return normalizeOrderStatus(invoiceShipmentStatus);
+  }
+  return normalizeOrderStatus(order?.status);
+};
 const isSettlementCompleted = (order: unknown, detail: unknown) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
   const paymentMethod = String(invoice?.payment_method || order?.payment_method || '').trim().toLowerCase();
@@ -236,56 +250,6 @@ const formatInvoiceReference = (invoiceId: string, invoiceNumber: string) => {
   if (invoiceNumber) return invoiceNumber;
   if (invoiceId) return `INV-${invoiceId.slice(-8).toUpperCase()}`;
   return 'Belum Terbit Invoice';
-};
-
-const getOrderItemSuppliedQty = (detail: unknown, invoiceDetail: unknown, itemId: string) => {
-  if (Array.isArray(detail?.item_summaries)) {
-    const summary = detail.item_summaries.find((row: unknown) => String(row?.order_item_id || row?.id || '') === itemId);
-    if (summary) return Number(summary?.invoiced_qty_total || 0);
-  }
-
-  const invoiceItems = Array.isArray(invoiceDetail?.InvoiceItems) ? invoiceDetail.InvoiceItems : [];
-  return invoiceItems.reduce((sum: number, invoiceItem: unknown) => {
-    const targetItemId = String(invoiceItem?.order_item_id || invoiceItem?.OrderItem?.id || '');
-    if (targetItemId !== itemId) return sum;
-    return sum + Number(invoiceItem?.qty || 0);
-  }, 0);
-};
-
-const getOrderItemBackorderQty = (
-  detail: unknown,
-  item: unknown,
-  orderedQty: number,
-  allocatedQty: number,
-  suppliedQty: number
-) => {
-  const itemId = String(item?.id || '').trim();
-
-  if (itemId && Array.isArray(detail?.item_summaries)) {
-    const summary = detail.item_summaries.find((row: unknown) => String(row?.order_item_id || row?.id || '').trim() === itemId);
-    if (summary) {
-      return Math.max(0, Number(summary?.backorder_open_qty || 0));
-    }
-  }
-
-  if (itemId && Array.isArray(detail?.Backorders)) {
-    const activeBackorderQty = detail.Backorders.reduce((sum: number, row: unknown) => {
-      if (String(row?.order_item_id || '').trim() !== itemId) return sum;
-      const status = String(row?.status || '').trim().toLowerCase();
-      if (status === 'fulfilled' || status === 'canceled') return sum;
-      return sum + Number(row?.qty_pending || 0);
-    }, 0);
-    if (activeBackorderQty > 0) {
-      return Math.max(0, activeBackorderQty);
-    }
-  }
-
-  const allocationDrivenBackorder = orderedQty - allocatedQty;
-  if (allocationDrivenBackorder > 0) {
-    return Math.max(0, allocationDrivenBackorder);
-  }
-
-  return Math.max(0, orderedQty - suppliedQty);
 };
 
 const buildInvoiceItemSummary = (invoiceData: unknown): InvoiceItemSummary => {
@@ -532,6 +496,8 @@ export default function AdminOrdersWorkspace({
   forcedCustomerId,
   forcedCustomerName,
   forcedCustomerKey,
+  initialSection,
+  initialFocusOrderId,
 }: AdminOrdersWorkspaceProps) {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   const { user } = useAuthStore();
@@ -549,13 +515,12 @@ export default function AdminOrdersWorkspace({
   const [loading, setLoading] = useState(true);
   const [customerQuery, setCustomerQuery] = useState('');
   const [orderQuery, setOrderQuery] = useState('');
-  const [orderSectionFilter, setOrderSectionFilter] = useState<OrderSectionFilter>('baru');
+  const [orderSectionFilter, setOrderSectionFilter] = useState<OrderSectionFilter>(initialSection || 'baru');
   const [orderDetails, setOrderDetails] = useState<Record<string, unknown>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [allocationDrafts, setAllocationDrafts] = useState<Record<string, Record<string, number>>>({});
   const [backorderHistoryByOrderId, setBackorderHistoryByOrderId] = useState<Record<string, BackorderSnapshot[]>>({});
   const [backorderTopupDrafts, setBackorderTopupDrafts] = useState<Record<string, Record<string, number>>>({});
-  const [expandedBackorderOrderIds, setExpandedBackorderOrderIds] = useState<string[]>([]);
   const [allocationSaving, setAllocationSaving] = useState<Record<string, boolean>>({});
   const [invoiceItemSummaryByInvoiceId, setInvoiceItemSummaryByInvoiceId] = useState<Record<string, InvoiceItemSummary | null>>({});
   const [invoiceDetailByInvoiceId, setInvoiceDetailByInvoiceId] = useState<Record<string, unknown | null>>({});
@@ -684,7 +649,7 @@ export default function AdminOrdersWorkspace({
 
   const classifyOrderSections = useCallback((order: unknown, detail: unknown): OrderSection[] => {
     const rawStatus = String(order?.status || '');
-    const normalizedStatus = normalizeOrderStatus(rawStatus);
+    const normalizedStatus = resolveWorkspaceShipmentStatus(order, detail);
     const isCompleted = COMPLETED_STATUSES.has(rawStatus);
     const isPayment = PAYMENT_STATUSES.has(rawStatus);
     const isWarehouse = WAREHOUSE_STATUSES.has(normalizedStatus);
@@ -1028,7 +993,6 @@ export default function AdminOrdersWorkspace({
         latestTs: 0,
       };
       current.orderIds.add(rowId);
-      current.totalAmount += Number(order?.total_amount || 0);
 
       const rowTs = Date.parse(String(order?.updatedAt || order?.createdAt || ''));
       if (Number.isFinite(rowTs)) current.latestTs = Math.max(current.latestTs, rowTs);
@@ -1044,6 +1008,9 @@ export default function AdminOrdersWorkspace({
         const invoiceDetail = invoiceDetailByInvoiceId[invoiceId];
         if (invoiceDetail === undefined) {
           current.hasMissingInvoiceDetail = true;
+          current.totalAmount += Number(order?.total_amount || 0);
+        } else if (invoiceDetail) {
+          current.totalAmount = Number(invoiceDetail?.total || 0);
         }
         const paymentStatus = String(
           invoiceDetail?.payment_status || order?.Invoice?.payment_status || detail?.Invoice?.payment_status || ''
@@ -1053,6 +1020,8 @@ export default function AdminOrdersWorkspace({
         ).trim().toLowerCase();
         if (paymentStatus) current.paymentStatuses.add(paymentStatus);
         if (shipmentStatus) current.shipmentStatuses.add(shipmentStatus);
+      } else {
+        current.totalAmount += Number(order?.total_amount || 0);
       }
 
       boardMap.set(groupKey, current);
@@ -1139,6 +1108,7 @@ export default function AdminOrdersWorkspace({
       const orderId = String(detail.id);
       const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
+      const itemSummaries = Array.isArray(detail.item_summaries) ? detail.item_summaries : [];
       const allocatedByProduct = new Map<string, number>();
       allocations.forEach((alloc: unknown) => {
         const key = String(alloc?.product_id || '');
@@ -1167,9 +1137,12 @@ export default function AdminOrdersWorkspace({
           const orderedQty = Number(item.qty || 0);
           const allocQty = Math.min(remainingAlloc, orderedQty);
           remainingAlloc -= allocQty;
+          const itemId = String(item.id || '');
+          const summaryRow = itemSummaries.find((row: unknown) => String(row?.order_item_id || '') === itemId);
+          const invoicedQty = Number(summaryRow?.invoiced_qty_total || 0);
           availability[String(item.id)] = {
             allocQty,
-            maxInvoice: allocQty,
+            maxInvoice: Math.max(0, allocQty - invoicedQty),
           };
         }
       });
@@ -1306,11 +1279,6 @@ export default function AdminOrdersWorkspace({
 
       const rawStatus = String(detail.status || '');
       if (rawStatus !== 'waiting_invoice') return false;
-
-      const hasInvoice =
-        Boolean(detail?.Invoice?.id) ||
-        (Array.isArray(detail?.Invoices) && detail.Invoices.length > 0);
-      if (hasInvoice) return false;
 
       const availability = availabilityByOrderId[orderId] || {};
       const hasInvoiceableQty = Object.values(availability).some((row) => Number(row?.maxInvoice || 0) > 0);
@@ -1486,14 +1454,6 @@ export default function AdminOrdersWorkspace({
 
   const handleSaveAllocation = async (orderId: string) => {
     setAllocationConfirm({ orderId, step: 1, action: 'allocation' });
-  };
-
-  const toggleExpandedBackorderOrder = (orderId: string) => {
-    setExpandedBackorderOrderIds((prev) =>
-      prev.includes(orderId)
-        ? prev.filter((id) => id !== orderId)
-        : [...prev, orderId]
-    );
   };
 
   const handleConfirmAllocationStep = async () => {
@@ -2426,59 +2386,86 @@ export default function AdminOrdersWorkspace({
                       <div className="space-y-3">
                         {backorderActiveOrders.map((order: unknown) => {
                           const orderId = String(order?.id || '');
-                          const isExpanded = expandedBackorderOrderIds.includes(orderId);
                           const detail = orderDetails[orderId];
+                          const rawOrderStatus = String(order?.status || '');
+                          const orderStatus = normalizeOrderStatus(rawOrderStatus);
                           const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
                           const invoiceNumber = normalizeInvoiceRef(
                             order?.invoice_number || order?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
                           );
                           const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
                           const canCancelBackorderEarly = canAllocate;
-                          const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
-                          const allocations = Array.isArray(detail?.Allocations) ? detail.Allocations : [];
-                          const allocatedByProduct = allocations.reduce<Record<string, number>>((acc, allocation: unknown) => {
-                            const productId = String(allocation?.product_id || '');
-                            if (!productId) return acc;
-                            acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
-                            return acc;
-                          }, {});
-                          const itemRows = orderItems
-                            .map((item: unknown) => {
+                          const allocationBusy = Boolean(allocationSaving[orderId]);
+                          const groupedItems = groupedItemsByOrderId[orderId] || [];
+                          const persistedAlloc = persistedAllocByOrderId[orderId] || {};
+                          const allocationDraft = allocationDrafts[orderId] || {};
+                          const invoiceShipmentStatus = String(invoiceDetail?.shipment_status || order?.shipment_status || '').trim().toLowerCase();
+                          const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
+                          const hasIssuedInvoice = Boolean(invoiceId || invoiceNumber);
+                          const hasPassedWarehouseStage = (() => {
+                            const normalized = orderStatus === 'waiting_payment' ? 'ready_to_ship' : orderStatus;
+                            if (invoiceShipmentStatus) {
+                              return ['delivered', 'canceled'].includes(invoiceShipmentStatus);
+                            }
+                            return ['delivered', 'partially_fulfilled'].includes(normalized);
+                          })();
+                          const isBackorderInputUnlocked = hasIssuedInvoice && hasPassedWarehouseStage;
+                          const isBackorderAllocationActionEnabled =
+                            canAllocate && isBackorderAllocationEditable && isBackorderInputUnlocked;
+                          const backorderEditorItems = groupedItems
+                            .map((item) => {
                               const productId = String(item?.product_id || '');
-                              const orderedQty = Math.max(0, Number(item?.ordered_qty_original || item?.qty || 0));
-                              const allocatedQty = Number(allocatedByProduct[productId] || 0);
-                              const suppliedQty = getOrderItemSuppliedQty(detail, invoiceDetail, String(item?.id || ''));
-                              const backorderQty = getOrderItemBackorderQty(detail, item, orderedQty, allocatedQty, suppliedQty);
+                              if (!productId) return null;
+                              const orderedQty = Number(item?.qty || 0);
+                              const allocatedQty = Number(
+                                allocationDraft[productId] !== undefined
+                                  ? allocationDraft[productId]
+                                  : persistedAlloc[productId] || 0
+                              );
+                              const shortageQty = Math.max(0, orderedQty - allocatedQty);
+                              if (shortageQty <= 0) return null;
+                              const stockQty = Number(item?.Product?.stock_quantity);
+                              const persistedQty = Number(persistedAlloc[productId] || 0);
+                              const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+                              const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
+                              const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
                               return {
-                                itemId: String(item?.id || productId),
+                                product_id: productId,
                                 name: String(item?.Product?.name || 'Produk'),
                                 sku: String(item?.Product?.sku || '-'),
                                 orderedQty,
                                 allocatedQty,
-                                suppliedQty,
-                                backorderQty,
+                                shortageQty,
+                                allocatableQty,
                               };
                             })
-                            .filter((row) => row.backorderQty > 0);
-                          const orderLevelSummary = itemRows.reduce(
+                            .filter(Boolean) as BackorderEditableItem[];
+                          const backorderEditorSummary = backorderEditorItems.reduce(
                             (acc, item) => ({
-                              orderedQty: acc.orderedQty + item.orderedQty,
-                              allocatedQty: acc.allocatedQty + item.allocatedQty,
-                              suppliedQty: acc.suppliedQty + item.suppliedQty,
-                              backorderQty: acc.backorderQty + item.backorderQty,
+                              orderedTotal: acc.orderedTotal + item.orderedQty,
+                              suppliedTotal: acc.suppliedTotal + item.allocatedQty,
+                              shortageTotal: acc.shortageTotal + item.shortageQty,
+                              allocatableTotal: acc.allocatableTotal + item.allocatableQty,
                             }),
-                            { orderedQty: 0, allocatedQty: 0, suppliedQty: 0, backorderQty: 0 }
+                            { orderedTotal: 0, suppliedTotal: 0, shortageTotal: 0, allocatableTotal: 0 }
                           );
-
-                          if (itemRows.length === 0) return null;
+                          const backorderDirty = backorderEditorItems.some((item) => {
+                            const requestedTopup = Number(backorderTopupDrafts[orderId]?.[item.product_id] ?? 0);
+                            const topupQty = Math.max(0, Math.min(item.allocatableQty, requestedTopup));
+                            return topupQty > 0;
+                          });
+                          if (backorderEditorItems.length === 0) return null;
 
                           return (
-                            <div key={`backorder:${orderId}`} className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
-                              <button
-                                type="button"
-                                onClick={() => toggleExpandedBackorderOrder(orderId)}
-                                className="flex w-full items-start justify-between gap-3 text-left"
-                              >
+                            <div
+                              key={`backorder:${orderId}`}
+                              className={`rounded-2xl border bg-amber-50/40 p-4 shadow-sm ${
+                                orderId === initialFocusOrderId
+                                  ? 'border-amber-400 ring-2 ring-amber-200'
+                                  : 'border-amber-200'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
                                 <div>
                                   <p className="text-sm font-black text-slate-900">Order #{orderId}</p>
                                   <p className="text-[11px] text-slate-500">{formatDateTime(order?.createdAt)}</p>
@@ -2486,72 +2473,117 @@ export default function AdminOrdersWorkspace({
                                     Status fulfillment {normalizeOrderStatus(order?.status) || '-'}
                                     {invoiceId || invoiceNumber ? ` • Invoice ${formatInvoiceReference(invoiceId, invoiceNumber)}` : ' • Belum invoice'}
                                   </p>
-                                  <p className="mt-2 text-[11px] font-bold text-slate-700">
-                                    Diminta {orderLevelSummary.orderedQty} • Tersuplai {orderLevelSummary.suppliedQty} • Backorder {orderLevelSummary.backorderQty}
-                                  </p>
                                 </div>
-                                <div className="text-right">
-                                  <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
-                                    {itemRows.length} item backorder
-                                  </span>
-                                  <p className="mt-2 text-[10px] font-bold text-amber-700">
-                                    {isExpanded ? 'Sembunyikan detail order' : 'Lihat detail order induk'}
-                                  </p>
-                                </div>
-                              </button>
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
+                                  {backorderEditorItems.length} item backorder
+                                </span>
+                              </div>
                               <div className="mt-3 flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
+                                  onClick={() => handleAutoFillBackorder(orderId, backorderEditorItems)}
+                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy || backorderEditorItems.length === 0}
+                                  className="px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
+                                >
+                                  Auto Fill
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSaveBackorderAllocation(orderId, backorderEditorItems)}
+                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
+                                  className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
+                                >
+                                  {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => void handleCancelBackorder(orderId)}
-                                  disabled={!canCancelBackorderEarly || Boolean(allocationSaving[orderId])}
+                                  disabled={!canCancelBackorderEarly || allocationBusy}
                                   className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
                                 >
                                   Cancel Backorder
                                 </button>
                               </div>
-                              {isExpanded && (
-                                <div className="mt-3 space-y-3">
-                                  <div className="rounded-2xl border border-amber-100 bg-white p-3">
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Detail Order Induk</p>
-                                    <div className="mt-2 grid gap-2 sm:grid-cols-4">
-                                      <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Qty Diminta</p>
-                                        <p className="text-sm font-black text-slate-900">{orderLevelSummary.orderedQty}</p>
-                                      </div>
-                                      <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Qty Dialokasikan</p>
-                                        <p className="text-sm font-black text-emerald-700">{orderLevelSummary.allocatedQty}</p>
-                                      </div>
-                                      <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Sudah Tersuplai</p>
-                                        <p className="text-sm font-black text-blue-700">{orderLevelSummary.suppliedQty}</p>
-                                      </div>
-                                      <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Backorder Aktif</p>
-                                        <p className="text-sm font-black text-amber-700">{orderLevelSummary.backorderQty}</p>
-                                      </div>
-                                    </div>
+                              <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50/60 p-3 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Edit Backorder</p>
+                                    <p className="text-[11px] text-amber-700">
+                                      Total {backorderEditorSummary.orderedTotal} • Tersuplai {backorderEditorSummary.suppliedTotal}
+                                      {backorderEditorSummary.shortageTotal > 0 ? ` • Backorder ${backorderEditorSummary.shortageTotal}` : ''}
+                                      {backorderEditorSummary.allocatableTotal > 0
+                                        ? ` • Bisa dialokasikan lagi ${backorderEditorSummary.allocatableTotal}`
+                                        : ' • Belum ada stok tambahan'}
+                                    </p>
                                   </div>
-                                  <div className="space-y-2">
-                                    {itemRows.map((item) => (
-                                      <div key={item.itemId} className="rounded-xl border border-amber-100 bg-white px-3 py-3">
-                                        <div className="flex items-start justify-between gap-3">
+                                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-amber-700 border border-amber-200">
+                                    {backorderEditorItems.length} item editable
+                                  </span>
+                                </div>
+                                {!hasIssuedInvoice && (
+                                  <p className="text-[10px] text-amber-700">
+                                    Top up backorder dibuka setelah invoice sebelumnya diterbitkan dan melewati proses gudang.
+                                  </p>
+                                )}
+                                {hasIssuedInvoice && !hasPassedWarehouseStage && (
+                                  <p className="text-[10px] text-amber-700">
+                                    Top up backorder masih dikunci. Menunggu invoice sebelumnya melewati proses gudang
+                                    (status kirim saat ini: <span className="font-bold">{invoiceShipmentStatus || orderStatus || '-'}</span>).
+                                  </p>
+                                )}
+                                {!isBackorderAllocationEditable && (
+                                  <p className="text-[10px] text-amber-700">
+                                    Alokasi backorder dikunci pada status <span className="font-bold">{order.status}</span>.
+                                  </p>
+                                )}
+                                {!canAllocate && (
+                                  <p className="text-[10px] text-slate-500">
+                                    Hanya kasir atau super admin yang bisa mengalokasikan ulang backorder.
+                                  </p>
+                                )}
+                                {!backorderDirty && (
+                                  <p className="text-[10px] text-amber-700">
+                                    Belum ada perubahan top up backorder.
+                                  </p>
+                                )}
+                                <div className="space-y-2">
+                                  {backorderEditorItems.map((item) => {
+                                    const topupDraft = Number(backorderTopupDrafts[orderId]?.[item.product_id] ?? 0);
+                                    const topupQty = Math.max(0, Math.min(item.allocatableQty, topupDraft));
+                                    return (
+                                      <div key={`editor:${item.product_id}`} className="rounded-xl border border-amber-100 bg-white px-3 py-3">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
                                           <div>
-                                            <p className="text-xs font-black text-slate-900">{item.name}</p>
+                                            <p className="text-xs font-bold text-slate-900">{item.name}</p>
                                             <p className="text-[10px] text-slate-500">SKU {item.sku}</p>
+                                            <p className="text-[10px] text-slate-500">
+                                              Pesan {item.orderedQty} • Tersuplai {item.allocatedQty}
+                                            </p>
+                                            <p className="text-[10px] font-bold text-rose-600">Backorder {item.shortageQty}</p>
+                                            <p className="text-[10px] text-amber-700">
+                                              {item.allocatableQty > 0
+                                                ? `Bisa dialokasikan lagi ${item.allocatableQty}`
+                                                : 'Belum ada stok tambahan untuk dialokasi'}
+                                            </p>
                                           </div>
-                                          <div className="text-right text-[10px] font-bold">
-                                            <p className="text-slate-700">Order {item.orderedQty}</p>
-                                            <p className="text-emerald-700">Dialokasikan {item.allocatedQty}</p>
-                                            <p className="text-blue-700">Tersuplai {item.suppliedQty}</p>
-                                            <p className="text-amber-700">Backorder {item.backorderQty}</p>
+                                          <div className="min-w-[150px] space-y-1 text-right">
+                                            <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={item.allocatableQty}
+                                              value={topupQty}
+                                              disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
+                                              onChange={(e) => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, e.target.value)}
+                                              className="w-full rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
+                                            />
                                           </div>
                                         </div>
                                       </div>
-                                    ))}
-                                  </div>
+                                    );
+                                  })}
                                 </div>
-                              )}
+                              </div>
                             </div>
                           );
                         })}
@@ -2652,7 +2684,8 @@ export default function AdminOrdersWorkspace({
                           totalAmount += Number(row?.total_amount || 0);
                         }
 
-                        const normalizedStatus = normalizeOrderStatus(row?.status);
+                        const detail = orderDetails[rowId];
+                        const normalizedStatus = resolveWorkspaceShipmentStatus(row, detail);
                         if (normalizedStatus) statusSet.add(normalizedStatus);
                         const paymentMethod = String(row?.Invoice?.payment_method || '').trim();
                         if (paymentMethod) paymentMethodSet.add(paymentMethod);
@@ -2706,14 +2739,26 @@ export default function AdminOrdersWorkspace({
                         .filter(Boolean);
                       const previewIds = orderIds.slice(0, 3).map((id: string) => `#${id.slice(-8).toUpperCase()}`);
                       const extraOrderCount = Math.max(0, orderIds.length - previewIds.length);
-                      const hasReadyToShip = bucket.orders.some((row: unknown) => normalizeOrderStatus(row?.status) === 'ready_to_ship');
+                      const hasReadyToShip = bucket.orders.some((row: unknown) => {
+                        const rowId = String(row?.id || '');
+                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
+                      });
                       const readyToShipOrderIds = bucket.orders
-                        .filter((row: unknown) => normalizeOrderStatus(row?.status) === 'ready_to_ship')
+                        .filter((row: unknown) => {
+                          const rowId = String(row?.id || '');
+                          return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
+                        })
                         .map((row: unknown) => String(row?.id || ''))
                         .filter(Boolean);
-                      const hasShipped = bucket.orders.some((row: unknown) => normalizeOrderStatus(row?.status) === 'shipped');
+                      const hasShipped = bucket.orders.some((row: unknown) => {
+                        const rowId = String(row?.id || '');
+                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'shipped';
+                      });
                       const primaryOrder =
-                        bucket.orders.find((row: unknown) => normalizeOrderStatus(row?.status) === 'ready_to_ship') ||
+                        bucket.orders.find((row: unknown) => {
+                          const rowId = String(row?.id || '');
+                          return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
+                        }) ||
                         bucket.orders[0] ||
                         null;
                       const primaryOrderId = String(primaryOrder?.id || '');
@@ -2915,19 +2960,16 @@ export default function AdminOrdersWorkspace({
                     <h2 className="text-xs font-black uppercase tracking-widest text-slate-400">{label}</h2>
                     {list.map((order) => {
                       const rawOrderStatus = String(order.status || '');
-                      const orderStatus = normalizeOrderStatus(rawOrderStatus);
                       const detail = orderDetails[String(order.id)];
+                      const orderStatus = resolveWorkspaceShipmentStatus(order, detail);
                       const totals = orderTotalsById[String(order.id)] || { orderedQty: 0, allocQty: 0, remainingQty: 0, allocPct: 0 };
                       const groupedItems = groupedItemsByOrderId[String(order.id)] || [];
                       const persistedAlloc = persistedAllocByOrderId[String(order.id)] || {};
                       const allocationDraft = allocationDrafts[String(order.id)] || {};
                       const shortageSummary = shortageSummaryByOrderId[String(order.id)] || { orderedTotal: 0, allocatedTotal: 0, shortageTotal: 0 };
                       const isAllocatedOnlyView = Boolean(forcedCustomerId && orderSectionFilter === 'allocated');
-                      const hasInvoice =
-                        Boolean(detail?.Invoice?.id) ||
-                        (Array.isArray(detail?.Invoices) && detail.Invoices.length > 0);
                       const invoiceableOrderAmount = Number(invoiceableAmountByOrderId[String(order.id)] || 0);
-                      const showInvoiceableAmount = !hasInvoice && rawOrderStatus === 'waiting_invoice' && invoiceableOrderAmount > 0;
+                      const showInvoiceableAmount = rawOrderStatus === 'waiting_invoice' && invoiceableOrderAmount > 0;
                       const isAllocationEditable = ALLOCATION_EDITABLE_STATUSES.has(rawOrderStatus);
                       const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
                       const canCancelBackorderEarly = canAllocate;

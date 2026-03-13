@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting } from '../../models';
+import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, Backorder } from '../../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -109,37 +109,47 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             }
 
             const toCompletedIds: string[] = [];
-            const toReadyToShipIds: string[] = [];
-            orders.forEach((order: any) => {
+            const toPartiallyFulfilledIds: string[] = [];
+            for (const order of orders as any[]) {
                 const orderId = String(order.id || '');
                 const currentStatus = String(order.status || '').toLowerCase();
-                if (!orderId) return;
+                if (!orderId) continue;
                 if (['completed', 'canceled', 'expired'].includes(currentStatus)) {
                     nextStatusByOrderId[orderId] = currentStatus;
-                    return;
+                    continue;
                 }
-                if (currentStatus === 'delivered') {
-                    if (!isOrderTransitionAllowed(currentStatus, 'completed')) {
-                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'completed'`, 409);
-                    }
+                const orderItems = await OrderItem.findAll({
+                    where: { order_id: orderId },
+                    attributes: ['id'],
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
+                const openBackorderCount = orderItemIds.length > 0
+                    ? await Backorder.count({
+                        where: {
+                            order_item_id: { [Op.in]: orderItemIds },
+                            qty_pending: { [Op.gt]: 0 },
+                            status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+                        },
+                        transaction: t
+                    })
+                    : 0;
+                const nextStatus = openBackorderCount > 0 ? 'partially_fulfilled' : 'completed';
+                if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
+                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextStatus}'`, 409);
+                }
+                if (nextStatus === 'completed') {
                     toCompletedIds.push(orderId);
-                    nextStatusByOrderId[orderId] = 'completed';
-                    return;
+                } else {
+                    toPartiallyFulfilledIds.push(orderId);
                 }
-                if (currentStatus === 'shipped') {
-                    nextStatusByOrderId[orderId] = 'shipped';
-                    return;
-                }
-                if (!isOrderTransitionAllowed(currentStatus, 'ready_to_ship')) {
-                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'ready_to_ship'`, 409);
-                }
-                toReadyToShipIds.push(orderId);
-                nextStatusByOrderId[orderId] = 'ready_to_ship';
-            });
-            if (toReadyToShipIds.length > 0) {
+                nextStatusByOrderId[orderId] = nextStatus;
+            }
+            if (toPartiallyFulfilledIds.length > 0) {
                 await Order.update(
-                    { status: 'ready_to_ship', expiry_date: null },
-                    { where: { id: { [Op.in]: toReadyToShipIds } }, transaction: t }
+                    { status: 'partially_fulfilled' },
+                    { where: { id: { [Op.in]: toPartiallyFulfilledIds } }, transaction: t }
                 );
             }
             if (toCompletedIds.length > 0) {

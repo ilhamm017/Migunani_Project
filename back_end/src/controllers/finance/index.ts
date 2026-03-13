@@ -9,3 +9,4 @@ export * from './cod';
 export * from './creditNote';
 export * from './journal';
 export * from './accounting';
+export * from './audit';

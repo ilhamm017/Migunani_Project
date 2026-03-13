@@ -31,11 +31,11 @@ export const getDriverCodList = asyncWrapper(async (req: Request, res: Response)
             attributes: ['id', 'name', 'whatsapp_number', 'debt']
         });
 
-        // 2. Get pending COD invoices linked to orders
+        // 2. Only keep the latest invoice per order. Older COD invoices must not
+        // stay visible in settlement once a newer invoice for the same order exists.
         const invoiceItems = await InvoiceItem.findAll({
             include: [{
                 model: Invoice,
-                where: { payment_status: 'cod_pending' },
                 required: true
             }, {
                 model: OrderItem,
@@ -44,19 +44,30 @@ export const getDriverCodList = asyncWrapper(async (req: Request, res: Response)
             }]
         });
 
-        const orderInvoicesMap = new Map<string, Set<string>>();
-        const invoiceDataMap = new Map<string, any>();
+        const latestInvoiceByOrderId = new Map<string, any>();
         invoiceItems.forEach((item: any) => {
             const orderId = item?.OrderItem?.order_id ? String(item.OrderItem.order_id) : '';
             const invoice = item.Invoice;
             if (!orderId || !invoice) return;
 
+            const existing = latestInvoiceByOrderId.get(orderId);
+            const invoiceTime = new Date(String(invoice.createdAt || 0)).getTime();
+            const existingTime = existing ? new Date(String(existing.createdAt || 0)).getTime() : -1;
+            if (!existing || invoiceTime > existingTime) {
+                latestInvoiceByOrderId.set(orderId, invoice);
+            }
+        });
+
+        const orderInvoicesMap = new Map<string, Set<string>>();
+        const invoiceDataMap = new Map<string, any>();
+        latestInvoiceByOrderId.forEach((invoice, orderId) => {
+            if (String(invoice.payment_method || '') !== 'cod' || String(invoice.payment_status || '') !== 'cod_pending') {
+                return;
+            }
+
             const invId = String(invoice.id);
             invoiceDataMap.set(invId, invoice);
-
-            const invSet = orderInvoicesMap.get(orderId) || new Set<string>();
-            invSet.add(invId);
-            orderInvoicesMap.set(orderId, invSet);
+            orderInvoicesMap.set(orderId, new Set<string>([invId]));
         });
 
         const orderIds = Array.from(orderInvoicesMap.keys());
@@ -403,69 +414,66 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 });
             }
 
-            const fullySettled = received >= totalExpected;
-            if (fullySettled) {
-                const targetOrderIds = affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds;
-                const targetOrders = await Order.findAll({
-                    where: { id: { [Op.in]: targetOrderIds } },
+            const targetOrderIds = affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds;
+            const targetOrders = await Order.findAll({
+                where: { id: { [Op.in]: targetOrderIds } },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            const targetOrderMap = new Map<string, any>();
+            targetOrders.forEach((row: any) => targetOrderMap.set(String(row.id), row));
+
+            for (const orderId of targetOrderIds) {
+                const currentStatus = String(previousOrderStatusById[orderId] || targetOrderMap.get(orderId)?.status || '').toLowerCase();
+                if (!currentStatus) continue;
+
+                const orderItems = await OrderItem.findAll({
+                    where: { order_id: orderId },
+                    attributes: ['id'],
                     transaction: t,
                     lock: t.LOCK.UPDATE
                 });
-                const targetOrderMap = new Map<string, any>();
-                targetOrders.forEach((row: any) => targetOrderMap.set(String(row.id), row));
+                const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
+                const openBackorderCount = orderItemIds.length > 0
+                    ? await Backorder.count({
+                        where: {
+                            order_item_id: { [Op.in]: orderItemIds },
+                            qty_pending: { [Op.gt]: 0 },
+                            status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+                        },
+                        transaction: t
+                    })
+                    : 0;
 
-                for (const orderId of targetOrderIds) {
-                    const currentStatus = String(previousOrderStatusById[orderId] || targetOrderMap.get(orderId)?.status || '').toLowerCase();
-                    if (!currentStatus) continue;
-
-                    const orderItems = await OrderItem.findAll({
-                        where: { order_id: orderId },
-                        attributes: ['id'],
-                        transaction: t,
-                        lock: t.LOCK.UPDATE
-                    });
-                    const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
-                    const openBackorderCount = orderItemIds.length > 0
-                        ? await Backorder.count({
-                            where: {
-                                order_item_id: { [Op.in]: orderItemIds },
-                                qty_pending: { [Op.gt]: 0 },
-                                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
-                            },
-                            transaction: t
-                        })
-                        : 0;
-
-                    const nextStatus: 'partially_fulfilled' | 'completed' =
-                        openBackorderCount > 0 ? 'partially_fulfilled' : 'completed';
-                    if (currentStatus === nextStatus) continue;
-                    if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
-                        await t.rollback();
-                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextStatus}'`, 409);
-                    }
-                    finalizedOrderResults.push({
-                        orderId,
-                        previousStatus: currentStatus,
-                        nextStatus
-                    });
+                const nextStatus: 'partially_fulfilled' | 'completed' =
+                    openBackorderCount > 0 ? 'partially_fulfilled' : 'completed';
+                if (currentStatus === nextStatus) continue;
+                if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
+                    await t.rollback();
+                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextStatus}'`, 409);
                 }
-                await Invoice.update({
-                    payment_status: 'paid',
-                    verified_at: new Date(),
-                    verified_by: verifierId
+                finalizedOrderResults.push({
+                    orderId,
+                    previousStatus: currentStatus,
+                    nextStatus
+                });
+            }
+            await Invoice.update({
+                payment_status: 'paid',
+                verified_at: new Date(),
+                verified_by: verifierId
+            }, {
+                where: { id: { [Op.in]: invoiceIds } },
+                transaction: t
+            });
+
+            for (const result of finalizedOrderResults) {
+                await Order.update({
+                    status: result.nextStatus
                 }, {
-                    where: { id: { [Op.in]: invoiceIds } },
+                    where: { id: result.orderId },
                     transaction: t
                 });
-
-                for (const result of finalizedOrderResults) {
-                    await Order.update({
-                        status: result.nextStatus
-                    }, {
-                        where: { id: result.orderId },
-                        transaction: t
-                    });
-                }
             }
 
             // --- Journal Entry for Settlement (Cash vs Piutang Driver) ---

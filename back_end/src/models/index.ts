@@ -43,6 +43,7 @@ import CreditNote from './CreditNote';
 import CreditNoteLine from './CreditNoteLine';
 import IdempotencyKey from './IdempotencyKey';
 import NotificationOutbox from './NotificationOutbox';
+import AuditLog from './AuditLog';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -224,6 +225,9 @@ Account.hasMany(JournalLine, { foreignKey: 'account_id' });
 Journal.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
 User.hasMany(Journal, { foreignKey: 'created_by' });
 
+AuditLog.belongsTo(User, { foreignKey: 'actor_user_id', as: 'Actor' });
+User.hasMany(AuditLog, { foreignKey: 'actor_user_id', as: 'AuditLogs' });
+
 // COD System
 CodCollection.belongsTo(Invoice, { foreignKey: 'invoice_id' });
 Invoice.hasOne(CodCollection, { foreignKey: 'invoice_id' });
@@ -289,5 +293,6 @@ export {
     CreditNote,
     CreditNoteLine,
     IdempotencyKey,
-    NotificationOutbox
+    NotificationOutbox,
+    AuditLog
 };

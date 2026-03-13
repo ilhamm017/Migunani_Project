@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle, Clock, FileText, RotateCcw, Settings, TrendingUp, Wallet } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Clock, FileText, RotateCcw, Settings, TrendingUp, Wallet, Shield } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 
@@ -15,6 +15,7 @@ const financeMenus = [
   { href: '/admin/finance/laporan', title: 'Laporan Keuangan', desc: 'PnL, neraca, cashflow, pajak.', icon: TrendingUp, tone: 'bg-slate-100 text-slate-700' },
   { href: '/admin/finance/jurnal/adjustment', title: 'Jurnal Manual', desc: 'Adjustment jurnal akuntansi.', icon: FileText, tone: 'bg-cyan-100 text-cyan-700' },
   { href: '/admin/finance/settings/tax', title: 'Pengaturan Pajak', desc: 'Atur mode pajak perusahaan.', icon: Settings, tone: 'bg-lime-100 text-lime-700' },
+  { href: '/admin/audit-log', title: 'Audit Log', desc: 'Lacak perubahan dan error dari website.', icon: Shield, tone: 'bg-orange-100 text-orange-700' },
 ];
 
 export default function FinanceAdminHubPage() {

@@ -5,9 +5,9 @@ import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orde
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
 
 
-export const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'hold'] as const;
-export const TERMINAL_ORDER_STATUSES = ['completed', 'canceled', 'expired'] as const;
-export const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'hold'] as const;
+export const REALLOCATABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'] as const;
+export const TERMINAL_ORDER_STATUSES = ['canceled', 'expired'] as const;
+export const ALLOCATION_EDITABLE_STATUSES = ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'] as const;
 
 export const isAllocationEditableStatus = (statusRaw: unknown): boolean =>
     (ALLOCATION_EDITABLE_STATUSES as readonly string[]).includes(String(statusRaw || '').trim().toLowerCase());
@@ -84,6 +84,5 @@ export const buildShortageSummary = (orderItemsRaw: any[], allocationsRaw: any[]
         shortageItems,
     };
 };
-
 
 

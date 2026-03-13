@@ -422,6 +422,10 @@ export const api = {
             getDriverCodList: () => apiClient.get('/admin/finance/driver-cod'),
             verifyDriverCod: (data: { driver_id: string; order_ids: string[]; amount_received: number }) =>
                 apiClient.post('/admin/finance/driver-cod/verify', data),
+            getAuditLogs: (params?: { limit?: number; q?: string; method?: string; actor_role?: string; status_group?: 'success' | 'error' | '' }) =>
+                apiClient.get('/admin/finance/audit-logs', { params }),
+            getAuditLogById: (id: number | string) =>
+                apiClient.get(`/admin/finance/audit-logs/${id}`),
             createCreditNote: (data: {
                 invoice_id: string;
                 reason?: string;
