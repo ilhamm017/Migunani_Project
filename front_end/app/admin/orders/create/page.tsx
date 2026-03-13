@@ -32,6 +32,31 @@ type ShippingMethodOption = {
     sort_order?: number;
 };
 
+type CustomerOption = {
+    id: string;
+    name?: string;
+    whatsapp_number?: string;
+    status?: string;
+    CustomerProfile?: {
+        tier?: string;
+    } | null;
+};
+
+type ProductOption = {
+    id: string;
+    name?: string;
+    image_url?: string;
+    stock_quantity?: number | string;
+    price?: number | string;
+    varian_harga?: unknown;
+};
+
+type CartItem = {
+    product_id: string;
+    product: ProductOption;
+    qty: number;
+};
+
 function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
@@ -44,17 +69,17 @@ function ManualOrderContent() {
 
     // Customer Search State
     const [customerSearch, setCustomerSearch] = useState('');
-    const [customers, setCustomers] = useState<unknown[]>([]);
-    const [selectedCustomer, setSelectedCustomer] = useState<unknown>(null);
+    const [customers, setCustomers] = useState<CustomerOption[]>([]);
+    const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
     const [, setSearchingCustomers] = useState(false);
 
     // Product Search State
     const [productSearch, setProductSearch] = useState('');
-    const [products, setProducts] = useState<unknown[]>([]);
+    const [products, setProducts] = useState<ProductOption[]>([]);
     const [, setSearchingProducts] = useState(false);
 
     // Cart State
-    const [cart, setCart] = useState<unknown[]>([]);
+    const [cart, setCart] = useState<CartItem[]>([]);
     const [paymentMethod, setPaymentMethod] = useState<'transfer_manual' | 'cod' | 'cash_store'>('cash_store');
     const [submitting, setSubmitting] = useState(false);
     const [prefillingCustomer, setPrefillingCustomer] = useState(false);
@@ -77,6 +102,25 @@ function ManualOrderContent() {
         return digits;
     }, []);
 
+    const toObjectOrEmpty = useCallback((value: unknown): Record<string, unknown> => {
+        if (!value) return {};
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return {};
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return parsed as Record<string, unknown>;
+                }
+                return {};
+            } catch {
+                return {};
+            }
+        }
+        if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+        return {};
+    }, []);
+
     const tryResolveCustomerFromChatSession = useCallback(async () => {
         if (!chatSessionIdParam) return false;
         try {
@@ -90,8 +134,8 @@ function ManualOrderContent() {
 
             const customerRes = await api.admin.customers.search(whatsappFromSession, { status: 'active', limit: 10 });
             const found = Array.isArray(customerRes.data?.customers)
-                ? customerRes.data.customers.find((item: unknown) =>
-                    normalizeWhatsapp(item?.whatsapp_number) === whatsappFromSession
+                ? (customerRes.data.customers as CustomerOption[]).find((item) =>
+                    normalizeWhatsapp(item.whatsapp_number) === whatsappFromSession
                 )
                 : null;
 
@@ -112,7 +156,7 @@ function ManualOrderContent() {
                 setSearchingCustomers(true);
                 try {
                     const res = await api.admin.customers.search(customerSearch, { status: 'active' });
-                    setCustomers(res.data.customers);
+                    setCustomers(Array.isArray(res.data?.customers) ? (res.data.customers as CustomerOption[]) : []);
                 } catch (error) {
                     console.error(error);
                 } finally {
@@ -134,7 +178,7 @@ function ManualOrderContent() {
             try {
                 setPrefillingCustomer(true);
                 const res = await api.admin.customers.getById(customerIdParam);
-                const customer = res.data?.customer;
+                const customer = res.data?.customer as CustomerOption | undefined;
                 if (customer && customer.status === 'active') {
                     setSelectedCustomer(customer);
                     setCustomerSearch('');
@@ -143,7 +187,7 @@ function ManualOrderContent() {
                 }
                 alert('Customer tidak aktif. Order tidak bisa dibuat.');
             } catch (error: unknown) {
-                const statusCode = Number(error?.response?.status || 0);
+                const statusCode = Number((error as { response?: { status?: unknown } })?.response?.status || 0);
                 if (statusCode === 404) {
                     if (isChatDrivenOrder) {
                         const resolved = await tryResolveCustomerFromChatSession();
@@ -232,32 +276,13 @@ function ManualOrderContent() {
         return () => clearTimeout(delayDebounceFn);
     }, [productSearch]);
 
-    const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
-        if (!value) return {};
-        if (typeof value === 'string') {
-            const trimmed = value.trim();
-            if (!trimmed) return {};
-            try {
-                const parsed = JSON.parse(trimmed);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    return parsed as Record<string, unknown>;
-                }
-                return {};
-            } catch {
-                return {};
-            }
-        }
-        if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-        return {};
-    };
-
     const toFiniteNumber = (value: unknown): number | null => {
         const parsed = Number(value);
         if (!Number.isFinite(parsed)) return null;
         return parsed;
     };
 
-    const getProductPrice = (product: unknown) => {
+    const getProductPrice = (product: ProductOption) => {
         const tier = selectedCustomer?.CustomerProfile?.tier || 'regular';
         const basePrice = Math.max(0, Number(product.price || 0));
         if (tier === 'regular') return basePrice;
@@ -300,7 +325,7 @@ function ManualOrderContent() {
         return basePrice;
     };
 
-    const addToCart = (product: unknown) => {
+    const addToCart = (product: ProductOption) => {
         setCart(prev => {
             const existing = prev.find(item => item.product_id === product.id);
             if (existing) {
@@ -368,7 +393,7 @@ function ManualOrderContent() {
             await refreshChatContext(chatSessionIdParam);
         } catch (error: unknown) {
             console.error('Failed to send chat context reply:', error);
-            setChatReplyError(error?.response?.data?.message || 'Gagal mengirim balasan chat.');
+            setChatReplyError((error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Gagal mengirim balasan chat.');
         } finally {
             setSendingChatReply(false);
         }
@@ -395,7 +420,7 @@ function ManualOrderContent() {
             router.push('/admin/orders');
         } catch (error: unknown) {
             console.error(error);
-            alert(error.response?.data?.message || 'Gagal membuat pesanan');
+            alert((error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Gagal membuat pesanan');
         } finally {
             setSubmitting(false);
         }
@@ -637,7 +662,7 @@ function ManualOrderContent() {
                                         >
                                             <div className="flex items-center gap-3">
                                                 {p.image_url && (
-                                                    <Image src={p.image_url} alt={p.name} width={40} height={40} className="rounded-lg object-cover" />
+                                                    <Image src={p.image_url} alt={p.name || 'Produk'} width={40} height={40} className="rounded-lg object-cover" />
                                                 )}
                                                 <div>
                                                     <p className="font-bold text-slate-900">{p.name}</p>
@@ -704,7 +729,7 @@ function ManualOrderContent() {
                                 <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
                                 <select
                                     value={paymentMethod}
-                                    onChange={(e) => setPaymentMethod(e.target.value as unknown)}
+                                    onChange={(e) => setPaymentMethod(e.target.value as 'transfer_manual' | 'cod' | 'cash_store')}
                                     className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
                                 >
                                     <option value="cash_store">Cash (Bayar di Toko)</option>
