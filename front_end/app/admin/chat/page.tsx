@@ -618,7 +618,8 @@ function AdminChatInboxContent() {
                   const isOwnMessage = senderId
                     ? senderId === currentUserId
                     : message.sender_type === 'admin';
-                  const hasAttachment = !!message.attachment_url;
+                  const attachmentUrl = message.attachment_url;
+                  const hasAttachment = !!attachmentUrl;
                   const hasTextBody = !!message.body && message.body !== '[Lampiran]';
                   const sourceTag = getSourceTag(message);
 
@@ -645,15 +646,15 @@ function AdminChatInboxContent() {
                         )}
                         {hasAttachment && (
                           <div className={hasTextBody ? 'mt-2' : ''}>
-                            {isImageAttachment(message.attachment_url) ? (
+                            {attachmentUrl && isImageAttachment(attachmentUrl) ? (
                               <button
                                 type="button"
-                                onClick={() => setZoomImageUrl(message.attachment_url || '')}
+                                onClick={() => setZoomImageUrl(attachmentUrl)}
                                 className="block rounded-lg overflow-hidden"
                                 aria-label="Perbesar gambar lampiran"
                               >
                                 <Image
-                                  src={message.attachment_url}
+                                  src={attachmentUrl}
                                   alt="Lampiran chat"
                                   width={220}
                                   height={176}
@@ -663,7 +664,7 @@ function AdminChatInboxContent() {
                               </button>
                             ) : (
                               <a
-                                href={message.attachment_url}
+                                href={attachmentUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 border text-xs font-semibold ${isOwnMessage
