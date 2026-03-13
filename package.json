@@ -11,6 +11,7 @@
         "dev:frontend:wait": "bash -lc 'until (echo > /dev/tcp/127.0.0.1/5000) >/dev/null 2>&1; do echo \"[wait] backend belum siap di :5000\"; sleep 1; done; npm run dev:frontend'",
         "dev:frontend": "cd front_end && npm run dev",
         "lint:frontend": "cd front_end && npm run lint",
+        "lint:frontend:file": "cd front_end && ./node_modules/.bin/eslint",
         "lint:driver-checklist": "cd front_end && npm run lint:test-driver",
         "docker:up:mysql": "bash -lc 'docker compose stop back_end front_end seed >/dev/null 2>&1 || true; docker compose up -d mysql'",
         "docker:up": "docker compose up -d",

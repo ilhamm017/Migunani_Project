@@ -10,11 +10,13 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const createCreditNote = async (req: Request, res: Response) => {
+export const createCreditNote = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { invoice_id, reason, mode = 'receivable', amount, tax_amount = 0, lines = [] } = req.body || {};
@@ -22,13 +24,13 @@ export const createCreditNote = async (req: Request, res: Response) => {
         const invoice = await Invoice.findByPk(String(invoice_id), { transaction: t, lock: t.LOCK.UPDATE });
         if (!invoice) {
             await t.rollback();
-            return res.status(404).json({ message: 'Invoice tidak ditemukan' });
+            throw new CustomError('Invoice tidak ditemukan', 404);
         }
 
         const creditAmount = Math.max(0, Number(amount || 0));
         if (creditAmount <= 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Nominal credit note tidak valid' });
+            throw new CustomError('Nominal credit note tidak valid', 400);
         }
 
         const cn = await CreditNote.create({
@@ -65,11 +67,14 @@ export const createCreditNote = async (req: Request, res: Response) => {
         return res.status(201).json({ message: 'Credit note draft dibuat', credit_note: cn });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        return res.status(500).json({ message: 'Gagal membuat credit note', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal membuat credit note', 500);
     }
-};
+});
 
-export const postCreditNote = async (req: Request, res: Response) => {
+export const postCreditNote = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const id = Number(req.params.id);
@@ -80,17 +85,17 @@ export const postCreditNote = async (req: Request, res: Response) => {
         const cn = await CreditNote.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!cn) {
             await t.rollback();
-            return res.status(404).json({ message: 'Credit note tidak ditemukan' });
+            throw new CustomError('Credit note tidak ditemukan', 404);
         }
         if (cn.status !== 'draft') {
             await t.rollback();
-            return res.status(409).json({ message: 'Credit note sudah diposting' });
+            throw new CustomError('Credit note sudah diposting', 409);
         }
 
         const invoice = await Invoice.findByPk(String(cn.invoice_id), { transaction: t, lock: t.LOCK.UPDATE });
         if (!invoice) {
             await t.rollback();
-            return res.status(404).json({ message: 'Invoice terkait tidak ditemukan' });
+            throw new CustomError('Invoice terkait tidak ditemukan', 404);
         }
 
         const salesReturnAcc = await Account.findOne({ where: { code: '4101' }, transaction: t });
@@ -143,7 +148,9 @@ export const postCreditNote = async (req: Request, res: Response) => {
         return res.json({ message: 'Credit note berhasil diposting', credit_note: cn });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        return res.status(500).json({ message: 'Gagal posting credit note', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal posting credit note', 500);
     }
-};
-
+});

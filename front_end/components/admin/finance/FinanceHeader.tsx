@@ -1,11 +1,8 @@
 'use client';
 
 import { Bell } from 'lucide-react';
-import { useAuthStore } from '@/store/authStore';
 
 export default function FinanceHeader({ title = 'Finance' }: { title?: string }) {
-    const { user } = useAuthStore();
-
     return (
         <div className="flex items-center justify-between py-4">
             <div>

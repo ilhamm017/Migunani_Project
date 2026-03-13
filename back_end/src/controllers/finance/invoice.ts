@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting } from '../../models';
+import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, Backorder } from '../../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -7,25 +7,133 @@ import { AccountingPostingService } from '../../services/AccountingPostingServic
 import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { generateInvoiceNumber } from '../../utils/invoice';
 import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { recordOrderEvent } from '../../utils/orderEvent';
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+
+const normalizeScopeList = (values: unknown[]): string =>
+    Array.from(new Set(
+        values
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+    )).sort().join(',');
+
+const buildIssueInvoiceScope = (userId: unknown, orderIds: unknown[]) =>
+    `finance_issue_invoice:${String(userId || '').trim()}:${normalizeScopeList(orderIds)}`;
+
+const buildIssueInvoiceItemsScope = (
+    userId: unknown,
+    items: Array<{ order_item_id: string; qty: number }>
+) => {
+    const normalized = items
+        .map((item) => ({
+            order_item_id: String(item?.order_item_id || '').trim(),
+            qty: Number(item?.qty || 0)
+        }))
+        .filter((item) => item.order_item_id && Number.isFinite(item.qty) && item.qty > 0)
+        .sort((a, b) => {
+            if (a.order_item_id === b.order_item_id) return a.qty - b.qty;
+            return a.order_item_id.localeCompare(b.order_item_id);
+        })
+        .map((item) => `${item.order_item_id}:${item.qty}`);
+    return `finance_issue_invoice_items:${String(userId || '').trim()}:${normalized.join(',')}`;
+};
+
+const syncBackordersFromInvoicedQty = async (
+    orderItems: any[],
+    transaction: any
+) => {
+    const orderItemIds = orderItems
+        .map((item) => String(item?.id || '').trim())
+        .filter(Boolean);
+
+    if (orderItemIds.length === 0) return;
+
+    const invoiceItems = await InvoiceItem.findAll({
+        where: { order_item_id: { [Op.in]: orderItemIds } },
+        transaction
+    });
+
+    const invoicedQtyByOrderItemId = new Map<string, number>();
+    invoiceItems.forEach((item: any) => {
+        const key = String(item?.order_item_id || '').trim();
+        if (!key) return;
+        const prev = Number(invoicedQtyByOrderItemId.get(key) || 0);
+        invoicedQtyByOrderItemId.set(key, prev + Number(item?.qty || 0));
+    });
+
+    for (const orderItem of orderItems) {
+        const orderItemId = String(orderItem?.id || '').trim();
+        if (!orderItemId) continue;
+
+        const orderedQtyOriginal = Math.max(
+            0,
+            Number(orderItem?.ordered_qty_original || orderItem?.qty || 0)
+        );
+        const canceledBackorderQty = Math.max(
+            0,
+            Number(orderItem?.qty_canceled_backorder || 0)
+        );
+        const invoicedQty = Math.max(
+            0,
+            Number(invoicedQtyByOrderItemId.get(orderItemId) || 0)
+        );
+        const qtyPending = Math.max(0, orderedQtyOriginal - invoicedQty - canceledBackorderQty);
+
+        const [backorder] = await Backorder.findOrCreate({
+            where: { order_item_id: orderItemId },
+            defaults: {
+                order_item_id: orderItemId,
+                qty_pending: qtyPending,
+                status: qtyPending > 0 ? 'waiting_stock' : 'fulfilled'
+            },
+            transaction
+        });
+
+        const nextStatus = qtyPending > 0 ? 'waiting_stock' : 'fulfilled';
+        if (
+            Number(backorder.qty_pending || 0) !== qtyPending ||
+            String(backorder.status || '') !== nextStatus
+        ) {
+            await backorder.update({
+                qty_pending: qtyPending,
+                status: nextStatus
+            }, { transaction });
+        }
+    }
+};
 
 export const issueInvoiceForOrders = async (orderIds: string[], req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const idempotencyScope = buildIssueInvoiceScope(req.user?.id, orderIds);
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, idempotencyScope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan penerbitan invoice duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const userRole = req.user!.role;
         if (!['kasir', 'super_admin'].includes(userRole)) {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya kasir atau super admin yang boleh menerbitkan invoice' });
+            throw new CustomError('Hanya kasir atau super admin yang boleh menerbitkan invoice', 403);
         }
 
         if (!Array.isArray(orderIds) || orderIds.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'order_ids wajib diisi' });
+            throw new CustomError('order_ids wajib diisi', 400);
         }
 
         const orders = await Order.findAll({
@@ -40,7 +148,7 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
 
         if (orders.length !== orderIds.length) {
             await t.rollback();
-            return res.status(404).json({ message: 'Beberapa order tidak ditemukan' });
+            throw new CustomError('Beberapa order tidak ditemukan', 404);
         }
 
         const primaryOrder = orders[0] as any;
@@ -49,21 +157,21 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
 
         if (!['transfer_manual', 'cod', 'cash_store'].includes(paymentMethod)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Metode pembayaran order belum ditentukan.' });
+            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
         }
 
         for (const order of orders as any[]) {
             if (String(order.status || '') !== 'waiting_invoice') {
                 await t.rollback();
-                return res.status(400).json({ message: `Order ${order.id} status '${order.status}' tidak bisa diterbitkan invoice.` });
+                throw new CustomError(`Order ${order.id} status '${order.status}' tidak bisa diterbitkan invoice.`, 400);
             }
             if (String(order.customer_id || '') !== customerId) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Order harus dari customer yang sama.' });
+                throw new CustomError('Order harus dari customer yang sama.', 400);
             }
             if (String(order.payment_method || '') !== paymentMethod) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Metode pembayaran harus sama untuk invoice gabungan.' });
+                throw new CustomError('Metode pembayaran harus sama untuk invoice gabungan.', 400);
             }
         }
 
@@ -168,14 +276,12 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
 
         if (ordersWithoutInvoiceLines.length > 0) {
             await t.rollback();
-            return res.status(400).json({
-                message: `Order berikut belum memiliki alokasi untuk ditagihkan: ${ordersWithoutInvoiceLines.join(', ')}`
-            });
+            throw new CustomError(`Order berikut belum memiliki alokasi untuk ditagihkan: ${ordersWithoutInvoiceLines.join(', ')}`, 400);
         }
 
         if (itemsPayload.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada item teralokasi untuk diterbitkan invoice.' });
+            throw new CustomError('Tidak ada item teralokasi untuk diterbitkan invoice.', 400);
         }
 
         discountTotal = Math.min(discountTotal, itemsSubtotal);
@@ -183,15 +289,16 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
         const taxConfig = await TaxConfigService.getConfig();
         const computedTax = computeInvoiceTax(subtotalBase, taxConfig);
 
-        const paymentStatus = paymentMethod === 'cod' || paymentMethod === 'cash_store'
-            ? 'cod_pending'
-            : 'unpaid';
+        const invoicePaymentMethod = paymentMethod === 'cash_store' ? 'cash_store' : 'pending';
+        const paymentStatus = paymentMethod === 'cash_store' ? 'unpaid' : 'draft';
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
 
         const invoice = await Invoice.create({
             order_id: primaryOrder.id,
             customer_id: customerId || null,
             invoice_number: invoiceNumber,
-            payment_method: paymentMethod as any,
+            payment_method: invoicePaymentMethod as any,
             payment_status: paymentStatus,
             amount_paid: 0,
             change_amount: 0,
@@ -212,9 +319,56 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
             })),
             { transaction: t }
         );
+        await syncBackordersFromInvoicedQty(
+            orders.flatMap((order: any) => Array.isArray(order.OrderItems) ? order.OrderItems : []),
+            t
+        );
+        for (const order of orders as any[]) {
+            await recordOrderEvent({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: String(invoice.id),
+                event_type: 'invoice_issued',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    invoice_number: String(invoice.invoice_number || ''),
+                    payment_method: String(invoicePaymentMethod || ''),
+                    payment_status: String(paymentStatus || ''),
+                }
+            });
+        }
+        for (const payload of itemsPayload as any[]) {
+            const orderItemId = String(payload?.order_item_id || '');
+            const ownerRow = orders
+                .flatMap((row: any) => Array.isArray(row.OrderItems) ? row.OrderItems : [])
+                .find((item: any) => String(item?.id || '') === orderItemId);
+            const ownerOrderId = String(ownerRow?.order_id || primaryOrder.id || '');
+            if (!ownerOrderId) continue;
+            await recordOrderEvent({
+                transaction: t,
+                order_id: ownerOrderId,
+                order_item_id: orderItemId,
+                invoice_id: String(invoice.id),
+                event_type: 'invoice_item_billed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: null,
+                    after: { invoiced_qty: Number(payload?.qty || 0) },
+                    delta: { invoiced_qty: Number(payload?.qty || 0) },
+                    line_total: Number(payload?.line_total || 0),
+                    unit_price: Number(payload?.unit_price || 0),
+                }
+            });
+        }
 
         const nextStatus = 'ready_to_ship';
         const expiryDate = null;
+        const prevStatusByOrderId: Record<string, string> = {};
+        for (const order of orders as any[]) {
+            prevStatusByOrderId[String(order.id)] = String(order.status || '');
+        }
 
         await Order.update(
             {
@@ -223,59 +377,108 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
             },
             { where: { id: { [Op.in]: orderIds } }, transaction: t }
         );
-
-        await t.commit();
+        for (const order of orders as any[]) {
+            const orderId = String(order.id || '');
+            const prevStatus = String(prevStatusByOrderId[orderId] || '');
+            if (!orderId || prevStatus === nextStatus) continue;
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                event_type: 'order_status_changed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: { status: prevStatus },
+                    after: { status: nextStatus },
+                    delta: { status_changed: true }
+                }
+            });
+        }
 
         for (const order of orders as any[]) {
             const prevStatus = String(order.status || '');
             if (prevStatus !== nextStatus) {
-                emitOrderStatusChanged({
+                await emitOrderStatusChanged({
                     order_id: String(order.id),
                     from_status: prevStatus,
                     to_status: nextStatus,
                     source: String(order.source || ''),
-                    payment_method: String(paymentMethod || ''),
+                    payment_method: String(invoicePaymentMethod || ''),
                     courier_id: String(order.courier_id || ''),
                     triggered_by_role: String(req.user?.role || ''),
                     target_roles: nextStatus === 'ready_to_ship'
                         ? ['admin_gudang', 'customer']
                         : ['customer'],
+                }, {
+                    transaction: t,
+                    requestContext: 'finance_issue_invoice_status_changed'
                 });
             }
         }
 
-        return res.json({
+        await t.commit();
+
+        const responsePayload = {
             message: 'Invoice diterbitkan. Order siap diproses gudang.',
             invoice_id: invoice.id,
             invoice_number: invoice.invoice_number,
             next_status: nextStatus
-        });
+        };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
+        }
+        return res.json(responsePayload);
     } catch (error) {
-        await t.rollback();
-        return res.status(500).json({ message: 'Gagal menerbitkan invoice', error });
+        try { await t.rollback(); } catch { }
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, idempotencyScope);
+        }
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal menerbitkan invoice', 500);
     }
 };
 
 // --- Issue Invoice (Kasir step: waiting_invoice → ready_to_ship) ---
-export const issueInvoice = async (req: Request, res: Response) => {
+export const issueInvoice = asyncWrapper(async (req: Request, res: Response) => {
     const { id } = req.params; // Order ID
-    return issueInvoiceForOrders([String(id)], req, res);
-};
+    return await issueInvoiceForOrders([String(id)], req, res);
+});
 
-export const issueInvoiceBatch = async (req: Request, res: Response) => {
+export const issueInvoiceBatch = asyncWrapper(async (req: Request, res: Response) => {
     const orderIds = Array.isArray(req.body?.order_ids)
         ? req.body.order_ids.map((value: unknown) => String(value)).filter(Boolean)
         : [];
-    return issueInvoiceForOrders(orderIds, req, res);
-};
+    return await issueInvoiceForOrders(orderIds, req, res);
+});
 
-export const issueInvoiceByItems = async (req: Request, res: Response) => {
+export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const rawItemsForScope = Array.isArray(req.body?.items) ? req.body.items : [];
+    const idempotencyScope = buildIssueInvoiceItemsScope(
+        req.user?.id,
+        rawItemsForScope.map((item: any) => ({
+            order_item_id: String(item?.order_item_id || ''),
+            qty: Number(item?.qty || 0)
+        }))
+    );
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, idempotencyScope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan penerbitan invoice item duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const userRole = req.user!.role;
         if (!['kasir', 'super_admin'].includes(userRole)) {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya kasir atau super admin yang boleh menerbitkan invoice' });
+            throw new CustomError('Hanya kasir atau super admin yang boleh menerbitkan invoice', 403);
         }
 
         const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -298,7 +501,7 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
 
         if (requestedItems.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'items wajib diisi' });
+            throw new CustomError('items wajib diisi', 400);
         }
 
         const orderItemIds = Array.from(new Set(requestedItems.map((item: any) => item.order_item_id)));
@@ -311,7 +514,7 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
 
         if (orderItems.length !== orderItemIds.length) {
             await t.rollback();
-            return res.status(404).json({ message: 'Beberapa item order tidak ditemukan' });
+            throw new CustomError('Beberapa item order tidak ditemukan', 404);
         }
 
         const orderItemById = new Map<string, any>();
@@ -323,25 +526,25 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
             const order = item.Order;
             if (!order) {
                 await t.rollback();
-                return res.status(404).json({ message: 'Order untuk item tidak ditemukan' });
+                throw new CustomError('Order untuk item tidak ditemukan', 404);
             }
             const nextCustomerId = String(order.customer_id || '');
             if (!customerId) customerId = nextCustomerId;
             if (nextCustomerId !== customerId) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Semua item harus berasal dari customer yang sama.' });
+                throw new CustomError('Semua item harus berasal dari customer yang sama.', 400);
             }
 
             const nextPaymentMethod = String(order.payment_method || '');
             if (!paymentMethod) paymentMethod = nextPaymentMethod;
             if (nextPaymentMethod !== paymentMethod) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Metode pembayaran harus sama untuk invoice gabungan.' });
+                throw new CustomError('Metode pembayaran harus sama untuk invoice gabungan.', 400);
             }
 
             if (['canceled', 'expired', 'completed'].includes(String(order.status || ''))) {
                 await t.rollback();
-                return res.status(400).json({ message: `Order ${order.id} sudah selesai atau dibatalkan.` });
+                throw new CustomError(`Order ${order.id} sudah selesai atau dibatalkan.`, 400);
             }
 
             orderItemById.set(String(item.id), item);
@@ -350,7 +553,7 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
 
         if (!['transfer_manual', 'cod', 'cash_store'].includes(paymentMethod)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Metode pembayaran order belum ditentukan.' });
+            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
         }
 
         const orders = await Order.findAll({
@@ -460,12 +663,12 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
 
         if (validationError) {
             await t.rollback();
-            return res.status(400).json({ message: validationError });
+            throw new CustomError(validationError, 400);
         }
 
         if (itemsPayload.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada item teralokasi untuk diterbitkan invoice.' });
+            throw new CustomError('Tidak ada item teralokasi untuk diterbitkan invoice.', 400);
         }
 
         for (const order of orders as any[]) {
@@ -485,15 +688,16 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
         const taxConfig = await TaxConfigService.getConfig();
         const computedTax = computeInvoiceTax(subtotalBase, taxConfig);
 
-        const paymentStatus = paymentMethod === 'cod' || paymentMethod === 'cash_store'
-            ? 'cod_pending'
-            : 'unpaid';
+        const invoicePaymentMethod = paymentMethod === 'cash_store' ? 'cash_store' : 'pending';
+        const paymentStatus = paymentMethod === 'cash_store' ? 'unpaid' : 'draft';
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
 
         const invoice = await Invoice.create({
             order_id: String(orders[0]?.id || null),
             customer_id: customerId || null,
             invoice_number: invoiceNumber,
-            payment_method: paymentMethod as any,
+            payment_method: invoicePaymentMethod as any,
             payment_status: paymentStatus,
             amount_paid: 0,
             change_amount: 0,
@@ -514,6 +718,46 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
             })),
             { transaction: t }
         );
+        await syncBackordersFromInvoicedQty(orderItems as any[], t);
+        for (const order of orders as any[]) {
+            const orderId = String(order.id || '').trim();
+            if (!orderId) continue;
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                invoice_id: String(invoice.id),
+                event_type: 'invoice_issued',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    invoice_number: String(invoice.invoice_number || ''),
+                    payment_method: String(invoicePaymentMethod || ''),
+                    payment_status: String(paymentStatus || ''),
+                }
+            });
+        }
+        for (const payload of itemsPayload as any[]) {
+            const orderItemId = String(payload?.order_item_id || '').trim();
+            const orderItem = orderItemById.get(orderItemId);
+            const orderId = String(orderItem?.order_id || '').trim();
+            if (!orderId || !orderItemId) continue;
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                order_item_id: orderItemId,
+                invoice_id: String(invoice.id),
+                event_type: 'invoice_item_billed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: null,
+                    after: { invoiced_qty: Number(payload?.qty || 0) },
+                    delta: { invoiced_qty: Number(payload?.qty || 0) },
+                    line_total: Number(payload?.line_total || 0),
+                    unit_price: Number(payload?.unit_price || 0),
+                }
+            });
+        }
 
         const nextStatus = 'ready_to_ship';
         const expiryDate = null;
@@ -546,39 +790,63 @@ export const issueInvoiceByItems = async (req: Request, res: Response) => {
                 { status: nextStatus, expiry_date: expiryDate },
                 { transaction: t }
             );
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                event_type: 'order_status_changed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: { status: currentStatus },
+                    after: { status: nextStatus },
+                    delta: { status_changed: true }
+                }
+            });
         }
-
-        await t.commit();
 
         for (const order of ordersWithLines as any[]) {
             const orderId = String(order.id);
             const prevStatus = prevStatusByOrderId[orderId] || '';
             if (prevStatus !== nextStatus) {
-                emitOrderStatusChanged({
+                await emitOrderStatusChanged({
                     order_id: String(order.id),
                     from_status: prevStatus,
                     to_status: nextStatus,
                     source: String(order.source || ''),
-                    payment_method: String(paymentMethod || ''),
+                    payment_method: String(invoicePaymentMethod || ''),
                     courier_id: String(order.courier_id || ''),
                     triggered_by_role: String(req.user?.role || ''),
                     target_roles: nextStatus === 'ready_to_ship'
                         ? ['admin_gudang', 'customer']
                         : ['customer'],
+                }, {
+                    transaction: t,
+                    requestContext: 'finance_issue_invoice_batch_status_changed'
                 });
             }
         }
 
-        return res.json({
+        await t.commit();
+
+        const responsePayload = {
             message: 'Invoice diterbitkan. Order siap diproses gudang.',
             invoice_id: invoice.id,
             invoice_number: invoice.invoice_number,
             next_status: nextStatus
-        });
+        };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
+        }
+        return res.json(responsePayload);
     } catch (error: any) {
-        await t.rollback();
+        try { await t.rollback(); } catch { }
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, idempotencyScope);
+        }
+        if (error instanceof CustomError) {
+            throw error;
+        }
         const message = typeof error?.message === 'string' ? error.message : 'Gagal menerbitkan invoice';
-        return res.status(500).json({ message, error });
+        throw new CustomError(message, 500);
     }
-};
-
+});

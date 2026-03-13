@@ -8,7 +8,10 @@ import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
-export const createPurchaseOrder = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const supplierId = Number(req.body?.supplier_id);
@@ -16,17 +19,17 @@ export const createPurchaseOrder = async (req: Request, res: Response) => {
 
         if (!Number.isInteger(supplierId) || supplierId <= 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'supplier_id tidak valid' });
+            throw new CustomError('supplier_id tidak valid', 400);
         }
         if (!Number.isFinite(totalCost) || totalCost < 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'total_cost tidak valid' });
+            throw new CustomError('total_cost tidak valid', 400);
         }
 
         const supplier = await Supplier.findByPk(supplierId, { transaction: t });
         if (!supplier) {
             await t.rollback();
-            return res.status(404).json({ message: 'Supplier tidak ditemukan' });
+            throw new CustomError('Supplier tidak ditemukan', 404);
         }
 
         const po = await PurchaseOrder.create({
@@ -57,12 +60,13 @@ export const createPurchaseOrder = async (req: Request, res: Response) => {
         await t.commit();
         res.status(201).json(po);
     } catch (error) {
-        await t.rollback();
-        res.status(500).json({ message: 'Error creating PO', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating PO', 500);
     }
-};
+});
 
-export const getPurchaseOrders = async (req: Request, res: Response) => {
+export const getPurchaseOrders = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { page = 1, limit = 10, status, supplier_id } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
@@ -86,11 +90,11 @@ export const getPurchaseOrders = async (req: Request, res: Response) => {
             purchaseOrders: rows
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching POs', error });
+        throw new CustomError('Error fetching POs', 500);
     }
-};
+});
 
-export const getPurchaseOrderById = async (req: Request, res: Response) => {
+export const getPurchaseOrderById = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = req.params.id as string;
         const po = await PurchaseOrder.findByPk(id, {
@@ -105,16 +109,17 @@ export const getPurchaseOrderById = async (req: Request, res: Response) => {
         });
 
         if (!po) {
-            return res.status(404).json({ message: 'Purchase Order not found' });
+            throw new CustomError('Purchase Order not found', 404);
         }
 
         res.json(po);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching PO detail', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching PO detail', 500);
     }
-};
+});
 
-export const receivePurchaseOrder = async (req: Request, res: Response) => {
+export const receivePurchaseOrder = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const id = req.params.id as string;
@@ -127,12 +132,12 @@ export const receivePurchaseOrder = async (req: Request, res: Response) => {
 
         if (!po) {
             await t.rollback();
-            return res.status(404).json({ message: 'Purchase Order not found' });
+            throw new CustomError('Purchase Order not found', 404);
         }
 
         if (po.status === 'received' || po.status === 'canceled') {
             await t.rollback();
-            return res.status(400).json({ message: `Cannot receive PO with status ${po.status}` });
+            throw new CustomError(`Cannot receive PO with status ${po.status}`, 400);
         }
 
         if (Array.isArray(items)) {
@@ -211,7 +216,8 @@ export const receivePurchaseOrder = async (req: Request, res: Response) => {
         await t.commit();
         res.json({ message: 'PO received successfully', status: newStatus });
     } catch (error) {
-        await t.rollback();
-        res.status(500).json({ message: 'Error receiving PO', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error receiving PO', 500);
     }
-};
+});

@@ -31,7 +31,17 @@ const formatRemaining = (dueAt: string | Date | null | undefined): string => {
 
 export default function AdminIssueOrdersPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
-  const [orders, setOrders] = useState<any[]>([]);
+  type IssueOrderRow = {
+    id: string;
+    customer_name?: string;
+    courier_display_name?: string | null;
+    createdAt?: string;
+    issue_overdue?: boolean;
+    Courier?: { name?: string | null } | null;
+    active_issue?: { due_at?: string | null; note?: string | null } | null;
+  };
+
+  const [orders, setOrders] = useState<IssueOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
@@ -45,7 +55,26 @@ export default function AdminIssueOrdersPage() {
         search: searchValue || undefined,
       });
 
-      const rows = (res.data?.orders || []) as any[];
+      const rowsRaw = Array.isArray(res.data?.orders) ? res.data.orders : [];
+      const rows: IssueOrderRow[] = rowsRaw.map((item) => {
+        const row = item as Record<string, unknown>;
+        return {
+          id: String(row.id ?? ''),
+          customer_name: row.customer_name ? String(row.customer_name) : undefined,
+          courier_display_name: row.courier_display_name ? String(row.courier_display_name) : null,
+          createdAt: row.createdAt ? String(row.createdAt) : undefined,
+          issue_overdue: Boolean(row.issue_overdue),
+          Courier: row.Courier && typeof row.Courier === 'object'
+            ? { name: (row.Courier as Record<string, unknown>).name ? String((row.Courier as Record<string, unknown>).name) : null }
+            : null,
+          active_issue: row.active_issue && typeof row.active_issue === 'object'
+            ? {
+              due_at: (row.active_issue as Record<string, unknown>).due_at ? String((row.active_issue as Record<string, unknown>).due_at) : null,
+              note: (row.active_issue as Record<string, unknown>).note ? String((row.active_issue as Record<string, unknown>).note) : null,
+            }
+            : null,
+        };
+      });
       const sorted = [...rows].sort((a, b) => {
         const aOverdue = Boolean(a.issue_overdue);
         const bOverdue = Boolean(b.issue_overdue);

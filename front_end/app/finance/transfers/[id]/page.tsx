@@ -1,14 +1,12 @@
 
 'use client';
 import React, { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
-import Link from 'next/link';
 import { AccountSelector } from '@/components/finance/AccountSelector';
 import Image from 'next/image';
 
 export default function TransferDetailPage() {
-    const params = useParams();
     const router = useRouter();
     const [selectedAccount, setSelectedAccount] = useState('1102'); // Default Bank
     const [isRejectionMode, setIsRejectionMode] = useState(false);

@@ -10,21 +10,26 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
 // --- Tax Settings ---
-export const getTaxSettings = async (_req: Request, res: Response) => {
+export const getTaxSettings = asyncWrapper(async (_req: Request, res: Response) => {
     try {
         const config = await TaxConfigService.getConfig();
         return res.json(config);
     } catch (error) {
-        return res.status(500).json({ message: 'Error fetching tax settings', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching tax settings', 500);
     }
-};
+});
 
-export const updateTaxSettings = async (req: Request, res: Response) => {
+export const updateTaxSettings = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const current = await TaxConfigService.getConfig();
@@ -40,12 +45,12 @@ export const updateTaxSettings = async (req: Request, res: Response) => {
 
         if (!nextMode && vatPercent === null && pphPercent === null) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada perubahan pada pengaturan pajak.' });
+            throw new CustomError('Tidak ada perubahan pada pengaturan pajak.', 400);
         }
 
         if (modeRaw && !nextMode) {
             await t.rollback();
-            return res.status(400).json({ message: 'company_tax_mode harus pkp atau non_pkp.' });
+            throw new CustomError('company_tax_mode harus pkp atau non_pkp.', 400);
         }
 
         const nextConfig = {
@@ -64,7 +69,9 @@ export const updateTaxSettings = async (req: Request, res: Response) => {
         return res.json(nextConfig);
     } catch (error) {
         try { await t.rollback(); } catch { }
-        return res.status(500).json({ message: 'Error updating tax settings', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error updating tax settings', 500);
     }
-};
-
+});

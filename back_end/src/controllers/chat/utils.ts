@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import path from 'path';
-import { MessageMedia } from 'whatsapp-web.js';
 import { ChatSession, ChatThread, User } from '../../models';
 import {
     ChatActor,
@@ -11,9 +10,8 @@ import {
     buildUnreadBadgePayloadsForThread
 } from '../../services/ChatBadgeService';
 import { io } from '../../server';
-import waClient from '../../services/whatsappClient';
 import { normalizeWhatsappNumber } from '../../utils/whatsappNumber';
-import fs from 'fs';
+import { sendWhatsappSafe } from '../../services/WhatsappSendService';
 
 export const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
 export const INTERNAL_STAFF_ROLES = ['super_admin', 'kasir', 'admin_gudang', 'admin_finance', 'driver'] as const;
@@ -26,19 +24,18 @@ export const asActor = (req: Request): ChatActor => ({
     whatsapp_number: req.user?.whatsapp_number,
 });
 
+import { CustomError } from '../../utils/CustomError';
+
 export const mapChatServiceError = (res: Response, error: unknown): boolean => {
     const code = String((error as any)?.message || '');
     if (code === 'ACTOR_NOT_FOUND') {
-        res.status(401).json({ message: 'Sesi tidak valid. Silakan login ulang.' });
-        return true;
+        throw new CustomError('Sesi tidak valid. Silakan login ulang.', 401);
     }
     if (code === 'THREAD_NOT_FOUND') {
-        res.status(404).json({ message: 'Thread tidak ditemukan.' });
-        return true;
+        throw new CustomError('Thread tidak ditemukan.', 404);
     }
     if (code === 'THREAD_FORBIDDEN') {
-        res.status(403).json({ message: 'Akses thread ditolak.' });
-        return true;
+        throw new CustomError('Akses thread ditolak.', 403);
     }
     return false;
 };
@@ -127,19 +124,30 @@ export const sendViaWhatsApp = async (targetNumber: string, payload: { body?: st
     const attachmentUrl = String(payload.attachmentUrl || '').trim();
 
     if (!textBody && !attachmentUrl) {
-        throw new Error('Pesan atau lampiran wajib diisi.');
+        throw new CustomError('Pesan atau lampiran wajib diisi.', 400);
     }
-    const chatId = `${targetNumber}@c.us`;
-    if (attachmentUrl) {
-        const absolutePath = path.resolve(process.cwd(), attachmentUrl.replace(/^\/+/, ''));
-        if (!fs.existsSync(absolutePath)) {
-            throw new Error('File lampiran tidak ditemukan di server.');
+    const absoluteAttachmentPath = attachmentUrl
+        ? path.resolve(process.cwd(), attachmentUrl.replace(/^\/+/, ''))
+        : '';
+    const result = await sendWhatsappSafe({
+        target: targetNumber,
+        textBody,
+        attachmentPath: absoluteAttachmentPath || undefined,
+        requestContext: 'chat_send'
+    });
+
+    if (result.status === 'skipped_not_ready') {
+        throw new CustomError('WhatsApp belum terhubung. Silakan Connect WhatsApp terlebih dahulu.', 409);
+    }
+    if (result.status === 'skipped_no_target') {
+        throw new CustomError('Target WhatsApp thread tidak valid.', 400);
+    }
+    if (result.status !== 'sent') {
+        if (result.reason === 'attachment_missing') {
+            throw new CustomError('File lampiran tidak ditemukan di server.', 400);
         }
-        const media = await MessageMedia.fromFilePath(absolutePath);
-        await waClient.sendMessage(chatId, media, textBody ? { caption: textBody } : undefined);
-        return;
+        throw new CustomError('Gagal mengirim pesan WhatsApp.', 500);
     }
-    await waClient.sendMessage(chatId, textBody);
 };
 
 export const toLegacySessionRow = (row: any) => {

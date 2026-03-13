@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
-import { Truck, Clock, MessageSquare, ClipboardCheck } from 'lucide-react';
+import { Truck, Clock, MessageSquare, ClipboardCheck, HandCoins } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
@@ -18,6 +18,7 @@ type NavItem = {
 const navItems: NavItem[] = [
     { href: '/driver', label: 'Tugas', icon: Truck },
     { href: '/driver/precheck', label: 'Checklist', icon: ClipboardCheck },
+    { href: '/driver/verifikasi-dana', label: 'Dana', icon: HandCoins },
     { href: '/driver/history', label: 'Riwayat', icon: Clock },
     { href: '/driver/chat', label: 'Chat', icon: MessageSquare },
 ];

@@ -1,5 +1,5 @@
 import { Op, Transaction } from 'sequelize';
-import { Invoice, InvoiceItem, OrderItem } from '../models';
+import { Invoice, InvoiceItem, OrderItem, Order } from '../models';
 
 const uniqueInvoices = (rows: any[]): Invoice[] => {
     const map = new Map<string, Invoice>();
@@ -117,4 +117,132 @@ export const attachInvoicesToOrders = async (
             Invoices: sorted
         };
     });
+};
+export const findOrderByIdOrInvoiceId = async (
+    id: string,
+    courierId?: string,
+    options?: { transaction?: Transaction; lock?: any }
+): Promise<Order | null> => {
+    // 1. Try as Order ID
+    const query: any = { id };
+    if (courierId) query.courier_id = courierId;
+
+    let order = await Order.findOne({
+        where: query,
+        transaction: options?.transaction,
+        lock: options?.lock
+    });
+
+    if (order) return order;
+
+    // 2. Try as Invoice ID
+    const invoice = await Invoice.findByPk(id, { transaction: options?.transaction });
+    if (invoice) {
+        // If it has order_id link direct
+        if (invoice.order_id) {
+            const query2: any = { id: invoice.order_id };
+            if (courierId) query2.courier_id = courierId;
+            order = await Order.findOne({
+                where: query2,
+                transaction: options?.transaction,
+                lock: options?.lock
+            });
+            if (order) return order;
+        }
+
+        // Linked via InvoiceItem -> OrderItem -> Order
+        const invoiceItem = await InvoiceItem.findOne({
+            where: { invoice_id: id },
+            include: [{
+                model: OrderItem,
+                include: [{
+                    model: Order
+                }]
+            }],
+            transaction: options?.transaction
+        });
+
+        const linkedOrder = (invoiceItem as any)?.OrderItem?.Order as Order | undefined;
+        if (linkedOrder) {
+            if (courierId && linkedOrder.courier_id !== courierId) return null;
+            return linkedOrder;
+        }
+    }
+
+    return null;
+};
+
+export const findDriverInvoiceContextByOrderOrInvoiceId = async (
+    id: string,
+    courierId?: string,
+    options?: { transaction?: Transaction; lock?: any }
+): Promise<{ invoice: Invoice | null; orders: Order[] }> => {
+    const transaction = options?.transaction;
+    const lock = options?.lock;
+
+    const directOrderWhere: any = { id };
+    if (courierId) directOrderWhere.courier_id = courierId;
+
+    const directOrder = await Order.findOne({
+        where: directOrderWhere,
+        transaction,
+        lock
+    });
+
+    if (directOrder) {
+        const invoices = await findInvoicesByOrderId(String(directOrder.id), { transaction });
+        const latestInvoice = invoices
+            .slice()
+            .sort((a, b) => new Date(String(b.createdAt || 0)).getTime() - new Date(String(a.createdAt || 0)).getTime())[0] || null;
+        if (!latestInvoice) {
+            return { invoice: null, orders: [directOrder] };
+        }
+
+        const relatedOrderIds = await findOrderIdsByInvoiceId(String(latestInvoice.id), { transaction });
+        if (relatedOrderIds.length === 0) {
+            return { invoice: latestInvoice, orders: [directOrder] };
+        }
+
+        const invoiceOrderWhere: any = { id: { [Op.in]: relatedOrderIds } };
+        if (courierId) invoiceOrderWhere.courier_id = courierId;
+        const invoiceOrders = await Order.findAll({
+            where: invoiceOrderWhere,
+            transaction,
+            lock
+        });
+        return {
+            invoice: latestInvoice,
+            orders: invoiceOrders.length > 0 ? invoiceOrders : [directOrder]
+        };
+    }
+
+    const invoice = await Invoice.findByPk(id, { transaction, lock });
+    if (!invoice) {
+        return { invoice: null, orders: [] };
+    }
+
+    const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction });
+    if (relatedOrderIds.length === 0) {
+        if (invoice.order_id) {
+            const orderWhere: any = { id: String(invoice.order_id) };
+            if (courierId) orderWhere.courier_id = courierId;
+            const fallbackOrder = await Order.findOne({
+                where: orderWhere,
+                transaction,
+                lock
+            });
+            return { invoice, orders: fallbackOrder ? [fallbackOrder] : [] };
+        }
+        return { invoice, orders: [] };
+    }
+
+    const invoiceOrderWhere: any = { id: { [Op.in]: relatedOrderIds } };
+    if (courierId) invoiceOrderWhere.courier_id = courierId;
+    const invoiceOrders = await Order.findAll({
+        where: invoiceOrderWhere,
+        transaction,
+        lock
+    });
+
+    return { invoice, orders: invoiceOrders };
 };

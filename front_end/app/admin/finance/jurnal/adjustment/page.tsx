@@ -3,20 +3,37 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
-import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 
 type JournalLine = {
-    account_id: number | '';
+    account_id: string;
     debit: number | '';
     credit: number | '';
 };
 
+type AccountOption = {
+    id: number;
+    code: string;
+    name: string;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const maybeResponse = (error as { response?: { data?: { message?: unknown } } }).response;
+        if (typeof maybeResponse?.data?.message === 'string' && maybeResponse.data.message.trim()) {
+            return maybeResponse.data.message;
+        }
+        const maybeMessage = (error as { message?: unknown }).message;
+        if (typeof maybeMessage === 'string' && maybeMessage.trim()) return maybeMessage;
+    }
+    return fallback;
+};
+
 export default function AdjustmentJournalPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
-    const [accounts, setAccounts] = useState<any[]>([]);
+    const [accounts, setAccounts] = useState<AccountOption[]>([]);
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [description, setDescription] = useState('');
     const [lines, setLines] = useState<JournalLine[]>([
@@ -26,11 +43,21 @@ export default function AdjustmentJournalPage() {
 
     useEffect(() => {
         if (allowed) {
-            api.admin.accounts.getAll().then(res => setAccounts(res.data)).catch(console.error);
+            api.admin.accounts.getAll()
+                .then((res) => {
+                    const rows = Array.isArray(res.data) ? res.data : [];
+                    const mapped: AccountOption[] = rows.map((row: Record<string, unknown>) => ({
+                        id: Number(row.id ?? 0),
+                        code: String(row.code ?? ''),
+                        name: String(row.name ?? ''),
+                    })).filter((row) => row.id > 0);
+                    setAccounts(mapped);
+                })
+                .catch(console.error);
         }
     }, [allowed]);
 
-    const updateLine = (index: number, field: keyof JournalLine, value: any) => {
+    const updateLine = (index: number, field: keyof JournalLine, value: JournalLine[keyof JournalLine]) => {
         setLines(prev => {
             const next = [...prev];
             next[index] = { ...next[index], [field]: value };
@@ -71,9 +98,9 @@ export default function AdjustmentJournalPage() {
             alert('Jurnal Penyesuaian berhasil disimpan');
             setDescription('');
             setLines([{ account_id: '', debit: '', credit: 0 }, { account_id: '', debit: 0, credit: '' }]);
-        } catch (e: any) {
-            console.error(e);
-            alert('Gagal menyimpan: ' + (e.response?.data?.message || e.message));
+        } catch (error: unknown) {
+            console.error(error);
+            alert(`Gagal menyimpan: ${getErrorMessage(error, 'Terjadi kesalahan saat menyimpan jurnal')}`);
         }
     };
 

@@ -13,12 +13,31 @@ type InvoiceRow = {
   invoice_number: string;
   payment_status: string;
   payment_method: string;
+  payment_proof_url?: string | null;
   total: number;
   createdAt?: string;
   orderIds: string[];
 };
 
+type InvoiceSummary = {
+  id: string;
+  invoice_number?: string | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
+  payment_proof_url?: string | null;
+  total?: number | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+};
+
+type OrderSummary = {
+  id: string;
+  Invoices?: InvoiceSummary[] | null;
+  Invoice?: InvoiceSummary | null;
+};
+
 const paymentMethodLabel = (method?: string) => {
+  if (!String(method || '').trim() || method === 'pending') return 'Menunggu Driver';
   if (method === 'transfer_manual') return 'Transfer Manual';
   if (method === 'cod') return 'COD';
   if (method === 'cash_store') return 'Tunai Toko';
@@ -26,10 +45,63 @@ const paymentMethodLabel = (method?: string) => {
 };
 
 const paymentStatusLabel = (status?: string) => {
+  if (status === 'draft') return 'Belum Ditentukan';
   if (status === 'unpaid') return 'Belum Lunas';
-  if (status === 'cod_pending') return 'COD Pending';
+  if (status === 'cod_pending') return 'Sudah Dibayar ke Driver';
   if (status === 'paid') return 'Lunas';
   return status || '-';
+};
+
+const deriveInvoicePaymentStage = (row: InvoiceRow) => {
+  const paymentMethod = String(row.payment_method || '');
+  const paymentStatus = String(row.payment_status || '');
+  const proofUploaded = Boolean(String(row.payment_proof_url || '').trim());
+
+  if (!paymentMethod || paymentMethod === 'pending' || paymentStatus === 'draft') {
+    return {
+      label: 'Menunggu Penentuan Pembayaran',
+      note: 'Metode pembayaran belum dipilih. Pembayaran akan ditentukan nanti bersama driver saat proses pengiriman.',
+      tone: 'bg-slate-50 text-slate-700 border-slate-200',
+    };
+  }
+
+  if (paymentMethod === 'transfer_manual') {
+    if (paymentStatus === 'paid') {
+      return {
+        label: 'Lunas',
+        note: 'Pembayaran transfer sudah diverifikasi admin finance.',
+        tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
+    }
+    if (proofUploaded || paymentStatus === 'waiting_admin_verification') {
+      return {
+        label: 'Menunggu Verifikasi Finance',
+        note: 'Bukti transfer sudah dikirim. Menunggu verifikasi admin finance.',
+        tone: 'bg-blue-50 text-blue-700 border-blue-200',
+      };
+    }
+    return {
+      label: 'Belum Dibayar',
+      note: 'Customer belum mengirim bukti transfer untuk invoice ini.',
+      tone: 'bg-amber-50 text-amber-700 border-amber-200',
+    };
+  }
+
+  if (paymentMethod === 'cod') {
+    return {
+      label: paymentStatus === 'paid' ? 'Lunas' : 'Sudah Dibayar ke Driver',
+      note: paymentStatus === 'paid'
+        ? 'Setoran COD sudah selesai diverifikasi finance.'
+        : 'Pembayaran COD sudah diterima driver. Proses setoran ke admin finance ditangani internal.',
+      tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    };
+  }
+
+  return {
+    label: paymentStatusLabel(paymentStatus),
+    note: 'Lihat detail invoice untuk status pembayaran lengkap.',
+    tone: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
 };
 
 export default function CustomerInvoicesPage() {
@@ -47,15 +119,15 @@ export default function CustomerInvoicesPage() {
     try {
       setLoading(true);
       const res = await api.orders.getMyOrders({ page: 1, limit: 200 });
-      const orders = res.data?.orders || [];
+      const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const invoiceMap = new Map<string, InvoiceRow>();
-      orders.forEach((order: any) => {
+      orders.forEach((order) => {
         const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
           ? order.Invoices
           : order?.Invoice
             ? [order.Invoice]
             : [];
-        invoices.forEach((invoice: any) => {
+        invoices.forEach((invoice) => {
           const id = String(invoice?.id || '');
           if (!id) return;
           const existing: InvoiceRow = invoiceMap.get(id) || {
@@ -63,6 +135,7 @@ export default function CustomerInvoicesPage() {
             invoice_number: String(invoice?.invoice_number || id),
             payment_status: String(invoice?.payment_status || ''),
             payment_method: String(invoice?.payment_method || ''),
+            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
             total: Number(invoice?.total || 0),
             createdAt: invoice?.createdAt || invoice?.created_at,
             orderIds: []
@@ -73,7 +146,10 @@ export default function CustomerInvoicesPage() {
           invoiceMap.set(id, existing);
         });
       });
-      const unpaid = Array.from(invoiceMap.values()).filter((inv) => String(inv.payment_status || '') !== 'paid');
+      const unpaid = Array.from(invoiceMap.values()).filter((inv) => {
+        const status = String(inv.payment_status || '');
+        return status !== 'paid' && status !== 'cod_pending';
+      });
       setRows(unpaid.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
     } catch (error) {
       console.error('Failed to load invoices:', error);
@@ -104,14 +180,6 @@ export default function CustomerInvoicesPage() {
     });
   }, [rows, query]);
 
-  const invoiceOrderLookup = useMemo(() => {
-    const map = new Map<string, string[]>();
-    rows.forEach((row) => {
-      map.set(String(row.id), row.orderIds || []);
-    });
-    return map;
-  }, [rows]);
-
   const totalDue = filteredRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
 
   if (!isAuthenticated) {
@@ -140,6 +208,22 @@ export default function CustomerInvoicesPage() {
             <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">Invoice Saya</h3>
             <h1 className="text-xl font-black text-slate-900">Tagihan Customer</h1>
           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
+          <div className="rounded-xl bg-emerald-600 px-4 py-3 text-center text-white shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-[0.22em]">Halaman Aktif</p>
+            <p className="mt-1 text-sm font-black">Invoice Aktif</p>
+            <p className="mt-1 text-[11px] font-semibold text-emerald-50">Tagihan yang masih perlu diproses</p>
+          </div>
+          <Link
+            href="/invoices/completed"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-center text-slate-700 transition-colors hover:border-emerald-200 hover:bg-emerald-50"
+          >
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Buka Riwayat</p>
+            <p className="mt-1 text-sm font-black text-slate-900">Invoice Selesai</p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">Lihat invoice yang sudah lunas / selesai</p>
+          </Link>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
@@ -176,31 +260,39 @@ export default function CustomerInvoicesPage() {
           {!loading && filteredRows.length > 0 && (
             <div className="space-y-2">
               {filteredRows.map((row) => (
-                <Link
-                  key={row.id}
-                  href={`/invoices/${row.id}`}
-                  className="block border border-slate-200 rounded-2xl p-4 bg-slate-50 hover:bg-slate-100 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-900 truncate">{row.invoice_number}</p>
-                      <p className="text-xs text-slate-600 truncate">
-                        Order: {row.orderIds.join(', ')}
-                      </p>
-                      <p className="text-[10px] text-slate-500">
-                        {paymentMethodLabel(row.payment_method)} • {paymentStatusLabel(row.payment_status)}
-                        {row.createdAt ? ` • ${formatDateTime(row.createdAt)}` : ''}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-[11px] text-slate-500">Tagihan</p>
-                      <p className="text-sm font-black text-rose-700">{formatCurrency(Number(row.total || 0))}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 text-[10px] text-slate-500">
-                    Pembayaran akan dilakukan melalui driver saat pengantaran atau sesuai metode yang disepakati.
-                  </div>
-                </Link>
+                (() => {
+                  const stage = deriveInvoicePaymentStage(row);
+                  return (
+                    <Link
+                      key={row.id}
+                      href={`/invoices/${row.id}`}
+                      className="block border border-slate-200 rounded-2xl p-4 bg-slate-50 hover:bg-slate-100 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 truncate">{row.invoice_number}</p>
+                          <p className="text-xs text-slate-600 truncate">
+                            Order: {row.orderIds.join(', ')}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            {paymentMethodLabel(row.payment_method)} • {row.createdAt ? formatDateTime(row.createdAt) : '-'}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-[11px] text-slate-500">Tagihan</p>
+                          <p className="text-sm font-black text-rose-700">{formatCurrency(Number(row.total || 0))}</p>
+                        </div>
+                      </div>
+                      <div className={`mt-3 rounded-xl border px-3 py-2 ${stage.tone}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.22em]">{stage.label}</p>
+                          <p className="text-[10px] font-bold">{paymentStatusLabel(row.payment_status)}</p>
+                        </div>
+                        <p className="mt-1 text-[11px] font-medium">{stage.note}</p>
+                      </div>
+                    </Link>
+                  );
+                })()
               ))}
             </div>
           )}

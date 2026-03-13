@@ -3,12 +3,54 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
+import Image from 'next/image';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+
+type OrderInvoiceSummary = {
+  id: string;
+  invoice_number?: string | null;
+  total?: number | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
+  payment_proof_url?: string | null;
+};
+
+type FinanceOrderRow = {
+  id: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  customer_name?: string | null;
+  delivery_proof_url?: string | null;
+  Invoice?: OrderInvoiceSummary | null;
+};
+
+type FinanceBoardRow = {
+  id: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  customer_name?: string | null;
+  delivery_proof_url?: string | null;
+  Invoice?: OrderInvoiceSummary | null;
+  related_order_ids: string[];
+  related_order_count: number;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === 'object' && error !== null) {
+    const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+    if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+    const errorMessage = (error as { message?: unknown }).message;
+    if (typeof errorMessage === 'string' && errorMessage.trim()) return errorMessage;
+  }
+  return fallback;
+};
 
 const normalizeProofImageUrl = (raw?: string | null) => {
   if (!raw) return null;
@@ -30,7 +72,7 @@ export default function FinanceVerifyPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance']);
 
   const [activeTab, setActiveTab] = useState<'verify' | 'cod' | 'completed'>('verify');
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<FinanceOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -38,11 +80,48 @@ export default function FinanceVerifyPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await api.admin.orderManagement.getAll({
-        page: 1, limit: 100,
-        status: 'waiting_admin_verification,delivered,completed,canceled'
+      const status = 'waiting_admin_verification,delivered,completed,canceled';
+      const firstPage = await api.admin.orderManagement.getAll({
+        page: 1,
+        limit: 100,
+        status,
       });
-      setOrders(res.data?.orders || []);
+      const totalPages = Math.max(1, Number(firstPage.data?.totalPages || 1));
+      let rows = Array.isArray(firstPage.data?.orders) ? firstPage.data.orders : [];
+
+      if (totalPages > 1) {
+        const restPages = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, index) =>
+            api.admin.orderManagement.getAll({
+              page: index + 2,
+              limit: 100,
+              status,
+            })
+          )
+        );
+        restPages.forEach((response) => {
+          const pageRows = Array.isArray(response.data?.orders) ? response.data.orders : [];
+          rows = rows.concat(pageRows);
+        });
+      }
+
+      const mapped: FinanceOrderRow[] = rows.map((row: Record<string, unknown>) => ({
+        id: String(row.id ?? ''),
+        status: String(row.status ?? ''),
+        createdAt: row.createdAt ? String(row.createdAt) : undefined,
+        updatedAt: row.updatedAt ? String(row.updatedAt) : undefined,
+        customer_name: row.customer_name ? String(row.customer_name) : null,
+        delivery_proof_url: row.delivery_proof_url ? String(row.delivery_proof_url) : null,
+        Invoice: row.Invoice && typeof row.Invoice === 'object' ? {
+          id: String((row.Invoice as Record<string, unknown>).id ?? ''),
+          invoice_number: (row.Invoice as Record<string, unknown>).invoice_number ? String((row.Invoice as Record<string, unknown>).invoice_number) : null,
+          total: Number((row.Invoice as Record<string, unknown>).total ?? 0),
+          payment_status: (row.Invoice as Record<string, unknown>).payment_status ? String((row.Invoice as Record<string, unknown>).payment_status) : null,
+          payment_method: (row.Invoice as Record<string, unknown>).payment_method ? String((row.Invoice as Record<string, unknown>).payment_method) : null,
+          payment_proof_url: (row.Invoice as Record<string, unknown>).payment_proof_url ? String((row.Invoice as Record<string, unknown>).payment_proof_url) : null,
+        } : null,
+      })).filter((row) => Boolean(row.id));
+      setOrders(mapped);
     } catch (error) {
       console.error('Failed to load orders:', error);
     } finally {
@@ -73,7 +152,7 @@ export default function FinanceVerifyPage() {
 
   // Client-side filtering for tabs
   const tabOrders = useMemo(() => {
-    return orders.filter(o => {
+    const filtered = orders.filter(o => {
       if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
       if (activeTab === 'cod') {
         const isCod = ['cod', 'cash_store'].includes(o.Invoice?.payment_method);
@@ -84,18 +163,71 @@ export default function FinanceVerifyPage() {
       }
       return false;
     });
+    return filtered.sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
   }, [orders, activeTab]);
+
+  const boardRows = useMemo<FinanceBoardRow[]>(() => {
+    const grouped = new Map<string, FinanceBoardRow>();
+
+    tabOrders.forEach((row) => {
+      const invoiceId = String(row.Invoice?.id || '').trim();
+      const groupKey = invoiceId || `order:${row.id}`;
+      const existing = grouped.get(groupKey);
+
+      if (!existing) {
+        grouped.set(groupKey, {
+          id: invoiceId || row.id,
+          status: row.status,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          customer_name: row.customer_name,
+          delivery_proof_url: row.delivery_proof_url,
+          Invoice: row.Invoice || null,
+          related_order_ids: [row.id],
+          related_order_count: 1,
+        });
+        return;
+      }
+
+      existing.related_order_ids.push(row.id);
+      existing.related_order_count += 1;
+
+      const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+      const rowTime = new Date(row.updatedAt || row.createdAt || 0).getTime();
+      if (rowTime > existingTime) {
+        existing.updatedAt = row.updatedAt;
+        existing.createdAt = row.createdAt;
+        existing.status = row.status;
+        existing.delivery_proof_url = row.delivery_proof_url;
+      }
+
+      if (!existing.customer_name && row.customer_name) existing.customer_name = row.customer_name;
+      if (!existing.Invoice?.payment_proof_url && row.Invoice?.payment_proof_url) {
+        existing.Invoice = row.Invoice;
+      }
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [tabOrders]);
 
   if (!allowed) return null;
 
-  const handleAction = async (id: string, actionType: 'verify', verifyAction?: 'approve' | 'reject') => {
+  const handleAction = async (id: string, verifyAction?: 'approve' | 'reject') => {
     try {
       setBusyId(id);
       await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
       await load();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Action failed:', error);
-      alert(error?.response?.data?.message || 'Gagal memproses.');
+      alert(getErrorMessage(error, 'Gagal memproses.'));
     } finally {
       setBusyId(null);
     }
@@ -134,14 +266,13 @@ export default function FinanceVerifyPage() {
       <div className="px-5 py-4 space-y-3">
         {loading ? (
           [1, 2, 3].map(i => <div key={i} className="h-24 bg-slate-200 rounded-2xl animate-pulse" />)
-        ) : tabOrders.length === 0 ? (
+        ) : boardRows.length === 0 ? (
           <div className="text-center py-20 text-slate-400">
             <p className="text-sm">Tidak ada data</p>
           </div>
         ) : (
-          tabOrders.map((o) => {
+          boardRows.map((o) => {
             const proofUrl = normalizeProofImageUrl(o.Invoice?.payment_proof_url);
-            const deliveryProofUrl = normalizeProofImageUrl(o.delivery_proof_url);
             const isCodTab = activeTab === 'cod';
             // const isVerifyTab = activeTab === 'verify'; 
             const initial = (o.customer_name || 'C').charAt(0).toUpperCase();
@@ -157,10 +288,13 @@ export default function FinanceVerifyPage() {
                     <div>
                       <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{o.customer_name}</h4>
                       <p className="text-[10px] text-slate-500 font-mono">#{o.Invoice?.invoice_number || o.id}</p>
+                      <p className="text-[10px] text-slate-400">
+                        {o.related_order_count} order terkait
+                      </p>
                     </div>
                   </div>
                   <span className="text-sm font-black text-slate-900">
-                    {formatCurrency(Number(o.Invoice?.total || o.total_amount))}
+                    {formatCurrency(Number(o.Invoice?.total || 0))}
                   </span>
                 </div>
 
@@ -189,8 +323,8 @@ export default function FinanceVerifyPage() {
                         </button>
                       ) : null}
                       <button
-                        onClick={() => handleAction(o.id, 'verify', 'approve')}
-                        disabled={busyId === o.id || !proofUrl}
+                        onClick={() => handleAction(String(o.Invoice?.id || o.id), 'approve')}
+                        disabled={busyId === String(o.Invoice?.id || o.id) || !proofUrl}
                         className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 disabled:opacity-50"
                       >
                         Approve
@@ -208,10 +342,10 @@ export default function FinanceVerifyPage() {
                   )}
 
                   {activeTab === 'completed' && (o.Invoice?.payment_status === 'paid') && (
-                    <button
-                      onClick={() => {
-                        if (!confirm('Void invoice ini?')) return;
-                        api.admin.finance.voidInvoice(o.Invoice?.id).then(() => load());
+                      <button
+                        onClick={() => {
+                          if (!confirm('Void invoice ini?')) return;
+                        api.admin.finance.voidInvoice(String(o.Invoice?.id || o.id)).then(() => load());
                       }}
                       className="flex-1 bg-rose-100 text-rose-600 py-2.5 rounded-xl text-xs font-bold"
                     >
@@ -233,7 +367,7 @@ export default function FinanceVerifyPage() {
               <button onClick={() => setPreviewUrl(null)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200"><X size={16} /></button>
             </div>
             <div className="p-0 bg-slate-900 flex items-center justify-center min-h-[300px]">
-              <img src={previewUrl} className="max-w-full max-h-[50vh] object-contain" alt="Proof" />
+              <Image src={previewUrl} className="max-w-full max-h-[50vh] object-contain" alt="Proof" width={640} height={640} />
             </div>
             <div className="p-4 flex gap-2">
               <button onClick={() => setPreviewUrl(null)} className="flex-1 py-3 font-bold text-slate-600 text-sm">Tutup</button>

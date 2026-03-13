@@ -4,26 +4,46 @@ import { ProductRow } from './types';
 import { api } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { Camera, History, Truck, X } from 'lucide-react';
+import Image from 'next/image';
 
 interface ProductDetailViewProps {
     product: ProductRow | null;
     onClose: () => void;
 }
 
+type MutationRow = {
+    id: string | number;
+    createdAt?: string;
+    type: string;
+    qty: number;
+    note?: string;
+    reference_id?: string;
+};
+
+type MutationResponse = {
+    data?: { mutations?: MutationRow[] };
+};
+
 export default function ProductDetailView({ product, onClose }: ProductDetailViewProps) {
-    const [mutations, setMutations] = useState<any[]>([]);
+    const [mutations, setMutations] = useState<MutationRow[]>([]);
     const [loadingMutations, setLoadingMutations] = useState(false);
 
     useEffect(() => {
-        if (product?.id) {
-            setLoadingMutations(true);
-            api.admin.inventory.getMutations(product.id)
-                .then((res: any) => setMutations(res.data.mutations || []))
-                .catch((err: any) => console.error(err))
-                .finally(() => setLoadingMutations(false));
-        } else {
+        if (!product?.id) {
             setMutations([]);
+            return;
         }
+        Promise.resolve().then(async () => {
+            setLoadingMutations(true);
+            try {
+                const res = await api.admin.inventory.getMutations(product.id) as MutationResponse;
+                setMutations(res.data?.mutations || []);
+            } catch (err) {
+                console.error(err);
+            } finally {
+                setLoadingMutations(false);
+            }
+        });
     }, [product?.id]);
 
     if (!product) {
@@ -59,7 +79,7 @@ export default function ProductDetailView({ product, onClose }: ProductDetailVie
                 {/* Image Section */}
                 <div className="aspect-video w-full bg-slate-100 rounded-xl border border-slate-200 overflow-hidden relative group">
                     {product.image_url ? (
-                        <img src={product.image_url} alt={product.name} className="w-full h-full object-contain" />
+                        <Image src={product.image_url} alt={product.name} width={640} height={360} unoptimized className="w-full h-full object-contain" />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-300">
                             <Camera size={48} />

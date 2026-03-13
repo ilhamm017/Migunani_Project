@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import {
     ArrowLeft,
     Save,
@@ -10,7 +10,6 @@ import {
     AlertCircle,
     Truck,
     Package,
-    Calendar,
     Plus,
     Minus,
     Clock
@@ -50,7 +49,6 @@ interface PO {
 export default function POReceivePage() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
     const { id } = useParams();
-    const router = useRouter();
 
     const [po, setPo] = useState<PO | null>(null);
     const [loading, setLoading] = useState(true);
@@ -62,13 +60,8 @@ export default function POReceivePage() {
     const [receivedInputs, setReceivedInputs] = useState<Record<string, number>>({});
     const [itemNotes, setItemNotes] = useState<Record<string, string>>({});
 
-    useEffect(() => {
-        if (allowed && id) {
-            loadPO();
-        }
-    }, [allowed, id]);
-
-    const loadPO = async () => {
+    const loadPO = useCallback(async () => {
+        if (!id) return;
         try {
             setLoading(true);
             const res = await api.admin.inventory.getPOById(id as string);
@@ -87,13 +80,18 @@ export default function POReceivePage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [id]);
+
+    useEffect(() => {
+        if (allowed && id) {
+            void loadPO();
+        }
+    }, [allowed, id, loadPO]);
 
     const handleInputChange = (productId: string, val: number) => {
         const item = po?.Items?.find(i => i.product_id === productId);
         if (!item) return;
 
-        const remaining = item.qty - item.received_qty;
         const boundedVal = Math.max(0, val); // Allow over-receiving if needed, or cap it at remaining
 
         setReceivedInputs(prev => ({
@@ -113,7 +111,7 @@ export default function POReceivePage() {
         if (!po) return;
 
         const itemsToSubmit = Object.entries(receivedInputs)
-            .filter(([_, qty]) => qty > 0)
+            .filter(([, qty]) => qty > 0)
             .map(([productId, qty]) => ({
                 product_id: productId,
                 received_qty: qty,
@@ -133,9 +131,10 @@ export default function POReceivePage() {
             setMessageType('success');
             setMessage('Penerimaan stok berhasil dicatat.');
             await loadPO(); // Reload to update received_qty in list
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const err = error as { response?: { data?: { message?: string } } };
             setMessageType('error');
-            setMessage(error?.response?.data?.message || 'Gagal menyimpan penerimaan barang.');
+            setMessage(err?.response?.data?.message || 'Gagal menyimpan penerimaan barang.');
         } finally {
             setIsSaving(false);
         }

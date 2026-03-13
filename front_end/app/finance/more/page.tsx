@@ -4,11 +4,8 @@
 import React from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Lock, FileText, Settings, Archive, ChevronRight, LogOut } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 
 export default function FinanceMorePage() {
-    const router = useRouter();
-
     // Mock Data
     const currentPeriod = { month: 'Februari', year: 2024, status: 'OPEN' };
 

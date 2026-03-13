@@ -1,12 +1,11 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { KpiCard } from '@/components/finance/KpiCard';
 import { TaskBlock } from '@/components/finance/TaskBlock';
 import { InvoiceCard } from '@/components/finance/InvoiceCard';
-import { ArrowUpRight, ArrowDownLeft, Truck, AlertCircle, RefreshCw, Wallet, Building2 } from 'lucide-react';
-import Link from 'next/link';
+import { Truck, RefreshCw, Wallet, Building2 } from 'lucide-react';
 
 // Mock Data for Initial Skeletons (Will replace with API calls)
 const MOCK_KPI = {
@@ -18,13 +17,6 @@ const MOCK_KPI = {
 };
 
 export default function FinanceDashboard() {
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        // Simulate loading
-        setTimeout(() => setIsLoading(false), 800);
-    }, []);
-
     const formatRp = (val: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
 
     return (

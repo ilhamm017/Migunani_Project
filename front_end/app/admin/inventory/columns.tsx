@@ -5,10 +5,21 @@ import { ProductRow } from './types';
 import { ArrowUpDown, Copy, Camera } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
+import Image from 'next/image';
+
+type EditableCellTableMeta = {
+    refreshData?: () => void;
+};
+
+type EditableCellProps = {
+    row: { original: ProductRow };
+    getValue: () => unknown;
+    table: { options: { meta?: EditableCellTableMeta } };
+};
 
 // Inline Editable Cell Component for Bin Location
-const EditableBinCell = ({ row, getValue, table }: { row: any; getValue: () => any; table: any }) => {
-    const initialValue = getValue() || '';
+const EditableBinCell = ({ row, getValue, table }: EditableCellProps) => {
+    const initialValue = String(getValue() || '');
     const [value, setValue] = useState(initialValue);
     const [isEditing, setIsEditing] = useState(false);
 
@@ -58,7 +69,7 @@ const EditableBinCell = ({ row, getValue, table }: { row: any; getValue: () => a
 };
 
 // Inline Editable Cell Component for Stock
-const EditableStockCell = ({ row, getValue, table }: { row: any; getValue: () => any; table: any }) => {
+const EditableStockCell = ({ row, getValue, table }: EditableCellProps) => {
     const initialValue = Number(getValue() || 0);
     // Note: Stock update usually requires a mutation record, but user asked for "Inline Editing".
     // We will use the mutation API if the value changes.
@@ -151,7 +162,7 @@ export const columns: ColumnDef<ProductRow>[] = [
                 <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded bg-slate-100 border border-slate-200 flex-shrink-0 overflow-hidden">
                         {product.image_url ? (
-                            <img src={product.image_url} alt="" className="w-full h-full object-cover" />
+                            <Image src={product.image_url} alt="" width={32} height={32} className="w-full h-full object-cover" unoptimized />
                         ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-300">
                                 <Camera size={12} />
@@ -192,7 +203,7 @@ export const columns: ColumnDef<ProductRow>[] = [
     },
     {
         accessorKey: 'stock_quantity',
-        header: ({ column }) => (
+        header: () => (
             <div className="text-center w-full">Stok Fisik</div>
         ),
         cell: EditableStockCell,

@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export default function Footer() {
     return (
         <footer className="bg-muted border-t border-border mt-auto mb-16 md:mb-0">
@@ -16,19 +18,19 @@ export default function Footer() {
                         <h3 className="font-bold text-lg mb-4">Quick Links</h3>
                         <ul className="space-y-2 text-sm text-muted-foreground">
                             <li>
-                                <a href="/catalog" className="hover:text-primary">
+                                <Link href="/catalog" className="hover:text-primary">
                                     Katalog Produk
-                                </a>
+                                </Link>
                             </li>
                             <li>
-                                <a href="/about" className="hover:text-primary">
+                                <Link href="/about" className="hover:text-primary">
                                     Tentang Kami
-                                </a>
+                                </Link>
                             </li>
                             <li>
-                                <a href="/contact" className="hover:text-primary">
+                                <Link href="/contact" className="hover:text-primary">
                                     Kontak
-                                </a>
+                                </Link>
                             </li>
                         </ul>
                     </div>

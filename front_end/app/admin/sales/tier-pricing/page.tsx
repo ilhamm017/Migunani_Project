@@ -35,6 +35,11 @@ type CategoryTierDiscount = {
   discount_premium_pct: number | null;
 };
 
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+  message?: string;
+};
+
 const toNullableNumber = (value: unknown): number | null => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
@@ -177,9 +182,10 @@ export default function SalesTierPricingPage() {
         setPremiumDiscount(String(Math.round(fallback.premium * 100) / 100));
         setDiscountsInitialized(true);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
       setProducts([]);
-      setError(e?.response?.data?.message || 'Gagal memuat produk');
+      setError(err?.response?.data?.message || 'Gagal memuat produk');
     } finally {
       setLoadingProducts(false);
     }
@@ -191,8 +197,9 @@ export default function SalesTierPricingPage() {
       const res = await api.admin.inventory.getCategories();
       const rows = Array.isArray(res.data?.categories) ? (res.data.categories as CategoryTierDiscount[]) : [];
       setCategories(rows);
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal memuat kategori');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal memuat kategori');
       setCategories([]);
     } finally {
       setLoadingCategories(false);
@@ -258,8 +265,9 @@ export default function SalesTierPricingPage() {
 
       setActionMessage(res.data?.message || 'Diskon tier berhasil diterapkan.');
       await loadProducts();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menerapkan diskon tier');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menerapkan diskon tier');
     } finally {
       setApplyingDiscount(false);
     }
@@ -299,8 +307,9 @@ export default function SalesTierPricingPage() {
       setActionMessage(res.data?.message || 'Diskon kategori berhasil diperbarui.');
       setEditingCategoryId(null);
       await loadCategories();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e?.message || 'Gagal menyimpan diskon kategori');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || err?.message || 'Gagal menyimpan diskon kategori');
     } finally {
       setSavingCategoryDiscount(false);
     }

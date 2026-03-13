@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Box, User, Wallet, MapPin, Phone, Package, ChevronRight, RotateCcw, HandCoins, MessageCircle, ClipboardList, Truck, ClipboardCheck } from 'lucide-react';
+import { User, Wallet, MapPin, Phone, Package, ChevronRight, RotateCcw, HandCoins, MessageCircle, ClipboardList, Truck, ClipboardCheck, Search } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -12,7 +12,7 @@ import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
-const getOrderInvoicePayload = (order: any) => {
+const getOrderInvoicePayload = (order: unknown) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
     id: normalizeInvoiceRef(order?.invoice_id || latestInvoice?.id),
@@ -20,7 +20,7 @@ const getOrderInvoicePayload = (order: any) => {
     total: Number(latestInvoice?.total || 0),
   };
 };
-const getInvoiceItems = (invoiceData: any) => {
+const getInvoiceItems = (invoiceData: unknown) => {
   if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
   if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
   return [];
@@ -35,7 +35,7 @@ const getChecklistStatus = (scopeId: string): 'not_checked' | 'mismatch' | 'read
     const parsed = JSON.parse(raw);
     const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
     if (rows.length === 0) return 'not_checked';
-    const hasMismatch = rows.some((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0));
+    const hasMismatch = rows.some((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0));
     return hasMismatch ? 'mismatch' : 'ready';
   } catch {
     return 'not_checked';
@@ -44,10 +44,11 @@ const getChecklistStatus = (scopeId: string): 'not_checked' | 'mismatch' | 'read
 
 export default function DriverTaskPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
-  const [wallet, setWallet] = useState<any>(null);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, any>>({});
-  const [returs, setReturs] = useState<any[]>([]);
+  const [wallet, setWallet] = useState<unknown>(null);
+  const [orders, setOrders] = useState<unknown[]>([]);
+  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, unknown>>({});
+  const [returs, setReturs] = useState<unknown[]>([]);
+  const [search, setSearch] = useState('');
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
@@ -66,7 +67,7 @@ export default function DriverTaskPage() {
     const invoiceIds = Array.from(
       new Set(
         orders
-          .map((row: any) => getOrderInvoicePayload(row).id)
+          .map((row: unknown) => getOrderInvoicePayload(row).id)
           .filter(Boolean)
       )
     );
@@ -81,7 +82,7 @@ export default function DriverTaskPage() {
           invoiceIds.map((invoiceId) => api.invoices.getById(invoiceId))
         );
         if (isCancelled) return;
-        const nextMap: Record<string, any> = {};
+        const nextMap: Record<string, unknown> = {};
         responses.forEach((result, index) => {
           if (result.status !== 'fulfilled') return;
           const data = result.value?.data || null;
@@ -102,7 +103,7 @@ export default function DriverTaskPage() {
   }, [allowed, orders]);
 
   const deliveryCards = useMemo(() => {
-    const buckets = orders.reduce((acc, order: any) => {
+    const buckets = orders.reduce((acc, order: unknown) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return acc;
       const invoiceData = getOrderInvoicePayload(order);
@@ -113,23 +114,23 @@ export default function DriverTaskPage() {
         groupKey,
         invoiceId,
         invoiceNumber,
-        orders: [] as any[],
+        orders: [] as unknown[],
       };
       bucket.orders.push(order);
       acc.set(groupKey, bucket);
       return acc;
-    }, new Map<string, { groupKey: string; invoiceId: string; invoiceNumber: string; orders: any[] }>());
+    }, new Map<string, { groupKey: string; invoiceId: string; invoiceNumber: string; orders: unknown[] }>());
 
     const bucketValues = Array.from(buckets.values()) as Array<{
       groupKey: string;
       invoiceId: string;
       invoiceNumber: string;
-      orders: any[];
+      orders: unknown[];
     }>;
 
     return bucketValues
       .map((bucket) => {
-        const sortedOrders = [...bucket.orders].sort((a: any, b: any) => {
+        const sortedOrders = [...bucket.orders].sort((a: unknown, b: unknown) => {
           const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
           const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
           const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -144,14 +145,14 @@ export default function DriverTaskPage() {
         const customer = primaryOrder?.Customer || {};
         const profile = customer.CustomerProfile || {};
         const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-        const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
+        const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
         const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
         const whatsapp = customer.whatsapp_number || '-';
 
         const itemMap = new Map<string, { name: string; qty: number }>();
         const invoiceItems = getInvoiceItems(invoiceDetail);
         if (invoiceItems.length > 0) {
-          invoiceItems.forEach((item: any) => {
+          invoiceItems.forEach((item: unknown) => {
             const orderItem = item?.OrderItem || {};
             const product = orderItem?.Product || {};
             const key = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -161,9 +162,9 @@ export default function DriverTaskPage() {
             itemMap.set(key, prev);
           });
         } else {
-          sortedOrders.forEach((order: any) => {
+          sortedOrders.forEach((order: unknown) => {
             const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-            items.forEach((item: any) => {
+            items.forEach((item: unknown) => {
               const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
               if (!key) return;
               const prev = itemMap.get(key) || { name: item?.Product?.name || 'Produk', qty: 0 };
@@ -174,17 +175,17 @@ export default function DriverTaskPage() {
         }
 
         const mergedItems = Array.from(itemMap.values()).sort((a, b) => b.qty - a.qty);
-        const activeOrderCount = sortedOrders.filter((order: any) => !isDoneOrderStatus(order?.status)).length;
+        const activeOrderCount = sortedOrders.filter((order: unknown) => !isDoneOrderStatus(order?.status)).length;
         const invoiceTotalFromOrders = sortedOrders
-          .map((row: any) => getOrderInvoicePayload(row).total)
+          .map((row: unknown) => getOrderInvoicePayload(row).total)
           .find((value: number) => Number.isFinite(value) && value > 0);
         const invoiceTotalFromSnapshot = Number(invoiceDetail?.total || 0);
         const totalAmount = Number.isFinite(invoiceTotalFromSnapshot) && invoiceTotalFromSnapshot > 0
           ? invoiceTotalFromSnapshot
           : Number.isFinite(invoiceTotalFromOrders)
             ? Number(invoiceTotalFromOrders)
-            : sortedOrders.reduce((sum: number, row: any) => sum + Number(row?.total_amount || 0), 0);
-        const statusValues = Array.from(new Set(sortedOrders.map((order: any) => String(order?.status || '').trim()).filter(Boolean)));
+            : sortedOrders.reduce((sum: number, row: unknown) => sum + Number(row?.total_amount || 0), 0);
+        const statusValues = Array.from(new Set(sortedOrders.map((order: unknown) => String(order?.status || '').trim()).filter(Boolean)));
         const statusLabel = statusValues.length <= 1 ? (statusValues[0] || '-') : `${statusValues.length} status`;
         const invoiceLabel = normalizeInvoiceRef(invoiceDetail?.invoice_number) || (bucket.invoiceNumber
           ? bucket.invoiceNumber
@@ -219,8 +220,31 @@ export default function DriverTaskPage() {
       });
   }, [invoiceDetailsById, orders]);
 
-  const readyDeliveryCards = useMemo(() => deliveryCards.filter(card => card.checklistStatus === 'ready'), [deliveryCards]);
-  const pendingChecklistCount = useMemo(() => deliveryCards.filter(card => card.checklistStatus !== 'ready').length, [deliveryCards]);
+  const filteredDeliveryCards = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return deliveryCards;
+    return deliveryCards.filter((card) => {
+      const orderIds = card.orders.map((order: unknown) => String(order?.id || '').toLowerCase());
+      const itemNames = card.mergedItems.map((item: unknown) => String(item?.name || '').toLowerCase());
+      return [
+        card.customerName,
+        card.invoiceLabel,
+        card.address,
+        card.whatsapp,
+        ...orderIds,
+        ...itemNames,
+      ].some((value) => String(value || '').toLowerCase().includes(keyword));
+    });
+  }, [deliveryCards, search]);
+
+  const readyDeliveryCards = useMemo(
+    () => filteredDeliveryCards.filter((card) => card.checklistStatus === 'ready' && card.activeOrderCount > 0),
+    [filteredDeliveryCards]
+  );
+  const pendingChecklistCount = useMemo(
+    () => filteredDeliveryCards.filter(card => card.checklistStatus !== 'ready').length,
+    [filteredDeliveryCards]
+  );
 
   const remainingDeliveryCount = readyDeliveryCards.filter((card) => card.activeOrderCount > 0).length;
   const remainingPickupCount = canMonitorReturTasks
@@ -236,7 +260,7 @@ export default function DriverTaskPage() {
   const load = useCallback(async () => {
     try {
       const [ordersRes, walletRes, retursRes] = await Promise.all([
-        api.driver.getOrders(),
+        api.driver.getOrders({ status: 'shipped' }),
         api.driver.getWallet(),
         canMonitorReturTasks ? api.driver.getReturs() : Promise.resolve({ data: [] })
       ]);
@@ -250,13 +274,17 @@ export default function DriverTaskPage() {
 
   useEffect(() => {
     if (allowed) {
-      void load();
+      Promise.resolve().then(() => {
+        void load();
+      });
     }
   }, [allowed, load]);
 
   useEffect(() => {
     if (allowed && latestEvents.length > 0) {
-      void load();
+      Promise.resolve().then(() => {
+        void load();
+      });
     }
   }, [allowed, latestEvents.length, load]);
 
@@ -284,9 +312,11 @@ export default function DriverTaskPage() {
         {/* Wallet Card */}
         <div className="bg-slate-900 rounded-[32px] p-6 text-white shadow-xl shadow-slate-200 relative overflow-hidden">
           <div className="relative z-10">
-            <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mb-1">Utang COD ke Finance</p>
+            <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mb-1">Setoran COD Belum Disettle</p>
             <h3 className="text-3xl font-black">Rp {(wallet?.cash_on_hand || 0).toLocaleString('id-ID')}</h3>
-            <p className="text-[10px] mt-3 bg-white/10 inline-block px-2 py-1 rounded-lg">Nilai ini sinkron dengan dashboard Finance</p>
+            <p className="text-[10px] mt-3 bg-white/10 inline-block px-2 py-1 rounded-lg">
+              Nilai ini menunjukkan COD yang masih dibawa driver atau masih menunggu settlement finance.
+            </p>
           </div>
           <Wallet size={100} className="absolute -right-6 -bottom-6 opacity-10" />
         </div>
@@ -342,6 +372,23 @@ export default function DriverTaskPage() {
 
       {/* Task List */}
       <div className="space-y-4">
+        <div className="bg-white border border-slate-200 rounded-[24px] p-4 shadow-sm">
+          <label htmlFor="driver-search" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+            Cari Tugas Pengiriman
+          </label>
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              id="driver-search"
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Cari invoice, customer, alamat, order ID, atau barang"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white"
+            />
+          </div>
+        </div>
+
         {pendingChecklistCount > 0 && (
           <div className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm">
             <div className="flex items-center gap-3">
@@ -365,15 +412,17 @@ export default function DriverTaskPage() {
         )}
 
         <div className="flex items-center justify-between px-1">
-          <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Misi Pengiriman ({readyDeliveryCards.length} Invoice Ready)</h2>
-        </div>
+            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Misi Pengiriman ({readyDeliveryCards.length} Invoice Ready)</h2>
+          </div>
 
-        <div className="grid grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 gap-3">
           {readyDeliveryCards.length === 0 && (
             <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
               <Package size={40} className="mx-auto text-slate-200 mb-3" />
-              <p className="text-sm font-bold text-slate-400 italic">Belum ada tugas yang siap dikirim.</p>
-              {pendingChecklistCount > 0 && (
+              <p className="text-sm font-bold text-slate-400 italic">
+                {search.trim() ? 'Tidak ada tugas yang cocok dengan pencarian ini.' : 'Belum ada tugas yang siap dikirim.'}
+              </p>
+              {!search.trim() && pendingChecklistCount > 0 && (
                 <p className="text-[11px] text-slate-400 mt-2">Selesaikan checklist terlebih dahulu agar tugas muncul di sini.</p>
               )}
             </div>
@@ -382,15 +431,15 @@ export default function DriverTaskPage() {
             return (
               <div
                 key={card.groupKey}
-                className="group bg-white border border-slate-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-emerald-200 transition-all"
+                className="group bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm hover:shadow-lg hover:border-emerald-200 transition-all"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Invoice</p>
-                    <p className="text-lg font-black text-slate-900 leading-none">{card.invoiceLabel}</p>
+                    <p className="text-base font-black text-slate-900 leading-none">{card.invoiceLabel}</p>
                     <p className="text-[10px] text-slate-500">
                       {card.orders.length} order
-                      {card.orders.length > 1 ? ` (${card.orders.map((row: any) => `#${String(row?.id || '').slice(-6)}`).join(', ')})` : ''}
+                      {card.orders.length > 1 ? ` (${card.orders.map((row: unknown) => `#${String(row?.id || '').slice(-6)}`).join(', ')})` : ''}
                     </p>
                   </div>
                   <div className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black uppercase">
@@ -398,51 +447,29 @@ export default function DriverTaskPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 pt-4 border-t border-slate-50 space-y-3">
+                <div className="mt-3 pt-3 border-t border-slate-50 space-y-2.5">
                   {/* Customer Name */}
                   <div className="flex items-center gap-2 text-slate-600">
                     <User size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-xs font-bold line-clamp-1">{card.customerName}</span>
+                    <span className="text-[11px] font-bold line-clamp-1">{card.customerName}</span>
                   </div>
 
                   {/* Address */}
                   <div className="flex items-start gap-2 text-slate-600">
                     <MapPin size={14} className="min-w-[14px] mt-0.5 opacity-40" />
-                    <span className="text-xs font-medium leading-relaxed line-clamp-2">{card.address}</span>
+                    <span className="text-[11px] font-medium leading-snug line-clamp-2">{card.address}</span>
                   </div>
 
-                  {/* Phone */}
-                  <div className="flex items-center gap-2 text-slate-600">
-                    <Phone size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-xs font-medium">{card.whatsapp}</span>
-                  </div>
                   <div className="flex items-center gap-2 text-slate-600">
                     <Wallet size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-xs font-bold">Total {card.totalAmount.toLocaleString('id-ID')}</span>
-                  </div>
-
-                  {/* Items Summary */}
-                  <div className="bg-slate-50 rounded-xl p-3 flex items-start gap-2 mt-1">
-                    <Package size={14} className="min-w-[14px] mt-0.5 text-slate-400" />
-                    <div className="flex-1">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">Barang Dikirim (Gabungan Invoice)</p>
-                      <div className="text-xs font-medium text-slate-800 space-y-0.5">
-                        {card.mergedItems.slice(0, 3).map((item: any, idx: number) => (
-                          <p key={`${item.name}-${idx}`}>{item.qty}x {item.name}</p>
-                        ))}
-                        {card.mergedItems.length > 3 && (
-                          <p className="text-[10px] text-slate-400 italic">...dan {(card.mergedItems.length - 3)} produk lainnya</p>
-                        )}
-                        {card.mergedItems.length === 0 && <p className="text-slate-400 italic">Tidak ada item</p>}
-                      </div>
-                    </div>
+                    <span className="text-[11px] font-bold">Total {card.totalAmount.toLocaleString('id-ID')}</span>
                   </div>
                 </div>
 
-                <div className="mt-4">
+                <div className="mt-3">
                   <Link
                     href={`/driver/orders/${card.targetId}`}
-                    className="w-full py-3 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                    className="w-full py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
                   >
                     Detail Invoice <ChevronRight size={14} />
                   </Link>
@@ -472,7 +499,7 @@ export default function DriverTaskPage() {
               const customer = r.Creator || {};
               const profile = customer.CustomerProfile || {};
               const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-              const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
+              const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
               const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
               const whatsapp = customer.whatsapp_number || '-';
 
@@ -488,7 +515,7 @@ export default function DriverTaskPage() {
                       <p className="text-lg font-black text-slate-900 leading-none">#{r.order_id.slice(-8).toUpperCase()}</p>
                     </div>
                     <div className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-[10px] font-black uppercase flex items-center gap-1">
-                      <HandCoins size={10} /> Verifikasi Dana (CS)
+                      <HandCoins size={10} /> Pickup Retur
                     </div>
                   </div>
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 
@@ -104,11 +104,17 @@ const countPendingCodSettlements = (rows: unknown): number => {
   }, 0);
 };
 
-const isReturNeedsFinanceAction = (row: any): boolean => {
-  const status = String(row?.status || '').trim();
+type ReturFinanceRow = {
+  status?: string | null;
+  refund_disbursed_at?: string | null;
+};
+
+const isReturNeedsFinanceAction = (row: unknown): boolean => {
+  const retur = (row && typeof row === 'object') ? (row as ReturFinanceRow) : {};
+  const status = String(retur.status || '').trim();
   if (!status) return false;
   if (status === 'pending' || status === 'rejected') return false;
-  if (row?.refund_disbursed_at) return false;
+  if (retur.refund_disbursed_at) return false;
   return ['approved', 'pickup_assigned', 'picked_up', 'handed_to_warehouse', 'received', 'completed'].includes(status);
 };
 
@@ -122,16 +128,12 @@ export const useAdminActionBadges = ({
   role,
   pollIntervalMs = 15000,
 }: UseAdminActionBadgesParams): AdminActionBadges => {
+  const normalizedRole = String(role || '').trim();
+  const shouldLoad = enabled && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
   const [badges, setBadges] = useState<AdminActionBadges>(ZERO_BADGES);
 
   useEffect(() => {
-    const normalizedRole = String(role || '').trim();
-    const shouldLoad = enabled && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
-
-    if (!shouldLoad) {
-      setBadges(ZERO_BADGES);
-      return;
-    }
+    if (!shouldLoad) return undefined;
 
     let isMounted = true;
 
@@ -203,7 +205,7 @@ export const useAdminActionBadges = ({
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [enabled, pollIntervalMs, role]);
+  }, [normalizedRole, pollIntervalMs, shouldLoad]);
 
-  return badges;
+  return shouldLoad ? badges : ZERO_BADGES;
 };

@@ -8,7 +8,10 @@ import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
-export const createStockMutation = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const createStockMutation = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { product_id, type, qty, note, reference_id } = req.body;
@@ -17,7 +20,7 @@ export const createStockMutation = async (req: Request, res: Response) => {
         const product = await Product.findByPk(product_id, { transaction: t });
         if (!product) {
             await t.rollback();
-            return res.status(404).json({ message: 'Product not found' });
+            throw new CustomError('Product not found', 404);
         }
 
         let newStock = product.stock_quantity;
@@ -29,7 +32,7 @@ export const createStockMutation = async (req: Request, res: Response) => {
 
         if (newStock < 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Insufficient stock' });
+            throw new CustomError('Insufficient stock', 400);
         }
 
         await StockMutation.create({
@@ -76,12 +79,13 @@ export const createStockMutation = async (req: Request, res: Response) => {
         await t.commit();
         res.json({ message: 'Stock mutation recorded', current_stock: newStock });
     } catch (error) {
-        await t.rollback();
-        res.status(500).json({ message: 'Error creating mutation', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating mutation', 500);
     }
-};
+});
 
-export const getProductMutations = async (req: Request, res: Response) => {
+export const getProductMutations = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { product_id } = req.params;
         const mutations = await StockMutation.findAll({
@@ -91,6 +95,6 @@ export const getProductMutations = async (req: Request, res: Response) => {
         });
         res.json(mutations);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching mutations', error });
+        throw new CustomError('Error fetching mutations', 500);
     }
-};
+});

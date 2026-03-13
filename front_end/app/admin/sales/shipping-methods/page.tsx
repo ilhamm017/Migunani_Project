@@ -30,6 +30,10 @@ const toCode = (value: string) =>
     .replace(/_+/g, '_')
     .replace(/^_+|_+$/g, '');
 
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
+
 export default function ShippingMethodsPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
   const [methods, setMethods] = useState<ShippingMethod[]>([]);
@@ -66,8 +70,9 @@ export default function ShippingMethodsPage() {
         };
       });
       setDrafts(nextDrafts);
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal memuat metode pengiriman');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal memuat metode pengiriman');
       setMethods([]);
       setDrafts({});
     } finally {
@@ -113,8 +118,9 @@ export default function ShippingMethodsPage() {
       setNewSortOrder('100');
       setNewActive(true);
       await loadMethods();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menambahkan metode pengiriman.');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menambahkan metode pengiriman.');
     } finally {
       setCreating(false);
     }
@@ -147,8 +153,9 @@ export default function ShippingMethodsPage() {
       });
       setActionMessage(res.data?.message || `Metode ${code} berhasil diperbarui.`);
       await loadMethods();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menyimpan perubahan.');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menyimpan perubahan.');
     } finally {
       setProcessingCode('');
     }
@@ -163,8 +170,9 @@ export default function ShippingMethodsPage() {
       const res = await api.admin.shippingMethods.remove(code);
       setActionMessage(res.data?.message || `Metode ${code} berhasil dihapus.`);
       await loadMethods();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menghapus metode pengiriman.');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menghapus metode pengiriman.');
     } finally {
       setProcessingCode('');
     }
@@ -362,4 +370,3 @@ export default function ShippingMethodsPage() {
     </div>
   );
 }
-

@@ -2,17 +2,19 @@ import { Request, Response } from 'express';
 import { User, CustomerProfile } from '../../models';
 import { ALLOWED_TIERS } from './types';
 import { normalizeId } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const updateCustomerTier = async (req: Request, res: Response) => {
+export const updateCustomerTier = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = normalizeId(req.params?.id);
         if (!id) {
-            return res.status(400).json({ message: 'ID customer tidak valid' });
+            throw new CustomError('ID customer tidak valid', 400);
         }
 
         const requestedTier = typeof req.body?.tier === 'string' ? req.body.tier.trim().toLowerCase() : '';
         if (!ALLOWED_TIERS.includes(requestedTier as (typeof ALLOWED_TIERS)[number])) {
-            return res.status(400).json({ message: 'Tier tidak valid. Gunakan regular/gold/platinum' });
+            throw new CustomError('Tier tidak valid. Gunakan regular/gold/platinum', 400);
         }
 
         const customer = await User.findOne({
@@ -20,7 +22,7 @@ export const updateCustomerTier = async (req: Request, res: Response) => {
             attributes: ['id', 'name', 'whatsapp_number', 'email', 'status']
         });
         if (!customer) {
-            return res.status(404).json({ message: 'Customer tidak ditemukan' });
+            throw new CustomError('Customer tidak ditemukan', 404);
         }
 
         const [profile] = await CustomerProfile.findOrCreate({
@@ -53,6 +55,9 @@ export const updateCustomerTier = async (req: Request, res: Response) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ message: 'Gagal update tier customer', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal update tier customer', 500);
     }
-};
+});

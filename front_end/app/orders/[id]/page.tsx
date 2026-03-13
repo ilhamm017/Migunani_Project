@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Truck, Clock3, CheckCircle2, AlertCircle, PauseCircle, XCircle, RotateCcw, Receipt } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
@@ -13,7 +13,7 @@ export default function OrderDetailPage() {
   const router = useRouter();
   const orderId = String(params?.id || '');
 
-  const [order, setOrder] = useState<any>(null);
+  const [order, setOrder] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
 
   const loadOrder = useCallback(async () => {
@@ -44,6 +44,38 @@ export default function OrderDetailPage() {
   const statusView = useMemo(() => {
     const rawStatus = order?.status || 'pending';
     const status = rawStatus === 'waiting_payment' ? 'ready_to_ship' : rawStatus;
+    const summaryRows = Array.isArray(order?.item_summaries) ? order.item_summaries : [];
+    const activeBackorderQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.backorder_open_qty || 0), 0);
+    const canceledBackorderQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.backorder_canceled_qty || 0), 0);
+    const allocatedTotalQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.allocated_qty_total || 0), 0);
+    if (status === 'canceled') {
+      if (allocatedTotalQty > 0 || canceledBackorderQty > 0) {
+        return {
+          icon: CheckCircle2,
+          label: `canceled (Selesai karena sisa dicancel ${canceledBackorderQty > 0 ? `${canceledBackorderQty}` : ''})`,
+          className: 'text-slate-700 bg-slate-100'
+        };
+      }
+      return {
+        icon: XCircle,
+        label: 'canceled (Dibatalkan dari awal)',
+        className: 'text-rose-700 bg-rose-50'
+      };
+    }
+    if (canceledBackorderQty > 0 && activeBackorderQty <= 0 && ['partially_fulfilled', 'delivered', 'completed'].includes(status)) {
+      return {
+        icon: CheckCircle2,
+        label: `completed (Selesai karena sisa dicancel ${canceledBackorderQty})`,
+        className: 'text-slate-700 bg-slate-100'
+      };
+    }
+    if (activeBackorderQty > 0 && ['delivered', 'completed'].includes(status)) {
+      return {
+        icon: AlertCircle,
+        label: `partially_fulfilled (Pengiriman Parsial, sisa inden ${activeBackorderQty})`,
+        className: 'text-amber-700 bg-amber-50'
+      };
+    }
 
     if (status === 'pending') {
       return {
@@ -76,7 +108,7 @@ export default function OrderDetailPage() {
     if (status === 'partially_fulfilled') {
       return {
         icon: AlertCircle,
-        label: 'partially_fulfilled (Stok Tersedia Sebagian)',
+        label: `partially_fulfilled (Terkirim Sebagian${activeBackorderQty > 0 ? `, sisa inden ${activeBackorderQty}` : ''})`,
         className: 'text-amber-700 bg-amber-50'
       };
     }
@@ -103,11 +135,11 @@ export default function OrderDetailPage() {
     if (status === 'hold') {
       return { icon: PauseCircle, label: 'hold (Pesanan Bermasalah)', className: 'text-violet-700 bg-violet-50' };
     }
-    if (status === 'canceled' || status === 'expired') {
-      return { icon: XCircle, label: 'canceled / expired (Pesanan Dibatalkan)', className: 'text-rose-700 bg-rose-50' };
+    if (status === 'expired') {
+      return { icon: XCircle, label: 'expired (Pesanan Kedaluwarsa)', className: 'text-rose-700 bg-rose-50' };
     }
     return { icon: Clock3, label: 'Status Pesanan', className: 'text-slate-700 bg-slate-100' };
-  }, [order?.status]);
+  }, [order?.status, order?.item_summaries]);
 
   // --- Missing Item Logic ---
   const [showMissingModal, setShowMissingModal] = useState(false);
@@ -118,7 +150,7 @@ export default function OrderDetailPage() {
   const openMissingModal = () => {
     if (!order) return;
     // Pre-fill eligible items (qty > 0)
-    const items = (order.OrderItems || []).map((item: any) => ({
+    const items = (order.OrderItems || []).map((item: unknown) => ({
       product_id: item.product_id,
       qty_missing: 0,
       max_qty: Number(item.qty),
@@ -159,7 +191,7 @@ export default function OrderDetailPage() {
       alert('Laporan barang kurang berhasil dikirim. Admin akan segera memverifikasi.');
       setShowMissingModal(false);
       loadOrder(); // Refresh status/issues
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to report missing item:', error);
       alert(error.response?.data?.message || 'Gagal mengirim laporan.');
     } finally {
@@ -183,9 +215,11 @@ export default function OrderDetailPage() {
 
   const StatusIcon = statusView.icon;
   const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+  const itemSummaries = Array.isArray(order?.item_summaries) ? order.item_summaries : [];
+  const timeline = Array.isArray(order?.timeline) ? order.timeline : [];
   const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
   const hasAnyAllocationData = allocations.length > 0;
-  const allocatedQtyByProduct = allocations.reduce((acc: Record<string, number>, allocation: any) => {
+  const allocatedQtyByProduct = allocations.reduce((acc: Record<string, number>, allocation: unknown) => {
     const productId = String(allocation?.product_id || '');
     if (!productId) return acc;
     acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
@@ -193,8 +227,8 @@ export default function OrderDetailPage() {
   }, {});
   const allocatedQtyByItemId = (() => {
     const result: Record<string, number> = {};
-    const itemsByProduct = new Map<string, any[]>();
-    orderItems.forEach((item: any) => {
+    const itemsByProduct = new Map<string, unknown[]>();
+    orderItems.forEach((item: unknown) => {
       const productId = String(item?.product_id || '');
       if (!productId) return;
       const rows = itemsByProduct.get(productId) || [];
@@ -203,8 +237,8 @@ export default function OrderDetailPage() {
     });
     itemsByProduct.forEach((rows, productId) => {
       let remaining = Number(allocatedQtyByProduct[productId] || 0);
-      const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
-      sortedRows.forEach((row: any) => {
+      const sortedRows = [...rows].sort((a: unknown, b: unknown) => String(a?.id || '').localeCompare(String(b?.id || '')));
+      sortedRows.forEach((row: unknown) => {
         const qty = Number(row?.qty || 0);
         const allocated = Math.max(0, Math.min(remaining, qty));
         result[String(row?.id || '')] = allocated;
@@ -213,6 +247,41 @@ export default function OrderDetailPage() {
     });
     return result;
   })();
+  const summaryByOrderItemId = itemSummaries.reduce((acc: Record<string, unknown>, row: unknown) => {
+    const key = String(row?.order_item_id || '');
+    if (!key) return acc;
+    acc[key] = row;
+    return acc;
+  }, {});
+  const eventLabel = (eventType: string) => {
+    if (eventType === 'allocation_set') return 'Alokasi diperbarui';
+    if (eventType === 'invoice_issued') return 'Invoice diterbitkan';
+    if (eventType === 'invoice_item_billed') return 'Item ditagihkan';
+    if (eventType === 'backorder_opened') return 'Backorder terbuka';
+    if (eventType === 'backorder_reallocated') return 'Backorder berkurang';
+    if (eventType === 'backorder_canceled') return 'Backorder dibatalkan';
+    if (eventType === 'order_status_changed') return 'Status order berubah';
+    return eventType || 'Event';
+  };
+  const itemNameById = orderItems.reduce((acc: Record<string, string>, item: unknown) => {
+    const key = String(item?.id || '');
+    if (!key) return acc;
+    acc[key] = String(item?.Product?.name || 'Produk');
+    return acc;
+  }, {});
+  const paymentMethod = String(order?.Invoice?.payment_method || '');
+  const paymentStatus = String(order?.Invoice?.payment_status || '');
+  const normalizedOrderStatus = String(order?.status || '');
+  const needsTransferProof =
+    paymentMethod === 'transfer_manual' &&
+    paymentStatus !== 'paid' &&
+    !['canceled', 'expired'].includes(normalizedOrderStatus);
+  const isWaitingFinanceVerification = paymentStatus === 'waiting_admin_verification';
+  const invoiceId = String(order?.Invoice?.id || '');
+
+  const customerPaymentStatusLabel = paymentStatus === 'cod_pending'
+    ? 'Sudah Dibayar ke Driver'
+    : paymentStatus || '-';
 
   return (
     <div className="p-6 space-y-5 pb-20">
@@ -235,8 +304,121 @@ export default function OrderDetailPage() {
         <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
           <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>
           <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{order.Invoice?.payment_method || '-'}</span></p>
-          <p className="text-xs text-slate-600">Status Bayar: <span className="font-bold text-slate-900">{order.Invoice?.payment_status || '-'}</span></p>
+          <p className="text-xs text-slate-600">Status Bayar: <span className="font-bold text-slate-900">{customerPaymentStatusLabel}</span></p>
         </div>
+
+        {invoiceId && (
+          <div
+            className={`rounded-[24px] border p-5 space-y-3 ${
+              needsTransferProof
+                ? isWaitingFinanceVerification
+                  ? 'bg-blue-50 border-blue-200'
+                  : 'bg-amber-50 border-amber-200'
+                : 'bg-slate-50 border-slate-200'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl ${
+                  needsTransferProof
+                    ? isWaitingFinanceVerification
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-amber-100 text-amber-700'
+                    : 'bg-white text-slate-700'
+                }`}
+              >
+                <Receipt size={18} />
+              </div>
+              <div className="flex-1 space-y-1">
+                <p
+                  className={`text-[11px] font-black uppercase tracking-[0.24em] ${
+                    needsTransferProof
+                      ? isWaitingFinanceVerification
+                        ? 'text-blue-700'
+                        : 'text-amber-700'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  Pembayaran Mengikuti Invoice
+                </p>
+                <p className="text-sm font-bold text-slate-900">
+                  {needsTransferProof
+                    ? isWaitingFinanceVerification
+                      ? 'Bukti transfer untuk invoice ini sedang diverifikasi admin finance.'
+                      : 'Upload bukti transfer dilakukan dari halaman invoice, bukan dari detail order.'
+                    : 'Status pembayaran order ini mengikuti invoice terkait.'}
+                </p>
+                <p className="text-xs text-slate-600">
+                  {needsTransferProof
+                    ? 'Karena pengiriman dan pembayaran berjalan per invoice, bukti transfer customer diunggah dari halaman invoice agar tidak terpecah per order.'
+                    : 'Gunakan halaman invoice untuk melihat tagihan, status bayar, dan bukti pembayaran customer.'}
+                </p>
+              </div>
+            </div>
+
+            <Link
+              href={
+                needsTransferProof
+                  ? `/invoices/${invoiceId}/upload-proof`
+                  : `/invoices/${invoiceId}`
+              }
+              className={`inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-[0.2em] ${
+                needsTransferProof
+                  ? isWaitingFinanceVerification
+                    ? 'bg-white text-blue-700 border border-blue-200'
+                    : 'bg-amber-600 text-white'
+                  : 'bg-slate-900 text-white'
+              }`}
+            >
+              {needsTransferProof
+                ? isWaitingFinanceVerification
+                  ? 'Buka Invoice & Lihat Status Verifikasi'
+                  : 'Buka Invoice & Upload Bukti Transfer'
+                : 'Buka Invoice'}
+            </Link>
+          </div>
+        )}
+
+        {!invoiceId && needsTransferProof && (
+          <div
+            className={`rounded-[24px] border p-5 space-y-3 ${
+              isWaitingFinanceVerification
+                ? 'bg-blue-50 border-blue-200'
+                : 'bg-amber-50 border-amber-200'
+            }`}
+          >
+            <div className="space-y-1">
+              <p
+                className={`text-[11px] font-black uppercase tracking-[0.24em] ${
+                  isWaitingFinanceVerification ? 'text-blue-700' : 'text-amber-700'
+                }`}
+              >
+                {isWaitingFinanceVerification ? 'Bukti Transfer Sudah Dikirim' : 'Upload Bukti Transfer'}
+              </p>
+              <p className="text-sm font-bold text-slate-900">
+                {isWaitingFinanceVerification
+                  ? 'Admin finance sedang memverifikasi bukti pembayaran Anda.'
+                  : 'Pembayaran transfer manual terdeteksi untuk order ini.'}
+              </p>
+              <p className="text-xs text-slate-600">
+                {isWaitingFinanceVerification
+                  ? 'Tunggu hasil verifikasi. Jika diminta perbaikan, unggah ulang bukti transfer dari tombol di bawah.'
+                  : 'Jika pembayaran dilakukan lewat transfer sesuai kesepakatan dengan kurir/admin, unggah bukti transfer di sini agar order bisa diproses.'}
+              </p>
+            </div>
+
+            <Link
+              href={`/orders/${order.id}/upload-proof`}
+              className={`inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-[0.2em] ${
+                isWaitingFinanceVerification
+                  ? 'bg-white text-blue-700 border border-blue-200'
+                  : 'bg-amber-600 text-white'
+              }`}
+            >
+              {isWaitingFinanceVerification ? 'Lihat / Upload Ulang Bukti Transfer' : 'Upload Bukti Transfer'}
+            </Link>
+          </div>
+        )}
 
         {order.active_issue && (
           <div className={`rounded-2xl p-4 border ${order.issue_overdue ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
@@ -255,7 +437,7 @@ export default function OrderDetailPage() {
               <RotateCcw size={16} className="text-amber-600" />
               <h3 className="text-xs font-black uppercase tracking-widest text-amber-700">Informasi Retur</h3>
             </div>
-            {order.Returs.map((retur: any) => (
+            {order.Returs.map((retur: unknown) => (
               <div key={retur.id} className="bg-white/50 rounded-xl p-3 border border-amber-200">
                 <div className="flex justify-between items-start">
                   <div>
@@ -272,7 +454,7 @@ export default function OrderDetailPage() {
                   </span>
                 </div>
                 {retur.admin_response && (
-                  <p className="text-[10px] text-amber-700 mt-2 italic font-medium">"{retur.admin_response}"</p>
+                  <p className="text-[10px] text-amber-700 mt-2 italic font-medium">{retur.admin_response}</p>
                 )}
               </div>
             ))}
@@ -302,7 +484,7 @@ export default function OrderDetailPage() {
               <h3 className="text-xs font-black uppercase tracking-widest text-indigo-700">Backorder / Pesanan Lanjutan</h3>
             </div>
             <p className="text-xs text-slate-600">Sebagian barang dikirim kemudian karena stok habis. Sisa barang ada di pesanan berikut:</p>
-            {order.Children.map((child: any) => (
+            {order.Children.map((child: unknown) => (
               <Link
                 key={child.id}
                 href={`/orders/${child.id}`}
@@ -322,7 +504,8 @@ export default function OrderDetailPage() {
         <div className="space-y-2">
 
           <h2 className="text-sm font-bold text-slate-900">Item Pesanan</h2>
-          {orderItems.map((item: any) => {
+          {orderItems.map((item: unknown) => {
+            const summary = summaryByOrderItemId[String(item?.id || '')] || null;
             const orderStatus = String(order.status || '').toLowerCase();
             const sentQtyRaw = Number(allocatedQtyByItemId[String(item?.id || '')] || 0);
 
@@ -337,28 +520,89 @@ export default function OrderDetailPage() {
 
             const isPartial = isAllocatedStatus && sentQty < item.qty;
             const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
+            const orderedOriginal = Number(summary?.ordered_qty_original ?? item.qty ?? 0);
+            const allocatedTotal = Number(summary?.allocated_qty_total ?? sentQty ?? 0);
+            const invoicedTotal = Number(summary?.invoiced_qty_total ?? 0);
+            const backorderOpen = Number(summary?.backorder_open_qty ?? Math.max(0, orderedOriginal - allocatedTotal));
+            const backorderCanceled = Number(summary?.backorder_canceled_qty ?? 0);
 
             return (
-              <div key={item.id} className="flex justify-between items-center bg-slate-50 rounded-2xl px-4 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
-                  <div className="flex gap-4 mt-1">
-                    <p className="text-xs text-slate-500">Dipesan: <span className="font-bold text-slate-700">{item.qty}</span></p>
-                    {isAllocatedStatus ? (
-                      <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
-                        {progressLabel}: {sentQty}
+              <div key={item.id} className="bg-slate-50 rounded-2xl px-4 py-3 space-y-2">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
+                    <div className="flex gap-4 mt-1">
+                      <p className="text-xs text-slate-500">Qty Aktif: <span className="font-bold text-slate-700">{item.qty}</span></p>
+                      {isAllocatedStatus ? (
+                        <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
+                          {progressLabel}: {sentQty}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-slate-900">{formatCurrency(effectivePrice)}</p>
+                    {isPartial && isAllocatedStatus && (
+                      <p className="text-[10px] text-amber-600 font-bold">
+                        {item.qty - sentQty} {isDeliveredStatus ? 'Belum Diterima' : isShippingStatus ? 'Belum Dikirim' : 'Belum Tersedia (Backorder)'}
                       </p>
-                    ) : null}
+                    )}
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-slate-900">{formatCurrency(effectivePrice)}</p>
-                  {isPartial && isAllocatedStatus && (
-                    <p className="text-[10px] text-amber-600 font-bold">
-                      {item.qty - sentQty} {isDeliveredStatus ? 'Belum Diterima' : isShippingStatus ? 'Belum Dikirim' : 'Belum Tersedia (Backorder)'}
-                    </p>
-                  )}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px]">
+                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+                    <p className="text-slate-500">Pesanan Awal</p>
+                    <p className="font-bold text-slate-900">{orderedOriginal}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+                    <p className="text-slate-500">Total Alokasi</p>
+                    <p className="font-bold text-slate-900">{allocatedTotal}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+                    <p className="text-slate-500">Invoice</p>
+                    <p className="font-bold text-slate-900">{invoicedTotal}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+                    <p className="text-slate-500">Backorder Aktif</p>
+                    <p className="font-bold text-amber-700">{backorderOpen}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+                    <p className="text-slate-500">Backorder Dibatalkan</p>
+                    <p className="font-bold text-rose-700">{backorderCanceled}</p>
+                  </div>
                 </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="space-y-2">
+          <h2 className="text-sm font-bold text-slate-900">Timeline Order</h2>
+          {timeline.length === 0 && (
+            <div className="bg-slate-50 rounded-2xl px-4 py-3 text-xs text-slate-500">
+              Belum ada histori tindakan yang tercatat.
+            </div>
+          )}
+          {timeline.map((evt: unknown) => {
+            const eventType = String(evt?.event_type || '');
+            const orderItemId = String(evt?.order_item_id || '');
+            const payload = evt?.payload || {};
+            const delta = payload?.delta || {};
+            const itemName = orderItemId ? itemNameById[orderItemId] || `Item #${orderItemId}` : null;
+            return (
+              <div key={evt?.id || `${eventType}-${evt?.occurred_at || ''}`} className="bg-slate-50 rounded-2xl px-4 py-3 space-y-1">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-900">{eventLabel(eventType)}</p>
+                  <p className="text-xs font-bold text-slate-800">{evt?.actor_role || '-'}</p>
+                </div>
+                {itemName && <p className="text-xs text-slate-600">Item: <span className="font-semibold">{itemName}</span></p>}
+                {evt?.reason && <p className="text-xs text-rose-700">Alasan: <span className="font-semibold">{evt.reason}</span></p>}
+                <p className="text-[11px] text-slate-500">
+                  {evt?.occurred_at ? formatDateTime(evt.occurred_at) : '-'}{evt?.actor_role ? ` • oleh ${evt.actor_role}` : ''}
+                </p>
+                {Object.keys(delta || {}).length > 0 && (
+                  <p className="text-[11px] text-slate-600">Perubahan: {JSON.stringify(delta)}</p>
+                )}
               </div>
             );
           })}
@@ -394,7 +638,7 @@ export default function OrderDetailPage() {
             </div>
 
             <p className="text-xs text-slate-500">
-              Silakan tandai barang yang tidak Anda terima meskipun status pesanan sudah "delivered".
+              Silakan tandai barang yang tidak Anda terima meskipun status pesanan sudah delivered.
             </p>
 
             <div className="max-h-[50vh] overflow-y-auto space-y-3">

@@ -1,33 +1,40 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 
-const getPersistApi = () => (useAuthStore as any).persist;
+type PersistApi = {
+  hasHydrated?: () => boolean;
+  onFinishHydration?: (callback: () => void) => (() => void) | void;
+};
+
+const getPersistApi = (): PersistApi | undefined => {
+  const store = useAuthStore as unknown as { persist?: PersistApi };
+  return store.persist;
+};
+
+const noopUnsubscribe = () => undefined;
+
+function useAuthHydrated() {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const persistApi = getPersistApi();
+      const unsubscribe = persistApi?.onFinishHydration?.(onStoreChange);
+      return typeof unsubscribe === 'function' ? unsubscribe : noopUnsubscribe;
+    },
+    () => {
+      const persistApi = getPersistApi();
+      return persistApi?.hasHydrated?.() ?? true;
+    },
+    () => true
+  );
+}
 
 export function useRequireAuth(redirectTo: string = '/auth/login') {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
-  const [hydrated, setHydrated] = useState(() => {
-    const persistApi = getPersistApi();
-    return persistApi?.hasHydrated?.() ?? false;
-  });
-
-  useEffect(() => {
-    const persistApi = getPersistApi();
-    if (!persistApi) {
-      setHydrated(true);
-      return;
-    }
-
-    const unsub = persistApi.onFinishHydration?.(() => setHydrated(true));
-    setHydrated(persistApi.hasHydrated?.() ?? true);
-
-    return () => {
-      if (typeof unsub === 'function') unsub();
-    };
-  }, []);
+  const hydrated = useAuthHydrated();
 
   useEffect(() => {
     if (!hydrated) return;
@@ -42,27 +49,9 @@ export function useRequireAuth(redirectTo: string = '/auth/login') {
 export function useRequireRoles(roles: string[], redirectTo: string = '/') {
   const router = useRouter();
   const { isAuthenticated, user } = useAuthStore();
-  const [hydrated, setHydrated] = useState(() => {
-    const persistApi = getPersistApi();
-    return persistApi?.hasHydrated?.() ?? false;
-  });
+  const hydrated = useAuthHydrated();
   const rolesKey = roles.join(',');
   const hasRole = !!user && roles.includes(user.role);
-
-  useEffect(() => {
-    const persistApi = getPersistApi();
-    if (!persistApi) {
-      setHydrated(true);
-      return;
-    }
-
-    const unsub = persistApi.onFinishHydration?.(() => setHydrated(true));
-    setHydrated(persistApi.hasHydrated?.() ?? true);
-
-    return () => {
-      if (typeof unsub === 'function') unsub();
-    };
-  }, []);
 
   useEffect(() => {
     if (!hydrated) return;

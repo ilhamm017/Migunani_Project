@@ -1,33 +1,76 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
+type ARAgingDetail = {
+    id: string;
+    customer: string;
+    invoice_number: string;
+    amount_due: number;
+    created_at: string;
+    days_outstanding: number;
+};
+
+type ARAgingData = {
+    summary: {
+        total: number;
+        '0-30': number;
+        '31-60': number;
+        '61-90': number;
+        '>90': number;
+    };
+    details: ARAgingDetail[];
+};
+
 export default function ARAgingPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<ARAgingData | null>(null);
     const [loading, setLoading] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getARAging();
-            setData(res.data);
+            const payload = (res.data || {}) as Record<string, unknown>;
+            const summary = (payload.summary || {}) as Record<string, unknown>;
+            const detailsRaw = Array.isArray(payload.details) ? payload.details : [];
+            const details: ARAgingDetail[] = detailsRaw.map((item) => {
+                const row = item as Record<string, unknown>;
+                return {
+                    id: String(row.id ?? ''),
+                    customer: String(row.customer ?? ''),
+                    invoice_number: String(row.invoice_number ?? ''),
+                    amount_due: Number(row.amount_due ?? 0),
+                    created_at: String(row.created_at ?? ''),
+                    days_outstanding: Number(row.days_outstanding ?? 0),
+                };
+            });
+            setData({
+                summary: {
+                    total: Number(summary.total ?? 0),
+                    '0-30': Number(summary['0-30'] ?? 0),
+                    '31-60': Number(summary['31-60'] ?? 0),
+                    '61-90': Number(summary['61-90'] ?? 0),
+                    '>90': Number(summary['>90'] ?? 0),
+                },
+                details,
+            });
         } catch (e) {
             console.error(e);
             alert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]);
+        if (allowed) void load();
+    }, [allowed, load]);
 
     if (!allowed) return null;
 
@@ -78,7 +121,7 @@ export default function ARAgingPage() {
                         <div>
                             <h3 className="font-bold text-slate-900 mb-3 ml-1">Rincian Invoice</h3>
                             <div className="space-y-3">
-                                {data.details?.map((item: any) => (
+                                {data.details?.map((item) => (
                                     <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <div className="flex justify-between items-start mb-2">
                                             <div>

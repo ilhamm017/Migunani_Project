@@ -5,8 +5,18 @@ import { api } from '@/lib/api'; // Ensure this helper exists or use fetch
 import Link from 'next/link';
 import { Plus, Eye, Calendar, User } from 'lucide-react';
 
+type AuditRow = {
+    id: string;
+    started_at: string;
+    status: string;
+    notes?: string | null;
+    Creator?: {
+        name?: string | null;
+    } | null;
+};
+
 export default function AuditListPage() {
-    const [opnames, setOpnames] = useState<any[]>([]);
+    const [opnames, setOpnames] = useState<AuditRow[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -16,9 +26,19 @@ export default function AuditListPage() {
     const loadOpnames = async () => {
         try {
             const res = await api.admin.inventory.getAudits();
-            setOpnames(res.data);
-        } catch (error) {
-            console.error('Failed to load audits', error);
+            const rows = Array.isArray(res.data) ? res.data : [];
+            const mapped: AuditRow[] = rows.map((row: Record<string, unknown>) => ({
+                id: String(row.id ?? ''),
+                started_at: String(row.started_at ?? ''),
+                status: String(row.status ?? ''),
+                notes: row.notes ? String(row.notes) : null,
+                Creator: row.Creator && typeof row.Creator === 'object'
+                    ? { name: (row.Creator as Record<string, unknown>).name ? String((row.Creator as Record<string, unknown>).name) : null }
+                    : null,
+            })).filter((row) => Boolean(row.id));
+            setOpnames(mapped);
+        } catch {
+            console.error('Failed to load audits');
         } finally {
             setLoading(false);
         }
@@ -31,7 +51,7 @@ export default function AuditListPage() {
 
             await api.admin.inventory.startAudit({ notes: note });
             loadOpnames();
-        } catch (error) {
+        } catch {
             alert('Gagal membuat audit baru');
         }
     };
@@ -71,7 +91,7 @@ export default function AuditListPage() {
                         ) : opnames.length === 0 ? (
                             <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">Belum ada data audit.</td></tr>
                         ) : (
-                            opnames.map((op: any) => (
+                            opnames.map((op) => (
                                 <tr key={op.id} className="hover:bg-slate-50 transition-colors">
                                     <td className="px-6 py-4 text-slate-900">
                                         <div className="flex items-center gap-2">

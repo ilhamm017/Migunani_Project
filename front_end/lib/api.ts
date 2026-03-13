@@ -25,6 +25,8 @@ apiClient.interceptors.request.use(
     }
 );
 
+type JsonRecord = Record<string, unknown>;
+
 // Response interceptor - handle errors
 apiClient.interceptors.response.use(
     (response) => response,
@@ -124,7 +126,7 @@ export const api = {
     // Profile (Customer)
     profile: {
         getMe: () => apiClient.get('/profile/me'),
-        updateAddresses: (addresses: any[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+        updateAddresses: (addresses: JsonRecord[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
     },
 
     // Promos
@@ -134,6 +136,12 @@ export const api = {
 
     invoices: {
         getById: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}`),
+        uploadPaymentProof: (invoiceId: string, formData: FormData) =>
+            apiClient.post(`/invoices/${invoiceId}/proof`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            }),
+        assignDriver: (invoiceId: string, data: { courier_id: string }) =>
+            apiClient.patch(`/invoices/${invoiceId}/assign-driver`, data),
     },
 
     // Allocation (Admin)
@@ -182,6 +190,8 @@ export const api = {
                 limit?: number;
                 scope?: 'all' | 'open';
                 status?: string;
+                startDate?: string;
+                endDate?: string;
             }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
             updateStatus: (id: string, data: {
                 status: 'active' | 'banned';
@@ -297,8 +307,8 @@ export const api = {
                 apiClient.delete(`/admin/suppliers/${id}`, {
                     data: replacement_supplier_id ? { replacement_supplier_id } : undefined,
                 }),
-            createProduct: (data: any) => apiClient.post('/admin/products', data),
-            updateProduct: (id: string, data: any) => apiClient.put(`/admin/products/${id}`, data),
+            createProduct: (data: JsonRecord) => apiClient.post('/admin/products', data),
+            updateProduct: (id: string, data: JsonRecord) => apiClient.put(`/admin/products/${id}`, data),
             updateTierPricing: (
                 id: string,
                 data: { regular_price: number; gold_price: number; platinum_price: number }
@@ -309,8 +319,8 @@ export const api = {
                 apiClient.post('/admin/products/upload-image', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 }),
-            createMutation: (data: any) => apiClient.post('/admin/inventory/mutation', data),
-            createPO: (data: any) => apiClient.post('/admin/inventory/po', data),
+            createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
+            createPO: (data: JsonRecord) => apiClient.post('/admin/inventory/po', data),
             getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number }) =>
                 apiClient.get('/admin/inventory/po', { params }),
             getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
@@ -328,7 +338,7 @@ export const api = {
                 apiClient.post('/admin/inventory/import/preview', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 }),
-            importCommit: (rows: any[]) =>
+            importCommit: (rows: JsonRecord[]) =>
                 apiClient.post('/admin/inventory/import/commit', { rows }),
             importFromPath: (filePath: string) =>
                 apiClient.post('/admin/inventory/import-from-path', { file_path: filePath }),
@@ -390,6 +400,21 @@ export const api = {
                 apiClient.get('/admin/finance/reports/aging-ar'),
             getBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders', { params }),
+            getStockReductionReport: (params?: {
+                startDate?: string;
+                endDate?: string;
+                eventType?: 'all' | 'allocation' | 'goods_out';
+                search?: string;
+            }) => apiClient.get('/admin/finance/reports/stock-reduction', { params }),
+            exportStockReductionReport: (params?: {
+                startDate?: string;
+                endDate?: string;
+                eventType?: 'all' | 'allocation' | 'goods_out';
+                search?: string;
+            }) => apiClient.get('/admin/finance/reports/stock-reduction/export', {
+                params,
+                responseType: 'blob',
+            }),
             getTaxSummary: (params: { startDate: string; endDate: string }) =>
                 apiClient.get('/admin/finance/reports/tax-summary', { params }),
             getVatMonthly: (params?: { year?: number }) =>
@@ -428,7 +453,7 @@ export const api = {
         // Profile
         profile: {
             getMe: () => apiClient.get('/profile/me'),
-            updateAddresses: (addresses: any[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+            updateAddresses: (addresses: JsonRecord[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
         },
         // Promos
         promos: {
@@ -456,8 +481,8 @@ export const api = {
         },
         accounts: {
             getAll: (params?: { type?: string; code?: string }) => apiClient.get('/admin/accounts', { params }),
-            create: (data: any) => apiClient.post('/admin/accounts', data),
-            update: (id: number, data: any) => apiClient.put(`/admin/accounts/${id}`, data),
+            create: (data: JsonRecord) => apiClient.post('/admin/accounts', data),
+            update: (id: number, data: JsonRecord) => apiClient.put(`/admin/accounts/${id}`, data),
             delete: (id: number) => apiClient.delete(`/admin/accounts/${id}`),
         },
     },
@@ -547,7 +572,7 @@ export const api = {
             apiClient.post('/pos/shift/start', { start_cash: data.initialCash }),
         endShift: (data: { endCash: number }) =>
             apiClient.post('/pos/shift/end', { end_cash: data.endCash }),
-        holdOrder: (data: any) => apiClient.post('/pos/hold', data),
+        holdOrder: (data: JsonRecord) => apiClient.post('/pos/hold', data),
         getHoldOrders: () => apiClient.get('/pos/hold'),
         resumeOrder: (id: string) => apiClient.get(`/pos/resume/${id}`),
         voidTransaction: (id: string) => apiClient.delete(`/pos/void/${id}`),

@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Save, Upload } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -55,6 +54,10 @@ interface IndexedPreviewRow {
   index: number;
   row: PreviewRow;
 }
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
 
 const toNonNegativeNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
@@ -274,7 +277,7 @@ const updateRowsAfterSingleEdit = (
   rows: PreviewRow[],
   rowIndex: number,
   field: keyof PreviewRow,
-  value: any
+  value: unknown
 ): PreviewRow[] => {
   const previousRow = rows[rowIndex];
   if (!previousRow) return rows;
@@ -358,7 +361,7 @@ export default function InventoryImportPage() {
       formData.append('file', selectedFile);
 
       const response = await api.admin.inventory.importPreview(formData);
-      const rows: PreviewRow[] = response.data?.rows || [];
+      const rows: PreviewRow[] = (response.data?.rows || []) as PreviewRow[];
       const recalculatedRows = recalculateDraftRows(rows);
       const invalidRows = recalculatedRows.filter((row) => !row.is_valid).length;
 
@@ -371,8 +374,9 @@ export default function InventoryImportPage() {
         invalid_rows: invalidRows,
         error_count: invalidRows,
       });
-    } catch (error: any) {
-      const message = error?.response?.data?.message || 'Gagal membaca file import.';
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
+      const message = err?.response?.data?.message || 'Gagal membaca file import.';
       setErrorMessage(message);
       setPreviewSummary(null);
       setPreviewRows([]);
@@ -382,7 +386,7 @@ export default function InventoryImportPage() {
     }
   };
 
-  const updateRowField = (rowIndex: number, field: keyof PreviewRow, value: any) => {
+  const updateRowField = (rowIndex: number, field: keyof PreviewRow, value: unknown) => {
     setPreviewRows((prev) => {
       return updateRowsAfterSingleEdit(prev, rowIndex, field, value);
     });
@@ -415,8 +419,9 @@ export default function InventoryImportPage() {
       const response = await api.admin.inventory.importCommit(previewRows);
       setCommitSummary(response.data?.summary || null);
       setCommitErrors(response.data?.errors || []);
-    } catch (error: any) {
-      const message = error?.response?.data?.message || 'Gagal commit import.';
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
+      const message = err?.response?.data?.message || 'Gagal commit import.';
       setErrorMessage(message);
       setCommitSummary(null);
       setCommitErrors([]);

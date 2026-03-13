@@ -1,45 +1,67 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Save, CheckCircle, AlertTriangle, ScanLine } from 'lucide-react';
 import Link from 'next/link';
 
+type ProductOption = {
+    id: string;
+    name: string;
+    sku: string;
+    stock_quantity: number;
+};
+
+type AuditItem = {
+    id: string;
+    system_qty: number;
+    physical_qty: number;
+    difference: number;
+    Product?: { name?: string; sku?: string };
+};
+
+type AuditDetail = {
+    id: string;
+    status: 'open' | 'completed' | string;
+    Items?: AuditItem[];
+};
+
 export default function AuditDetailPage() {
     const { id } = useParams();
     const router = useRouter();
-    const [opname, setOpname] = useState<any>(null);
+    const [opname, setOpname] = useState<AuditDetail | null>(null);
     const [loading, setLoading] = useState(true);
 
     // Form State
     const [productId, setProductId] = useState('');
     const [physicalQty, setPhysicalQty] = useState('');
-    const [products, setProducts] = useState<any[]>([]);
+    const [products, setProducts] = useState<ProductOption[]>([]);
     const [search, setSearch] = useState('');
 
-    useEffect(() => {
-        if (id) loadData();
-    }, [id]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
+        if (!id) return;
         try {
             const [opRes, prodRes] = await Promise.all([
                 api.admin.inventory.getAuditDetail(id as string),
                 api.admin.inventory.getProducts({ limit: 1000, status: 'all' })
             ]);
-            setOpname(opRes.data);
+            setOpname(opRes.data as AuditDetail);
             if (prodRes.data && Array.isArray(prodRes.data.products)) {
-                setProducts(prodRes.data.products);
+                setProducts(prodRes.data.products as ProductOption[]);
             } else if (Array.isArray(prodRes.data)) {
-                setProducts(prodRes.data);
+                setProducts(prodRes.data as ProductOption[]);
             }
         } catch (error) {
             console.error('Failed to load audit detail', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [id]);
+
+    useEffect(() => {
+        if (id) void loadData();
+    }, [id, loadData]);
 
     const handleSubmitItem = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -55,8 +77,8 @@ export default function AuditDetailPage() {
             setProductId('');
             setPhysicalQty('');
             setSearch(''); // Optional: clear search
-            loadData(); // Refresh list
-        } catch (error) {
+            void loadData(); // Refresh list
+        } catch {
             alert('Gagal menyimpan item audit');
         }
     };
@@ -66,7 +88,7 @@ export default function AuditDetailPage() {
         try {
             await api.admin.inventory.finishAudit(id as string);
             router.push('/admin/warehouse/audit');
-        } catch (error) {
+        } catch {
             alert('Gagal menyelesaikan audit');
         }
     };
@@ -74,7 +96,7 @@ export default function AuditDetailPage() {
     if (loading) return <div className="p-6">Loading...</div>;
     if (!opname) return <div className="p-6">Audit not found</div>;
 
-    const filteredProducts = products.filter(p =>
+    const filteredProducts = products.filter((p) =>
         p.name.toLowerCase().includes(search.toLowerCase()) ||
         p.sku.toLowerCase().includes(search.toLowerCase())
     );
@@ -128,7 +150,7 @@ export default function AuditDetailPage() {
                                     />
                                     {search && (
                                         <div className="mt-2 max-h-40 overflow-y-auto border border-slate-200 rounded-xl bg-slate-50">
-                                            {filteredProducts.slice(0, 10).map(p => (
+                                            {filteredProducts.slice(0, 10).map((p) => (
                                                 <div
                                                     key={p.id}
                                                     onClick={() => { setProductId(p.id); setSearch(p.name); }}
@@ -196,7 +218,7 @@ export default function AuditDetailPage() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {opname.Items?.map((item: any) => (
+                                    {opname.Items?.map((item) => (
                                         <tr key={item.id} className="hover:bg-slate-50">
                                             <td className="px-6 py-3">
                                                 <div className="font-bold text-slate-900">{item.Product?.name}</div>

@@ -1,21 +1,27 @@
 import { Request, Response } from 'express';
 import { sequelize, AccountingPeriod } from '../../models';
 import { JournalService } from '../../services/JournalService';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 
 // --- Accounting Periods & Adjustments ---
 
-export const getAccountingPeriods = async (req: Request, res: Response) => {
+export const getAccountingPeriods = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const periods = await AccountingPeriod.findAll({
             order: [['year', 'DESC'], ['month', 'DESC']]
         });
         res.json(periods);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching periods', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching periods', 500);
     }
-};
+});
 
-export const closeAccountingPeriod = async (req: Request, res: Response) => {
+export const closeAccountingPeriod = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { month, year } = req.body;
@@ -23,7 +29,7 @@ export const closeAccountingPeriod = async (req: Request, res: Response) => {
 
         if (!month || !year) {
             await t.rollback();
-            return res.status(400).json({ message: 'Month dan Year wajib diisi' });
+            throw new CustomError('Month dan Year wajib diisi', 400);
         }
 
         const [period, created] = await AccountingPeriod.findOrCreate({
@@ -40,7 +46,7 @@ export const closeAccountingPeriod = async (req: Request, res: Response) => {
 
         if (!created && period.is_closed) {
             await t.rollback();
-            return res.status(400).json({ message: 'Periode sudah ditutup sebelumnya' });
+            throw new CustomError('Periode sudah ditutup sebelumnya', 400);
         }
 
         if (!created) {
@@ -55,11 +61,26 @@ export const closeAccountingPeriod = async (req: Request, res: Response) => {
         res.json({ message: `Periode ${month}/${year} berhasil ditutup`, period });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error closing period', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error closing period', 500);
     }
-};
+});
 
-export const createAdjustmentJournal = async (req: Request, res: Response) => {
+export const createAdjustmentJournal = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const scope = `finance_adjustment:${String(req.user?.id || '')}`;
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, scope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 201)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan adjustment duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const { date, description, lines } = req.body;
@@ -67,7 +88,7 @@ export const createAdjustmentJournal = async (req: Request, res: Response) => {
 
         if (!lines || !Array.isArray(lines) || lines.length < 2) {
             await t.rollback();
-            return res.status(400).json({ message: 'Journal adjustment minimal 2 baris (Debit/Credit)' });
+            throw new CustomError('Journal adjustment minimal 2 baris (Debit/Credit)', 400);
         }
 
         const journal = await JournalService.createAdjustmentEntry({
@@ -75,14 +96,25 @@ export const createAdjustmentJournal = async (req: Request, res: Response) => {
             description: `[ADJUSTMENT] ${description}`,
             reference_type: 'adjustment',
             created_by: userId,
-            lines
+            lines,
+            idempotency_key: idempotencyKey ? `adjustment_${idempotencyKey}` : undefined
         }, t);
 
         await t.commit();
-        res.status(201).json({ message: 'Adjustment journal created', journal });
+        const responsePayload = { message: 'Adjustment journal created', journal };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, scope, 201, responsePayload);
+        }
+        res.status(201).json(responsePayload);
     } catch (error) {
         try { await t.rollback(); } catch { }
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, scope);
+        }
+        if (error instanceof CustomError) {
+            throw error;
+        }
         const msg = error instanceof Error ? error.message : 'Unknown error';
-        res.status(500).json({ message: 'Error creating adjustment', error: msg });
+        throw new CustomError(`Error creating adjustment: ${msg}`, 500);
     }
-};
+});

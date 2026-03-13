@@ -18,7 +18,6 @@ import {
     Clock,
     HandCoins,
     RotateCcw,
-    Image as ImageIcon,
     MessageSquare,
     X,
     AlertCircle,
@@ -27,13 +26,49 @@ import {
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import Image from 'next/image';
+
+type ReturOrderItem = {
+    product_id: string;
+    price_at_purchase?: number | string;
+    qty?: number | string;
+};
+
+type ReturDetail = {
+    id: string;
+    status: string;
+    qty: number;
+    order_id: string;
+    product_id: string;
+    createdAt?: string;
+    reason?: string;
+    evidence_img?: string;
+    admin_response?: string;
+    refund_amount?: number | string;
+    refund_disbursed_at?: string | null;
+    refund_note?: string | null;
+    courier_id?: string | null;
+    created_by?: string;
+    Product?: { name?: string; sku?: string } | null;
+    Creator?: { name?: string; whatsapp_number?: string } | null;
+    Courier?: { name?: string; whatsapp_number?: string } | null;
+    Order?: {
+        status?: string;
+        total_amount?: number;
+        OrderItems?: ReturOrderItem[];
+    } | null;
+};
+
+type ApiErrorWithMessage = {
+    response?: { data?: { message?: string } };
+};
 
 export default function FinanceReturDetailPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const params = useParams();
     const returId = params.id as string;
 
-    const [retur, setRetur] = useState<any>(null);
+    const [retur, setRetur] = useState<ReturDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [zoomedImage, setZoomedImage] = useState<string | null>(null);
@@ -42,7 +77,7 @@ export default function FinanceReturDetailPage() {
         try {
             setLoading(true);
             const res = await api.retur.getAll();
-            const found = (res.data || []).find((r: any) => String(r.id) === String(returId));
+            const found = ((res.data || []) as ReturDetail[]).find((r) => String(r.id) === String(returId));
             setRetur(found || null);
         } catch (error) {
             console.error('Failed to load retur detail:', error);
@@ -73,9 +108,10 @@ export default function FinanceReturDetailPage() {
             await api.retur.disburse(retur.id, 'Pencairan manual via admin finance');
             alert('Pencairan dana berhasil dicatat!');
             loadData(); // Refresh to see update
-        } catch (error: any) {
+        } catch (error: unknown) {
+            const apiError = error as ApiErrorWithMessage;
             console.error('Disburse failed:', error);
-            alert('Gagal mencairkan dana: ' + (error.response?.data?.message || 'Error unknown'));
+            alert('Gagal mencairkan dana: ' + (apiError.response?.data?.message || 'Error unknown'));
         } finally {
             setSubmitting(false);
         }
@@ -103,7 +139,7 @@ export default function FinanceReturDetailPage() {
     }
 
     // Calculate refund info
-    const orderItem = retur.Order?.OrderItems?.find((oi: any) => String(oi.product_id) === String(retur.product_id));
+    const orderItem = retur.Order?.OrderItems?.find((oi: ReturOrderItem) => String(oi.product_id) === String(retur.product_id));
     const priceAtPurchase = Number(orderItem?.price_at_purchase || 0);
     const qtyPurchased = Number(orderItem?.qty || 0);
     const calculatedRefund = priceAtPurchase * retur.qty;
@@ -124,8 +160,6 @@ export default function FinanceReturDetailPage() {
     };
 
     const statusInfo = getStatusInfo(retur.status);
-    const StatusIcon = statusInfo.icon;
-
     return (
         <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
             {/* Header */}
@@ -288,7 +322,7 @@ export default function FinanceReturDetailPage() {
                         onClick={() => setZoomedImage(`/${retur.evidence_img}`)}
                         className="block w-full relative rounded-2xl overflow-hidden border border-slate-200 group cursor-zoom-in"
                     >
-                        <img src={`/${retur.evidence_img}`} alt="Bukti" className="w-full h-48 object-cover group-hover:scale-105 transition-transform" />
+                        <Image src={`/${retur.evidence_img}`} alt="Bukti" width={1280} height={768} unoptimized className="w-full h-48 object-cover group-hover:scale-105 transition-transform" />
                         <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                             <span className="text-white text-xs font-black uppercase tracking-widest">Klik untuk Zoom</span>
                         </div>
@@ -356,9 +390,12 @@ export default function FinanceReturDetailPage() {
                     >
                         <X size={18} />
                     </button>
-                    <img
+                    <Image
                         src={zoomedImage}
                         alt="Preview Bukti"
+                        width={1440}
+                        height={1080}
+                        unoptimized
                         className="max-w-full max-h-[90vh] object-contain rounded-xl bg-white shadow-2xl"
                         onClick={(e) => e.stopPropagation()}
                     />

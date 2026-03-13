@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -12,6 +11,10 @@ interface CategoryRow {
   description: string | null;
   icon: string | null;
 }
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
 
 const CATEGORY_ICON_OPTIONS = [
   { value: '', label: 'Tanpa Icon' },
@@ -45,9 +48,9 @@ export default function InventoryCategoriesPage() {
       setLoading(true);
       const res = await api.admin.inventory.getCategories();
       setCategories(res.data?.categories || []);
-    } catch (error) {
+    } catch (error: unknown) {
       setMessageType('error');
-      const err = error as any;
+      const err = error as ApiErrorWithMessage;
       setMessage(err?.response?.data?.message || 'Gagal memuat kategori.');
     } finally {
       setLoading(false);
@@ -84,9 +87,10 @@ export default function InventoryCategoriesPage() {
       await loadCategories();
       setMessageType('success');
       setMessage('Kategori baru berhasil ditambahkan.');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal menambah kategori.');
+      setMessage(err?.response?.data?.message || 'Gagal menambah kategori.');
     } finally {
       setIsSaving(false);
     }
@@ -127,9 +131,10 @@ export default function InventoryCategoriesPage() {
       setMessageType('success');
       setMessage('Kategori berhasil diperbarui.');
       cancelEditCategory();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal memperbarui kategori.');
+      setMessage(err?.response?.data?.message || 'Gagal memperbarui kategori.');
     } finally {
       setIsSaving(false);
     }
@@ -156,9 +161,10 @@ export default function InventoryCategoriesPage() {
       await loadCategories();
       setMessageType('success');
       setMessage('Kategori berhasil dihapus.');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal menghapus kategori.');
+      setMessage(err?.response?.data?.message || 'Gagal menghapus kategori.');
     } finally {
       setIsSaving(false);
     }

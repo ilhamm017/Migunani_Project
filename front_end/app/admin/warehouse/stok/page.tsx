@@ -19,6 +19,14 @@ import {
 
 const PRODUCTS_PER_PAGE = 50;
 
+type InventoryQuery = {
+    page: number;
+    limit: number;
+    status: string;
+    search?: string;
+    category_id?: number;
+};
+
 export default function WarehouseInventoryPage() {
     const [products, setProducts] = useState<ProductRow[]>([]);
     const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
@@ -46,7 +54,7 @@ export default function WarehouseInventoryPage() {
     const loadProducts = useCallback(async () => {
         setLoading(true);
         try {
-            const params: any = {
+            const params: InventoryQuery = {
                 page: currentPage,
                 limit: PRODUCTS_PER_PAGE,
                 status: 'all',
@@ -87,7 +95,7 @@ export default function WarehouseInventoryPage() {
         if (latest) {
             setSelectedProduct(latest);
         }
-    }, [products, selectedProduct?.id]);
+    }, [products, selectedProduct]);
 
     const handleProductUpdated = useCallback((nextProduct: ProductRow) => {
         setSelectedProduct(nextProduct);
@@ -277,7 +285,7 @@ export default function WarehouseInventoryPage() {
                                     </tr>
                                 ) : (
                                     table.getRowModel().rows.map((row) => {
-                                        const isSelected = (row.original as any).id === selectedProduct?.id;
+                                        const isSelected = row.original.id === selectedProduct?.id;
                                         return (
                                             <tr
                                                 key={row.id}

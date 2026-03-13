@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import { Product, Category, ProductCategory } from '../models';
 import { Op, fn, col } from 'sequelize';
+import { asyncWrapper } from '../utils/asyncWrapper';
+import { CustomError } from '../utils/CustomError';
 
 // Public Catalog API - Safe for Customers (Hides base_price/COGS)
 
-export const getCatalog = async (req: Request, res: Response) => {
+export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { page = 1, limit = 12, search, category_id, min_price, max_price, sort } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
@@ -21,7 +23,7 @@ export const getCatalog = async (req: Request, res: Response) => {
         if (category_id) {
             const categoryId = Number(category_id);
             if (!Number.isInteger(categoryId) || categoryId <= 0) {
-                return res.status(400).json({ message: 'category_id tidak valid' });
+                throw new CustomError('category_id tidak valid', 400);
             }
 
             const mappings = await ProductCategory.findAll({
@@ -71,11 +73,14 @@ export const getCatalog = async (req: Request, res: Response) => {
             products: rows
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching catalog', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching catalog', 500);
     }
-};
+});
 
-export const getProductDetails = async (req: Request, res: Response) => {
+export const getProductDetails = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { id } = req.params; // Can be UUID or SKU? 
         // Route says usually /products/:id or /products/:slug
@@ -97,16 +102,19 @@ export const getProductDetails = async (req: Request, res: Response) => {
         });
 
         if (!product) {
-            return res.status(404).json({ message: 'Product not found' });
+            throw new CustomError('Product not found', 404);
         }
 
         res.json(product);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching product', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching product', 500);
     }
-};
+});
 
-export const getPublicCategories = async (req: Request, res: Response) => {
+export const getPublicCategories = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const limitRaw = Number(req.query.limit ?? 6);
         const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.trunc(limitRaw), 20) : 6;
@@ -149,6 +157,9 @@ export const getPublicCategories = async (req: Request, res: Response) => {
 
         res.json({ categories: sorted });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching public categories', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching public categories', 500);
     }
-};
+});

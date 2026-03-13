@@ -16,6 +16,20 @@ type Props = {
 
 type TabId = 'baru_masuk' | 'selesai' | 'backorder';
 
+type AdminOrderListRow = {
+  id: string;
+  source?: string;
+  status: string;
+  total_amount?: number;
+  createdAt: string;
+  parent_order_id?: string | null;
+  customer_name?: string;
+  issue_overdue?: boolean;
+  active_issue?: { issue_type?: string; due_at?: string | null } | null;
+  Children?: Array<unknown> | null;
+  Invoice?: { payment_status?: string; invoice_number?: string } | null;
+};
+
 const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'all', label: 'Semua' },
   { key: 'pending', label: 'Pending' },
@@ -64,7 +78,7 @@ const calculateAge = (createdAt: string) => {
 
 export default function AdminOrdersListView({ title, description, fixedStatus = 'all' }: Props) {
   const router = useRouter();
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<AdminOrderListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -114,13 +128,40 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
         is_backorder: isBackorder,
         exclude_backorder: excludeBackorder,
       });
-      setOrders(res.data?.orders || []);
+      const rows = Array.isArray(res.data?.orders) ? res.data.orders : [];
+      const mapped: AdminOrderListRow[] = rows.map((item) => {
+        const row = item as Record<string, unknown>;
+        return {
+          id: String(row.id ?? ''),
+          source: row.source ? String(row.source) : undefined,
+          status: String(row.status ?? ''),
+          total_amount: Number(row.total_amount ?? 0),
+          createdAt: String(row.createdAt ?? ''),
+          parent_order_id: row.parent_order_id ? String(row.parent_order_id) : null,
+          customer_name: row.customer_name ? String(row.customer_name) : undefined,
+          issue_overdue: Boolean(row.issue_overdue),
+          active_issue: row.active_issue && typeof row.active_issue === 'object'
+            ? {
+              issue_type: (row.active_issue as Record<string, unknown>).issue_type ? String((row.active_issue as Record<string, unknown>).issue_type) : undefined,
+              due_at: (row.active_issue as Record<string, unknown>).due_at ? String((row.active_issue as Record<string, unknown>).due_at) : null,
+            }
+            : null,
+          Children: Array.isArray(row.Children) ? row.Children : null,
+          Invoice: row.Invoice && typeof row.Invoice === 'object'
+            ? {
+              payment_status: (row.Invoice as Record<string, unknown>).payment_status ? String((row.Invoice as Record<string, unknown>).payment_status) : undefined,
+              invoice_number: (row.Invoice as Record<string, unknown>).invoice_number ? String((row.Invoice as Record<string, unknown>).invoice_number) : undefined,
+            }
+            : null,
+        };
+      });
+      setOrders(mapped);
     } catch (error) {
       console.error('Failed to load admin orders:', error);
     } finally {
       setLoading(false);
     }
-  }, [activeStatus, activeTab]);
+  }, [activeStatus, activeTab, fixedStatus]);
 
   const loadTabBadgeCounts = useCallback(async () => {
     if (fixedStatus !== 'all') return;

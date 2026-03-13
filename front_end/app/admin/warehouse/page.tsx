@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { type ComponentType, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-    LayoutDashboard, Boxes, ClipboardList, UserCheck,
+    LayoutDashboard, ClipboardList, UserCheck,
     Layers, Truck, ShoppingCart, ShieldCheck,
     ScanBarcode, FileSpreadsheet, ClipboardCheck,
-    AlertTriangle, Package, TrendingDown, ChevronRight,
+    Package, TrendingDown, ChevronRight,
     ArrowUpRight, Clock
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -41,7 +41,7 @@ export default function WarehouseLandingPage() {
                     api.admin.inventory.getProducts({ limit: 100 }) // Simple check for low stock
                 ]);
 
-                const lowStockCount = (productsRes.data?.products || []).filter((p: any) =>
+                const lowStockCount = (productsRes.data?.products || []).filter((p: ProductStockRow) =>
                     Number(p.stock_quantity || 0) <= Number(p.min_stock || 0)
                 ).length;
 
@@ -258,13 +258,29 @@ export default function WarehouseLandingPage() {
     );
 }
 
-function StatCard({ icon: Icon, label, value, color, loading, href }: any) {
+type ProductStockRow = {
+    stock_quantity?: number;
+    min_stock?: number;
+};
+
+type StatColor = 'orange' | 'rose' | 'blue' | 'emerald';
+
+type StatCardProps = {
+    icon: ComponentType<{ size?: number }>;
+    label: string;
+    value: number;
+    color: StatColor;
+    loading: boolean;
+    href: string;
+};
+
+function StatCard({ icon: Icon, label, value, color, loading, href }: StatCardProps) {
     const colorClasses = {
         orange: 'bg-orange-50 text-orange-600 border-orange-100',
         rose: 'bg-rose-50 text-rose-600 border-rose-100',
         blue: 'bg-blue-50 text-blue-600 border-blue-100',
         emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-    } as any;
+    };
 
     return (
         <Link

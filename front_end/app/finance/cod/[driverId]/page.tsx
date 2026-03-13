@@ -1,34 +1,30 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, CheckCircle, Calculator, AlertTriangle, ChevronRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, CheckCircle, AlertTriangle, ChevronRight } from 'lucide-react';
 import { MoneyInput } from '@/components/finance/MoneyInput';
 import { AccountSelector } from '@/components/finance/AccountSelector';
 // import { api } from '@/lib/api';
 
+const MOCK_INVOICES = [
+    { id: '1', number: 'INV-001', customer: 'Bengkel A', amount: 500000 },
+    { id: '2', number: 'INV-002', customer: 'Bengkel B', amount: 750000 },
+    { id: '3', number: 'INV-005', customer: 'Toko C', amount: 250000 },
+];
+
 export default function CodSettlementPage() {
-    const params = useParams();
     const router = useRouter();
     const [step, setStep] = useState(1);
-    const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
+    const [selectedInvoices, setSelectedInvoices] = useState<string[]>(() => MOCK_INVOICES.map((invoice) => invoice.id));
     const [receivedAmount, setReceivedAmount] = useState(0);
     const [targetAccount, setTargetAccount] = useState('1101'); // Default Kas
     const [note, setNote] = useState('');
 
     // Mock Data
     const driverName = "Budi Santoso";
-    const invoices = [
-        { id: '1', number: 'INV-001', customer: 'Bengkel A', amount: 500000 },
-        { id: '2', number: 'INV-002', customer: 'Bengkel B', amount: 750000 },
-        { id: '3', number: 'INV-005', customer: 'Toko C', amount: 250000 },
-    ];
-
-    // Auto-select all on mount
-    useEffect(() => {
-        setSelectedInvoices(invoices.map(i => i.id));
-    }, []);
+    const invoices = MOCK_INVOICES;
 
     const totalExpected = invoices
         .filter(inv => selectedInvoices.includes(inv.id))

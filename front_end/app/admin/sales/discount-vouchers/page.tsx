@@ -37,6 +37,16 @@ type ProductOption = {
   sku: string;
 };
 
+type InventoryProductLite = {
+  id: string;
+  name?: string;
+  sku?: string;
+};
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
+
 const normalizeCode = (value: string) =>
   value
     .trim()
@@ -196,16 +206,17 @@ export default function DiscountVouchersPage() {
         search: query?.trim() || undefined,
         status: 'active',
       });
-      const rows = Array.isArray(res.data?.products) ? res.data.products : [];
-      const mapped: ProductOption[] = rows.map((item: any) => ({
+      const rows = Array.isArray(res.data?.products) ? (res.data.products as InventoryProductLite[]) : [];
+      const mapped: ProductOption[] = rows.map((item) => ({
         id: String(item.id),
         name: String(item.name || ''),
         sku: String(item.sku || ''),
       }));
       setProductOptions(mapped);
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
       setProductOptions([]);
-      setError(e?.response?.data?.message || 'Gagal memuat daftar produk');
+      setError(err?.response?.data?.message || 'Gagal memuat daftar produk');
     } finally {
       setProductLoading(false);
     }
@@ -234,10 +245,11 @@ export default function DiscountVouchersPage() {
         };
       });
       setDrafts(nextDrafts);
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
       setVouchers([]);
       setDrafts({});
-      setError(e?.response?.data?.message || 'Gagal memuat voucher diskon');
+      setError(err?.response?.data?.message || 'Gagal memuat voucher diskon');
     } finally {
       setLoading(false);
     }
@@ -315,8 +327,9 @@ export default function DiscountVouchersPage() {
       setNewIsActive(true);
       setNewProductId('');
       await loadVouchers();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menambahkan voucher diskon.');
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menambahkan voucher diskon.');
     } finally {
       setCreating(false);
     }
@@ -373,8 +386,9 @@ export default function DiscountVouchersPage() {
       });
       setActionMessage(res.data?.message || `Voucher ${code} berhasil diperbarui.`);
       await loadVouchers();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || `Gagal memperbarui voucher ${code}.`);
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || `Gagal memperbarui voucher ${code}.`);
     } finally {
       setProcessingCode('');
     }
@@ -389,8 +403,9 @@ export default function DiscountVouchersPage() {
       const res = await api.admin.discountVouchers.remove(code);
       setActionMessage(res.data?.message || `Voucher ${code} berhasil dihapus.`);
       await loadVouchers();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || `Gagal menghapus voucher ${code}.`);
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || `Gagal menghapus voucher ${code}.`);
     } finally {
       setProcessingCode('');
     }

@@ -8,6 +8,16 @@ import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { ArRow, paymentMethodLabel, paymentStatusLabel, sourceLabel } from '../arShared';
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === 'object' && error !== null) {
+    const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+    if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+};
+
 export default function FinanceARDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
   const params = useParams();
@@ -24,9 +34,9 @@ export default function FinanceARDetailPage() {
         setError('');
         const res = await api.admin.finance.getARById(invoiceId);
         setRow((res.data || null) as ArRow | null);
-      } catch (e: any) {
+      } catch (error: unknown) {
         setRow(null);
-        setError(e?.response?.data?.message || 'Gagal memuat detail piutang');
+        setError(getErrorMessage(error, 'Gagal memuat detail piutang'));
       } finally {
         setLoading(false);
       }

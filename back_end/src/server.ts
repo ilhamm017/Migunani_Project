@@ -16,6 +16,7 @@ import { ensureChatThreadSchema } from './services/chatSchema';
 import { backfillLegacyChatSessionsToThreads } from './services/ChatThreadService';
 import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
 import { TaxConfigService } from './services/TaxConfigService';
+import { startNotificationOutboxWorker } from './services/TransactionNotificationOutboxService';
 
 dotenv.config();
 
@@ -212,7 +213,6 @@ import profileRoutes from './routes/profile';
 import promoRoutes from './routes/promo';
 
 // Routes
-// Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/cart', cartRoutes);
 app.use('/api/v1/orders', orderRoutes);
@@ -241,6 +241,9 @@ app.get('/', (req, res) => {
     res.send('Migunani Motor Backend Running');
 });
 
+// Import and register centralized error handling middleware
+import { errorMiddleware } from './middleware/errorMiddleware';
+app.use(errorMiddleware);
 
 const PORT = process.env.PORT || 5000;
 const waAutoInit = process.env.WA_AUTO_INIT !== 'false';
@@ -529,6 +532,8 @@ const startServer = async () => {
         httpServer.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
         });
+
+        startNotificationOutboxWorker();
 
         if (waAutoInit) {
             // Check if we have a valid session in DB

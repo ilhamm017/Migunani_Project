@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:5000';
 
 let socket: Socket | null = null;
+let hasLoggedSocketFailure = false;
 
 export const getSocket = (): Socket => {
     if (!socket) {
@@ -14,6 +15,7 @@ export const getSocket = (): Socket => {
         });
 
         socket.on('connect', () => {
+            hasLoggedSocketFailure = false;
             console.log('Socket connected:', socket?.id);
         });
 
@@ -21,8 +23,11 @@ export const getSocket = (): Socket => {
             console.log('Socket disconnected');
         });
 
-        socket.on('connect_error', (error) => {
-            console.error('Socket connection error:', error);
+        socket.on('connect_error', () => {
+            if (!hasLoggedSocketFailure) {
+                hasLoggedSocketFailure = true;
+                console.warn(`Socket unavailable at ${WS_URL}. Falling back to non-realtime refresh.`);
+            }
         });
     }
 

@@ -12,7 +12,7 @@ import {
 
 import { useState } from 'react';
 
-interface DataTableProps<TData, TValue> {
+interface DataTableProps<TData extends { id?: string | number }, TValue> {
     columns: ColumnDef<TData, TValue>[];
     data: TData[];
     onRowClick?: (row: TData) => void;
@@ -20,17 +20,19 @@ interface DataTableProps<TData, TValue> {
     refreshData?: () => void;
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends { id?: string | number }, TValue>({
     columns,
     data,
     onRowClick,
     selectedRowId,
     refreshData
 }: DataTableProps<TData, TValue>) {
+    'use no memo';
     const [sorting, setSorting] = useState<SortingState>([]);
     const [rowSelection, setRowSelection] = useState({});
+    const buildTable = useReactTable;
 
-    const table = useReactTable({
+    const table = buildTable({
         data,
         columns,
         getCoreRowModel: getCoreRowModel(),
@@ -81,7 +83,7 @@ export function DataTable<TData, TValue>({
                                     onClick={() => onRowClick?.(row.original)}
                                     className={`
                     transition-colors cursor-pointer hover:bg-emerald-50/50 
-                    ${(row.original as any).id === selectedRowId ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : ''}
+                    ${String(row.original.id ?? '') === String(selectedRowId ?? '') ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : ''}
                   `}
                                 >
                                     {row.getVisibleCells().map((cell) => (

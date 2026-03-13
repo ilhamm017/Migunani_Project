@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -12,6 +11,10 @@ interface SupplierRow {
   contact: string | null;
   address: string | null;
 }
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
 
 export default function InventorySuppliersPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
@@ -33,9 +36,9 @@ export default function InventorySuppliersPage() {
       setLoading(true);
       const res = await api.admin.inventory.getSuppliers();
       setSuppliers(res.data?.suppliers || []);
-    } catch (error) {
+    } catch (error: unknown) {
       setMessageType('error');
-      const err = error as any;
+      const err = error as ApiErrorWithMessage;
       setMessage(err?.response?.data?.message || 'Gagal memuat supplier.');
     } finally {
       setLoading(false);
@@ -72,9 +75,10 @@ export default function InventorySuppliersPage() {
       await loadSuppliers();
       setMessageType('success');
       setMessage('Supplier berhasil ditambahkan.');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal menambah supplier.');
+      setMessage(err?.response?.data?.message || 'Gagal menambah supplier.');
     } finally {
       setIsSaving(false);
     }
@@ -115,9 +119,10 @@ export default function InventorySuppliersPage() {
       setMessageType('success');
       setMessage('Supplier berhasil diperbarui.');
       cancelEditSupplier();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal memperbarui supplier.');
+      setMessage(err?.response?.data?.message || 'Gagal memperbarui supplier.');
     } finally {
       setIsSaving(false);
     }
@@ -144,9 +149,10 @@ export default function InventorySuppliersPage() {
       await loadSuppliers();
       setMessageType('success');
       setMessage('Supplier berhasil dihapus.');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal menghapus supplier.');
+      setMessage(err?.response?.data?.message || 'Gagal menghapus supplier.');
     } finally {
       setIsSaving(false);
     }

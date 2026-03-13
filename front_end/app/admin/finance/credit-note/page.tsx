@@ -6,6 +6,16 @@ import { ArrowLeft } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+        if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message;
+    }
+    return fallback;
+};
+
 export default function CreditNotePage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const [invoiceId, setInvoiceId] = useState('');
@@ -33,8 +43,8 @@ export default function CreditNotePage() {
             const id = Number(res?.data?.credit_note?.id || 0);
             setCreatedId(id || null);
             alert('Credit note draft berhasil dibuat');
-        } catch (error: any) {
-            alert(error?.response?.data?.message || 'Gagal membuat credit note');
+        } catch (error: unknown) {
+            alert(getErrorMessage(error, 'Gagal membuat credit note'));
         } finally {
             setLoading(false);
         }
@@ -50,8 +60,8 @@ export default function CreditNotePage() {
             }
             await api.admin.finance.postCreditNote(id, { pay_now: payNow });
             alert('Credit note berhasil diposting');
-        } catch (error: any) {
-            alert(error?.response?.data?.message || 'Gagal posting credit note');
+        } catch (error: unknown) {
+            alert(getErrorMessage(error, 'Gagal posting credit note'));
         } finally {
             setLoading(false);
         }

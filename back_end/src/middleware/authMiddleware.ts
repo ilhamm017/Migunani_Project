@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { User } from '../models';
 
 // Extend Express Request interface to include user property
 declare global {
@@ -14,9 +15,15 @@ declare global {
     }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey'; // Fallback for dev only
+const getJwtSecret = (): string => {
+    const secret = String(process.env.JWT_SECRET || '').trim();
+    if (!secret) {
+        throw new Error('JWT_SECRET is required');
+    }
+    return secret;
+};
 
-export const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
+export const authenticateToken = async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
 
@@ -24,13 +31,32 @@ export const authenticateToken = (req: Request, res: Response, next: NextFunctio
         return res.status(401).json({ message: 'Access token required' });
     }
 
-    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-        if (err) {
-            return res.status(403).json({ message: 'Invalid or expired token' });
+    try {
+        const decoded = jwt.verify(token, getJwtSecret()) as { id?: string };
+        const userId = String(decoded?.id || '').trim();
+        if (!userId) {
+            return res.status(403).json({ message: 'Invalid token payload' });
         }
-        req.user = user;
+
+        const dbUser = await User.findByPk(userId, {
+            attributes: ['id', 'role', 'status', 'whatsapp_number']
+        });
+        if (!dbUser) {
+            return res.status(401).json({ message: 'User not found' });
+        }
+        if (String(dbUser.status || '').toLowerCase() !== 'active') {
+            return res.status(403).json({ message: 'Account is inactive or banned' });
+        }
+
+        req.user = {
+            id: String(dbUser.id),
+            role: String(dbUser.role),
+            whatsapp_number: String(dbUser.whatsapp_number || '')
+        };
         next();
-    });
+    } catch {
+        return res.status(403).json({ message: 'Invalid or expired token' });
+    }
 };
 
 export const authorizeRoles = (...allowedRoles: string[]) => {
@@ -49,5 +75,5 @@ export const authorizeRoles = (...allowedRoles: string[]) => {
 
 // Helper for generating tokens (can be used in AuthController later)
 export const generateToken = (user: { id: string; role: string; whatsapp_number: string }) => {
-    return jwt.sign(user, JWT_SECRET, { expiresIn: '24h' });
+    return jwt.sign(user, getJwtSecret(), { expiresIn: '24h' });
 };

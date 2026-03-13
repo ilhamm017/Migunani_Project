@@ -5,6 +5,7 @@ import { ArrowLeft, FileText, Paperclip, RefreshCw, Search, Send, Star, X } from
 import { useAuthStore } from '@/store/authStore';
 import getSocket from '@/lib/socket';
 import { api } from '@/lib/api';
+import Image from 'next/image';
 
 type ChatEventPayload = {
   session_id?: string;
@@ -73,6 +74,10 @@ type CustomerWebSessionRow = {
   } | null;
 };
 
+type ApiErrorWithStatus = {
+  response?: { status?: number; data?: { message?: string } };
+};
+
 const SESSION_KEY = 'web_chat_session_id';
 const GUEST_KEY = 'web_chat_guest_id';
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
@@ -94,7 +99,7 @@ export default function CustomerChatPage() {
   const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const [sessionId, setSessionId] = useState('');
+  const [, setSessionId] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [guestId, setGuestId] = useState('');
   const [sessions, setSessions] = useState<ChatSessionRow[]>([]);
@@ -213,8 +218,9 @@ export default function CustomerChatPage() {
         setSelectedSessionId(resolvedSessionId);
       }
       return resolvedSessionId;
-    } catch (error) {
-      const status = Number((error as any)?.response?.status || 0);
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithStatus;
+      const status = Number(err?.response?.status || 0);
       if (status !== 401 && status !== 403) {
         console.error('Error resolving customer web session:', error);
       }
@@ -248,8 +254,9 @@ export default function CustomerChatPage() {
       if (latest) {
         updateSessionPreview(targetSessionId, latest, forcedTitle);
       }
-    } catch (error: any) {
-      const status = Number(error?.response?.status || 0);
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithStatus;
+      const status = Number(err?.response?.status || 0);
       if (status === 403 || status === 404) {
         if (typeof window !== 'undefined') {
           window.sessionStorage.removeItem(SESSION_KEY);
@@ -323,7 +330,7 @@ export default function CustomerChatPage() {
     } finally {
       setInboxLoading(false);
     }
-  }, [guestId, loadMessages, mapCustomerSession, resolveMyWebSession, selectedSessionId, selectedStaffId, selectedStaffName, sessionId, user?.id]);
+  }, [guestId, loadMessages, mapCustomerSession, resolveMyWebSession, selectedSessionId, selectedStaffId, selectedStaffName, user?.id]);
 
   useEffect(() => {
     const currentUserId = user?.id || null;
@@ -531,8 +538,9 @@ export default function CustomerChatPage() {
 
       setReplyText('');
       setReplyAttachment(null);
-    } catch (error: any) {
-      const apiMessage = error?.response?.data?.message;
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithStatus;
+      const apiMessage = err?.response?.data?.message;
       setSendError(apiMessage || 'Gagal mengirim pesan.');
       console.error('Error sending web chat message:', error);
     } finally {
@@ -723,9 +731,12 @@ export default function CustomerChatPage() {
                               className="block rounded-lg overflow-hidden"
                               aria-label="Perbesar gambar lampiran"
                             >
-                              <img
+                              <Image
                                 src={message.attachmentUrl}
                                 alt="Lampiran chat"
+                                width={220}
+                                height={176}
+                                unoptimized
                                 className="max-h-44 max-w-[220px] rounded-lg border border-black/10 object-cover"
                               />
                             </button>
@@ -833,9 +844,12 @@ export default function CustomerChatPage() {
           >
             <X size={18} />
           </button>
-          <img
+          <Image
             src={zoomImageUrl}
             alt="Preview gambar lampiran"
+            width={1280}
+            height={900}
+            unoptimized
             className="max-w-[95vw] max-h-[90vh] object-contain rounded-xl"
             onClick={(e) => e.stopPropagation()}
           />

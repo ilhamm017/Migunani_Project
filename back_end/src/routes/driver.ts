@@ -1,38 +1,35 @@
 import { Router } from 'express';
-import fs from 'fs';
-import path from 'path';
-import multer from 'multer';
 import * as DriverController from '../controllers/driver';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
+import { createImageUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
-const createDriverUpload = (folderName: string, prefix: string) => multer({
-    storage: multer.diskStorage({
-        destination: (req, file, cb) => {
-            const userId = req.user?.id || 'anonymous';
-            const dest = path.join('uploads', String(userId), folderName);
-            if (!fs.existsSync(dest)) {
-                fs.mkdirSync(dest, { recursive: true });
-            }
-            cb(null, dest);
-        },
-        filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            cb(null, `${prefix}-${uniqueSuffix}${path.extname(file.originalname)}`);
-        }
-    })
+const proofUpload = createImageUpload('proofs', 'proof');
+const issueUpload = createImageUpload('issues', 'issue');
+const paymentUpload = createImageUpload('payments', 'payment');
+const completeDeliveryUploadMiddleware = createSingleUploadMiddleware(proofUpload, {
+    fieldName: 'proof',
+    sizeExceededMessage: 'Ukuran bukti pengiriman terlalu besar (maksimal 5MB).',
+    fallbackMessage: 'Upload bukti pengiriman gagal diproses.'
 });
-const proofUpload = createDriverUpload('proofs', 'proof');
-const issueUpload = createDriverUpload('issues', 'issue');
-const paymentUpload = createDriverUpload('payments', 'payment');
+const recordPaymentUploadMiddleware = createSingleUploadMiddleware(paymentUpload, {
+    fieldName: 'proof',
+    sizeExceededMessage: 'Ukuran bukti pembayaran terlalu besar (maksimal 5MB).',
+    fallbackMessage: 'Upload bukti pembayaran COD gagal diproses.'
+});
+const issueEvidenceUploadMiddleware = createSingleUploadMiddleware(issueUpload, {
+    fieldName: 'evidence',
+    sizeExceededMessage: 'Ukuran lampiran issue terlalu besar (maksimal 5MB).',
+    fallbackMessage: 'Upload lampiran issue gagal diproses.'
+});
 const router = Router();
 
 router.use(authenticateToken);
 
 router.get('/orders', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedOrders);
-router.post('/orders/:id/complete', authorizeRoles('driver'), proofUpload.single('proof'), DriverController.completeDelivery);
-router.post('/orders/:id/payment', authorizeRoles('driver'), paymentUpload.single('proof'), DriverController.recordPayment);
+router.post('/orders/:id/complete', authorizeRoles('driver'), completeDeliveryUploadMiddleware, DriverController.completeDelivery);
+router.post('/orders/:id/payment', authorizeRoles('driver'), recordPaymentUploadMiddleware, DriverController.recordPayment);
 router.patch('/orders/:id/payment-method', authorizeRoles('driver'), DriverController.updatePaymentMethod);
-router.post('/orders/:id/issue', authorizeRoles('driver'), issueUpload.single('evidence'), DriverController.reportIssue);
+router.post('/orders/:id/issue', authorizeRoles('driver'), issueEvidenceUploadMiddleware, DriverController.reportIssue);
 router.get('/wallet', authorizeRoles('driver', 'admin_finance', 'super_admin'), DriverController.getDriverWallet);
 router.get('/retur', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturs);
 router.get('/retur/:id', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturDetail);

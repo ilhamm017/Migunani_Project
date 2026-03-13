@@ -3,22 +3,25 @@ import { Op } from 'sequelize';
 import { User, Order, sequelize } from '../../models';
 import { OPEN_ORDER_STATUSES } from './types';
 import { normalizeId, releaseOrderAllocationStock } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const updateCustomerStatus = async (req: Request, res: Response) => {
+export const updateCustomerStatus = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const id = normalizeId(req.params?.id);
         const nextStatus = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : '';
         const haltOpenOrders = req.body?.halt_open_orders !== false;
+        const confirmHaltOpenOrders = req.body?.confirm_halt_open_orders === true;
 
         if (!id) {
             await t.rollback();
-            return res.status(400).json({ message: 'ID customer tidak valid' });
+            throw new CustomError('ID customer tidak valid', 400);
         }
 
         if (!['active', 'banned'].includes(nextStatus)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Status customer harus active or banned' });
+            throw new CustomError('Status customer harus active or banned', 400);
         }
 
         const customer = await User.findOne({
@@ -29,7 +32,7 @@ export const updateCustomerStatus = async (req: Request, res: Response) => {
 
         if (!customer) {
             await t.rollback();
-            return res.status(404).json({ message: 'Customer tidak ditemukan' });
+            throw new CustomError('Customer tidak ditemukan', 404);
         }
 
         const haltedOrderIds: string[] = [];
@@ -43,6 +46,14 @@ export const updateCustomerStatus = async (req: Request, res: Response) => {
                 transaction: t,
                 lock: t.LOCK.UPDATE
             });
+
+            if (openOrders.length > 0 && !confirmHaltOpenOrders) {
+                await t.rollback();
+                throw new CustomError(
+                    `Customer masih memiliki ${openOrders.length} order terbuka. Ulangi request dengan confirm_halt_open_orders=true untuk melanjutkan pembatalan massal.`,
+                    409
+                );
+            }
 
             for (const order of openOrders) {
                 if (order.status === 'canceled') continue;
@@ -80,6 +91,7 @@ export const updateCustomerStatus = async (req: Request, res: Response) => {
         });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error updating customer status', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error updating customer status', 500);
     }
-};
+});

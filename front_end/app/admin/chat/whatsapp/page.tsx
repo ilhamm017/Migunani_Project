@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
 import { RefreshCw, LogOut, CheckCircle, AlertCircle, Loader2, Link2 } from 'lucide-react';
@@ -11,14 +11,30 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
 
-const getPersistApi = () => (useAuthStore as any).persist;
+type PersistApi = {
+  hasHydrated?: () => boolean;
+  onFinishHydration?: (callback: () => void) => (() => void) | void;
+};
+
+const getPersistApi = (): PersistApi | undefined => {
+  const store = useAuthStore as unknown as { persist?: PersistApi };
+  return store.persist;
+};
 
 export default function WhatsappConfigPage() {
   const { user, isAuthenticated } = useAuthStore();
-  const [hydrated, setHydrated] = useState(() => {
-    const persistApi = getPersistApi();
-    return persistApi?.hasHydrated?.() ?? false;
-  });
+  const hydrated = useSyncExternalStore(
+    (onStoreChange) => {
+      const persistApi = getPersistApi();
+      const unsubscribe = persistApi?.onFinishHydration?.(onStoreChange);
+      return typeof unsubscribe === 'function' ? unsubscribe : () => undefined;
+    },
+    () => {
+      const persistApi = getPersistApi();
+      return persistApi?.hasHydrated?.() ?? true;
+    },
+    () => true
+  );
   const canManageWhatsapp = !!user && ['super_admin', 'kasir'].includes(user.role);
   const [status, setStatus] = useState<string>('STOPPED');
   const [qr, setQr] = useState<string | null>(null);
@@ -32,21 +48,6 @@ export default function WhatsappConfigPage() {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const router = useRouter();
-
-  useEffect(() => {
-    const persistApi = getPersistApi();
-    if (!persistApi) {
-      setHydrated(true);
-      return;
-    }
-
-    const unsub = persistApi.onFinishHydration?.(() => setHydrated(true));
-    setHydrated(persistApi.hasHydrated?.() ?? true);
-
-    return () => {
-      if (typeof unsub === 'function') unsub();
-    };
-  }, []);
 
   useEffect(() => {
     if (!hydrated) return;

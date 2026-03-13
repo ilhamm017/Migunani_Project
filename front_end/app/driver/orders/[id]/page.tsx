@@ -16,12 +16,25 @@ type StoredChecklistRow = {
   note?: string;
 };
 
+type PaymentMethodConfirmState = {
+  step: 1 | 2;
+  nextMethod: 'cod' | 'transfer_manual';
+  title: string;
+  description: string;
+};
+
+type CodPaymentConfirmState = {
+  step: 1 | 2;
+};
+
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
+const formatCurrency = (value: unknown) =>
+  `Rp ${Number(value || 0).toLocaleString('id-ID')}`;
 const isOrderDoneStatus = (raw: unknown) =>
   ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
 const legacyChecklistStorageKey = (orderId: string) => `driver-checklist-${orderId}`;
-const getOrderInvoicePayload = (order: any) => {
+const getOrderInvoicePayload = (order: unknown) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
     id: normalizeInvoiceRef(order?.invoice_id || latestInvoice?.id),
@@ -31,10 +44,38 @@ const getOrderInvoicePayload = (order: any) => {
     paymentStatus: String(latestInvoice?.payment_status || '').toLowerCase(),
   };
 };
-const getInvoiceItems = (invoiceData: any) => {
+const getInvoiceItems = (invoiceData: unknown) => {
   if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
   if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
   return [];
+};
+
+const getDriverInvoiceStatusLabel = (orders: unknown[]) => {
+  const statuses = orders
+    .map((row: unknown) => String(row?.status || '').trim().toLowerCase())
+    .filter(Boolean);
+
+  if (statuses.length === 0) return '-';
+  if (statuses.every((status) => ['completed', 'delivered', 'cancelled', 'canceled'].includes(status))) {
+    return 'Selesai';
+  }
+  if (statuses.every((status) => status === 'partially_fulfilled')) {
+    return 'Sebagian Selesai';
+  }
+  if (statuses.every((status) => status === 'shipped')) {
+    return 'Dalam Pengiriman';
+  }
+  if (
+    statuses.some((status) => status === 'shipped')
+    && statuses.some((status) => ['delivered', 'completed', 'partially_fulfilled'].includes(status))
+  ) {
+    return 'Sebagian Selesai';
+  }
+  if (statuses.some((status) => status === 'partially_fulfilled')) {
+    return 'Sebagian Selesai';
+  }
+  if (statuses.length === 1) return statuses[0] || '-';
+  return `${statuses.length} status`;
 };
 
 export default function DriverOrderDetailPage() {
@@ -43,11 +84,11 @@ export default function DriverOrderDetailPage() {
   const router = useRouter();
   const orderId = String(params?.id || '');
 
-  const [order, setOrder] = useState<any>(null);
-  const [groupedOrders, setGroupedOrders] = useState<any[]>([]);
+  const [order, setOrder] = useState<unknown>(null);
+  const [groupedOrders, setGroupedOrders] = useState<unknown[]>([]);
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
-  const [invoiceDetail, setInvoiceDetail] = useState<any>(null);
+  const [invoiceDetail, setInvoiceDetail] = useState<unknown>(null);
   const [proof, setProof] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
@@ -67,13 +108,16 @@ export default function DriverOrderDetailPage() {
   const [paymentMethod, setPaymentMethod] = useState<'cod' | 'transfer_manual' | ''>('');
   const [paymentMethodLoading, setPaymentMethodLoading] = useState(false);
   const [paymentMethodMessage, setPaymentMethodMessage] = useState('');
+  const [paymentMethodConfirm, setPaymentMethodConfirm] = useState<PaymentMethodConfirmState | null>(null);
+  const [codPaymentConfirm, setCodPaymentConfirm] = useState<CodPaymentConfirmState | null>(null);
+  const [completeMessage, setCompleteMessage] = useState('');
 
   const loadOrder = useCallback(async () => {
     try {
-      const res = await api.driver.getOrders();
+      const res = await api.driver.getOrders({ status: 'shipped,delivered,completed,partially_fulfilled' });
       const rows = Array.isArray(res.data) ? res.data : [];
-      const selectedByOrderId = rows.find((x: any) => String(x?.id || '') === orderId) || null;
-      let invoiceScopedRows: any[] = [];
+      const selectedByOrderId = rows.find((x: unknown) => String(x?.id || '') === orderId) || null;
+      let invoiceScopedRows: unknown[] = [];
       let resolvedInvoice = '';
       let resolvedOrder = '';
 
@@ -82,14 +126,14 @@ export default function DriverOrderDetailPage() {
         const invoiceIdFromOrder = normalizeInvoiceRef(selectedByOrderId?.invoice_id || selectedByOrderId?.Invoice?.id);
         if (invoiceIdFromOrder) {
           resolvedInvoice = invoiceIdFromOrder;
-          invoiceScopedRows = rows.filter((row: any) =>
+          invoiceScopedRows = rows.filter((row: unknown) =>
             normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === invoiceIdFromOrder
           );
         } else {
           invoiceScopedRows = [selectedByOrderId];
         }
       } else {
-        const matchedByInvoice = rows.filter((row: any) =>
+        const matchedByInvoice = rows.filter((row: unknown) =>
           normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === orderId
         );
         if (matchedByInvoice.length > 0) {
@@ -98,7 +142,7 @@ export default function DriverOrderDetailPage() {
         }
       }
 
-      const sortedScopedRows = [...invoiceScopedRows].sort((a: any, b: any) => {
+      const sortedScopedRows = [...invoiceScopedRows].sort((a: unknown, b: unknown) => {
         const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
         const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -106,21 +150,21 @@ export default function DriverOrderDetailPage() {
         return bVal - aVal;
       });
       const selected =
-        sortedScopedRows.find((x: any) => !isOrderDoneStatus(x?.status)) ||
+        sortedScopedRows.find((x: unknown) => !isOrderDoneStatus(x?.status)) ||
         sortedScopedRows[0] ||
         null;
       const invoiceTotalFromRows = sortedScopedRows
-        .map((row: any) => getOrderInvoicePayload(row).total)
+        .map((row: unknown) => getOrderInvoicePayload(row).total)
         .find((value: number) => Number.isFinite(value) && value > 0);
       const fallbackInvoiceTotal = sortedScopedRows.reduce(
-        (sum: number, row: any) => sum + Number(row?.total_amount || 0),
+        (sum: number, row: unknown) => sum + Number(row?.total_amount || 0),
         0
       );
       const resolvedInvoiceTotal = Number.isFinite(invoiceTotalFromRows)
         ? Number(invoiceTotalFromRows)
         : fallbackInvoiceTotal;
       const resolvedPaymentMethod = sortedScopedRows
-        .map((row: any) => getOrderInvoicePayload(row).paymentMethod)
+        .map((row: unknown) => getOrderInvoicePayload(row).paymentMethod)
         .find((method: string) => method === 'cod' || method === 'transfer_manual') || '';
       setOrder(selected);
       setGroupedOrders(sortedScopedRows);
@@ -171,13 +215,13 @@ export default function DriverOrderDetailPage() {
   }, [invoiceDetail?.id, invoiceDetail?.total]);
 
   const groupedOrderIds = useMemo(
-    () => groupedOrders.map((row: any) => String(row?.id || '').trim()).filter(Boolean),
+    () => groupedOrders.map((row: unknown) => String(row?.id || '').trim()).filter(Boolean),
     [groupedOrders]
   );
   const actionableOrderIds = useMemo(() => {
     const ids = groupedOrders
-      .filter((row: any) => !isOrderDoneStatus(row?.status))
-      .map((row: any) => String(row?.id || '').trim())
+      .filter((row: unknown) => !isOrderDoneStatus(row?.status))
+      .map((row: unknown) => String(row?.id || '').trim())
       .filter(Boolean);
     return ids.length > 0 ? ids : groupedOrderIds;
   }, [groupedOrderIds, groupedOrders]);
@@ -201,7 +245,7 @@ export default function DriverOrderDetailPage() {
         try {
           const scopedParsed = JSON.parse(scopedRaw);
           const rows = Array.isArray(scopedParsed?.rows) ? scopedParsed.rows : [];
-          const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+          const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
           setChecklistRows(rows);
           setChecklistState({
             exists: rows.length > 0,
@@ -226,8 +270,8 @@ export default function DriverOrderDetailPage() {
       try {
         const parsed = JSON.parse(raw);
         const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-        const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
-        rows.forEach((row: any) => {
+        const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+        rows.forEach((row: unknown) => {
           mergedRows.push({
             ...row,
             orderId: currentOrderId,
@@ -257,7 +301,7 @@ export default function DriverOrderDetailPage() {
     [checklistRows]
   );
   const invoiceContext = useMemo(() => {
-    const invoiceRows = groupedOrders.map((row: any) => getOrderInvoicePayload(row));
+    const invoiceRows = groupedOrders.map((row: unknown) => getOrderInvoicePayload(row));
     const invoiceId = normalizeInvoiceRef(invoiceDetail?.id) || resolvedInvoiceId
       || invoiceRows.find((row) => row.id)?.id
       || normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
@@ -266,7 +310,7 @@ export default function DriverOrderDetailPage() {
     const invoiceTotalFromDetail = Number(invoiceDetail?.total || 0);
     const invoiceTotalFromRows = invoiceRows.find((row) => Number.isFinite(row.total) && row.total > 0)?.total;
     const invoiceTotalFallback = groupedOrders.reduce(
-      (sum: number, row: any) => sum + Number(row?.total_amount || 0),
+      (sum: number, row: unknown) => sum + Number(row?.total_amount || 0),
       0
     );
     const invoiceTotal = Number.isFinite(invoiceTotalFromDetail) && invoiceTotalFromDetail > 0
@@ -278,12 +322,7 @@ export default function DriverOrderDetailPage() {
     const invoicePaymentStatus = invoiceRows.find((row) => !!row.paymentStatus)?.paymentStatus
       || String(invoiceDetail?.payment_status || '').toLowerCase()
       || '';
-    const uniqueOrderStatuses = Array.from(
-      new Set(groupedOrders.map((row: any) => String(row?.status || '').trim()).filter(Boolean))
-    );
-    const statusLabel = uniqueOrderStatuses.length <= 1
-      ? (uniqueOrderStatuses[0] || '-')
-      : `${uniqueOrderStatuses.length} status`;
+    const statusLabel = getDriverInvoiceStatusLabel(groupedOrders);
     return {
       invoiceId,
       invoiceNumber,
@@ -298,7 +337,7 @@ export default function DriverOrderDetailPage() {
     const itemMap = new Map<string, { key: string; name: string; qty: number; orderIds: Set<string> }>();
     const invoiceItems = getInvoiceItems(invoiceDetail);
     if (invoiceItems.length > 0) {
-      invoiceItems.forEach((item: any) => {
+      invoiceItems.forEach((item: unknown) => {
         const orderItem = item?.OrderItem || {};
         const product = orderItem?.Product || {};
         const key = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -315,10 +354,10 @@ export default function DriverOrderDetailPage() {
         itemMap.set(key, entry);
       });
     } else {
-      groupedOrders.forEach((row: any) => {
+      groupedOrders.forEach((row: unknown) => {
         const currentOrderId = String(row?.id || '').trim();
         const items = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
-        items.forEach((item: any) => {
+        items.forEach((item: unknown) => {
           const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
           if (!key) return;
           const entry = itemMap.get(key) || {
@@ -361,6 +400,20 @@ export default function DriverOrderDetailPage() {
   const hasChecklistMismatch = checklistState.exists && checklistState.mismatchCount > 0;
   const missingProof = !proof;
   const missingCodPaymentRecord = isCod && !paymentRecorded;
+  const codStatusTitle = paymentRecorded ? 'Status COD sudah tercatat untuk invoice ini.' : 'Konfirmasi COD jika invoice masih belum tercatat.';
+  const codStatusHint = paymentRecorded
+    ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut checklist dan bukti kirim.'
+    : 'Jika invoice COD ini masih belum tercatat, driver dapat konfirmasi penerimaan uang customer di sini.';
+  const codProofHint = paymentRecorded
+    ? 'Upload bukti COD bersifat opsional untuk dokumentasi tambahan.'
+    : 'Jika masih diperlukan, upload bukti COD akan mencoba mencatat pembayaran otomatis.';
+  const codActionLabel = paymentRecorded ? 'COD Sudah Tercatat' : 'Konfirmasi Penerimaan COD';
+  const codCompletionHint = paymentRecorded
+    ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah checklist dan bukti kirim lengkap.'
+    : 'Invoice COD ini masih belum tercatat. Konfirmasi penerimaan COD terlebih dahulu sebelum selesai.';
+  const codBlockingHint = paymentRecorded
+    ? ''
+    : 'Pembayaran COD belum tercatat. Upload bukti COD atau klik Konfirmasi Penerimaan COD.';
   const fallbackActionOrderId = String(resolvedFromOrderId || groupedOrderIds[0] || order?.id || orderId).trim();
   const getActionTargetIds = () => {
     if (actionableOrderIds.length > 0) return actionableOrderIds;
@@ -370,9 +423,10 @@ export default function DriverOrderDetailPage() {
   const complete = async () => {
     try {
       setLoading(true);
+      setCompleteMessage('');
       const targetIds = getActionTargetIds();
       if (targetIds.length === 0) {
-        alert('Order invoice belum ditemukan.');
+        setCompleteMessage('Order invoice belum ditemukan.');
         return;
       }
       const results = await Promise.allSettled(
@@ -386,14 +440,15 @@ export default function DriverOrderDetailPage() {
         .map((result, idx) => (result.status === 'rejected' ? String(targetIds[idx]) : ''))
         .filter(Boolean);
       if (failedIds.length > 0) {
-        alert(`Sebagian order gagal diselesaikan (${failedIds.length}/${targetIds.length}).`);
+        setCompleteMessage(`Sebagian order gagal diselesaikan (${failedIds.length}/${targetIds.length}).`);
       } else {
-        alert(`Pengiriman selesai untuk ${targetIds.length} order.`);
+        setCompleteMessage(`Pengiriman selesai untuk ${targetIds.length} order.`);
       }
+      setIsConfirmOpen(false);
       router.push('/driver');
     } catch (error) {
       console.error('Complete delivery failed:', error);
-      alert('Gagal konfirmasi pengiriman.');
+      setCompleteMessage('Gagal konfirmasi pengiriman.');
     } finally {
       setLoading(false);
     }
@@ -401,11 +456,19 @@ export default function DriverOrderDetailPage() {
 
   const recordPayment = async (options?: { skipConfirm?: boolean; proofOverride?: File | null }) => {
     if (!isCod) return;
+    if (paymentRecorded) {
+      setPaymentMessage('Status COD untuk invoice ini sudah tercatat. Lanjutkan proses selesai pengiriman.');
+      setCodPaymentConfirm(null);
+      return;
+    }
     if (!paymentAmountValid) {
       setPaymentMessage('Nominal pembayaran tidak valid.');
       return;
     }
-    if (!options?.skipConfirm && !window.confirm('Catat pembayaran COD dari customer?')) return;
+    if (!options?.skipConfirm) {
+      setCodPaymentConfirm({ step: 1 });
+      return;
+    }
     try {
       setPaymentLoading(true);
       setPaymentMessage('');
@@ -439,6 +502,7 @@ export default function DriverOrderDetailPage() {
         }
       }
       setPaymentProof(null);
+      setCodPaymentConfirm(null);
       await loadOrder();
     } catch (error) {
       console.error('Record payment failed:', error);
@@ -448,21 +512,45 @@ export default function DriverOrderDetailPage() {
     }
   };
 
+  const handleConfirmCodPayment = async () => {
+    if (!codPaymentConfirm) return;
+    if (codPaymentConfirm.step === 1) {
+      setCodPaymentConfirm({ step: 2 });
+      return;
+    }
+    await recordPayment({ skipConfirm: true });
+  };
+
   const handlePaymentProofChange = (file: File | null) => {
     setPaymentProof(file);
     if (!file) return;
     if (!isCod) return;
-    if (paymentRecorded || paymentLoading) return;
-    setPaymentMessage('Bukti diterima. Mencatat pembayaran COD otomatis...');
-    void recordPayment({ skipConfirm: true, proofOverride: file });
+    if (paymentRecorded) {
+      setPaymentMessage('Bukti COD tersimpan sebagai dokumentasi. Status COD invoice ini sudah tercatat.');
+      return;
+    }
+    setPaymentMessage('Bukti COD diterima. Lanjutkan Konfirmasi Penerimaan COD untuk mencatat pembayaran.');
   };
 
   const handlePaymentMethodChange = async (nextMethod: 'cod' | 'transfer_manual') => {
     if (paymentMethodLocked || paymentMethodLoading || nextMethod === activePaymentMethod) return;
-    const confirmText = nextMethod === 'cod'
-      ? 'Gunakan metode COD? Driver akan membawa uang untuk disetor ke finance.'
-      : 'Gunakan metode transfer? Pembayaran akan ditangani finance.';
-    if (!window.confirm(confirmText)) return;
+    setPaymentMethodConfirm({
+      step: 1,
+      nextMethod,
+      title: nextMethod === 'cod' ? 'Konfirmasi metode COD' : 'Konfirmasi metode transfer',
+      description: nextMethod === 'cod'
+        ? 'Driver akan membawa uang dari customer untuk kemudian disetorkan ke admin finance.'
+        : 'Pembayaran akan dialihkan ke transfer manual dan diverifikasi admin finance.',
+    });
+  };
+
+  const handleConfirmPaymentMethod = async () => {
+    if (!paymentMethodConfirm) return;
+    if (paymentMethodConfirm.step === 1) {
+      setPaymentMethodConfirm((prev) => (prev ? { ...prev, step: 2 } : prev));
+      return;
+    }
+    const nextMethod = paymentMethodConfirm.nextMethod;
     try {
       setPaymentMethodLoading(true);
       setPaymentMethodMessage('');
@@ -476,7 +564,8 @@ export default function DriverOrderDetailPage() {
       setPaymentMethod(nextMethod);
       setPaymentMethodMessage(`Metode pembayaran invoice diperbarui untuk ${targetIds.length} order.`);
       await loadOrder();
-    } catch (error: any) {
+      setPaymentMethodConfirm(null);
+    } catch (error: unknown) {
       console.error('Update payment method failed:', error);
       const message = error?.response?.data?.message || 'Gagal memperbarui metode pembayaran.';
       setPaymentMethodMessage(message);
@@ -556,6 +645,110 @@ export default function DriverOrderDetailPage() {
 
   return (
     <div className="p-6 space-y-5">
+      {paymentMethodConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
+            <div>
+              <p className={`text-[10px] font-black uppercase tracking-[0.2em] ${paymentMethodConfirm.nextMethod === 'cod' ? 'text-emerald-600' : 'text-blue-600'}`}>
+                Verifikasi Metode Pembayaran
+              </p>
+              <h3 className="mt-2 text-lg font-black text-slate-900">
+                {paymentMethodConfirm.step === 1 ? paymentMethodConfirm.title : 'Konfirmasi akhir perubahan metode bayar'}
+              </h3>
+              <p className="mt-2 text-sm text-slate-600">{paymentMethodConfirm.description}</p>
+            </div>
+
+            <div className={`rounded-2xl border px-4 py-3 text-[11px] ${paymentMethodConfirm.nextMethod === 'cod' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
+              {paymentMethodConfirm.nextMethod === 'cod'
+                ? 'Jika COD dipilih, driver akan menerima uang dari customer dan dana itu masuk ke alur setoran ke admin finance.'
+                : 'Jika transfer dipilih, customer akan membayar lewat transfer manual dan bukti transfer diverifikasi admin finance.'}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (paymentMethodLoading) return;
+                  setPaymentMethodConfirm(null);
+                }}
+                disabled={paymentMethodLoading}
+                className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmPaymentMethod()}
+                disabled={paymentMethodLoading}
+                className={`py-3 rounded-xl text-white text-xs font-black uppercase disabled:opacity-60 ${paymentMethodConfirm.nextMethod === 'cod' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+              >
+                {paymentMethodLoading
+                  ? 'Memproses...'
+                  : paymentMethodConfirm.step === 1
+                    ? 'Lanjut Verifikasi'
+                    : paymentMethodConfirm.nextMethod === 'cod'
+                      ? 'Ya, Gunakan COD'
+                      : 'Ya, Gunakan Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {codPaymentConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600">
+                Verifikasi Penerimaan COD
+              </p>
+              <h3 className="mt-2 text-lg font-black text-slate-900">
+                {codPaymentConfirm.step === 1 ? 'Periksa penerimaan uang customer' : 'Konfirmasi catat penerimaan COD'}
+              </h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Pastikan uang dari customer sudah diterima sesuai total invoice sebelum dicatat ke sistem.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800 space-y-1">
+              <p>
+                Total invoice: <span className="font-black">{formatCurrency(Number(invoiceContext.invoiceTotal || 0))}</span>
+              </p>
+              <p>
+                Nominal dicatat: <span className="font-black">{formatCurrency(paymentAmountValue)}</span>
+              </p>
+              <p>
+                Order terkait: <span className="font-black">{getActionTargetIds().length}</span>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (paymentLoading) return;
+                  setCodPaymentConfirm(null);
+                }}
+                disabled={paymentLoading}
+                className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmCodPayment()}
+                disabled={paymentLoading}
+                className="py-3 rounded-xl bg-amber-600 text-white text-xs font-black uppercase disabled:opacity-60"
+              >
+                {paymentLoading
+                  ? 'Memproses...'
+                  : codPaymentConfirm.step === 1
+                    ? 'Lanjut Verifikasi'
+                    : 'Ya, Catat COD'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
@@ -693,7 +886,8 @@ export default function DriverOrderDetailPage() {
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">Pembayaran Customer</p>
-                <p className="text-sm font-black text-slate-900">Catat pembayaran COD sebelum selesai.</p>
+                <p className="text-sm font-black text-slate-900">{codStatusTitle}</p>
+                <p className="text-[11px] text-slate-600 mt-1">{codStatusHint}</p>
               </div>
               <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${paymentRecorded ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-amber-700 border border-amber-200'}`}>
                 {paymentRecorded ? 'Sudah Dicatat' : 'Belum Dicatat'}
@@ -722,7 +916,7 @@ export default function DriverOrderDetailPage() {
                   onChange={(e) => handlePaymentProofChange(e.target.files?.[0] || null)}
                   className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-200 file:px-3 file:py-2 file:text-[10px] file:font-black file:uppercase file:text-amber-900"
                 />
-                <p className="text-[10px] text-slate-500">Setelah upload bukti, pembayaran COD akan dicatat otomatis.</p>
+                <p className="text-[10px] text-slate-500">{codProofHint}</p>
               </div>
             </div>
 
@@ -736,7 +930,7 @@ export default function DriverOrderDetailPage() {
               disabled={paymentRecorded || paymentLoading || !paymentAmountValid}
               className="w-full py-3 rounded-2xl bg-amber-600 text-white text-xs font-black uppercase disabled:opacity-60"
             >
-              {paymentLoading ? 'Mencatat...' : 'Catat Pembayaran COD'}
+              {paymentLoading ? 'Memproses...' : codActionLabel}
             </button>
           </div>
         )}
@@ -806,7 +1000,12 @@ export default function DriverOrderDetailPage() {
 
           {isCod && !paymentRecorded && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
-              Catat pembayaran COD terlebih dahulu sebelum konfirmasi selesai.
+              {codCompletionHint}
+            </div>
+          )}
+          {isCod && paymentRecorded && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[11px] font-bold text-emerald-700">
+              {codCompletionHint}
             </div>
           )}
           {!isCod && (
@@ -818,10 +1017,16 @@ export default function DriverOrderDetailPage() {
           {(missingChecklist || hasChecklistMismatch || missingProof || missingCodPaymentRecord) && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600 space-y-1">
               <p className="uppercase text-[10px] tracking-widest text-slate-400">Belum Bisa Selesai</p>
-              {missingCodPaymentRecord && <p>Pembayaran COD belum tercatat. Upload bukti COD atau klik "Catat Pembayaran COD".</p>}
+              {missingCodPaymentRecord && <p>{codBlockingHint}</p>}
               {missingChecklist && <p>Checklist belum disimpan. Buka checklist lalu klik Simpan.</p>}
               {hasChecklistMismatch && <p>Checklist masih ada selisih. Perbaiki atau laporkan terlebih dahulu.</p>}
               {missingProof && <p>Upload bukti foto pengiriman (bukan bukti pembayaran).</p>}
+            </div>
+          )}
+
+          {completeMessage && (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-[11px] font-bold text-blue-700">
+              {completeMessage}
             </div>
           )}
 
@@ -863,7 +1068,7 @@ export default function DriverOrderDetailPage() {
                   Rp {Number(invoiceContext.invoiceTotal || 0).toLocaleString('id-ID')}
                 </p>
                 <p className="text-[10px] text-orange-700 font-medium">
-                  Wajib terima uang tunai dari customer.
+                  Terima uang tunai dari customer bila invoice COD ini belum lunas, lalu lanjutkan setoran ke finance sesuai proses.
                 </p>
               </div>
             )}

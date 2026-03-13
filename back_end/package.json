@@ -8,7 +8,15 @@
     "dev": "nodemon src/server.ts",
     "build": "npx tsc",
     "start": "node dist/server.js",
-    "seed": "ts-node src/seeders/index.ts"
+    "seed": "ts-node src/seeders/index.ts",
+    "test:system-status": "ts-node src/scripts/system_status.ts",
+    "test:action-matrix": "ts-node src/scripts/regression_action_matrix.ts",
+    "test:finance-replay": "ts-node src/scripts/regression_finance_replay.ts",
+    "test:ownership-matrix": "ts-node src/scripts/regression_ownership_matrix.ts",
+    "test:notification-softfail": "ts-node src/scripts/regression_notification_softfail.ts",
+    "test:boundary-read": "ts-node src/scripts/regression_boundary_read.ts",
+    "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
+    "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts"
   },
   "keywords": [],
   "author": "",

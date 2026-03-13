@@ -20,6 +20,22 @@ interface ProductDetail {
   category_name?: string;
 }
 
+type ProductCategory = {
+  name?: string;
+};
+
+type ProductApiDetail = {
+  id: string;
+  name: string;
+  sku?: string;
+  price?: number;
+  stock_quantity?: number;
+  description?: string;
+  unit?: string;
+  Categories?: ProductCategory[];
+  Category?: ProductCategory | null;
+};
+
 export default function ProductDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -36,7 +52,7 @@ export default function ProductDetailPage() {
       try {
         setLoading(true);
         const res = await api.catalog.getProductById(productId);
-        const p = res.data;
+        const p = res.data as ProductApiDetail;
         setProduct({
           id: String(p.id),
           name: p.name,
@@ -46,7 +62,7 @@ export default function ProductDetailPage() {
           description: p.description,
           unit: p.unit,
           category_name: Array.isArray(p.Categories) && p.Categories.length > 0
-            ? p.Categories.map((item: any) => item?.name).filter(Boolean).join(', ')
+            ? p.Categories.map((item) => item?.name).filter(Boolean).join(', ')
             : p.Category?.name,
         });
       } catch (error) {

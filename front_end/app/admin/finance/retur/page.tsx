@@ -19,9 +19,24 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
+type ReturFinanceRow = {
+    id: string;
+    status: string;
+    refund_disbursed_at?: string | null;
+    order_id: string;
+    refund_amount?: number;
+    createdAt?: string;
+    Product?: { name?: string | null } | null;
+    Creator?: {
+        id?: string | null;
+        name?: string | null;
+        whatsapp_number?: string | null;
+    } | null;
+};
+
 export default function FinanceReturPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
-    const [returs, setReturs] = useState<any[]>([]);
+    const [returs, setReturs] = useState<ReturFinanceRow[]>([]);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
 
@@ -29,8 +44,30 @@ export default function FinanceReturPage() {
         try {
             setLoading(true);
             const res = await api.retur.getAll();
-            const relevant = (res.data || []).filter((r: any) =>
-                ['approved', 'pickup_assigned', 'picked_up', 'handed_to_warehouse', 'received', 'completed'].includes(r.status)
+            const rows = Array.isArray(res.data) ? res.data : [];
+            const mapped: ReturFinanceRow[] = rows.map((item) => {
+                const row = item as Record<string, unknown>;
+                return {
+                    id: String(row.id ?? ''),
+                    status: String(row.status ?? ''),
+                    refund_disbursed_at: row.refund_disbursed_at ? String(row.refund_disbursed_at) : null,
+                    order_id: String(row.order_id ?? ''),
+                    refund_amount: Number(row.refund_amount ?? 0),
+                    createdAt: row.createdAt ? String(row.createdAt) : undefined,
+                    Product: row.Product && typeof row.Product === 'object'
+                        ? { name: String((row.Product as Record<string, unknown>).name ?? '') }
+                        : null,
+                    Creator: row.Creator && typeof row.Creator === 'object'
+                        ? {
+                            id: (row.Creator as Record<string, unknown>).id ? String((row.Creator as Record<string, unknown>).id) : null,
+                            name: (row.Creator as Record<string, unknown>).name ? String((row.Creator as Record<string, unknown>).name) : null,
+                            whatsapp_number: (row.Creator as Record<string, unknown>).whatsapp_number ? String((row.Creator as Record<string, unknown>).whatsapp_number) : null,
+                        }
+                        : null,
+                };
+            });
+            const relevant = mapped.filter((retur) =>
+                ['approved', 'pickup_assigned', 'picked_up', 'handed_to_warehouse', 'received', 'completed'].includes(retur.status)
             );
             setReturs(relevant);
         } catch (error) {

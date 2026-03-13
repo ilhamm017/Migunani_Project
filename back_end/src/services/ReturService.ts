@@ -66,9 +66,7 @@ export class ReturService {
                 created_by: userId
             }, { transaction: t });
 
-            await t.commit();
-
-            emitReturStatusChanged({
+            await emitReturStatusChanged({
                 retur_id: String(createdRetur.id),
                 order_id: String(order_id),
                 from_status: null,
@@ -77,7 +75,12 @@ export class ReturService {
                 triggered_by_role: String(userRole || 'customer'),
                 target_roles: ['customer', 'kasir', 'super_admin'],
                 target_user_ids: [String(userId)],
+            }, {
+                transaction: t,
+                requestContext: 'retur_request_status_changed'
             });
+
+            await t.commit();
 
             return createdRetur;
         } catch (error) {
@@ -250,9 +253,7 @@ export class ReturService {
                 }
             }
 
-            await t.commit();
-
-            emitReturStatusChanged({
+            await emitReturStatusChanged({
                 retur_id: String(retur.id),
                 order_id: String(retur.order_id),
                 from_status: previousStatus || null,
@@ -261,7 +262,12 @@ export class ReturService {
                 triggered_by_role: String(user.role || ''),
                 target_roles: ['customer', 'kasir', 'admin_finance', 'driver', 'super_admin'],
                 target_user_ids: updateData.courier_id ? [String(updateData.courier_id)] : (retur.courier_id ? [String(retur.courier_id)] : []),
+            }, {
+                transaction: t,
+                requestContext: 'retur_admin_status_changed'
             });
+
+            await t.commit();
 
             return { retur, nextStatus };
         } catch (error) {
@@ -331,9 +337,7 @@ export class ReturService {
                 refund_note: note || null
             }, { transaction: t });
 
-            await t.commit();
-
-            emitReturStatusChanged({
+            await emitReturStatusChanged({
                 retur_id: String(retur.id),
                 order_id: String(retur.order_id),
                 from_status: String(retur.status || ''),
@@ -341,7 +345,12 @@ export class ReturService {
                 courier_id: String((retur as any).courier_id || ''),
                 triggered_by_role: String(user.role || ''),
                 target_roles: ['customer', 'admin_finance', 'kasir', 'super_admin'],
+            }, {
+                transaction: t,
+                requestContext: 'retur_refund_status_changed'
             });
+
+            await t.commit();
 
             return retur;
         } catch (error) {

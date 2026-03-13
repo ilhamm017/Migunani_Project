@@ -1,27 +1,64 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-    ChevronLeft, List, Clock,
-    Package, Truck, CheckCircle2, ChevronDown,
+    ChevronLeft, Clock,
+    Package, ChevronDown,
     ChevronRight, ChevronsLeft, ChevronsRight,
-    Search, RotateCcw
+    Search
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const TABS = [
-    { id: 'all', label: 'By No Order', icon: List },
     { id: 'processing', label: 'Proses Order', icon: Search },
+    { id: 'backorder', label: 'Backorder', icon: ChevronDown },
     { id: 'ready_to_ship', label: 'Persiapan Barang', icon: Package },
     { id: 'shipped', label: 'Dalam Pengiriman', icon: Clock },
     { id: 'delivered', label: 'Terkirim', icon: Package },
 ];
 
-const getStatusLabel = (status: string) => {
+const TAB_GROUPS = [
+    {
+        id: 'pemrosesan',
+        label: 'Perlu Dicek',
+        tabs: ['processing', 'backorder', 'ready_to_ship'],
+    },
+    {
+        id: 'pengiriman',
+        label: 'Status Kirim',
+        tabs: ['shipped', 'delivered'],
+    },
+];
+
+const PAGE_SIZE = 10;
+
+type OrderSummary = {
+    id: string;
+    status?: string;
+    createdAt?: string;
+    total_qty?: number;
+    indent_qty?: number;
+    shipped_qty?: number;
+    canceled_qty?: number;
+    parent_order_id?: string | null;
+    Returs?: Array<unknown>;
+};
+
+const getStatusLabel = (status: string, order?: OrderSummary) => {
+    const canceledQty = Number(order?.canceled_qty || 0);
+    const shippedQty = Number(order?.shipped_qty || 0);
+    const indentQty = Number(order?.indent_qty || 0);
+    if (status === 'canceled') {
+        if (shippedQty > 0) return 'Selesai (Sisa Dibatalkan)';
+        return 'Dibatalkan dari Awal';
+    }
+    if (canceledQty > 0 && indentQty <= 0 && ['completed', 'delivered', 'partially_fulfilled'].includes(status)) {
+        return 'Selesai (Sisa Dibatalkan)';
+    }
     const statuses: Record<string, string> = {
         'pending': 'Menunggu Konfirmasi',
         'waiting_invoice': 'Menunggu Invoice',
@@ -42,6 +79,7 @@ const getStatusLabel = (status: string) => {
 };
 
 const getStatusColor = (status: string) => {
+    if (status === 'canceled') return 'bg-rose-500 text-white';
     if (['completed', 'delivered'].includes(status)) return 'bg-emerald-500 text-white';
     if (status === 'shipped') return 'bg-blue-500 text-white';
     if (status === 'partially_fulfilled') return 'bg-amber-500 text-white';
@@ -50,13 +88,22 @@ const getStatusColor = (status: string) => {
     return 'bg-slate-500 text-white';
 };
 
+const deriveDisplayStatus = (order: OrderSummary) => {
+    const status = String(order?.status || '').toLowerCase();
+    const indentQty = Number(order?.indent_qty || 0);
+    // Show partial fulfillment only after delivery outcome is known.
+    if (indentQty > 0 && ['delivered', 'completed'].includes(status)) {
+        return 'partially_fulfilled';
+    }
+    return status;
+};
+
 export default function OrdersPage() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-    const [orders, setOrders] = useState<any[]>([]);
+    const [orders, setOrders] = useState<OrderSummary[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState('all');
+    const [activeTab, setActiveTab] = useState('processing');
     const [page, setPage] = useState(1);
-    const [totalPages, setTotalPages] = useState(1);
 
     const loadOrders = useCallback(async () => {
         if (!isAuthenticated) {
@@ -66,17 +113,31 @@ export default function OrdersPage() {
         }
         try {
             setLoading(true);
-            const statusFilter = activeTab === 'all' ? undefined : activeTab;
-            const res = await api.orders.getMyOrders({ page, limit: 10, status: statusFilter });
-            setOrders(res.data?.orders || []);
-            setTotalPages(res.data?.totalPages || 1);
+            const firstPage = await api.orders.getMyOrders({ page: 1, limit: 100 });
+            const firstOrders = Array.isArray(firstPage.data?.orders) ? firstPage.data.orders : [];
+            const totalPages = Math.max(1, Number(firstPage.data?.totalPages || 1));
+            let mergedOrders = [...firstOrders];
+
+            if (totalPages > 1) {
+                const restPages = await Promise.all(
+                    Array.from({ length: totalPages - 1 }, (_, index) =>
+                        api.orders.getMyOrders({ page: index + 2, limit: 100 })
+                    )
+                );
+                restPages.forEach((response) => {
+                    const rows = Array.isArray(response.data?.orders) ? response.data.orders : [];
+                    mergedOrders = mergedOrders.concat(rows);
+                });
+            }
+
+            setOrders(mergedOrders);
         } catch (error) {
             console.error('Failed to load orders:', error);
             setOrders([]);
         } finally {
             setLoading(false);
         }
-    }, [isAuthenticated, activeTab, page]);
+    }, [isAuthenticated]);
 
     useEffect(() => {
         void loadOrders();
@@ -87,7 +148,46 @@ export default function OrdersPage() {
         onRefresh: loadOrders,
         domains: ['order', 'retur', 'admin'],
         pollIntervalMs: 15000,
-    });
+  });
+
+    const matchesTab = useCallback((order: OrderSummary, tabId: string) => {
+        const displayStatus = deriveDisplayStatus(order);
+        const indentQty = Number(order?.indent_qty || 0);
+        if (tabId === 'processing') {
+            return ['pending', 'waiting_invoice', 'allocated', 'waiting_admin_verification', 'hold', 'debt_pending'].includes(displayStatus);
+        }
+        if (tabId === 'backorder') return indentQty > 0;
+        if (tabId === 'ready_to_ship') return displayStatus === 'ready_to_ship';
+        if (tabId === 'shipped') return displayStatus === 'shipped';
+        if (tabId === 'delivered') return ['delivered', 'completed', 'partially_fulfilled'].includes(displayStatus);
+        return false;
+    }, []);
+
+    const tabCounts = useMemo(() => {
+        return TABS.reduce<Record<string, number>>((acc, tab) => {
+            acc[tab.id] = orders.filter((order) => matchesTab(order, tab.id)).length;
+            return acc;
+        }, {});
+    }, [orders, matchesTab]);
+
+    const filteredOrders = useMemo(() => {
+        return orders.filter((order) => matchesTab(order, activeTab));
+    }, [orders, activeTab, matchesTab]);
+
+    const totalPages = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE));
+
+    const paginatedOrders = useMemo(() => {
+        const start = (page - 1) * PAGE_SIZE;
+        return filteredOrders.slice(start, start + PAGE_SIZE);
+    }, [filteredOrders, page]);
+
+    useEffect(() => {
+        if (page > totalPages) {
+            setPage(1);
+        }
+    }, [page, totalPages]);
+
+    const activeTabMeta = TABS.find((tab) => tab.id === activeTab) || TABS[0];
 
     if (!isAuthenticated) {
         return (
@@ -126,24 +226,52 @@ export default function OrdersPage() {
             </div>
 
             {/* Status Tabs */}
-            <div className="px-6 pb-4 overflow-x-auto no-scrollbar">
-                <div className="flex gap-3 min-w-max">
-                    {TABS.map((tab) => {
-                        const Icon = tab.icon;
-                        const isActive = activeTab === tab.id;
-                        return (
-                            <button
-                                key={tab.id}
-                                onClick={() => { setActiveTab(tab.id); setPage(1); }}
-                                className={`flex flex-col items-center justify-center w-28 h-28 rounded-3xl transition-all border ${isActive ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 text-slate-400'}`}
-                            >
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-3 ${isActive ? 'bg-white/20' : 'bg-emerald-50 text-emerald-600'}`}>
-                                    <Icon size={24} />
-                                </div>
-                                <span className="text-[10px] font-black text-center leading-tight px-2 uppercase tracking-tight">{tab.label}</span>
-                            </button>
-                        );
-                    })}
+            <div className="px-6 pb-4 space-y-4">
+                {TAB_GROUPS.map((group) => (
+                    <div key={group.id} className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <p className="text-[11px] font-black uppercase tracking-[0.28em] text-slate-400">{group.label}</p>
+                            <p className="text-[11px] font-bold text-slate-500">
+                                {group.tabs.reduce((sum, tabId) => sum + Number(tabCounts[tabId] || 0), 0)} order
+                            </p>
+                        </div>
+                        <div className="overflow-x-auto no-scrollbar">
+                            <div className="flex gap-3 min-w-max">
+                                {group.tabs.map((tabId) => {
+                                    const tab = TABS.find((row) => row.id === tabId);
+                                    if (!tab) return null;
+                                    const Icon = tab.icon;
+                                    const isActive = activeTab === tab.id;
+                                    const count = Number(tabCounts[tab.id] || 0);
+                                    return (
+                                        <button
+                                            key={tab.id}
+                                            onClick={() => { setActiveTab(tab.id); setPage(1); }}
+                                            className={`relative flex flex-col items-center justify-center w-28 h-28 rounded-3xl transition-all border ${isActive ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-white border-slate-100 text-slate-400'}`}
+                                        >
+                                            <span className={`absolute right-2 top-2 min-w-6 px-1.5 py-1 rounded-full text-[10px] font-black leading-none ${isActive ? 'bg-white text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>
+                                                {count}
+                                            </span>
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-3 ${isActive ? 'bg-white/20' : 'bg-emerald-50 text-emerald-600'}`}>
+                                                <Icon size={24} />
+                                            </div>
+                                            <span className="text-[10px] font-black text-center leading-tight px-2 uppercase tracking-tight">{tab.label}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                ))}
+
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-emerald-700">Filter Aktif</p>
+                    <div className="mt-1 flex items-center justify-between gap-3">
+                        <p className="text-sm font-black text-slate-900">{activeTabMeta.label}</p>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-emerald-700">
+                            {filteredOrders.length} order
+                        </span>
+                    </div>
                 </div>
             </div>
 
@@ -155,7 +283,7 @@ export default function OrdersPage() {
                             <div key={i} className="bg-slate-50 rounded-3xl h-56 animate-pulse" />
                         ))}
                     </div>
-                ) : orders.length === 0 ? (
+                ) : filteredOrders.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 text-center">
                         <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4">
                             <Package size={32} className="text-slate-300" />
@@ -163,7 +291,9 @@ export default function OrdersPage() {
                         <p className="text-slate-400 font-bold">Tidak ada pesanan ditemukan</p>
                     </div>
                 ) : (
-                    orders.map((order) => (
+                    paginatedOrders.map((order) => {
+                        const displayStatus = deriveDisplayStatus(order);
+                        return (
                         <div key={order.id} className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden p-6 space-y-5">
                             {/* Top Row */}
                             <div className="flex justify-between items-start">
@@ -195,8 +325,8 @@ export default function OrdersPage() {
                                         <p className="text-sm font-black text-slate-900">{order.total_qty || 0} Pcs</p>
                                     </div>
                                 </div>
-                                <div className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider ${getStatusColor(order.status)} shadow-sm`}>
-                                    {getStatusLabel(order.status)}
+                                <div className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider ${getStatusColor(displayStatus)} shadow-sm`}>
+                                    {getStatusLabel(displayStatus, order)}
                                 </div>
                             </div>
 
@@ -224,7 +354,8 @@ export default function OrdersPage() {
                                 </button>
                             </Link>
                         </div>
-                    ))
+                        );
+                    })
                 )}
             </div>
 

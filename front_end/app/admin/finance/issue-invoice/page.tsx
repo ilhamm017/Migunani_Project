@@ -9,16 +9,29 @@ import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
+type InvoiceCandidateOrder = {
+  id: string;
+  customer_id?: string;
+  customer_name?: string;
+  total_amount?: number | string;
+  status?: string;
+  createdAt?: string;
+};
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
+
 export default function FinanceIssueInvoicePage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<InvoiceCandidateOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [selectionError, setSelectionError] = useState('');
 
   const orderById = useMemo(() => {
-    const map = new Map<string, any>();
+    const map = new Map<string, InvoiceCandidateOrder>();
     orders.forEach((order) => {
       if (order?.id) map.set(String(order.id), order);
     });
@@ -90,9 +103,10 @@ export default function FinanceIssueInvoicePage() {
       setBusyId(id);
       await api.admin.finance.issueInvoice(id);
       await load();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       console.error('Issue invoice failed:', error);
-      alert(error?.response?.data?.message || 'Gagal menerbitkan invoice.');
+      alert(err?.response?.data?.message || 'Gagal menerbitkan invoice.');
     } finally {
       setBusyId(null);
     }
@@ -104,9 +118,10 @@ export default function FinanceIssueInvoicePage() {
       setBusyId('batch');
       await api.admin.finance.issueInvoiceBatch(selectedOrderIds);
       await load();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
       console.error('Batch issue failed:', error);
-      alert(error?.response?.data?.message || 'Gagal menerbitkan invoice gabungan.');
+      alert(err?.response?.data?.message || 'Gagal menerbitkan invoice gabungan.');
     } finally {
       setBusyId(null);
     }

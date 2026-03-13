@@ -8,7 +8,10 @@ import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
-export const getSuppliers = async (_req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const getSuppliers = asyncWrapper(async (_req: Request, res: Response) => {
     try {
         const suppliers = await Supplier.findAll({
             attributes: ['id', 'name', 'contact', 'address'],
@@ -16,23 +19,23 @@ export const getSuppliers = async (_req: Request, res: Response) => {
         });
         res.json({ suppliers });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching suppliers', error });
+        throw new CustomError('Error fetching suppliers', 500);
     }
-};
+});
 
-export const createSupplier = async (req: Request, res: Response) => {
+export const createSupplier = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const name = String(req.body?.name || '').trim();
         const contact = String(req.body?.contact || '').trim();
         const address = String(req.body?.address || '').trim();
 
         if (!name) {
-            return res.status(400).json({ message: 'Nama supplier wajib diisi' });
+            throw new CustomError('Nama supplier wajib diisi', 400);
         }
 
         const existingSupplier = await Supplier.findOne({ where: { name } });
         if (existingSupplier) {
-            return res.status(400).json({ message: 'Nama supplier sudah digunakan' });
+            throw new CustomError('Nama supplier sudah digunakan', 400);
         }
 
         const supplier = await Supplier.create({
@@ -43,20 +46,21 @@ export const createSupplier = async (req: Request, res: Response) => {
 
         res.status(201).json(supplier);
     } catch (error) {
-        res.status(500).json({ message: 'Error creating supplier', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating supplier', 500);
     }
-};
+});
 
-export const updateSupplier = async (req: Request, res: Response) => {
+export const updateSupplier = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const supplierId = Number(req.params.id);
         if (!Number.isInteger(supplierId) || supplierId <= 0) {
-            return res.status(400).json({ message: 'ID supplier tidak valid' });
+            throw new CustomError('ID supplier tidak valid', 400);
         }
 
         const supplier = await Supplier.findByPk(supplierId);
         if (!supplier) {
-            return res.status(404).json({ message: 'Supplier tidak ditemukan' });
+            throw new CustomError('Supplier tidak ditemukan', 404);
         }
 
         const updates: { name?: string; contact?: string | null; address?: string | null } = {};
@@ -64,7 +68,7 @@ export const updateSupplier = async (req: Request, res: Response) => {
         if (req.body?.name !== undefined) {
             const nextName = String(req.body.name).trim();
             if (!nextName) {
-                return res.status(400).json({ message: 'Nama supplier wajib diisi' });
+                throw new CustomError('Nama supplier wajib diisi', 400);
             }
 
             const duplicate = await Supplier.findOne({
@@ -74,7 +78,7 @@ export const updateSupplier = async (req: Request, res: Response) => {
                 }
             });
             if (duplicate) {
-                return res.status(400).json({ message: 'Nama supplier sudah digunakan' });
+                throw new CustomError('Nama supplier sudah digunakan', 400);
             }
             updates.name = nextName;
         }
@@ -92,23 +96,24 @@ export const updateSupplier = async (req: Request, res: Response) => {
         await supplier.update(updates);
         res.json(supplier);
     } catch (error) {
-        res.status(500).json({ message: 'Error updating supplier', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error updating supplier', 500);
     }
-};
+});
 
-export const deleteSupplier = async (req: Request, res: Response) => {
+export const deleteSupplier = asyncWrapper(async (req: Request, res: Response) => {
     const transaction = await sequelize.transaction();
     try {
         const supplierId = Number(req.params.id);
         if (!Number.isInteger(supplierId) || supplierId <= 0) {
             await transaction.rollback();
-            return res.status(400).json({ message: 'ID supplier tidak valid' });
+            throw new CustomError('ID supplier tidak valid', 400);
         }
 
         const supplier = await Supplier.findByPk(supplierId, { transaction });
         if (!supplier) {
             await transaction.rollback();
-            return res.status(404).json({ message: 'Supplier tidak ditemukan' });
+            throw new CustomError('Supplier tidak ditemukan', 404);
         }
 
         const replacementIdRaw = req.body?.replacement_supplier_id;
@@ -118,17 +123,17 @@ export const deleteSupplier = async (req: Request, res: Response) => {
             const replacementSupplierId = Number(replacementIdRaw);
             if (!Number.isInteger(replacementSupplierId) || replacementSupplierId <= 0) {
                 await transaction.rollback();
-                return res.status(400).json({ message: 'replacement_supplier_id tidak valid' });
+                throw new CustomError('replacement_supplier_id tidak valid', 400);
             }
             if (replacementSupplierId === supplierId) {
                 await transaction.rollback();
-                return res.status(400).json({ message: 'Supplier pengganti tidak boleh sama' });
+                throw new CustomError('Supplier pengganti tidak boleh sama', 400);
             }
 
             const replacementSupplier = await Supplier.findByPk(replacementSupplierId, { transaction });
             if (!replacementSupplier) {
                 await transaction.rollback();
-                return res.status(404).json({ message: 'Supplier pengganti tidak ditemukan' });
+                throw new CustomError('Supplier pengganti tidak ditemukan', 404);
             }
 
             const [movedCount] = await PurchaseOrder.update(
@@ -147,16 +152,15 @@ export const deleteSupplier = async (req: Request, res: Response) => {
         const totalPurchaseOrders = await PurchaseOrder.count({ where: { supplier_id: supplierId }, transaction });
         if (totalPurchaseOrders > 0) {
             await transaction.rollback();
-            return res.status(400).json({
-                message: `Supplier masih dipakai ${totalPurchaseOrders} purchase order. Pilih replacement_supplier_id sebelum hapus.`
-            });
+            throw new CustomError(`Supplier masih dipakai ${totalPurchaseOrders} purchase order. Pilih replacement_supplier_id sebelum hapus.`, 400);
         }
 
         await supplier.destroy({ transaction });
         await transaction.commit();
         return res.json({ message: 'Supplier berhasil dihapus' });
     } catch (error) {
-        await transaction.rollback();
-        res.status(500).json({ message: 'Error deleting supplier', error });
+        try { await transaction.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error deleting supplier', 500);
     }
-};
+});

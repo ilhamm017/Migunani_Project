@@ -5,8 +5,10 @@ import { AccountingPostingService } from '../../services/AccountingPostingServic
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getAssignedReturs = async (req: Request, res: Response) => {
+export const getAssignedReturs = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id;
         const returs = await Retur.findAll({
@@ -28,17 +30,17 @@ export const getAssignedReturs = async (req: Request, res: Response) => {
         });
         res.json(returs);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching assigned returns', error });
+        throw new CustomError('Error fetching assigned returns', 500);
     }
-};
+});
 
-export const getAssignedReturDetail = async (req: Request, res: Response) => {
+export const getAssignedReturDetail = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id;
         const id = String(req.params.id || '');
 
         if (!id) {
-            return res.status(400).json({ message: 'Retur ID wajib diisi' });
+            throw new CustomError('Retur ID wajib diisi', 400);
         }
 
         const retur = await Retur.findOne({
@@ -60,17 +62,25 @@ export const getAssignedReturDetail = async (req: Request, res: Response) => {
         });
 
         if (!retur) {
-            return res.status(404).json({ message: 'Retur tidak ditemukan atau bukan tugas Anda' });
+            throw new CustomError('Retur tidak ditemukan atau bukan tugas Anda', 404);
         }
 
         return res.json(retur);
     } catch (error) {
-        return res.status(500).json({ message: 'Error fetching retur detail', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching retur detail', 500);
     }
-};
+});
 
-export const updateAssignedReturStatus = async (req: Request, res: Response) => {
+export const updateAssignedReturStatus = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
+    const safeRollback = async () => {
+        if (!(t as any).finished) {
+            await t.rollback();
+        }
+    };
     try {
         const driverAllowedStatuses = ['picked_up', 'handed_to_warehouse'] as const;
         type DriverAllowedReturStatus = (typeof driverAllowedStatuses)[number];
@@ -82,13 +92,13 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
         const requestedStatus = String(req.body?.status || '').trim();
 
         if (!id || !requestedStatus) {
-            await t.rollback();
-            return res.status(400).json({ message: 'Retur ID dan status wajib diisi' });
+            await safeRollback();
+            throw new CustomError('Retur ID dan status wajib diisi', 400);
         }
 
         if (!isDriverAllowedReturStatus(requestedStatus)) {
-            await t.rollback();
-            return res.status(400).json({ message: 'Status tidak valid untuk aksi driver' });
+            await safeRollback();
+            throw new CustomError('Status tidak valid untuk aksi driver', 400);
         }
         const nextStatus: DriverAllowedReturStatus = requestedStatus;
 
@@ -102,24 +112,23 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
         });
 
         if (!retur) {
-            await t.rollback();
-            return res.status(404).json({ message: 'Retur tidak ditemukan atau bukan tugas Anda' });
+            await safeRollback();
+            throw new CustomError('Retur tidak ditemukan atau bukan tugas Anda', 404);
         }
 
         if (nextStatus === 'picked_up' && retur.status !== 'pickup_assigned') {
-            await t.rollback();
-            return res.status(409).json({ message: 'Barang hanya bisa dipickup dari status pickup_assigned' });
+            await safeRollback();
+            throw new CustomError('Barang hanya bisa dipickup dari status pickup_assigned', 409);
         }
 
         if (nextStatus === 'handed_to_warehouse' && retur.status !== 'picked_up') {
-            await t.rollback();
-            return res.status(409).json({ message: 'Barang hanya bisa diserahkan ke kasir setelah pickup' });
+            await safeRollback();
+            throw new CustomError('Barang hanya bisa diserahkan ke kasir setelah pickup', 409);
         }
 
         const previousStatus = String(retur.status || '');
         await retur.update({ status: nextStatus }, { transaction: t });
-        await t.commit();
-        emitReturStatusChanged({
+        await emitReturStatusChanged({
             retur_id: String(retur.id),
             order_id: String(retur.order_id),
             from_status: previousStatus || null,
@@ -128,7 +137,12 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
             triggered_by_role: String(req.user?.role || 'driver'),
             target_roles: ['driver', 'kasir', 'admin_finance', 'customer', 'super_admin'],
             target_user_ids: [String(userId)],
+        }, {
+            transaction: t,
+            requestContext: 'driver_retur_status_changed'
         });
+
+        await t.commit();
 
         return res.json({
             message: nextStatus === 'picked_up'
@@ -137,7 +151,7 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
             retur
         });
     } catch (error) {
-        try { await t.rollback(); } catch { }
+        await safeRollback();
         const err: any = error;
         const detail = String(err?.original?.sqlMessage || err?.message || '');
         const enumMismatch = detail.includes("Data truncated for column 'status'")
@@ -145,11 +159,11 @@ export const updateAssignedReturStatus = async (req: Request, res: Response) => 
             || detail.includes("Unknown column 'status'")
             || detail.includes("Column 'status'");
         if (enumMismatch) {
-            return res.status(409).json({
-                message: 'Status retur belum sinkron di database. Restart backend untuk sinkronisasi enum status retur.',
-                detail
-            });
+            throw new CustomError(`Status retur belum sinkron di database. Restart backend untuk sinkronisasi enum status retur. Detail: ${detail}`, 409);
         }
-        return res.status(500).json({ message: 'Error updating retur task status', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error updating retur task status', 500);
     }
-};
+});

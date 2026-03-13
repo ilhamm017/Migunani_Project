@@ -4,12 +4,50 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
-import { ArrowLeft, Package, Users, ShoppingCart, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Package, Users } from 'lucide-react';
 import Link from 'next/link';
+
+interface BackorderSummary {
+    total_items: number;
+    total_value: number;
+    backorder_count: number;
+    preorder_count: number;
+}
+
+interface BackorderTopProduct {
+    name: string;
+    sku: string;
+    qty: number;
+    value: number;
+}
+
+interface BackorderTopCustomer {
+    name: string;
+    value: number;
+    qty: number;
+}
+
+interface BackorderDetailItem {
+    id: string;
+    product_name: string;
+    customer_name: string;
+    type: 'preorder' | 'backorder' | string;
+    qty: number;
+    total_value: number;
+    order_id?: string;
+    date?: string;
+}
+
+interface BackorderReportData {
+    summary: BackorderSummary;
+    top_products?: BackorderTopProduct[];
+    top_customers?: BackorderTopCustomer[];
+    details?: BackorderDetailItem[];
+}
 
 export default function BackorderReportPage() {
     const allowed = useRequireRoles(['super_admin', 'kasir']);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
 
     const load = async () => {
@@ -80,7 +118,7 @@ export default function BackorderReportPage() {
                                 <h3 className="font-bold text-slate-900">Produk Paling Kurang</h3>
                             </div>
                             <div className="space-y-3">
-                                {data.top_products?.map((p: any, idx: number) => (
+                                {data.top_products?.map((p, idx: number) => (
                                     <div key={idx} className="flex items-center justify-between">
                                         <div className="min-w-0 flex-1 mr-4">
                                             <p className="text-sm font-bold text-slate-900 truncate">{p.name}</p>
@@ -102,7 +140,7 @@ export default function BackorderReportPage() {
                                 <h3 className="font-bold text-slate-900">Pelanggan Menunggu</h3>
                             </div>
                             <div className="space-y-3">
-                                {data.top_customers?.map((c: any, idx: number) => (
+                                {data.top_customers?.map((c, idx: number) => (
                                     <div key={idx} className="flex items-center justify-between">
                                         <p className="text-sm font-bold text-slate-700">{c.name}</p>
                                         <div className="text-right">
@@ -121,7 +159,7 @@ export default function BackorderReportPage() {
                                 <p className="text-[10px] text-slate-400 font-bold uppercase">{data.details?.length} Order</p>
                             </div>
                             <div className="space-y-3">
-                                {data.details?.map((item: any) => (
+                                {data.details?.map((item) => (
                                     <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <div className="flex justify-between items-start mb-2">
                                             <div>

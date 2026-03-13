@@ -3,7 +3,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { ArrowLeft, PieChart, TrendingUp, TrendingDown, Calendar, FileText, ChevronRight, Scale } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown, Calendar, FileText, ChevronRight, Scale } from 'lucide-react';
 
 export default function ReportsPage() {
     const reports = [

@@ -1,190 +1,208 @@
 import { Request, Response } from 'express';
-import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting } from '../../models';
+import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting, Account } from '../../models';
 import { Op } from 'sequelize';
 import { resolveShippingMethodByCode } from '../ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../../services/whatsappClient';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
+import { JournalService } from '../../services/JournalService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
 import { DELIVERY_EMPLOYEE_ROLES, withOrderTrackingFields, normalizeIssueNote, ISSUE_SLA_HOURS, resolveEmployeeDisplayName, ORDER_STATUS_OPTIONS } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { isLegacyOrderStatusAlias, isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 
-export const getAllOrders = async (req: Request, res: Response) => {
-    try {
-        const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder, updatedAfter } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+export const getAllOrders = asyncWrapper(async (req: Request, res: Response) => {
+    const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder, updatedAfter } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
 
-        const whereClause: any = {};
-        let prioritizeRecentIssueUpdates = false;
-        if (status && status !== 'all') {
-            const statusStr = String(status);
-            const statuses = statusStr.split(',').map(s => s.trim()).filter(Boolean);
+    const whereClause: any = {};
+    let prioritizeRecentIssueUpdates = false;
+    if (status && status !== 'all') {
+        const statusStr = String(status);
+        const statuses = statusStr
+            .split(',')
+            .map((value) => resolveLegacyOrderStatusAlias(value, 'admin_order_status_query'))
+            .filter(Boolean);
 
-            if (statuses.length > 0) {
-                if (statuses.includes('ready_to_ship') && !statuses.includes('waiting_payment')) {
-                    statuses.push('waiting_payment');
-                }
-                if (statuses.includes('hold')) {
-                    prioritizeRecentIssueUpdates = true;
-                }
-                whereClause.status = { [Op.in]: statuses };
+        if (statuses.length > 0) {
+            if (statuses.includes('hold')) {
+                prioritizeRecentIssueUpdates = true;
             }
+            whereClause.status = { [Op.in]: statuses };
         }
-
-        const wantsBackorder = is_backorder === 'true';
-        const wantsExcludeBackorder = exclude_backorder === 'true';
-        if (wantsBackorder || wantsExcludeBackorder) {
-            const backorderRows = await Backorder.findAll({
-                where: {
-                    qty_pending: { [Op.gt]: 0 },
-                    status: { [Op.notIn]: ['fulfilled', 'canceled'] }
-                },
-                include: [{ model: OrderItem, attributes: ['order_id'] }],
-                attributes: ['order_item_id']
-            });
-            const backorderOrderIds = Array.from(new Set(
-                backorderRows
-                    .map((row: any) => row?.OrderItem?.order_id)
-                    .filter(Boolean)
-                    .map((id: any) => String(id))
-            ));
-
-            if (wantsBackorder) {
-                if (backorderOrderIds.length === 0) {
-                    return res.json({
-                        total: 0,
-                        totalPages: 0,
-                        currentPage: Number(page),
-                        orders: []
-                    });
-                }
-                whereClause.id = { [Op.in]: backorderOrderIds };
-            } else if (wantsExcludeBackorder && backorderOrderIds.length > 0) {
-                whereClause.id = { [Op.notIn]: backorderOrderIds };
-            }
-        }
-
-        const searchText = typeof search === 'string' ? search.trim() : '';
-        if (searchText) {
-            const invoiceMatches = await Invoice.findAll({
-                where: { invoice_number: { [Op.like]: `%${searchText}%` } },
-                attributes: ['id']
-            });
-            const invoiceIds = invoiceMatches.map((inv: any) => String(inv.id));
-            const invoiceItems = invoiceIds.length > 0
-                ? await InvoiceItem.findAll({
-                    where: { invoice_id: { [Op.in]: invoiceIds } },
-                    include: [{ model: OrderItem, attributes: ['order_id'] }]
-                })
-                : [];
-            const orderIdsFromInvoice = Array.from(new Set(
-                invoiceItems.map((item: any) => String(item?.OrderItem?.order_id || '')).filter(Boolean)
-            ));
-
-            whereClause[Op.or] = [
-                { id: { [Op.like]: `%${searchText}%` } },
-                { customer_name: { [Op.like]: `%${searchText}%` } },
-                { customer_id: { [Op.like]: `%${searchText}%` } },
-                ...(orderIdsFromInvoice.length > 0 ? [{ id: { [Op.in]: orderIdsFromInvoice } }] : []),
-                { '$Customer.name$': { [Op.like]: `%${searchText}%` } },
-            ];
-        }
-
-        const startRaw = typeof startDate === 'string' ? startDate : (typeof dateFrom === 'string' ? dateFrom : '');
-        const endRaw = typeof endDate === 'string' ? endDate : (typeof dateTo === 'string' ? dateTo : '');
-
-        const createdAtRange: any = {};
-
-        if (startRaw) {
-            const start = new Date(startRaw);
-            if (!Number.isNaN(start.getTime())) {
-                start.setHours(0, 0, 0, 0);
-                createdAtRange[Op.gte] = start;
-            }
-        }
-
-        if (endRaw) {
-            const end = new Date(endRaw);
-            if (!Number.isNaN(end.getTime())) {
-                end.setHours(23, 59, 59, 999);
-                createdAtRange[Op.lte] = end;
-            }
-        }
-
-        if (Object.keys(createdAtRange).length > 0) {
-            whereClause.createdAt = createdAtRange;
-        }
-
-        const updatedAfterRaw = typeof updatedAfter === 'string' ? updatedAfter : '';
-        if (updatedAfterRaw) {
-            const updatedAfterDate = new Date(updatedAfterRaw);
-            if (!Number.isNaN(updatedAfterDate.getTime())) {
-                whereClause.updatedAt = {
-                    [Op.gte]: updatedAfterDate
-                };
-            }
-        }
-
-        const orders = await Order.findAndCountAll({
-            where: whereClause,
-            include: [
-                { model: User, as: 'Customer', attributes: ['id', 'name'] },
-                { model: User, as: 'Courier', attributes: ['id', 'name'] },
-                {
-                    model: OrderIssue,
-                    as: 'Issues',
-                    include: [{ model: User, as: 'IssueCreator', attributes: ['id', 'name', 'role'] }]
-                },
-                { model: Order, as: 'Children', attributes: ['id'] },
-            ],
-            distinct: true,
-            limit: Number(limit),
-            offset: Number(offset),
-            order: prioritizeRecentIssueUpdates
-                ? [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
-                : [['createdAt', 'DESC']]
-        });
-
-        const plainRows = orders.rows.map((row) => row.get({ plain: true }) as any);
-        const rowsWithInvoices = await attachInvoicesToOrders(plainRows);
-        const rows = rowsWithInvoices.map((row) => withOrderTrackingFields(row as any));
-
-        res.json({
-            total: orders.count,
-            totalPages: Math.ceil(orders.count / Number(limit)),
-            currentPage: Number(page),
-            orders: rows
-        });
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching orders', error });
     }
-};
 
-export const getDeliveryEmployees = async (_req: Request, res: Response) => {
-    try {
-        const employees = await User.findAll({
+    const wantsBackorder = is_backorder === 'true';
+    const wantsExcludeBackorder = exclude_backorder === 'true';
+    if (wantsBackorder || wantsExcludeBackorder) {
+        const backorderRows = await Backorder.findAll({
             where: {
-                status: 'active',
-                role: { [Op.in]: DELIVERY_EMPLOYEE_ROLES as unknown as string[] }
+                qty_pending: { [Op.gt]: 0 },
+                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
             },
-            attributes: ['id', 'name', 'email', 'role', 'whatsapp_number'],
-            order: [['name', 'ASC']]
+            include: [{ model: OrderItem, attributes: ['order_id'] }],
+            attributes: ['order_item_id']
         });
+        const backorderOrderIds = Array.from(new Set(
+            backorderRows
+                .map((row: any) => row?.OrderItem?.order_id)
+                .filter(Boolean)
+                .map((id: any) => String(id))
+        ));
 
-        res.json({
-            employees: employees.map((item) => {
-                const plain = item.get({ plain: true }) as any;
-                return {
-                    ...plain,
-                    display_name: resolveEmployeeDisplayName(plain)
-                };
-            })
-        });
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching delivery employees', error });
+        if (wantsBackorder) {
+            if (backorderOrderIds.length === 0) {
+                return res.json({
+                    total: 0,
+                    totalPages: 0,
+                    currentPage: Number(page),
+                    orders: []
+                });
+            }
+            whereClause.id = { [Op.in]: backorderOrderIds };
+        } else if (wantsExcludeBackorder && backorderOrderIds.length > 0) {
+            whereClause.id = { [Op.notIn]: backorderOrderIds };
+        }
     }
-};
 
-export const updateOrderStatus = async (req: Request, res: Response) => {
+    const searchText = typeof search === 'string' ? search.trim() : '';
+    if (searchText) {
+        const invoiceMatches = await Invoice.findAll({
+            where: { invoice_number: { [Op.like]: `%${searchText}%` } },
+            attributes: ['id']
+        });
+        const invoiceIds = invoiceMatches.map((inv: any) => String(inv.id));
+        const invoiceItems = invoiceIds.length > 0
+            ? await InvoiceItem.findAll({
+                where: { invoice_id: { [Op.in]: invoiceIds } },
+                include: [{ model: OrderItem, attributes: ['order_id'] }]
+            })
+            : [];
+        const orderIdsFromInvoice = Array.from(new Set(
+            invoiceItems.map((item: any) => String(item?.OrderItem?.order_id || '')).filter(Boolean)
+        ));
+
+        whereClause[Op.or] = [
+            { id: { [Op.like]: `%${searchText}%` } },
+            { customer_name: { [Op.like]: `%${searchText}%` } },
+            { customer_id: { [Op.like]: `%${searchText}%` } },
+            ...(orderIdsFromInvoice.length > 0 ? [{ id: { [Op.in]: orderIdsFromInvoice } }] : []),
+            { '$Customer.name$': { [Op.like]: `%${searchText}%` } },
+        ];
+    }
+
+    const startRaw = typeof startDate === 'string' ? startDate : (typeof dateFrom === 'string' ? dateFrom : '');
+    const endRaw = typeof endDate === 'string' ? endDate : (typeof dateTo === 'string' ? dateTo : '');
+
+    const createdAtRange: any = {};
+
+    if (startRaw) {
+        const start = new Date(startRaw);
+        if (!Number.isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            createdAtRange[Op.gte] = start;
+        }
+    }
+
+    if (endRaw) {
+        const end = new Date(endRaw);
+        if (!Number.isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            createdAtRange[Op.lte] = end;
+        }
+    }
+
+    if (Object.keys(createdAtRange).length > 0) {
+        whereClause.createdAt = createdAtRange;
+    }
+
+    const updatedAfterRaw = typeof updatedAfter === 'string' ? updatedAfter : '';
+    if (updatedAfterRaw) {
+        const updatedAfterDate = new Date(updatedAfterRaw);
+        if (!Number.isNaN(updatedAfterDate.getTime())) {
+            whereClause.updatedAt = {
+                [Op.gte]: updatedAfterDate
+            };
+        }
+    }
+
+    const orders = await Order.findAndCountAll({
+        where: whereClause,
+        include: [
+            { model: User, as: 'Customer', attributes: ['id', 'name'] },
+            { model: User, as: 'Courier', attributes: ['id', 'name'] },
+            {
+                model: OrderIssue,
+                as: 'Issues',
+                include: [{ model: User, as: 'IssueCreator', attributes: ['id', 'name', 'role'] }]
+            },
+            { model: Order, as: 'Children', attributes: ['id'] },
+            {
+                model: OrderAllocation,
+                as: 'Allocations',
+                attributes: ['id', 'allocated_qty', 'product_id', 'status']
+            },
+            {
+                model: OrderItem,
+                attributes: ['id', 'product_id', 'price_at_purchase']
+            }
+        ],
+        distinct: true,
+        limit: Number(limit),
+        offset: Number(offset),
+        order: prioritizeRecentIssueUpdates
+            ? [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+            : [['createdAt', 'DESC']]
+    });
+
+    const plainRows = orders.rows.map((row) => {
+        const plain = row.get({ plain: true }) as any;
+        let allocatedAmount = 0;
+        const allocations = Array.isArray(plain.Allocations) ? plain.Allocations : [];
+        const items = Array.isArray(plain.OrderItems) ? plain.OrderItems : [];
+
+        allocations.forEach((alloc: any) => {
+            const item = items.find((oi: any) => String(oi.product_id) === String(alloc.product_id));
+            if (item) {
+                allocatedAmount += Number(alloc.allocated_qty) * Number(item.price_at_purchase);
+            }
+        });
+        return { ...plain, allocated_amount: allocatedAmount };
+    });
+    const rowsWithInvoices = await attachInvoicesToOrders(plainRows);
+    const rows = rowsWithInvoices.map((row) => withOrderTrackingFields(row as any));
+
+    res.json({
+        total: orders.count,
+        totalPages: Math.ceil(orders.count / Number(limit)),
+        currentPage: Number(page),
+        orders: rows
+    });
+});
+
+export const getDeliveryEmployees = asyncWrapper(async (_req: Request, res: Response) => {
+    const employees = await User.findAll({
+        where: {
+            status: 'active',
+            role: { [Op.in]: DELIVERY_EMPLOYEE_ROLES as unknown as string[] }
+        },
+        attributes: ['id', 'name', 'email', 'role', 'whatsapp_number'],
+        order: [['name', 'ASC']]
+    });
+
+    res.json({
+        employees: employees.map((item) => {
+            const plain = item.get({ plain: true }) as any;
+            return {
+                ...plain,
+                display_name: resolveEmployeeDisplayName(plain)
+            };
+        })
+    });
+});
+
+export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const orderId = String(req.params.id);
@@ -194,7 +212,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         const nextStatus = typeof status === 'string' ? status : '';
         if (!ORDER_STATUS_OPTIONS.includes(nextStatus as (typeof ORDER_STATUS_OPTIONS)[number])) {
             await t.rollback();
-            return res.status(400).json({ message: 'Status order tidak valid' });
+            throw new CustomError('Status order tidak valid', 400);
         }
 
         const order = await Order.findByPk(orderId, {
@@ -203,13 +221,14 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         });
         if (!order) {
             await t.rollback();
-            return res.status(404).json({ message: 'Order not found' });
+            throw new CustomError('Order not found', 404);
         }
         let prevStatus = String(order.status || '');
-        if (prevStatus === 'waiting_payment') {
+        if (isLegacyOrderStatusAlias(prevStatus)) {
+            const canonicalStatus = resolveLegacyOrderStatusAlias(prevStatus, 'admin_update_order_status_record');
             await order.update({ status: 'ready_to_ship', expiry_date: null }, { transaction: t });
-            order.status = 'ready_to_ship' as any;
-            prevStatus = 'ready_to_ship';
+            order.status = canonicalStatus as any;
+            prevStatus = canonicalStatus;
         }
 
         // --- STRICT TRANSITION MAP ---
@@ -238,17 +257,13 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
             if (nextStatus === 'canceled') {
                 if (!canCancelByRole || !CANCELABLE_STATUSES.includes(order.status)) {
                     await t.rollback();
-                    return res.status(403).json({
-                        message: `Role '${userRole}' tidak bisa membatalkan order dengan status '${order.status}'.`
-                    });
+                    throw new CustomError(`Role '${userRole}' tidak bisa membatalkan order dengan status '${order.status}'.`, 403);
                 }
             } else {
                 const rule = ALLOWED_TRANSITIONS[order.status];
                 if (!rule || !rule.roles.includes(userRole) || !rule.to.includes(nextStatus)) {
                     await t.rollback();
-                    return res.status(403).json({
-                        message: `Role '${userRole}' tidak bisa mengubah status dari '${order.status}' ke '${nextStatus}'. Gunakan fitur yang sesuai (alokasi, invoice, verifikasi).`
-                    });
+                    throw new CustomError(`Role '${userRole}' tidak bisa mengubah status dari '${order.status}' ke '${nextStatus}'. Gunakan fitur yang sesuai (alokasi, invoice, verifikasi).`, 403);
                 }
             }
         }
@@ -256,15 +271,24 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         const normalizedResolutionNote = normalizeIssueNote(resolution_note);
         if (prevStatus === 'hold' && nextStatus === 'shipped' && !normalizedResolutionNote) {
             await t.rollback();
-            return res.status(400).json({ message: 'Catatan follow-up wajib diisi sebelum kirim ulang order dari status hold.' });
+            throw new CustomError('Catatan follow-up wajib diisi sebelum kirim ulang order dari status hold.', 400);
         }
 
         // --- Courier validation for shipped ---
         let courierIdToSave: string | null = null;
         if (nextStatus === 'shipped') {
+            const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+            if (!invoice) {
+                await t.rollback();
+                throw new CustomError('Invoice tidak ditemukan untuk order ini.', 400);
+            }
+            // Pembayaran Transfer/COD diubah alur logikanya: bisa dikirim dulu baru bayar belakangan
+            // Jadi pengecekan pesanan non-COD harus lunas kita hapus.
+            // Fitur pembayaran di awal tetap berjalan karena sistem mengecek jika sudah lunas maka statusnya 'paid'.
+
             if (typeof courier_id !== 'string' || !courier_id.trim()) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Status dikirim wajib memilih driver/kurir' });
+                throw new CustomError('Status dikirim wajib memilih driver/kurir', 400);
             }
             const courier = await User.findOne({
                 where: {
@@ -276,12 +300,16 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
             });
             if (!courier) {
                 await t.rollback();
-                return res.status(404).json({ message: 'Driver/kurir tidak ditemukan atau tidak aktif' });
+                throw new CustomError('Driver/kurir tidak ditemukan atau tidak aktif', 404);
             }
             courierIdToSave = courier.id;
         }
 
         const updatePayload: any = { status: nextStatus };
+        if (nextStatus !== prevStatus && !isOrderTransitionAllowed(prevStatus, nextStatus)) {
+            await t.rollback();
+            throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextStatus}'`, 409);
+        }
         if (courierIdToSave) {
             updatePayload.courier_id = courierIdToSave;
         }
@@ -289,8 +317,19 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 
         if (nextStatus === 'shipped') {
             const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
-            if (invoice && invoice.payment_method !== 'cod') {
-                await AccountingPostingService.postGoodsOutForOrder(orderId, String(req.user!.id), t, 'non_cod');
+            if (invoice) {
+                if (String(invoice.shipment_status || '') === 'delivered' || invoice.delivered_at) {
+                    await t.rollback();
+                    throw new CustomError('Invoice untuk order ini sudah selesai dikirim dan tidak bisa dikembalikan ke status shipped.', 409);
+                }
+                if (invoice.payment_method !== 'cod') {
+                    await AccountingPostingService.postGoodsOutForOrder(orderId, String(req.user!.id), t, 'non_cod');
+                }
+                await invoice.update({
+                    shipment_status: 'shipped',
+                    shipped_at: new Date(),
+                    courier_id: courierIdToSave
+                }, { transaction: t });
             }
         }
 
@@ -301,7 +340,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                 : 'shortage';
             if (normalizedIssueType !== 'shortage') {
                 await t.rollback();
-                return res.status(400).json({ message: 'Issue type tidak valid.' });
+                throw new CustomError('Issue type tidak valid.', 400);
             }
             const dueAt = new Date(Date.now() + (ISSUE_SLA_HOURS * 60 * 60 * 1000));
             const existingOpenIssue = await OrderIssue.findOne({
@@ -356,9 +395,62 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                 }
             }
             await order.update({ stock_released: true }, { transaction: t });
+
+            // Auto-Reversal for Shipped/Delivered/Completed
+            if (['shipped', 'delivered', 'completed'].includes(prevStatus)) {
+                const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+                if (invoice) {
+                    // Reverse HPP
+                    const invoiceItems = await InvoiceItem.findAll({
+                        where: { invoice_id: invoice.id },
+                        attributes: ['qty', 'unit_cost'],
+                        transaction: t
+                    });
+                    let totalCost = 0;
+                    invoiceItems.forEach((item: any) => {
+                        totalCost += Number(item.unit_cost || 0) * Number(item.qty || 0);
+                    });
+
+                    if (totalCost > 0) {
+                        const hppAcc = await Account.findOne({ where: { code: '5100' }, transaction: t });
+                        const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });
+                        if (hppAcc && inventoryAcc) {
+                            await JournalService.createEntry({
+                                description: `[VOID/REVERSAL] Pembatalan Order #${orderId} - HPP`,
+                                reference_type: 'order_reversal',
+                                reference_id: invoice.id.toString(),
+                                created_by: String(req.user!.id),
+                                lines: [
+                                    { account_id: hppAcc.id, debit: 0, credit: totalCost },
+                                    { account_id: inventoryAcc.id, debit: totalCost, credit: 0 }
+                                ]
+                            }, t);
+                        }
+                    }
+
+                    // Reverse Sales if Paid
+                    if (invoice.payment_status === 'paid' && Number(invoice.amount_paid) > 0) {
+                        const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
+                        const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
+                        const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+
+                        if (paymentAcc && revenueAcc) {
+                            await JournalService.createEntry({
+                                description: `[VOID/REVERSAL] Pembatalan Order #${orderId} - Pendapatan`,
+                                reference_type: 'order_reversal',
+                                reference_id: invoice.id.toString(),
+                                created_by: String(req.user!.id),
+                                lines: [
+                                    { account_id: paymentAcc.id, debit: 0, credit: Number(invoice.amount_paid) },
+                                    { account_id: revenueAcc.id, debit: Number(invoice.amount_paid), credit: 0 }
+                                ]
+                            }, t);
+                        }
+                    }
+                }
+            }
         }
 
-        await t.commit();
         if (nextStatus !== prevStatus) {
             const targetRoles = nextStatus === 'shipped'
                 ? ['driver', 'customer']
@@ -369,7 +461,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                         : nextStatus === 'completed'
                             ? ['customer']
                             : ['admin_gudang', 'admin_finance', 'kasir', 'customer'];
-            emitOrderStatusChanged({
+            await emitOrderStatusChanged({
                 order_id: orderId,
                 from_status: prevStatus || null,
                 to_status: nextStatus,
@@ -379,20 +471,27 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
                 triggered_by_role: userRole || null,
                 target_roles: targetRoles,
                 target_user_ids: courierIdToSave ? [courierIdToSave] : [],
+            }, {
+                transaction: t,
+                requestContext: 'admin_order_status_changed'
             });
         } else {
-            emitAdminRefreshBadges();
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'admin_order_refresh_badges'
+            });
         }
+        await t.commit();
         res.json({ message: `Order status updated to ${nextStatus}` });
 
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error updating order status', error });
+        throw error;
     }
-};
+});
 
-export const reportMissingItem = async (req: Request, res: Response) => {
+export const reportMissingItem = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const orderId = String(req.params.id);
@@ -411,19 +510,19 @@ export const reportMissingItem = async (req: Request, res: Response) => {
 
         if (!order) {
             await t.rollback();
-            return res.status(404).json({ message: 'Order not found' });
+            throw new CustomError('Order not found', 404);
         }
 
         // 1. Validate Status: Must be Delivered or Completed
         if (!['delivered', 'completed'].includes(order.status)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Laporan barang kurang hanya bisa dibuat setelah pesanan diterima (delivered/completed).' });
+            throw new CustomError('Laporan barang kurang hanya bisa dibuat setelah pesanan diterima (delivered/completed).', 400);
         }
 
         // 2. Validate Items
         if (!Array.isArray(items) || items.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Daftar barang kurang wajib diisi.' });
+            throw new CustomError('Daftar barang kurang wajib diisi.', 400);
         }
 
         const missingItemsData: string[] = [];
@@ -437,12 +536,12 @@ export const reportMissingItem = async (req: Request, res: Response) => {
             const orderItem = (order.OrderItems || []).find((oi: any) => String(oi.product_id) === pid);
             if (!orderItem) {
                 await t.rollback();
-                return res.status(400).json({ message: `Produk ID ${pid} tidak ada dalam pesanan ini.` });
+                throw new CustomError(`Produk ID ${pid} tidak ada dalam pesanan ini.`, 400);
             }
 
             if (qtyMissing > Number(orderItem.qty)) {
                 await t.rollback();
-                return res.status(400).json({ message: `Jumlah barang kurang untuk produk ${pid} melebihi jumlah pesanan.` });
+                throw new CustomError(`Jumlah barang kurang untuk produk ${pid} melebihi jumlah pesanan.`, 400);
             }
 
             const productName = (orderItem as any).Product?.name || pid;
@@ -451,7 +550,7 @@ export const reportMissingItem = async (req: Request, res: Response) => {
 
         if (missingItemsData.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada item valid yang dilaporkan.' });
+            throw new CustomError('Tidak ada item valid yang dilaporkan.', 400);
         }
 
         // 3. Create Order Issue
@@ -468,62 +567,54 @@ export const reportMissingItem = async (req: Request, res: Response) => {
             created_by: userId
         }, { transaction: t });
 
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'admin_missing_item_refresh_badges'
+        });
         await t.commit();
-        emitAdminRefreshBadges();
         res.status(201).json({ message: 'Laporan barang kurang berhasil dibuat. Tim kami akan segera melakukan verifikasi.' });
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Gagal membuat laporan barang kurang', error });
+        throw error;
     }
-};
+});
 
-export const getDashboardStats = async (req: Request, res: Response) => {
-    try {
-        const counts = await Order.findAll({
-            attributes: [
-                'status',
-                [sequelize.fn('COUNT', sequelize.col('id')), 'count']
-            ],
-            group: ['status'],
-            raw: true
-        }) as unknown as { status: string, count: number }[];
+export const getDashboardStats = asyncWrapper(async (req: Request, res: Response) => {
+    const counts = await Order.findAll({
+        attributes: [
+            'status',
+            [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+        ],
+        group: ['status'],
+        raw: true
+    }) as unknown as { status: string, count: number }[];
 
-        const stats = {
-            pending: 0,
-            waiting_invoice: 0,
-            waiting_payment: 0,
-            delivered: 0,
-            ready_to_ship: 0,
-            shipped: 0,
-            completed: 0,
-            canceled: 0,
-            waiting_admin_verification: 0,
-            allocated: 0,
-            partially_fulfilled: 0,
-            debt_pending: 0,
-            hold: 0,
-            expired: 0,
-            total: 0
-        };
+    const stats = {
+        pending: 0,
+        waiting_invoice: 0,
+        delivered: 0,
+        ready_to_ship: 0,
+        shipped: 0,
+        completed: 0,
+        canceled: 0,
+        waiting_admin_verification: 0,
+        allocated: 0,
+        partially_fulfilled: 0,
+        debt_pending: 0,
+        hold: 0,
+        expired: 0,
+        total: 0
+    };
 
-        counts.forEach(item => {
-            const status = String(item.status || '');
-            const count = Number(item.count || 0);
-            if (status === 'waiting_payment') {
-                stats.ready_to_ship += count;
-                stats.total += count;
-                return;
-            }
-            if (status && (stats as any)[status] !== undefined) {
-                (stats as any)[status] = count;
-            }
-            stats.total += count;
-        });
+    counts.forEach(item => {
+        const status = String(item.status || '');
+        const count = Number(item.count || 0);
+        if (status && (stats as any)[status] !== undefined) {
+            (stats as any)[status] = count;
+        }
+        stats.total += count;
+    });
 
-        res.json(stats);
-    } catch (error) {
-        console.error('Stats error:', error);
-        res.status(500).json({ message: 'Error fetching stats', error });
-    }
-};
+    res.json(stats);
+});

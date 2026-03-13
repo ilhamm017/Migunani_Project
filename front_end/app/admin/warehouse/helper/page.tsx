@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
-import Link from 'next/link';
+import Image from 'next/image';
 import { Camera, CheckCircle, MapPin, Package, RefreshCw, Loader2 } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
@@ -19,22 +19,72 @@ interface PickItem {
     picked: boolean;
 }
 
+type WarehouseOrderItemRow = {
+    id: string;
+    product_id?: string;
+    product_name?: string;
+    sku?: string;
+    qty?: number;
+    quantity?: number;
+    Product?: {
+        name?: string;
+        sku?: string;
+        image_url?: string | null;
+        bin_location?: string;
+    } | null;
+};
+
+type WarehouseOrderRow = {
+    id: string;
+    order_number?: string;
+    OrderItems?: WarehouseOrderItemRow[] | null;
+};
+
 export default function WarehouseHelperPage() {
     const [items, setItems] = useState<PickItem[]>([]);
-    const [orders, setOrders] = useState<any[]>([]); // Added state for orders
     const [loading, setLoading] = useState(true);
     const [confirming, setConfirming] = useState<string | null>(null);
 
     const loadPickingItems = useCallback(async () => {
         try {
             setLoading(true);
-            // Fetch processing orders that need picking
             const res = await api.admin.orderManagement.getAll({ status: 'processing', limit: 20 });
-            const fetchedOrders = res.data?.orders || [];
-            setOrders(fetchedOrders); // Set the fetched orders to state
+            const fetchedOrders: WarehouseOrderRow[] = Array.isArray(res.data?.orders)
+                ? res.data.orders.map((row: Record<string, unknown>) => {
+                    const orderItemsRaw = Array.isArray(row.OrderItems) ? row.OrderItems : [];
+                    const orderItems: WarehouseOrderItemRow[] = orderItemsRaw.map((item) => {
+                        const itemRecord = item as Record<string, unknown>;
+                        const productRaw = itemRecord.Product;
+                        const product = productRaw && typeof productRaw === 'object'
+                            ? productRaw as Record<string, unknown>
+                            : null;
+
+                        return {
+                            id: String(itemRecord.id ?? ''),
+                            product_id: itemRecord.product_id ? String(itemRecord.product_id) : undefined,
+                            product_name: itemRecord.product_name ? String(itemRecord.product_name) : undefined,
+                            sku: itemRecord.sku ? String(itemRecord.sku) : undefined,
+                            qty: Number(itemRecord.qty ?? 0),
+                            quantity: Number(itemRecord.quantity ?? 0),
+                            Product: product ? {
+                                name: product.name ? String(product.name) : undefined,
+                                sku: product.sku ? String(product.sku) : undefined,
+                                image_url: product.image_url ? String(product.image_url) : null,
+                                bin_location: product.bin_location ? String(product.bin_location) : undefined,
+                            } : null,
+                        };
+                    });
+
+                    return {
+                        id: String(row.id ?? ''),
+                        order_number: row.order_number ? String(row.order_number) : undefined,
+                        OrderItems: orderItems,
+                    };
+                })
+                : [];
 
             const pickItems: PickItem[] = [];
-            for (const order of fetchedOrders) { // Use fetchedOrders here
+            for (const order of fetchedOrders) {
                 const orderItems = order.OrderItems || [];
                 for (const item of orderItems) {
                     pickItems.push({
@@ -143,7 +193,7 @@ export default function WarehouseHelperPage() {
                                             {/* Thumbnail */}
                                             <div className="w-20 h-20 rounded-xl bg-slate-100 border border-slate-200 flex-shrink-0 overflow-hidden">
                                                 {item.productImage ? (
-                                                    <img src={item.productImage} alt="" className="w-full h-full object-cover" />
+                                                    <Image src={item.productImage} alt={item.productName} className="w-full h-full object-cover" width={80} height={80} />
                                                 ) : (
                                                     <div className="w-full h-full flex items-center justify-center text-slate-300">
                                                         <Camera size={24} />

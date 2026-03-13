@@ -10,12 +10,14 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
 // --- Reports ---
-export const getAccountsReceivable = async (req: Request, res: Response) => {
+export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Response) => {
     try {
         // 1. Get AR from Invoices (payment_status != 'paid')
         const ar = await Invoice.findAll({
@@ -76,15 +78,15 @@ export const getAccountsReceivable = async (req: Request, res: Response) => {
 
         res.json([...invoiceRows, ...driverRows]);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching AR', error });
+        throw new CustomError('Error fetching AR', 500);
     }
-};
+});
 
-export const getAccountsReceivableDetail = async (req: Request, res: Response) => {
+export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const invoiceId = String(req.params.id || '').trim();
         if (!invoiceId) {
-            return res.status(400).json({ message: 'invoice id wajib diisi' });
+            throw new CustomError('invoice id wajib diisi', 400);
         }
 
         // Handle pseudo-ID for driver debt
@@ -100,7 +102,7 @@ export const getAccountsReceivableDetail = async (req: Request, res: Response) =
             });
 
             if (!driver) {
-                return res.status(404).json({ message: 'Data piutang driver tidak ditemukan' });
+                throw new CustomError('Data piutang driver tidak ditemukan', 404);
             }
 
             const debt = Number(driver.debt || 0);
@@ -148,17 +150,19 @@ export const getAccountsReceivableDetail = async (req: Request, res: Response) =
         });
 
         if (!invoice) {
-            return res.status(404).json({ message: 'Data piutang tidak ditemukan' });
+            throw new CustomError('Data piutang tidak ditemukan', 404);
         }
 
         const context = await buildAccountsReceivableContext([invoice]);
         const [row] = mapAccountsReceivableRows([invoice], context);
         if (!row) {
-            return res.status(404).json({ message: 'Data piutang tidak ditemukan' });
+            throw new CustomError('Data piutang tidak ditemukan', 404);
         }
         return res.json(row);
     } catch (error) {
-        return res.status(500).json({ message: 'Error fetching AR detail', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching AR detail', 500);
     }
-};
-
+});

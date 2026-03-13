@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { getQr, getStatus, getWhatsappDiagnostics, startWhatsappClient } from '../services/whatsappClient';
 import waClient from '../services/whatsappClient';
+import { asyncWrapper } from '../utils/asyncWrapper';
+import { CustomError } from '../utils/CustomError';
 
 const setNoCacheHeaders = (res: Response) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -39,7 +41,7 @@ export const getQrCode = (req: Request, res: Response) => {
 
 import { Setting } from '../models';
 
-export const getClientStatus = async (req: Request, res: Response) => {
+export const getClientStatus = asyncWrapper(async (req: Request, res: Response) => {
     setNoCacheHeaders(res);
     const status = getStatus();
     const meta = getWhatsappDiagnostics();
@@ -56,23 +58,29 @@ export const getClientStatus = async (req: Request, res: Response) => {
     }
 
     res.json({ status, info, meta });
-};
+});
 
-export const logout = async (req: Request, res: Response) => {
+export const logout = asyncWrapper(async (req: Request, res: Response) => {
     try {
+        const status = getStatus();
+        if (status === 'STOPPED') {
+            throw new CustomError('WhatsApp belum dijalankan.', 409);
+        }
         await waClient.logout();
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
-        res.status(500).json({ message: 'Error logging out', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error logging out', 500);
     }
-};
+});
 
-export const connect = async (req: Request, res: Response) => {
+export const connect = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const force = req.body?.force === true;
         const result = await startWhatsappClient({ force });
         res.json(result);
     } catch (error) {
-        res.status(500).json({ message: 'Error starting WhatsApp client', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error starting WhatsApp client', 500);
     }
-};
+});

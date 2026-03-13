@@ -14,10 +14,26 @@ type ChecklistMeta = {
   mismatchCount?: number;
 };
 
+type SavedChecklist = {
+  scopeId: string;
+  invoiceId?: string | null;
+  orderIds: string[];
+  savedAt: string;
+  rows: Array<{
+    key: string;
+    productName: string;
+    expectedQty: number;
+    actualQty: number;
+    note: string;
+    quickState: 'match' | 'short' | 'missing';
+    orderIds: string[];
+  }>;
+};
+
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
 const legacyChecklistStorageKey = (orderId: string) => `driver-checklist-${orderId}`;
-const getInvoiceItems = (invoiceData: any) => {
+const getInvoiceItems = (invoiceData: unknown) => {
   if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
   if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
   return [];
@@ -34,7 +50,7 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
       const parsed = JSON.parse(scopeRaw);
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
       if (rows.length === 0) return { status: 'not_checked' };
-      const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+      const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
       return {
         status: mismatchCount > 0 ? 'mismatch' : 'ready',
         savedAt: parsed?.savedAt,
@@ -55,7 +71,7 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
     try {
       const parsed = JSON.parse(raw);
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-      mismatchTotal += rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+      mismatchTotal += rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
       if (parsed?.savedAt) {
         const savedAtText = String(parsed.savedAt);
         if (!latestSavedAt || savedAtText > latestSavedAt) latestSavedAt = savedAtText;
@@ -79,10 +95,12 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
 
 export default function DriverPrecheckPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<unknown[]>([]);
   const [loading, setLoading] = useState(true);
-  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, any>>({});
+  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, unknown>>({});
   const [checklistByScope, setChecklistByScope] = useState<Record<string, ChecklistMeta>>({});
+  const [bulkChecklistOpen, setBulkChecklistOpen] = useState(false);
+  const [bulkChecklistStep, setBulkChecklistStep] = useState<1 | 2>(1);
 
   const load = useCallback(async () => {
     try {
@@ -109,7 +127,7 @@ export default function DriverPrecheckPage() {
     const invoiceIds = Array.from(
       new Set(
         orders
-          .map((row: any) => normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id))
+          .map((row: unknown) => normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id))
           .filter(Boolean)
       )
     );
@@ -125,7 +143,7 @@ export default function DriverPrecheckPage() {
           invoiceIds.map((invoiceId) => api.invoices.getById(invoiceId))
         );
         if (isCancelled) return;
-        const nextMap: Record<string, any> = {};
+        const nextMap: Record<string, unknown> = {};
         responses.forEach((result, index) => {
           if (result.status !== 'fulfilled') return;
           const data = result.value?.data || null;
@@ -147,7 +165,7 @@ export default function DriverPrecheckPage() {
   }, [allowed, orders]);
 
   const invoiceCards = useMemo(() => {
-    const buckets = orders.reduce((acc, order: any) => {
+    const buckets = orders.reduce((acc, order: unknown) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return acc;
       const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
@@ -157,22 +175,22 @@ export default function DriverPrecheckPage() {
         key,
         invoiceId,
         invoiceNumber,
-        orders: [] as any[],
+        orders: [] as unknown[],
       };
       bucket.orders.push(order);
       acc.set(key, bucket);
       return acc;
-    }, new Map<string, { key: string; invoiceId: string; invoiceNumber: string; orders: any[] }>());
+    }, new Map<string, { key: string; invoiceId: string; invoiceNumber: string; orders: unknown[] }>());
 
     const bucketValues = Array.from(buckets.values()) as Array<{
       key: string;
       invoiceId: string;
       invoiceNumber: string;
-      orders: any[];
+      orders: unknown[];
     }>;
 
     return bucketValues.map((bucket) => {
-      const sortedOrders = [...bucket.orders].sort((a: any, b: any) => {
+      const sortedOrders = [...bucket.orders].sort((a: unknown, b: unknown) => {
         const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
         const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -183,19 +201,19 @@ export default function DriverPrecheckPage() {
       const primaryOrder = sortedOrders[0] || null;
       const primaryOrderId = String(primaryOrder?.id || '').trim();
       const scopeId = bucket.invoiceId || primaryOrderId;
-      const orderIds = sortedOrders.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+      const orderIds = sortedOrders.map((row: unknown) => String(row?.id || '').trim()).filter(Boolean);
       const invoiceDetail = bucket.invoiceId ? invoiceDetailsById[bucket.invoiceId] : null;
 
       const customer = primaryOrder?.Customer || {};
       const profile = customer.CustomerProfile || {};
       const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-      const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
+      const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
       const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
 
       const itemMap = new Map<string, { name: string; qty: number }>();
       const invoiceItems = getInvoiceItems(invoiceDetail);
       if (invoiceItems.length > 0) {
-        invoiceItems.forEach((item: any) => {
+        invoiceItems.forEach((item: unknown) => {
           const orderItem = item?.OrderItem || {};
           const product = orderItem?.Product || {};
           const productKey = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -205,9 +223,9 @@ export default function DriverPrecheckPage() {
           itemMap.set(productKey, entry);
         });
       } else {
-        sortedOrders.forEach((order: any) => {
+        sortedOrders.forEach((order: unknown) => {
           const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-          items.forEach((item: any) => {
+          items.forEach((item: unknown) => {
             const productKey = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
             if (!productKey) return;
             const entry = itemMap.get(productKey) || { name: item?.Product?.name || 'Produk', qty: 0 };
@@ -289,7 +307,7 @@ export default function DriverPrecheckPage() {
             <div className="flex-1">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">Barang Invoice</p>
               <div className="text-xs font-medium text-slate-800 space-y-0.5">
-                {card.mergedItems.slice(0, 3).map((item: any, idx: number) => (
+                {card.mergedItems.slice(0, 3).map((item: unknown, idx: number) => (
                   <p key={`${item.name}-${idx}`}>{item.qty}x {item.name}</p>
                 ))}
                 {card.mergedItems.length > 3 && (
@@ -322,6 +340,61 @@ export default function DriverPrecheckPage() {
     );
   }), [invoiceCards, checklistByScope]);
 
+  const bulkChecklistSummary = useMemo(() => {
+    const itemMap = new Map<string, { name: string; qty: number }>();
+    invoiceCards.forEach((card) => {
+      card.mergedItems.forEach((item: unknown) => {
+        const key = String(item?.name || '').trim().toLowerCase();
+        if (!key) return;
+        const existing = itemMap.get(key) || { name: String(item?.name || 'Produk'), qty: 0 };
+        existing.qty += Number(item?.qty || 0);
+        itemMap.set(key, existing);
+      });
+    });
+    return {
+      invoiceCount: invoiceCards.length,
+      orderCount: invoiceCards.reduce((sum, card) => sum + card.orderIds.length, 0),
+      items: Array.from(itemMap.values()).sort((a, b) => b.qty - a.qty),
+    };
+  }, [invoiceCards]);
+
+  const isBulkChecklistVerified = useMemo(() => {
+    if (invoiceCards.length === 0) return false;
+    return invoiceCards.every((card) => (checklistByScope[card.scopeId] || { status: 'not_checked' }).status === 'ready');
+  }, [checklistByScope, invoiceCards]);
+
+  const handleChecklistAll = () => {
+    const savedAt = new Date().toISOString();
+    invoiceCards.forEach((card) => {
+      if (!card.scopeId) return;
+      const rows = card.mergedItems.map((item: unknown) => ({
+        key: String(item?.name || '').trim().toLowerCase(),
+        productName: String(item?.name || 'Produk'),
+        expectedQty: Number(item?.qty || 0),
+        actualQty: Number(item?.qty || 0),
+        note: '',
+        quickState: 'match' as const,
+        orderIds: card.orderIds,
+      }));
+      const payload: SavedChecklist = {
+        scopeId: card.scopeId,
+        invoiceId: card.scopeId,
+        orderIds: card.orderIds,
+        savedAt,
+        rows,
+      };
+      sessionStorage.setItem(checklistScopeStorageKey(card.scopeId), JSON.stringify(payload));
+    });
+
+    const next: Record<string, ChecklistMeta> = {};
+    invoiceCards.forEach((card) => {
+      next[card.scopeId] = { status: 'ready', savedAt, mismatchCount: 0 };
+    });
+    setChecklistByScope(next);
+    setBulkChecklistOpen(false);
+    setBulkChecklistStep(1);
+  };
+
   if (!allowed) return null;
 
   return (
@@ -332,7 +405,93 @@ export default function DriverPrecheckPage() {
           <h1 className="text-2xl font-black text-slate-900 leading-none">Checklist Invoice Sebelum Kirim</h1>
           <p className="text-xs text-slate-500 mt-2">Pastikan barang per invoice sudah sesuai sebelum pengantaran.</p>
         </div>
+        {!loading && invoiceCards.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setBulkChecklistOpen(true);
+              setBulkChecklistStep(1);
+            }}
+            disabled={isBulkChecklistVerified}
+            className="rounded-2xl bg-emerald-600 px-4 py-3 text-[11px] font-black uppercase tracking-wider text-white shadow-sm shadow-emerald-200 disabled:opacity-50"
+          >
+            {isBulkChecklistVerified ? 'Semua Sudah Diverifikasi' : 'Checklist Semua'}
+          </button>
+        )}
       </div>
+
+      {isBulkChecklistVerified && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[11px] text-emerald-800">
+          Seluruh invoice yang tampil pada halaman ini sudah diverifikasi driver. Tombol checklist semua dikunci agar tidak tertekan ulang tanpa alasan.
+        </div>
+      )}
+
+      {bulkChecklistOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28">
+          <div className="max-h-[calc(100vh-8rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Checklist Sekaligus</p>
+            <h3 className="mt-2 text-xl font-black text-slate-900">Ringkasan seluruh barang bawaan</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              {bulkChecklistSummary.invoiceCount} invoice • {bulkChecklistSummary.orderCount} order akan ditandai sudah dicek sekaligus.
+            </p>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="space-y-2 text-sm">
+                {bulkChecklistSummary.items.map((item) => (
+                  <div key={item.name} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+                    <span className="font-semibold text-slate-800">{item.name}</span>
+                    <span className="font-black text-slate-900">{item.qty}x</span>
+                  </div>
+                ))}
+                {bulkChecklistSummary.items.length === 0 && (
+                  <p className="text-xs italic text-slate-400">Tidak ada barang untuk diringkas.</p>
+                )}
+              </div>
+            </div>
+
+            <div className={`mt-4 rounded-2xl px-4 py-3 text-[11px] ${bulkChecklistStep === 1 ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
+              {bulkChecklistStep === 1
+                ? 'Langkah 1. Pastikan seluruh barang di semua invoice yang tampil memang sudah diperiksa dan siap dibawa driver.'
+                : 'Langkah 2. Ini konfirmasi akhir. Setelah disimpan, seluruh invoice yang tampil akan ditandai sudah diverifikasi.'}
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setBulkChecklistOpen(false);
+                  setBulkChecklistStep(1);
+                }}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600"
+              >
+                Batal
+              </button>
+              {bulkChecklistStep === 2 && (
+                <button
+                  type="button"
+                  onClick={() => setBulkChecklistStep(1)}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-bold text-amber-700"
+                >
+                  Kembali
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (bulkChecklistStep === 1) {
+                    setBulkChecklistStep(2);
+                    return;
+                  }
+                  handleChecklistAll();
+                }}
+                className={`rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white ${bulkChecklistStep === 1 ? 'bg-emerald-600' : 'bg-rose-600'}`}
+              >
+                {bulkChecklistStep === 1 ? 'Lanjut Verifikasi' : 'Tandai Semua Sudah Dicek'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">

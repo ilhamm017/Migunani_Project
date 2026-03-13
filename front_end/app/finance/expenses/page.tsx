@@ -2,21 +2,30 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, Wallet, Building2, Plus, Filter, Calendar } from 'lucide-react';
+import { ArrowLeft, Wallet, Building2, Plus, Filter } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { AccountSelector } from '@/components/finance/AccountSelector';
-import { MoneyInput } from '@/components/finance/MoneyInput';
+
+type ExpenseStatus = 'requested' | 'approved' | 'paid';
+
+type ExpenseItem = {
+    id: number;
+    category: string;
+    amount: number;
+    status: ExpenseStatus;
+    requester: string;
+    date: string;
+};
 
 export default function ExpensesPage() {
     const [activeTab, setActiveTab] = useState<'requested' | 'approved' | 'paid'>('requested');
     const [isPayMode, setIsPayMode] = useState(false);
-    const [selectedExpense, setSelectedExpense] = useState<any>(null);
+    const [selectedExpense, setSelectedExpense] = useState<ExpenseItem | null>(null);
     const [payAccount, setPayAccount] = useState('1101'); // Kas
 
     // Mock Data
-    const expenses = [
+    const expenses: ExpenseItem[] = [
         { id: 1, category: 'Uang Bensin', amount: 50000, status: 'requested', requester: 'Joko', date: '16 Feb 2024' },
         { id: 2, category: 'Makan Siang', amount: 35000, status: 'requested', requester: 'Asep', date: '16 Feb 2024' },
         { id: 3, category: 'Beli ATK', amount: 120000, status: 'approved', requester: 'Admin', date: '15 Feb 2024' },
@@ -58,7 +67,7 @@ export default function ExpensesPage() {
                 {['requested', 'approved', 'paid'].map((tab) => (
                     <button
                         key={tab}
-                        onClick={() => setActiveTab(tab as any)}
+                        onClick={() => setActiveTab(tab as ExpenseStatus)}
                         className={cn(
                             "flex-1 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors",
                             activeTab === tab

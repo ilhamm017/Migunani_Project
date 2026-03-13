@@ -71,7 +71,7 @@ export default function HelpPage() {
                                 <span className="text-emerald-300 group-open:rotate-180 transition-transform">▾</span>
                             </summary>
                             <p className="text-[10px] text-emerald-100 mt-2 leading-relaxed">
-                                Klik 'Lupa Password' pada halaman login dan ikuti instruksi email.
+                                Klik &apos;Lupa Password&apos; pada halaman login dan ikuti instruksi email.
                             </p>
                         </details>
                     </div>

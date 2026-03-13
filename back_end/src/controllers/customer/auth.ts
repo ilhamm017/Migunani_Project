@@ -3,27 +3,29 @@ import { Op } from 'sequelize';
 import { User, CustomerProfile, sequelize } from '../../models';
 import bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
-import waClient, { getStatus as getWhatsappStatus } from '../../services/whatsappClient';
 import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../../utils/whatsappNumber';
 import { customerOtpMap, cleanupOtpSessions, normalizeTier, normalizeEmail, isValidEmail } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { sendWhatsappSafe } from '../../services/WhatsappSendService';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const OTP_MAX_VERIFY_ATTEMPTS = 5;
 const MIN_CUSTOMER_PASSWORD_LENGTH = 6;
 
-export const sendCustomerOtp = async (req: Request, res: Response) => {
+export const sendCustomerOtp = asyncWrapper(async (req: Request, res: Response) => {
     try {
         cleanupOtpSessions();
 
         const normalizedWhatsapp = normalizeWhatsappNumber(req.body?.whatsapp_number);
         if (!normalizedWhatsapp) {
-            return res.status(400).json({ message: 'Nomor WhatsApp tidak valid' });
+            throw new CustomError('Nomor WhatsApp tidak valid', 400);
         }
 
         const actorId = String(req.user?.id || '').trim();
         if (!actorId) {
-            return res.status(401).json({ message: 'Unauthorized' });
+            throw new CustomError('Unauthorized', 401);
         }
 
         const existing = await User.findOne({
@@ -31,29 +33,33 @@ export const sendCustomerOtp = async (req: Request, res: Response) => {
             attributes: ['id', 'role']
         });
         if (existing) {
-            return res.status(409).json({ message: 'Nomor WhatsApp sudah terdaftar di sistem' });
-        }
-
-        const waStatus = getWhatsappStatus();
-        if (waStatus !== 'READY') {
-            return res.status(409).json({ message: 'WhatsApp bot belum terhubung. Silakan connect WhatsApp terlebih dahulu.' });
+            throw new CustomError('Nomor WhatsApp sudah terdaftar di sistem', 409);
         }
 
         const now = Date.now();
         const previous = customerOtpMap.get(normalizedWhatsapp);
         if (previous && previous.expiresAt > now && previous.resendAvailableAt > now) {
-            return res.status(429).json({
-                message: 'OTP baru saja dikirim. Coba lagi sebentar.',
-                retry_after_sec: Math.ceil((previous.resendAvailableAt - now) / 1000)
-            });
+            throw new CustomError(
+                `OTP baru saja dikirim. Coba lagi dalam ${Math.ceil((previous.resendAvailableAt - now) / 1000)} detik.`,
+                429
+            );
         }
 
         const otpCode = String(randomInt(0, 1_000_000)).padStart(6, '0');
         const waMessage =
             `Kode verifikasi Migunani Motor: ${otpCode}\n` +
             `Kode ini berlaku 5 menit. Jangan berikan kode ini kepada siapa pun.`;
-
-        await waClient.sendMessage(`${normalizedWhatsapp}@c.us`, waMessage);
+        const sendResult = await sendWhatsappSafe({
+            target: normalizedWhatsapp,
+            textBody: waMessage,
+            requestContext: 'customer_otp_send'
+        });
+        if (sendResult.status === 'skipped_not_ready') {
+            throw new CustomError('WhatsApp bot belum terhubung. Silakan connect WhatsApp terlebih dahulu.', 409);
+        }
+        if (sendResult.status !== 'sent') {
+            throw new CustomError('Gagal mengirim OTP WhatsApp', 500);
+        }
 
         customerOtpMap.set(normalizedWhatsapp, {
             code: otpCode,
@@ -68,14 +74,13 @@ export const sendCustomerOtp = async (req: Request, res: Response) => {
             expires_in_sec: Math.ceil(OTP_TTL_MS / 1000),
             resend_in_sec: Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000),
         });
-    } catch (error: any) {
-        res.status(500).json({
-            message: error?.message || 'Gagal mengirim OTP WhatsApp'
-        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Gagal mengirim OTP WhatsApp', 500);
     }
-};
+});
 
-export const createCustomerByAdmin = async (req: Request, res: Response) => {
+export const createCustomerByAdmin = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         cleanupOtpSessions();
@@ -83,7 +88,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         const actorId = String(req.user?.id || '').trim();
         if (!actorId) {
             await t.rollback();
-            return res.status(401).json({ message: 'Unauthorized' });
+            throw new CustomError('Unauthorized', 401);
         }
 
         const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
@@ -96,23 +101,23 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
 
         if (!name) {
             await t.rollback();
-            return res.status(400).json({ message: 'Nama customer wajib diisi' });
+            throw new CustomError('Nama customer wajib diisi', 400);
         }
         if (!normalizedWhatsapp) {
             await t.rollback();
-            return res.status(400).json({ message: 'Nomor WhatsApp tidak valid' });
+            throw new CustomError('Nomor WhatsApp tidak valid', 400);
         }
         if (!email) {
             await t.rollback();
-            return res.status(400).json({ message: 'Email wajib diisi' });
+            throw new CustomError('Email wajib diisi', 400);
         }
         if (!isValidEmail(email)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Format email tidak valid' });
+            throw new CustomError('Format email tidak valid', 400);
         }
         if (!password || password.length < MIN_CUSTOMER_PASSWORD_LENGTH) {
             await t.rollback();
-            return res.status(400).json({ message: `Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter` });
+            throw new CustomError(`Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter`, 400);
         }
 
         const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
@@ -129,7 +134,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         });
         if (existing) {
             await t.rollback();
-            return res.status(409).json({ message: 'Email atau nomor WhatsApp sudah terdaftar' });
+            throw new CustomError('Email atau nomor WhatsApp sudah terdaftar', 409);
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -179,6 +184,7 @@ export const createCustomerByAdmin = async (req: Request, res: Response) => {
         });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Gagal menambahkan customer', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Gagal menambahkan customer', 500);
     }
-};
+});

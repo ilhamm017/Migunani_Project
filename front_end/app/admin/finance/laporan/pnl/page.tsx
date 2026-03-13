@@ -1,12 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
-import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+
+type PnlSummary = {
+    net_profit: number;
+    revenue: number;
+    cogs: number;
+    gross_profit: number;
+    expenses: number;
+};
 
 export default function PnLPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
@@ -18,25 +25,32 @@ export default function PnLPage() {
 
     const [startDate, setStartDate] = useState(firstDay);
     const [endDate, setEndDate] = useState(lastDay);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<PnlSummary | null>(null);
     const [loading, setLoading] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getPnL({ startDate, endDate });
-            setData(res.data);
+            const payload = res.data as Record<string, unknown>;
+            setData({
+                net_profit: Number(payload?.net_profit ?? 0),
+                revenue: Number(payload?.revenue ?? 0),
+                cogs: Number(payload?.cogs ?? 0),
+                gross_profit: Number(payload?.gross_profit ?? 0),
+                expenses: Number(payload?.expenses ?? 0),
+            });
         } catch (e) {
             console.error(e);
             alert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
-    };
+    }, [endDate, startDate]);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]);
+        if (allowed) void load();
+    }, [allowed, load]);
 
     if (!allowed) return null;
 

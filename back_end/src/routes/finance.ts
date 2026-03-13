@@ -2,34 +2,29 @@ import { Router } from 'express';
 import * as FinanceController from '../controllers/finance';
 import * as ReportController from '../controllers/ReportController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
-
-import fs from 'fs';
-import path from 'path';
-import multer from 'multer';
+import { createAttachmentUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
 const router = Router();
-const upload = multer({
-    storage: multer.diskStorage({
-        destination: (req, file, cb) => {
-            const userId = req.user?.id || 'anonymous';
-            const dest = path.join('uploads', String(userId), 'expenses');
-            if (!fs.existsSync(dest)) {
-                fs.mkdirSync(dest, { recursive: true });
-            }
-            cb(null, dest);
-        },
-        filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            cb(null, 'exp-' + uniqueSuffix + path.extname(file.originalname));
-        }
-    })
+const expenseUpload = createAttachmentUpload({
+    folderName: 'expenses',
+    prefix: 'exp',
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    allowedExtensions: ['.jpg', '.jpeg', '.png', '.webp', '.pdf'],
+    fallbackExtension: '.pdf',
+    maxSizeBytes: 5 * 1024 * 1024,
+    unsupportedTypeMessage: 'File attachment expense harus berupa JPG, PNG, WEBP, atau PDF'
+});
+const uploadExpenseAttachment = createSingleUploadMiddleware(expenseUpload, {
+    fieldName: 'attachment',
+    sizeExceededMessage: 'Ukuran attachment expense terlalu besar (maksimal 5MB).',
+    fallbackMessage: 'Upload attachment expense gagal diproses.'
 });
 
 router.use(authenticateToken);
 
 // Expenses (Admin Finance, Super Admin)
 router.get('/expenses', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getExpenses);
-router.post('/expenses', authorizeRoles('super_admin', 'admin_finance'), upload.single('attachment'), FinanceController.createExpense);
+router.post('/expenses', authorizeRoles('super_admin', 'admin_finance'), uploadExpenseAttachment, FinanceController.createExpense);
 router.post('/expenses/:id/approve', authorizeRoles('super_admin', 'admin_finance'), FinanceController.approveExpense);
 router.post('/expenses/:id/pay', authorizeRoles('super_admin', 'admin_finance'), FinanceController.payExpense);
 router.get('/expense-labels', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getExpenseLabels);
@@ -55,6 +50,8 @@ router.get('/reports/inventory-value', authorizeRoles('super_admin', 'admin_fina
 router.get('/reports/aging-ap', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsPayableAging);
 router.get('/reports/aging-ar', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsReceivableAging);
 router.get('/reports/backorders', authorizeRoles('super_admin', 'kasir'), ReportController.getBackorderPreorderReport);
+router.get('/reports/stock-reduction', authorizeRoles('super_admin', 'kasir'), ReportController.getStockReductionReport);
+router.get('/reports/stock-reduction/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportStockReductionReportExcel);
 router.get('/reports/tax-summary', authorizeRoles('super_admin', 'admin_finance'), ReportController.getTaxSummary);
 router.get('/reports/vat-monthly', authorizeRoles('super_admin', 'admin_finance'), ReportController.getVatMonthlyReport);
 

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -18,19 +18,22 @@ export default function ExpenseLabelConfigPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({ name: '', description: '' });
 
-  const loadLabels = async () => {
+  const loadLabels = useCallback(async () => {
     try {
       const res = await api.admin.finance.getExpenseLabels();
       setLabels((res.data?.labels || []) as ExpenseLabel[]);
     } catch (error) {
       console.error('Failed to load expense labels:', error);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!allowed) return;
-    loadLabels();
-  }, [allowed]);
+    const run = async () => {
+      await loadLabels();
+    };
+    void run();
+  }, [allowed, loadLabels]);
 
   if (!allowed) return null;
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { MapPin, FileText, Camera, CreditCard, X } from 'lucide-react';
@@ -392,11 +393,13 @@ export default function DriverHistoryPage() {
           >
             <X size={18} />
           </button>
-          <img
+          <Image
             src={zoomImageUrl}
             alt="Preview bukti pengiriman"
-            className="max-w-[95vw] max-h-[90vh] object-contain rounded-2xl"
+            className="max-w-[95vw] max-h-[90vh] object-contain rounded-2xl w-auto h-auto"
             onClick={(event) => event.stopPropagation()}
+            width={1200}
+            height={900}
           />
         </div>
       )}

@@ -8,6 +8,16 @@ import { api } from '@/lib/api';
 
 type TierType = 'regular' | 'gold' | 'platinum';
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === 'object' && error !== null) {
+    const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+    if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+};
+
 const TIER_OPTIONS: Array<{ value: TierType; label: string }> = [
   { value: 'regular', label: 'Regular' },
   { value: 'gold', label: 'Gold' },
@@ -78,8 +88,8 @@ export default function SalesMemberCreatePage() {
       setPassword('');
       setTier('regular');
       setAddress('');
-    } catch (e: any) {
-      setError(e?.response?.data?.message || 'Gagal menambahkan customer');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, 'Gagal menambahkan customer'));
     } finally {
       setCreatingCustomer(false);
     }

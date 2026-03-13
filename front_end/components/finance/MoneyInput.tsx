@@ -14,7 +14,6 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     error,
     className,
     value,
-    onChange,
     onValueChange,
     ...props
 }) => {

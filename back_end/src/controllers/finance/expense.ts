@@ -10,12 +10,14 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
 // --- Expenses ---
-export const getExpenses = async (req: Request, res: Response) => {
+export const getExpenses = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { page = 1, limit = 10, startDate, endDate, category } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
@@ -54,11 +56,12 @@ export const getExpenses = async (req: Request, res: Response) => {
             expenses: rows
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching expenses', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching expenses', 500);
     }
-};
+});
 
-export const createExpense = async (req: Request, res: Response) => {
+export const createExpense = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { category, amount, date, note, details, payment_method } = req.body;
@@ -68,16 +71,16 @@ export const createExpense = async (req: Request, res: Response) => {
         const numericAmount = Number(amount);
         if (!safeCategory) {
             await t.rollback();
-            return res.status(400).json({ message: 'Kategori wajib diisi' });
+            throw new CustomError('Kategori wajib diisi', 400);
         }
         if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Amount harus lebih besar dari 0' });
+            throw new CustomError('Amount harus lebih besar dari 0', 400);
         }
 
         if (!req.file) {
             await t.rollback();
-            return res.status(400).json({ message: 'Attachment/Bukti pengeluaran wajib diupload' });
+            throw new CustomError('Attachment/Bukti pengeluaran wajib diupload', 400);
         }
 
         let parsedDetails = details;
@@ -106,11 +109,12 @@ export const createExpense = async (req: Request, res: Response) => {
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error creating expense', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating expense', 500);
     }
-};
+});
 
-export const approveExpense = async (req: Request, res: Response) => {
+export const approveExpense = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params as { id: string };
@@ -119,12 +123,12 @@ export const approveExpense = async (req: Request, res: Response) => {
         const expense = await Expense.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!expense) {
             await t.rollback();
-            return res.status(404).json({ message: 'Expense not found' });
+            throw new CustomError('Expense not found', 404);
         }
 
         if (expense.status !== 'requested') {
             await t.rollback();
-            return res.status(400).json({ message: `Expense status is ${expense.status}, cannot approve` });
+            throw new CustomError(`Expense status is ${expense.status}, cannot approve`, 400);
         }
 
         await expense.update({
@@ -137,11 +141,12 @@ export const approveExpense = async (req: Request, res: Response) => {
         res.json({ message: 'Expense approved', expense });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error approving expense', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error approving expense', 500);
     }
-};
+});
 
-export const payExpense = async (req: Request, res: Response) => {
+export const payExpense = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params as { id: string };
@@ -151,23 +156,23 @@ export const payExpense = async (req: Request, res: Response) => {
         const expense = await Expense.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!expense) {
             await t.rollback();
-            return res.status(404).json({ message: 'Expense not found' });
+            throw new CustomError('Expense not found', 404);
         }
 
         if (expense.status !== 'approved') {
             await t.rollback();
-            return res.status(400).json({ message: `Expense must be approved before payment. Current status: ${expense.status}` });
+            throw new CustomError(`Expense must be approved before payment. Current status: ${expense.status}`, 400);
         }
 
         if (!account_id) {
             await t.rollback();
-            return res.status(400).json({ message: 'Account ID (source of funds) is required' });
+            throw new CustomError('Account ID (source of funds) is required', 400);
         }
 
         const paymentAcc = await Account.findByPk(account_id, { transaction: t });
         if (!paymentAcc) {
             await t.rollback();
-            return res.status(404).json({ message: 'Payment account not found' });
+            throw new CustomError('Payment account not found', 404);
         }
 
         await expense.update({
@@ -212,8 +217,8 @@ export const payExpense = async (req: Request, res: Response) => {
         res.json({ message: 'Expense paid', expense });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error paying expense', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error paying expense', 500);
     }
-};
-
+});
 

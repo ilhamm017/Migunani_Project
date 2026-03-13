@@ -1,0 +1,16 @@
+# Transaction Root-Cause Ledger
+
+Dokumen ini mencatat fail atau catatan transaksi yang perlu ditelusuri sampai akar penyebabnya.
+
+| Issue | Scenario IDs | Layer | Operational Impact | Current Status | Recommended Patch |
+|---|---|---|---|---|---|
+| COD invoice becomes `cod_pending` at issue-invoice time | `ST-002`, `ST-019` | contract/lifecycle | driver bisa bingung karena `recordPayment` tidak selalu relevan | `OPEN NOTE` | selaraskan SOP/UI; redesign lifecycle hanya jika memang diputuskan sebagai proyek terpisah |
+| Allocation editability after shipping/finance | `SCN-KAS-*`, `SCN-GDG-*` | state transition | berisiko korupsi histori fulfillment jika edit terlalu longgar | `PATCHED` | editable allocation kini dikunci ke fase pra-finance/pengiriman; lanjutkan regression runtime untuk status borderline bila domain bertambah |
+| Upload policy not yet uniform across all multipart endpoints | `ST-004`, `ST-027`, `ST-034`, `SCN-CUST-008` | upload policy | rejection behavior bisa tidak konsisten antar modul | `PARTIAL` | helper middleware upload kini sudah menyatukan order proof, driver proof/payment/issue, retur evidence, chat attachment, expense attachment, product image, dan import upload; regression runtime upload-policy kini menjaga MIME/oversize path inti; lanjut audit endpoint multipart pinggiran bila ada modul baru |
+| Event emit / post-commit split-brain | `SCN-*` cross-cutting | async side effect | status utama bisa commit tanpa jaminan delivery event | `PARTIAL` | socket event transaksi inti kini lewat persistent outbox worker dan callsite kritikal sudah transaction-bound; lanjutkan outbox/reconciliation untuk channel side-effect lain bila dibutuhkan |
+| Legacy status alias normalization still exists | lifecycle family | lifecycle | bug status bisa tertutup oleh normalisasi legacy | `PARTIAL` | query/filter runtime inti sudah dipersempit ke status kanonik; lanjut hapus alias dari model/runtime non-kritis |
+| Notification delivery has no persistent retry | `ST-027`, `ST-032` | notification reliability | notifikasi bisa skipped saat WA tidak ready | `PARTIAL` | async WA transaction notification utama kini sudah lewat outbox retry; jalur interactive seperti OTP/chat tetap synchronous by contract dan callsite async lain bisa dipindah bila dibutuhkan |
+| Invalid driver order date filter caused false `500` | `ST-033` | read-boundary validation | query list driver bisa gagal pada input tanggal tidak valid | `PATCHED` | controller driver orders kini mengabaikan date boundary invalid dan fallback ke query default aman |
+| Customer banning can halt open orders in bulk | customer status update | guard/ops safety | operator bisa membatalkan order aktif tanpa sadar | `PATCHED` | API sekarang mewajibkan konfirmasi eksplisit sebelum pembatalan order terbuka massal |
+| Replay test for period close was stateful | `ST-025`, `transaction-assurance` | regression reliability | audit bisa gagal palsu walau flow produksi aman | `PATCHED` | fixture period close sekarang dinamis per run |
+| Finance void/reversal precondition terlalu lemah | `void payment` family | finance integrity | reversal berisiko terposting sebelum eligibility/order transition tervalidasi | `PATCHED` | pre-check transisi dan existing reversal kini terjadi sebelum posting journal reversal |

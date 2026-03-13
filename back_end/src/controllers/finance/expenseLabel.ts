@@ -10,11 +10,13 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getExpenseLabels = async (_req: Request, res: Response) => {
+export const getExpenseLabels = asyncWrapper(async (_req: Request, res: Response) => {
     try {
         await ensureDefaultExpenseLabels();
         const labels = await ExpenseLabel.findAll({
@@ -22,23 +24,24 @@ export const getExpenseLabels = async (_req: Request, res: Response) => {
         });
         res.json({ labels });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching expense labels', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching expense labels', 500);
     }
-};
+});
 
-export const createExpenseLabel = async (req: Request, res: Response) => {
+export const createExpenseLabel = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const name = toSafeText(req.body?.name);
         const description = toSafeText(req.body?.description);
 
         if (!name) {
-            return res.status(400).json({ message: 'Nama label wajib diisi' });
+            throw new CustomError('Nama label wajib diisi', 400);
         }
 
         const existingLabels = await ExpenseLabel.findAll({ attributes: ['name'] });
         const hasDuplicate = existingLabels.some((item) => item.name.toLowerCase() === name.toLowerCase());
         if (hasDuplicate) {
-            return res.status(409).json({ message: 'Label sudah ada' });
+            throw new CustomError('Label sudah ada', 409);
         }
 
         const label = await ExpenseLabel.create({
@@ -47,26 +50,27 @@ export const createExpenseLabel = async (req: Request, res: Response) => {
         });
         res.status(201).json({ message: 'Label created', label });
     } catch (error) {
-        res.status(500).json({ message: 'Error creating expense label', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating expense label', 500);
     }
-};
+});
 
-export const updateExpenseLabel = async (req: Request, res: Response) => {
+export const updateExpenseLabel = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
         if (!Number.isFinite(id)) {
-            return res.status(400).json({ message: 'ID label tidak valid' });
+            throw new CustomError('ID label tidak valid', 400);
         }
 
         const label = await ExpenseLabel.findByPk(id);
         if (!label) {
-            return res.status(404).json({ message: 'Label tidak ditemukan' });
+            throw new CustomError('Label tidak ditemukan', 404);
         }
 
         const nextName = toSafeText(req.body?.name);
         const description = toSafeText(req.body?.description);
         if (!nextName) {
-            return res.status(400).json({ message: 'Nama label wajib diisi' });
+            throw new CustomError('Nama label wajib diisi', 400);
         }
 
         const existingLabels = await ExpenseLabel.findAll({
@@ -75,7 +79,7 @@ export const updateExpenseLabel = async (req: Request, res: Response) => {
         });
         const hasDuplicate = existingLabels.some((item) => item.name.toLowerCase() === nextName.toLowerCase());
         if (hasDuplicate) {
-            return res.status(409).json({ message: 'Nama label sudah digunakan' });
+            throw new CustomError('Nama label sudah digunakan', 409);
         }
 
         await label.update({
@@ -84,26 +88,27 @@ export const updateExpenseLabel = async (req: Request, res: Response) => {
         });
         res.json({ message: 'Label updated', label });
     } catch (error) {
-        res.status(500).json({ message: 'Error updating expense label', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error updating expense label', 500);
     }
-};
+});
 
-export const deleteExpenseLabel = async (req: Request, res: Response) => {
+export const deleteExpenseLabel = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
         if (!Number.isFinite(id)) {
-            return res.status(400).json({ message: 'ID label tidak valid' });
+            throw new CustomError('ID label tidak valid', 400);
         }
 
         const label = await ExpenseLabel.findByPk(id);
         if (!label) {
-            return res.status(404).json({ message: 'Label tidak ditemukan' });
+            throw new CustomError('Label tidak ditemukan', 404);
         }
 
         await label.destroy();
         res.json({ message: 'Label deleted' });
     } catch (error) {
-        res.status(500).json({ message: 'Error deleting expense label', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error deleting expense label', 500);
     }
-};
-
+});

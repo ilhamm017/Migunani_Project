@@ -1,11 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import Link from 'next/link';
+
+type CashFlowData = {
+    closing_balance: number;
+    opening_balance: number;
+    cash_in: number;
+    cash_out: number;
+    net_change: number;
+};
 
 export default function CashFlowPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
@@ -16,25 +24,32 @@ export default function CashFlowPage() {
 
     const [startDate, setStartDate] = useState(firstDay);
     const [endDate, setEndDate] = useState(lastDay);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<CashFlowData | null>(null);
     const [loading, setLoading] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getCashFlow({ startDate, endDate });
-            setData(res.data);
+            const payload = (res.data || {}) as Record<string, unknown>;
+            setData({
+                closing_balance: Number(payload.closing_balance ?? 0),
+                opening_balance: Number(payload.opening_balance ?? 0),
+                cash_in: Number(payload.cash_in ?? 0),
+                cash_out: Number(payload.cash_out ?? 0),
+                net_change: Number(payload.net_change ?? 0),
+            });
         } catch (e) {
             console.error(e);
             alert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
-    };
+    }, [endDate, startDate]);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]);
+        if (allowed) void load();
+    }, [allowed, load]);
 
     if (!allowed) return null;
 

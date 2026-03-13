@@ -3,12 +3,18 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const reportIssue = async (req: Request, res: Response) => {
+export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
-    let isCommitted = false;
+    const safeRollback = async () => {
+        if (!(t as any).finished) {
+            await t.rollback();
+        }
+    };
     try {
         const { id } = req.params; // Order ID
         const noteRaw = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
@@ -19,24 +25,23 @@ export const reportIssue = async (req: Request, res: Response) => {
         const evidence = req.file;
 
         if (noteRaw.length < 5) {
-            await t.rollback();
-            return res.status(400).json({ message: 'Catatan laporan wajib diisi minimal 5 karakter.' });
+            await safeRollback();
+            throw new CustomError('Catatan laporan wajib diisi minimal 5 karakter.', 400);
         }
 
-        const order = await Order.findOne({
-            where: { id, courier_id: userId },
+        const order = await findOrderByIdOrInvoiceId(String(id), userId, {
             transaction: t,
             lock: t.LOCK.UPDATE
         });
 
         if (!order) {
-            await t.rollback();
-            return res.status(404).json({ message: 'Order tidak ditemukan atau bukan tugas Anda' });
+            await safeRollback();
+            throw new CustomError('Order tidak ditemukan atau bukan tugas Anda', 404);
         }
 
         if (!['ready_to_ship', 'shipped'].includes(String(order.status || '').toLowerCase())) {
-            await t.rollback();
-            return res.status(409).json({ message: 'Laporan kekurangan hanya bisa dibuat pada order yang masih aktif dikirim.' });
+            await safeRollback();
+            throw new CustomError('Laporan kekurangan hanya bisa dibuat pada order yang masih aktif dikirim.', 409);
         }
 
         let finalNote = noteRaw;
@@ -92,9 +97,6 @@ export const reportIssue = async (req: Request, res: Response) => {
             courier_id: null as any,
         }, { transaction: t });
 
-        await t.commit();
-        isCommitted = true;
-
         let paymentMethod: string | null = null;
         try {
             const invoice = await findLatestInvoiceByOrderId(String(order.id));
@@ -109,7 +111,7 @@ export const reportIssue = async (req: Request, res: Response) => {
             });
         }
 
-        emitOrderStatusChanged({
+        await emitOrderStatusChanged({
             order_id: String(order.id),
             from_status: previousStatus || null,
             to_status: 'hold',
@@ -118,19 +120,17 @@ export const reportIssue = async (req: Request, res: Response) => {
             courier_id: null,
             triggered_by_role: String(req.user?.role || 'driver'),
             target_roles: ['admin_gudang', 'super_admin'],
+        }, {
+            transaction: t,
+            requestContext: 'driver_report_issue_status_changed'
         });
+        await t.commit();
         res.json({ message: 'Masalah berhasil dilaporkan' });
     } catch (error) {
-        if (!isCommitted) {
-            await t.rollback();
+        await safeRollback();
+        if (error instanceof CustomError) {
+            throw error;
         }
-        console.error('[DriverController.reportIssue] Failed to submit driver issue report', {
-            order_id: String(req.params?.id || ''),
-            driver_id: String(req.user?.id || ''),
-            driver_role: String(req.user?.role || ''),
-            error: error instanceof Error ? error.message : String(error)
-        });
-        res.status(500).json({ message: 'Gagal melaporkan masalah', error });
+        throw new CustomError('Gagal melaporkan masalah', 500);
     }
-};
-
+});

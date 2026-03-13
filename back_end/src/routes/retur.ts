@@ -1,31 +1,18 @@
 import { Router } from 'express';
-import fs from 'fs';
 import { authenticateToken as authenticate, authorizeRoles as requireRole } from '../middleware/authMiddleware';
 import * as ReturController from '../controllers/ReturController';
-import multer from 'multer';
-import path from 'path';
+import { createImageUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
 const router = Router();
-
-// Multer Config
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const userId = req.user?.id || 'anonymous';
-        const dest = path.join('uploads', String(userId), 'retur');
-        if (!fs.existsSync(dest)) {
-            fs.mkdirSync(dest, { recursive: true });
-        }
-        cb(null, dest);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'retur-' + uniqueSuffix + path.extname(file.originalname));
-    }
+const returUpload = createImageUpload('retur', 'retur');
+const requestReturUploadMiddleware = createSingleUploadMiddleware(returUpload, {
+    fieldName: 'evidence_img',
+    sizeExceededMessage: 'Ukuran bukti retur terlalu besar (maksimal 5MB).',
+    fallbackMessage: 'Upload bukti retur gagal diproses.'
 });
-const upload = multer({ storage: storage });
 
 // Customer Routes
-router.post('/request', authenticate, upload.single('evidence_img'), ReturController.requestRetur);
+router.post('/request', authenticate, requestReturUploadMiddleware, ReturController.requestRetur);
 router.get('/my', authenticate, ReturController.getMyReturs);
 
 // Admin Routes

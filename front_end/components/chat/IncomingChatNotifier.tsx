@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bell, X } from 'lucide-react';
 import getSocket from '@/lib/socket';
@@ -49,23 +49,23 @@ export default function IncomingChatNotifier() {
     const timeoutMapRef = useRef<Map<string, number>>(new Map());
     const hasRequestedBrowserPermissionRef = useRef(false);
 
-    const dismissNotice = (id: string) => {
+    const dismissNotice = useCallback((id: string) => {
         const timeoutId = timeoutMapRef.current.get(id);
         if (typeof timeoutId === 'number') {
             window.clearTimeout(timeoutId);
             timeoutMapRef.current.delete(id);
         }
         setNotices((prev) => prev.filter((item) => item.id !== id));
-    };
+    }, []);
 
-    const pushNotice = (notice: Omit<NoticeItem, 'id'>) => {
+    const pushNotice = useCallback((notice: Omit<NoticeItem, 'id'>) => {
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         setNotices((prev) => [{ id, ...notice }, ...prev].slice(0, 3));
         const timeoutId = window.setTimeout(() => dismissNotice(id), NOTICE_TTL_MS);
         timeoutMapRef.current.set(id, timeoutId);
-    };
+    }, [dismissNotice]);
 
-    const maybePushBrowserNotification = (title: string, body: string, href: string) => {
+    const maybePushBrowserNotification = useCallback((title: string, body: string, href: string) => {
         if (typeof window === 'undefined') return;
         if (!('Notification' in window)) return;
         if (document.visibilityState === 'visible') return;
@@ -97,12 +97,13 @@ export default function IncomingChatNotifier() {
                 // Ignore browser permission errors silently.
             });
         }
-    };
+    }, [router]);
 
     useEffect(() => {
+        const timeoutMap = timeoutMapRef.current;
         return () => {
-            timeoutMapRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-            timeoutMapRef.current.clear();
+            timeoutMap.forEach((timeoutId) => window.clearTimeout(timeoutId));
+            timeoutMap.clear();
         };
     }, []);
 
@@ -146,7 +147,7 @@ export default function IncomingChatNotifier() {
         return () => {
             socket.off('chat:message', onIncomingMessage);
         };
-    }, [isAuthenticated, router, user?.id, user?.role]);
+    }, [dismissNotice, isAuthenticated, maybePushBrowserNotification, pushNotice, user?.id, user?.role]);
 
     if (!isAuthenticated || notices.length === 0) return null;
 

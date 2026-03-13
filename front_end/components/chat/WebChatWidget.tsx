@@ -6,6 +6,7 @@ import { FileText, Paperclip, Send, X } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import getSocket from '@/lib/socket';
 import { api } from '@/lib/api';
+import Image from 'next/image';
 
 type ChatEventPayload = {
   session_id?: string;
@@ -37,6 +38,10 @@ type WebHistoryMessage = {
 const SESSION_KEY = 'web_chat_session_id';
 const GUEST_KEY = 'web_chat_guest_id';
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
+
+type ApiErrorWithStatus = {
+  response?: { status?: number; data?: { message?: string } };
+};
 
 const isImageAttachment = (attachmentUrl?: string) => {
   if (!attachmentUrl) return false;
@@ -83,8 +88,9 @@ export default function WebChatWidget() {
       }
       setSessionId(resolvedSessionId);
       return resolvedSessionId;
-    } catch (error) {
-      const status = Number((error as any)?.response?.status || 0);
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithStatus;
+      const status = Number(err?.response?.status || 0);
       if (status !== 401 && status !== 403) {
         console.error('Error resolving customer web session:', error);
       }
@@ -230,8 +236,9 @@ export default function WebChatWidget() {
         if (isMounted) {
           setMessages(mapped);
         }
-      } catch (error: any) {
-        const status = Number(error?.response?.status || 0);
+      } catch (error: unknown) {
+        const err = error as ApiErrorWithStatus;
+        const status = Number(err?.response?.status || 0);
         if (status === 403 || status === 404) {
           if (typeof window !== 'undefined') {
             window.sessionStorage.removeItem(SESSION_KEY);
@@ -303,8 +310,9 @@ export default function WebChatWidget() {
 
       setInput('');
       setAttachment(null);
-    } catch (error: any) {
-      const apiMessage = error?.response?.data?.message;
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithStatus;
+      const apiMessage = err?.response?.data?.message;
       setSendError(apiMessage || 'Gagal mengirim pesan.');
       console.error('Error sending web chat message:', error);
     } finally {
@@ -358,9 +366,12 @@ export default function WebChatWidget() {
                             className="block rounded-lg overflow-hidden"
                             aria-label="Perbesar gambar lampiran"
                           >
-                            <img
+                            <Image
                               src={message.attachmentUrl}
                               alt="Lampiran chat"
+                              width={190}
+                              height={160}
+                              unoptimized
                               className="max-h-40 max-w-[190px] rounded-lg border border-black/10 object-cover"
                             />
                           </button>
@@ -470,9 +481,12 @@ export default function WebChatWidget() {
           >
             <X size={18} />
           </button>
-          <img
+          <Image
             src={zoomImageUrl}
             alt="Preview gambar lampiran"
+            width={1280}
+            height={900}
+            unoptimized
             className="max-w-[95vw] max-h-[90vh] object-contain rounded-xl"
             onClick={(e) => e.stopPropagation()}
           />

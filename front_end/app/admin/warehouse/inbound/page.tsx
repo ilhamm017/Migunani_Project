@@ -21,6 +21,10 @@ interface Product {
   base_price: number;
 }
 
+interface ProductSuggestionRow extends Product {
+  min_stock: number;
+}
+
 interface POItem {
   product: Product;
   qty: number;
@@ -35,6 +39,28 @@ interface BackorderSuggestion {
   shortage: number;
   base_price: number;
 }
+
+interface BackorderItemRow {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  stock_quantity: number;
+  shortage_qty: number;
+  base_price: number;
+}
+
+interface BackorderOrderRow {
+  shortage_items?: BackorderItemRow[];
+}
+
+interface CreatePOResult {
+  id?: string;
+  status?: string;
+}
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+};
 
 export default function PurchaseOrderPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
@@ -58,7 +84,7 @@ export default function PurchaseOrderPage() {
 
   // UI State
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<CreatePOResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
 
   // Initial Load
@@ -101,13 +127,13 @@ export default function PurchaseOrderPage() {
       const res = await api.admin.inventory.getProducts({ limit: 500, status: 'active' });
       const rows = Array.isArray(res.data?.products) ? res.data.products : [];
 
-      const suggested = rows
-        .filter((product: any) => {
+      const suggested = (rows as ProductSuggestionRow[])
+        .filter((product) => {
           const stock = Number(product?.stock_quantity || 0);
           const minStock = Number(product?.min_stock || 0);
           return stock <= 0 || stock <= minStock;
         })
-        .sort((a: any, b: any) => {
+        .sort((a, b) => {
           const aStock = Number(a?.stock_quantity || 0);
           const bStock = Number(b?.stock_quantity || 0);
           const aMin = Number(a?.min_stock || 0);
@@ -136,13 +162,13 @@ export default function PurchaseOrderPage() {
     try {
       setLoadingBackorderSuggestions(true);
       const res = await api.allocation.getPending({ scope: 'shortage' });
-      const rows = res.data?.rows || [];
+      const rows = (res.data?.rows || []) as BackorderOrderRow[];
 
       // Aggregate shortages by product
       const aggregated = new Map<string, BackorderSuggestion>();
 
-      rows.forEach((order: any) => {
-        (order.shortage_items || []).forEach((item: any) => {
+      rows.forEach((order) => {
+        (order.shortage_items || []).forEach((item) => {
           const productId = item.product_id;
           const existing = aggregated.get(productId);
           if (existing) {
@@ -262,9 +288,9 @@ export default function PurchaseOrderPage() {
       // Reset form
       setSupplierId('');
       setItems([]);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Create PO failed:', error);
-      const err = error as any;
+      const err = error as ApiErrorWithMessage;
       setErrorMessage(err?.response?.data?.message || 'Gagal membuat purchase order.');
     } finally {
       setLoading(false);

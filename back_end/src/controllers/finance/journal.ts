@@ -10,12 +10,14 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
 // --- Journals ---
-export const getJournals = async (req: Request, res: Response) => {
+export const getJournals = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { page = 1, limit = 50, startDate, endDate } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
@@ -40,7 +42,7 @@ export const getJournals = async (req: Request, res: Response) => {
             journals: journals.rows
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching journals', error });
+        throw new CustomError('Error fetching journals', 500);
     }
-};
+});
 

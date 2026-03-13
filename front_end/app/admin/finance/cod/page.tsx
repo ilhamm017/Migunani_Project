@@ -8,14 +8,17 @@ import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 export default function AdminDriverCodPage() {
     const allowed = useRequireRoles(['admin_finance', 'super_admin']);
-    const [drivers, setDrivers] = useState<any[]>([]);
-    const [selectedDriver, setSelectedDriver] = useState<any>(null);
+    const [drivers, setDrivers] = useState<unknown[]>([]);
+    const [selectedDriver, setSelectedDriver] = useState<unknown>(null);
     const [loading, setLoading] = useState(false);
 
     // Form State
     const [selectedInvoiceKeys, setSelectedInvoiceKeys] = useState<string[]>([]);
     const [amountReceived, setAmountReceived] = useState<string>('');
     const [submitting, setSubmitting] = useState(false);
+    const [verifyStep, setVerifyStep] = useState<1 | 2>(1);
+    const [showVerifyModal, setShowVerifyModal] = useState(false);
+    const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const loadDrivers = useCallback(async () => {
         try {
@@ -24,12 +27,12 @@ export default function AdminDriverCodPage() {
             const driverList = res.data || [];
             setDrivers(driverList);
 
-            setSelectedDriver((prev: any) => {
+            setSelectedDriver((prev: unknown) => {
                 if (driverList.length === 1 && !prev) {
                     return driverList[0];
                 }
                 if (!prev) return prev;
-                const updated = driverList.find((d: any) => d.driver.id === prev.driver.id);
+                const updated = driverList.find((d: unknown) => d.driver.id === prev.driver.id);
                 return updated || null;
             });
         } catch (error) {
@@ -54,7 +57,7 @@ export default function AdminDriverCodPage() {
         if (selectedDriver) {
             const invoiceKeys: string[] = Array.from(new Set(
                 selectedDriver.orders
-                    .map((o: any) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                    .map((o: unknown) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
                     .filter(Boolean)
             ));
             setSelectedInvoiceKeys(invoiceKeys);
@@ -63,7 +66,7 @@ export default function AdminDriverCodPage() {
         }
     }, [selectedDriver]);
 
-    const handleSelectDriver = (driverData: any) => {
+    const handleSelectDriver = (driverData: unknown) => {
         setSelectedDriver(driverData);
     };
 
@@ -78,7 +81,7 @@ export default function AdminDriverCodPage() {
             customer_names: string[];
         }>();
 
-        selectedDriver.orders.forEach((order: any) => {
+        selectedDriver.orders.forEach((order: unknown) => {
             const key = String(order.invoice_id || order.invoice_number || order.id || '').trim();
             if (!key) return;
 
@@ -124,8 +127,8 @@ export default function AdminDriverCodPage() {
         if (!selectedDriver) return [];
         const selectedSet = new Set(selectedInvoiceKeys);
         return selectedDriver.orders
-            .filter((order: any) => selectedSet.has(String(order.invoice_id || order.invoice_number || order.id || '').trim()))
-            .map((order: any) => String(order.id || '').trim())
+            .filter((order: unknown) => selectedSet.has(String(order.invoice_id || order.invoice_number || order.id || '').trim()))
+            .map((order: unknown) => String(order.id || '').trim())
             .filter(Boolean);
     }, [selectedDriver, selectedInvoiceKeys]);
 
@@ -139,27 +142,37 @@ export default function AdminDriverCodPage() {
         if (!selectedDriver) return 0;
         const selectedSet = new Set(selectedInvoiceKeys);
         return invoiceRows
-            .filter((row: any) => selectedSet.has(row.key))
-            .reduce((sum: number, row: any) => sum + Number(row.invoice_total || 0), 0);
+            .filter((row: unknown) => selectedSet.has(row.key))
+            .reduce((sum: number, row: unknown) => sum + Number(row.invoice_total || 0), 0);
+    };
+
+    const closeVerifyModal = () => {
+        if (submitting) return;
+        setShowVerifyModal(false);
+        setVerifyStep(1);
+    };
+
+    const openVerifyModal = () => {
+        const received = Number(amountReceived.replace(/\D/g, '')); // simple parse
+        if (!selectedDriver || selectedInvoiceKeys.length === 0) {
+            setFeedback({ type: 'error', message: 'Pilih invoice COD yang akan disettle terlebih dahulu.' });
+            return;
+        }
+        if (!Number.isFinite(received) || received < 0) {
+            setFeedback({ type: 'error', message: 'Jumlah uang diterima tidak valid.' });
+            return;
+        }
+        if (!amountReceived) {
+            setFeedback({ type: 'error', message: 'Isi nominal uang yang diterima dari driver terlebih dahulu.' });
+            return;
+        }
+        setFeedback(null);
+        setVerifyStep(1);
+        setShowVerifyModal(true);
     };
 
     const handleVerify = async () => {
         const received = Number(amountReceived.replace(/\D/g, '')); // simple parse
-        const total = getSelectedTotal();
-        const diff = received - total;
-
-        const confirmMsg = `
-Konfirmasi Setoran COD:
-Total Tagihan: Rp ${total.toLocaleString()}
-Uang Diterima: Rp ${received.toLocaleString()}
-Selisih: Rp ${diff.toLocaleString()} (${diff < 0 ? 'KURANG' : diff > 0 ? 'LEBIH' : 'PAS'})
-
-Driver akan memiliki ${(diff < 0 ? 'TAMBAHAN UTANG' : diff > 0 ? 'PENGURANGAN UTANG' : 'buku seimbang')}.
-Lanjutkan?
-        `.trim();
-
-        if (!confirm(confirmMsg)) return;
-
         try {
             setSubmitting(true);
             await api.admin.finance.verifyDriverCod({
@@ -167,17 +180,31 @@ Lanjutkan?
                 order_ids: selectedOrderIds,
                 amount_received: received
             });
-            alert('Setoran berhasil dikonfirmasi!');
+            setFeedback({ type: 'success', message: 'Setoran COD berhasil dikonfirmasi.' });
+            closeVerifyModal();
             setSelectedDriver(null);
-            loadDrivers();
+            setSelectedInvoiceKeys([]);
+            setAmountReceived('');
+            await loadDrivers();
         } catch (error) {
-            alert('Gagal memproses setoran: ' + (error as any).response?.data?.message || 'Error unknown');
+            const message =
+                (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+                'Gagal memproses setoran COD.';
+            setFeedback({ type: 'error', message });
         } finally {
             setSubmitting(false);
         }
     };
 
     const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+    const selectedTotal = getSelectedTotal();
+    const receivedAmount = Number(amountReceived.replace(/\D/g, '')) || 0;
+    const settlementDiff = receivedAmount - selectedTotal;
+    const settlementEffectLabel = settlementDiff < 0
+        ? 'Tambahan utang driver'
+        : settlementDiff > 0
+            ? 'Pengurang utang driver'
+            : 'Buku seimbang';
 
     if (!allowed) return null;
 
@@ -186,16 +213,26 @@ Lanjutkan?
             <div>
                 <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.2em] mb-1">Finance Admin</p>
                 <h1 className="text-2xl font-black text-slate-900">Setoran COD Kurir</h1>
+                <p className="text-xs text-slate-500 mt-1">Invoice COD yang sudah `cod_pending` akan diselesaikan di sini saat finance menerima setoran driver.</p>
             </div>
+
+            {feedback && (
+                <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${feedback.type === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-rose-200 bg-rose-50 text-rose-700'
+                    }`}>
+                    {feedback.message}
+                </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* List Driver */}
                 <div className="md:col-span-1 space-y-4">
                     <div className="bg-white border border-slate-200 rounded-[24px] p-4 shadow-sm">
-                        <h2 className="text-sm font-black text-slate-900 mb-4 px-2">Daftar Penagihan</h2>
+                        <h2 className="text-sm font-black text-slate-900 mb-4 px-2">Daftar Settlement COD</h2>
                         {drivers.length === 0 && !loading && (
                             <div className="text-center py-8 text-slate-400 text-xs italic">
-                                Tidak ada tagihan COD pending.
+                                Tidak ada invoice COD yang menunggu settlement.
                             </div>
                         )}
                         <div className="space-y-2">
@@ -230,7 +267,7 @@ Lanjutkan?
                                                 {(() => {
                                                     const invoiceCount = new Set(
                                                         (item.orders || [])
-                                                            .map((o: any) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
+                                                            .map((o: unknown) => String(o.invoice_id || o.invoice_number || o.id || '').trim())
                                                             .filter(Boolean)
                                                     ).size || item.orders.length;
                                                     return (
@@ -262,7 +299,7 @@ Lanjutkan?
                                 <div>
                                     <h2 className="text-xl font-black text-slate-900">{selectedDriver.driver.name}</h2>
                                     <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-xs font-medium text-slate-500">Total Pending Setor:</span>
+                                        <span className="text-xs font-medium text-slate-500">Total Menunggu Settlement:</span>
                                         <span className="text-sm font-black text-emerald-600">{formatCurrency(selectedDriver.total_pending)}</span>
                                     </div>
                                 </div>
@@ -276,7 +313,7 @@ Lanjutkan?
 
                             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
                                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest sticky top-0 bg-white py-2 z-10">Rincian Invoice</h3>
-                                {invoiceRows.map((row: any) => (
+                                {invoiceRows.map((row: unknown) => (
                                     <div
                                         key={row.key}
                                         className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer select-none transition-colors ${selectedInvoiceKeys.includes(row.key) ? 'bg-slate-50 border-emerald-200' : 'bg-white border-slate-100 opacity-60'}`}
@@ -331,10 +368,10 @@ Lanjutkan?
                                             </div>
                                             <div className="text-xs font-medium">
                                                 {(Number(amountReceived) - getSelectedTotal()) < 0 && (
-                                                    <span>Kurang Bayar <span className="font-black">{formatCurrency(Math.abs(Number(amountReceived) - getSelectedTotal()))}</span>. Akan tercatat sebagai UTANG driver.</span>
+                                                <span>Kurang Bayar <span className="font-black">{formatCurrency(Math.abs(Number(amountReceived) - getSelectedTotal()))}</span>. Akan tercatat sebagai UTANG driver.</span>
                                                 )}
                                                 {(Number(amountReceived) - getSelectedTotal()) > 0 && (
-                                                    <span>Lebih Bayar <span className="font-black">{formatCurrency(Number(amountReceived) - getSelectedTotal())}</span>. Akan mengurangi utang driver.</span>
+                                                <span>Lebih Bayar <span className="font-black">{formatCurrency(Number(amountReceived) - getSelectedTotal())}</span>. Akan mengurangi utang driver.</span>
                                                 )}
                                                 {(Number(amountReceived) - getSelectedTotal()) === 0 && (
                                                     <span>Pembayaran Pas. Lunas.</span>
@@ -345,7 +382,7 @@ Lanjutkan?
                                 </div>
 
                                 <button
-                                    onClick={handleVerify}
+                                    onClick={openVerifyModal}
                                     disabled={submitting || !amountReceived || (selectedInvoiceKeys.length === 0 && Number(amountReceived) <= 0)}
                                     className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-slate-200 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2"
                                 >
@@ -361,12 +398,117 @@ Lanjutkan?
                             </div>
                             <h3 className="text-slate-900 font-bold mb-1">Pilih Driver untuk Memproses</h3>
                             <p className="text-sm text-slate-400 max-w-xs mx-auto">
-                                Klik salah satu driver di daftar sebelah kiri untuk melihat rincian order COD yang belum disetor.
+                                Klik salah satu driver di daftar sebelah kiri untuk melihat invoice COD yang masih menunggu settlement finance.
                             </p>
                         </div>
                     )}
                 </div>
             </div>
+
+            {showVerifyModal && selectedDriver && (
+                <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[2px] px-4 py-6 flex items-center justify-center">
+                    <div className="w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-hidden rounded-[28px] bg-white shadow-2xl border border-slate-200 flex flex-col">
+                        <div className="px-6 pt-6 pb-4 border-b border-slate-100">
+                            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-600">Verifikasi Setoran COD</p>
+                            <h2 className="mt-2 text-2xl font-black text-slate-900">
+                                {verifyStep === 1 ? 'Periksa settlement sebelum disimpan' : 'Konfirmasi settlement COD'}
+                            </h2>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                                Driver: {selectedDriver.driver.name}
+                            </p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Invoice Dipilih</p>
+                                    <p className="mt-1 text-xl font-black text-slate-900">{selectedInvoiceKeys.length}</p>
+                                </div>
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Total Tagihan</p>
+                                    <p className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedTotal)}</p>
+                                </div>
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Uang Diterima</p>
+                                    <p className="mt-1 text-xl font-black text-slate-900">{formatCurrency(receivedAmount)}</p>
+                                </div>
+                            </div>
+
+                            <div className={`rounded-2xl border px-4 py-4 ${settlementDiff < 0
+                                ? 'border-rose-200 bg-rose-50'
+                                : settlementDiff > 0
+                                    ? 'border-emerald-200 bg-emerald-50'
+                                    : 'border-blue-200 bg-blue-50'
+                                }`}>
+                                <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Selisih Settlement</p>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-2xl font-black text-slate-900">{formatCurrency(Math.abs(settlementDiff))}</p>
+                                        <p className="text-xs font-semibold text-slate-600 mt-1">
+                                            {settlementDiff < 0 ? 'Kurang dari total tagihan' : settlementDiff > 0 ? 'Lebih dari total tagihan' : 'Pas sesuai total tagihan'}
+                                        </p>
+                                    </div>
+                                    <div className="rounded-xl bg-white/70 px-3 py-2 text-xs font-black text-slate-800">
+                                        {settlementEffectLabel}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Invoice yang akan disettle</p>
+                                <div className="space-y-2">
+                                    {invoiceRows.filter((row: unknown) => selectedInvoiceKeys.includes(row.key)).map((row: unknown) => (
+                                        <div key={row.key} className="rounded-xl bg-white px-3 py-3 border border-slate-100">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-black text-slate-900">{row.invoice_number || row.key}</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">
+                                                        {row.order_ids.length} order • {row.customer_names.join(', ') || 'Customer'}
+                                                    </p>
+                                                </div>
+                                                <p className="text-sm font-black text-slate-900">{formatCurrency(Number(row.invoice_total || 0))}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-xs font-semibold text-amber-800">
+                                Finance akan menandai invoice terpilih sebagai settlement COD, dan posisi debt driver akan disesuaikan berdasarkan selisih uang diterima.
+                            </div>
+                        </div>
+
+                        <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={verifyStep === 1 ? closeVerifyModal : () => setVerifyStep(1)}
+                                disabled={submitting}
+                                className="rounded-xl border border-slate-200 px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                {verifyStep === 1 ? 'Batal' : 'Kembali'}
+                            </button>
+                            {verifyStep === 1 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setVerifyStep(2)}
+                                    className="rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white hover:bg-emerald-700"
+                                >
+                                    Lanjut Verifikasi
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={handleVerify}
+                                    disabled={submitting}
+                                    className="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-wide text-white hover:bg-slate-800 disabled:opacity-50"
+                                >
+                                    {submitting ? 'Memproses...' : 'Ya, Simpan Settlement'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

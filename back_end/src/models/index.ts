@@ -13,6 +13,7 @@ import OrderItem from './OrderItem';
 import Invoice from './Invoice';
 import InvoiceItem from './InvoiceItem';
 import OrderIssue from './OrderIssue';
+import OrderEvent from './OrderEvent';
 import ChatSession from './ChatSession';
 import Message from './Message';
 import ChatThread from './ChatThread';
@@ -40,6 +41,8 @@ import ProductCostState from './ProductCostState';
 import InventoryCostLedger from './InventoryCostLedger';
 import CreditNote from './CreditNote';
 import CreditNoteLine from './CreditNoteLine';
+import IdempotencyKey from './IdempotencyKey';
+import NotificationOutbox from './NotificationOutbox';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -149,6 +152,14 @@ CreditNoteLine.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 
 Order.hasMany(OrderIssue, { foreignKey: 'order_id', as: 'Issues' });
 OrderIssue.belongsTo(Order, { foreignKey: 'order_id' });
+Order.hasMany(OrderEvent, { foreignKey: 'order_id', as: 'Events' });
+OrderEvent.belongsTo(Order, { foreignKey: 'order_id' });
+OrderItem.hasMany(OrderEvent, { foreignKey: 'order_item_id', as: 'Events' });
+OrderEvent.belongsTo(OrderItem, { foreignKey: 'order_item_id' });
+Invoice.hasMany(OrderEvent, { foreignKey: 'invoice_id', as: 'Events' });
+OrderEvent.belongsTo(Invoice, { foreignKey: 'invoice_id' });
+User.hasMany(OrderEvent, { foreignKey: 'actor_user_id', as: 'ActorOrderEvents' });
+OrderEvent.belongsTo(User, { foreignKey: 'actor_user_id', as: 'Actor' });
 
 User.hasMany(Invoice, { foreignKey: 'verified_by', as: 'VerifiedInvoices' });
 Invoice.belongsTo(User, { foreignKey: 'verified_by', as: 'Verifier' });
@@ -249,6 +260,7 @@ export {
     Invoice,
     InvoiceItem,
     OrderIssue,
+    OrderEvent,
     ChatSession,
     ChatThread,
     ChatThreadMember,
@@ -275,5 +287,7 @@ export {
     ProductCostState,
     InventoryCostLedger,
     CreditNote,
-    CreditNoteLine
+    CreditNoteLine,
+    IdempotencyKey,
+    NotificationOutbox
 };

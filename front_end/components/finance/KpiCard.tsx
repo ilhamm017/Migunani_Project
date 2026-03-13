@@ -1,7 +1,6 @@
 
 import React from 'react';
 import { cn } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/Card';
 
 interface KpiCardProps {
     title: string;
@@ -28,8 +27,6 @@ export const KpiCard: React.FC<KpiCardProps> = ({
     value,
     subValue,
     icon,
-    trend,
-    trendValue,
     onClick,
     className,
     color = 'default'

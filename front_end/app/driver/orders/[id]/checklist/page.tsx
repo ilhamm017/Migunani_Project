@@ -31,7 +31,7 @@ const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const isOrderDoneStatus = (raw: unknown) =>
   ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
-const getInvoiceItems = (invoiceData: any) => {
+const getInvoiceItems = (invoiceData: unknown) => {
   if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
   if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
   return [];
@@ -43,12 +43,12 @@ const normalizeQuickState = (expectedQty: number, actualQty: number): QuickState
   return 'short';
 };
 
-const buildBaseRowsFromOrders = (orders: any[]): ChecklistRow[] => {
+const buildBaseRowsFromOrders = (orders: unknown[]): ChecklistRow[] => {
   const productMap = new Map<string, { key: string; productName: string; expectedQty: number; orderIds: Set<string> }>();
-  orders.forEach((order: any) => {
+  orders.forEach((order: unknown) => {
     const currentOrderId = String(order?.id || '').trim();
     const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-    items.forEach((item: any) => {
+    items.forEach((item: unknown) => {
       const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
       if (!key) return;
       const entry = productMap.get(key) || {
@@ -76,10 +76,10 @@ const buildBaseRowsFromOrders = (orders: any[]): ChecklistRow[] => {
     .sort((a, b) => b.expectedQty - a.expectedQty);
 };
 
-const buildBaseRowsFromInvoice = (invoiceData: any): ChecklistRow[] => {
+const buildBaseRowsFromInvoice = (invoiceData: unknown): ChecklistRow[] => {
   const invoiceItems = getInvoiceItems(invoiceData);
   const productMap = new Map<string, { key: string; productName: string; expectedQty: number; orderIds: Set<string> }>();
-  invoiceItems.forEach((item: any) => {
+  invoiceItems.forEach((item: unknown) => {
     const orderItem = item?.OrderItem || {};
     const product = orderItem?.Product || {};
     const key = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -108,10 +108,10 @@ const buildBaseRowsFromInvoice = (invoiceData: any): ChecklistRow[] => {
     .sort((a, b) => b.expectedQty - a.expectedQty);
 };
 
-const hydrateRowsFromSaved = (baseRows: ChecklistRow[], savedRows: any[]): ChecklistRow[] => {
-  const byKey = new Map<string, any>();
-  const byName = new Map<string, any>();
-  savedRows.forEach((row: any) => {
+const hydrateRowsFromSaved = (baseRows: ChecklistRow[], savedRows: unknown[]): ChecklistRow[] => {
+  const byKey = new Map<string, unknown>();
+  const byName = new Map<string, unknown>();
+  savedRows.forEach((row: unknown) => {
     const key = String(row?.key || '').trim();
     const name = String(row?.productName || '').trim().toLowerCase();
     if (key) byKey.set(key, row);
@@ -136,11 +136,11 @@ export default function DriverOrderChecklistPage() {
   const router = useRouter();
   const routeRef = String(params?.id || '');
 
-  const [primaryOrder, setPrimaryOrder] = useState<any>(null);
-  const [scopedOrders, setScopedOrders] = useState<any[]>([]);
+  const [primaryOrder, setPrimaryOrder] = useState<unknown>(null);
+  const [scopedOrders, setScopedOrders] = useState<unknown[]>([]);
   const [scopeId, setScopeId] = useState('');
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
-  const [invoiceDetail, setInvoiceDetail] = useState<any>(null);
+  const [invoiceDetail, setInvoiceDetail] = useState<unknown>(null);
   const [rows, setRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -158,21 +158,21 @@ export default function DriverOrderChecklistPage() {
         const res = await api.driver.getOrders();
         const allRows = Array.isArray(res.data) ? res.data : [];
 
-        const selectedByOrderId = allRows.find((x: any) => String(x?.id || '') === routeRef) || null;
-        let invoiceScopedRows: any[] = [];
+        const selectedByOrderId = allRows.find((x: unknown) => String(x?.id || '') === routeRef) || null;
+        let invoiceScopedRows: unknown[] = [];
         let invoiceId = '';
 
         if (selectedByOrderId) {
           invoiceId = normalizeInvoiceRef(selectedByOrderId?.invoice_id || selectedByOrderId?.Invoice?.id);
           if (invoiceId) {
-            invoiceScopedRows = allRows.filter((row: any) =>
+            invoiceScopedRows = allRows.filter((row: unknown) =>
               normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === invoiceId
             );
           } else {
             invoiceScopedRows = [selectedByOrderId];
           }
         } else {
-          const matchedByInvoice = allRows.filter((row: any) =>
+          const matchedByInvoice = allRows.filter((row: unknown) =>
             normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === routeRef
           );
           if (matchedByInvoice.length > 0) {
@@ -181,7 +181,7 @@ export default function DriverOrderChecklistPage() {
           }
         }
 
-        const sortedScopedRows = [...invoiceScopedRows].sort((a: any, b: any) => {
+        const sortedScopedRows = [...invoiceScopedRows].sort((a: unknown, b: unknown) => {
           const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
           const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
           const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -190,12 +190,12 @@ export default function DriverOrderChecklistPage() {
         });
 
         const selected =
-          sortedScopedRows.find((x: any) => !isOrderDoneStatus(x?.status))
+          sortedScopedRows.find((x: unknown) => !isOrderDoneStatus(x?.status))
           || sortedScopedRows[0]
           || null;
         const resolvedScope = (invoiceId || String(selected?.id || '').trim() || routeRef).trim();
 
-        let invoiceSnapshot: any = null;
+        let invoiceSnapshot: unknown = null;
         if (invoiceId) {
           try {
             const invoiceRes = await api.invoices.getById(invoiceId);
@@ -248,13 +248,13 @@ export default function DriverOrderChecklistPage() {
   );
   const isAllMatched = rows.length > 0 && mismatchRows.length === 0;
   const orderIds = useMemo(
-    () => scopedOrders.map((row: any) => String(row?.id || '').trim()).filter(Boolean),
+    () => scopedOrders.map((row: unknown) => String(row?.id || '').trim()).filter(Boolean),
     [scopedOrders]
   );
   const activeOrderIds = useMemo(() => {
     const ids = scopedOrders
-      .filter((row: any) => !isOrderDoneStatus(row?.status))
-      .map((row: any) => String(row?.id || '').trim())
+      .filter((row: unknown) => !isOrderDoneStatus(row?.status))
+      .map((row: unknown) => String(row?.id || '').trim())
       .filter(Boolean);
     return ids.length > 0 ? ids : orderIds;
   }, [orderIds, scopedOrders]);

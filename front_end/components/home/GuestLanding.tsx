@@ -36,6 +36,21 @@ interface PopularCategory {
   icon: string | null;
 }
 
+type ProductApiRow = {
+  id: string;
+  name: string;
+  price: number;
+  stock_quantity?: number;
+  Category?: { name?: string } | null;
+};
+
+type CategoryApiRow = {
+  id: number;
+  name?: string;
+  description?: string | null;
+  icon?: string | null;
+};
+
 const AUTO_GENERATED_CATEGORY_DESCRIPTIONS = new Set([
   'auto-created from inventory import',
 ]);
@@ -84,10 +99,10 @@ export default function GuestLanding() {
           api.catalog.getCategories({ limit: 3 }),
         ]);
 
-        const rows = Array.isArray(productResponse.data?.products) ? productResponse.data.products : [];
-        const categoryRows = Array.isArray(categoriesResponse.data?.categories) ? categoriesResponse.data.categories : [];
+        const rows: ProductApiRow[] = Array.isArray(productResponse.data?.products) ? productResponse.data.products : [];
+        const categoryRows: CategoryApiRow[] = Array.isArray(categoriesResponse.data?.categories) ? categoriesResponse.data.categories : [];
 
-        const mapped: CatalogProduct[] = rows.slice(0, 3).map((item: any) => ({
+        const mapped: CatalogProduct[] = rows.slice(0, 3).map((item) => ({
           id: String(item.id),
           name: item.name,
           price: Number(item.price),
@@ -95,7 +110,7 @@ export default function GuestLanding() {
           category: item.Category?.name || 'Sparepart',
         }));
 
-        const mappedCategories: PopularCategory[] = categoryRows.slice(0, 3).map((item: any) => ({
+        const mappedCategories: PopularCategory[] = categoryRows.slice(0, 3).map((item) => ({
           id: Number(item.id),
           name: String(item.name || ''),
           description: (() => {

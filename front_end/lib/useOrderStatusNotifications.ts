@@ -224,32 +224,25 @@ export const useOrderStatusNotifications = ({
 
   useEffect(() => {
     if (!shouldEnable || !normalizedRole) {
-      setLatestEvents([]);
-      setActionableCount(0);
-      setLastSeenCount(0);
-      setLastSeenAtMs(0);
-      clearToast();
       return;
     }
 
     const savedSeen = Number(localStorage.getItem(lastSeenCountKey) || 'NaN');
     const hasSavedSeen = Number.isFinite(savedSeen);
-    setLastSeenCount(hasSavedSeen ? savedSeen : 0);
     const savedSeenAt = localStorage.getItem(lastSeenAtKey);
-    setLastSeenAtMs(savedSeenAt ? toTimestamp(savedSeenAt) : 0);
 
     let mounted = true;
     const bootstrap = async () => {
       const current = await loadActionableCount();
       if (!mounted) return;
+      const initialSeenCount = hasSavedSeen ? savedSeen : current;
+      const initialSeenAtIso = savedSeenAt || new Date().toISOString();
+
       setActionableCount(current);
-      if (!hasSavedSeen) {
-        const nowIso = new Date().toISOString();
-        setLastSeenCount(current);
-        setLastSeenAtMs(toTimestamp(nowIso));
-        localStorage.setItem(lastSeenCountKey, String(current));
-        localStorage.setItem(lastSeenAtKey, nowIso);
-      }
+      setLastSeenCount(initialSeenCount);
+      setLastSeenAtMs(toTimestamp(initialSeenAtIso));
+      localStorage.setItem(lastSeenCountKey, String(initialSeenCount));
+      localStorage.setItem(lastSeenAtKey, initialSeenAtIso);
     };
 
     void bootstrap();
@@ -318,26 +311,30 @@ export const useOrderStatusNotifications = ({
     showToast,
   ]);
 
-  const newTaskCount = Math.max(0, actionableCount - lastSeenCount);
+  const effectiveActionableCount = shouldEnable ? actionableCount : 0;
+  const effectiveLastSeenCount = shouldEnable ? lastSeenCount : 0;
+  const effectiveLastSeenAtMs = shouldEnable ? lastSeenAtMs : 0;
+
+  const newTaskCount = Math.max(0, effectiveActionableCount - effectiveLastSeenCount);
   const latestEventsSinceSeen = useMemo(
-    () =>
+    () => (shouldEnable ?
       latestEvents.filter((event) => {
         if (!event.triggered_at) return true;
-        return toTimestamp(event.triggered_at) > lastSeenAtMs;
-      }),
-    [lastSeenAtMs, latestEvents]
+        return toTimestamp(event.triggered_at) > effectiveLastSeenAtMs;
+      }) : []),
+    [effectiveLastSeenAtMs, latestEvents, shouldEnable]
   );
   const priorityCards = useMemo(
-    () => (normalizedRole ? buildPriorityCards(normalizedRole, latestEventsSinceSeen, newTaskCount) : []),
-    [latestEventsSinceSeen, newTaskCount, normalizedRole]
+    () => (shouldEnable && normalizedRole ? buildPriorityCards(normalizedRole, latestEventsSinceSeen, newTaskCount) : []),
+    [latestEventsSinceSeen, newTaskCount, normalizedRole, shouldEnable]
   );
 
   return {
-    newTaskCount,
-    latestEvents: latestEventsSinceSeen,
+    newTaskCount: shouldEnable ? newTaskCount : 0,
+    latestEvents: shouldEnable ? latestEventsSinceSeen : [],
     priorityCards,
-    markSeen,
-    activeToast,
+    markSeen: shouldEnable ? markSeen : () => undefined,
+    activeToast: shouldEnable ? activeToast : null,
     dismissToast: clearToast,
   };
 };

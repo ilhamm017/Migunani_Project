@@ -1,9 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { Boxes, ClipboardCheck, FileSpreadsheet, Layers, ScanBarcode, Shield, Truck, ShoppingCart } from 'lucide-react';
-
 import { ArrowLeft } from 'lucide-react';
 
 export default function WarehouseLayout({ children }: { children: React.ReactNode }) {

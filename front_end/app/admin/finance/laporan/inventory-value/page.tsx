@@ -1,33 +1,66 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft, Package } from 'lucide-react';
 import Link from 'next/link';
 
+type InventoryValueItem = {
+    id: string;
+    name: string;
+    sku: string;
+    total_valuation: number;
+    stock_quantity: number;
+    base_price: number;
+};
+
+type InventoryValueSummary = {
+    total_valuation: number;
+    total_items: number;
+    breakdown: InventoryValueItem[];
+};
+
 export default function InventoryValuePage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<InventoryValueSummary | null>(null);
     const [loading, setLoading] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getInventoryValue();
-            setData(res.data);
+            const payload = (res.data || {}) as Record<string, unknown>;
+            const breakdownRaw = Array.isArray(payload.breakdown) ? payload.breakdown : [];
+            const breakdown: InventoryValueItem[] = breakdownRaw.map((item) => {
+                const row = item as Record<string, unknown>;
+                return {
+                    id: String(row.id ?? ''),
+                    name: String(row.name ?? ''),
+                    sku: String(row.sku ?? ''),
+                    total_valuation: Number(row.total_valuation ?? 0),
+                    stock_quantity: Number(row.stock_quantity ?? 0),
+                    base_price: Number(row.base_price ?? 0),
+                };
+            });
+
+            setData({
+                total_valuation: Number(payload.total_valuation ?? 0),
+                total_items: Number(payload.total_items ?? 0),
+                breakdown,
+            });
         } catch (e) {
             console.error(e);
             alert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]);
+        if (allowed) void load();
+    }, [allowed, load]);
 
     if (!allowed) return null;
 
@@ -65,7 +98,7 @@ export default function InventoryValuePage() {
                         <div>
                             <h3 className="font-bold text-slate-900 mb-3 ml-1">Rincian Barang</h3>
                             <div className="space-y-3">
-                                {data.breakdown?.map((item: any) => (
+                                {data.breakdown?.map((item) => (
                                     <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <div className="flex justify-between items-start mb-2">
                                             <div>

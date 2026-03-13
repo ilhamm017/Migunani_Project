@@ -9,8 +9,15 @@ import getSocket from '@/lib/socket';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
+import Image from 'next/image';
 
-const getPersistApi = () => (useAuthStore as any).persist;
+type PersistApi = {
+  hasHydrated?: () => boolean;
+  onFinishHydration?: (cb: () => void) => (() => void) | void;
+};
+
+const getPersistApi = (): PersistApi | undefined =>
+  (useAuthStore as unknown as { persist?: PersistApi }).persist;
 
 type ChatSessionRow = {
   id: string;
@@ -51,6 +58,14 @@ type ChatContactRow = {
   name?: string;
   whatsapp_number?: string;
   role?: string;
+};
+
+type ChatMessageEventPayload = {
+  session_id?: string;
+};
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
 };
 
 function AdminChatInboxContent() {
@@ -108,7 +123,7 @@ function AdminChatInboxContent() {
     return digits;
   };
 
-  const getPhoneSearchCandidates = (value?: string | null) => {
+  const getPhoneSearchCandidates = useCallback((value?: string | null) => {
     const digits = String(value || '').replace(/\D/g, '');
     if (!digits) return [] as string[];
 
@@ -123,9 +138,9 @@ function AdminChatInboxContent() {
     }
 
     return Array.from(variants).filter((item) => item.length >= 3);
-  };
+  }, []);
 
-  const doesPhoneMatchKeyword = (phone: string, keyword: string) => {
+  const doesPhoneMatchKeyword = useCallback((phone: string, keyword: string) => {
     const phoneCandidates = getPhoneSearchCandidates(phone);
     const keywordCandidates = getPhoneSearchCandidates(keyword);
     if (!phoneCandidates.length || !keywordCandidates.length) return false;
@@ -133,7 +148,7 @@ function AdminChatInboxContent() {
     return keywordCandidates.some((keywordPart) =>
       phoneCandidates.some((phonePart) => phonePart.includes(keywordPart) || keywordPart.includes(phonePart))
     );
-  };
+  }, [getPhoneSearchCandidates]);
 
   const getSessionWhatsappNumber = (session: ChatSessionRow) => {
     const raw = (session.whatsapp_number || '').trim();
@@ -190,7 +205,7 @@ function AdminChatInboxContent() {
       setSessions(rows);
 
       const preferredFromUserId = userIdParam
-        ? rows.find((item: any) => String(item?.user_id || '') === userIdParam)?.id
+        ? rows.find((item: ChatSessionRow) => String(item?.user_id || '') === userIdParam)?.id
         : '';
       const preferredFromSessionId = sessionIdParam
         ? rows.find((item: ChatSessionRow) => String(item.id || '') === sessionIdParam)?.id
@@ -247,7 +262,7 @@ function AdminChatInboxContent() {
     );
 
     const socket = getSocket();
-    const onChatMessage = (payload: any) => {
+    const onChatMessage = (payload: ChatMessageEventPayload) => {
       if (payload?.session_id && payload.session_id === selectedSessionId) {
         void loadMessages(payload.session_id);
       }
@@ -343,8 +358,9 @@ function AdminChatInboxContent() {
       setQuotedMessage(null);
       await loadMessages(selectedSessionId);
       await loadSessions(undefined, selectedSessionId);
-    } catch (error: any) {
-      const apiMessage = error?.response?.data?.message;
+    } catch (error: unknown) {
+      const apiError = error as ApiErrorWithMessage;
+      const apiMessage = apiError?.response?.data?.message;
       setSendError(apiMessage || 'Gagal mengirim balasan.');
       console.error('Error sending reply:', error);
     } finally {
@@ -636,9 +652,12 @@ function AdminChatInboxContent() {
                                 className="block rounded-lg overflow-hidden"
                                 aria-label="Perbesar gambar lampiran"
                               >
-                                <img
+                                <Image
                                   src={message.attachment_url}
                                   alt="Lampiran chat"
+                                  width={220}
+                                  height={176}
+                                  unoptimized
                                   className="max-h-44 max-w-[220px] rounded-lg border border-black/10 object-cover"
                                 />
                               </button>
@@ -784,9 +803,12 @@ function AdminChatInboxContent() {
           >
             <X size={18} />
           </button>
-          <img
+          <Image
             src={zoomImageUrl}
             alt="Preview gambar lampiran"
+            width={1280}
+            height={900}
+            unoptimized
             className="max-w-[95vw] max-h-[90vh] object-contain rounded-xl"
             onClick={(e) => e.stopPropagation()}
           />

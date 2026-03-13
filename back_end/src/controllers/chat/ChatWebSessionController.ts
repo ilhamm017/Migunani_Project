@@ -19,16 +19,18 @@ import {
     mapChatServiceError,
     resolveThreadByIdOrLegacySession
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getMyWebSession = async (req: Request, res: Response) => {
+export const getMyWebSession = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const actor = asActor(req);
         if (!actor.id) {
-            return res.status(401).json({ message: 'User tidak terautentikasi.' });
+            throw new CustomError('User tidak terautentikasi.', 401);
         }
         const user = await User.findByPk(actor.id, { attributes: ['id', 'role'] });
         if (!user || user.role !== 'customer') {
-            return res.status(403).json({ message: 'Endpoint hanya untuk customer.' });
+            throw new CustomError('Endpoint hanya untuk customer.', 403);
         }
 
         const thread = await resolveSupportOmniThread(actor.id);
@@ -42,26 +44,26 @@ export const getMyWebSession = async (req: Request, res: Response) => {
             }
         });
     } catch (error: any) {
-        return res.status(500).json({ message: error?.message || 'Error resolving web session' });
+        throw new CustomError(error?.message || 'Error resolving web session', 500);
     }
-};
+});
 
-export const getMyWebSessionByStaff = async (req: Request, res: Response) => {
+export const getMyWebSessionByStaff = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const actor = asActor(req);
         const staffId = String(req.query.staff_id || '').trim();
         if (!actor.id) {
-            return res.status(401).json({ message: 'User tidak terautentikasi.' });
+            throw new CustomError('User tidak terautentikasi.', 401);
         }
         if (!staffId) {
-            return res.status(400).json({ message: 'staff_id wajib diisi.' });
+            throw new CustomError('staff_id wajib diisi.', 400);
         }
 
         const requester = await User.findByPk(actor.id, {
             attributes: ['id', 'role']
         });
         if (!requester || requester.role !== 'customer') {
-            return res.status(403).json({ message: 'Endpoint hanya untuk customer.' });
+            throw new CustomError('Endpoint hanya untuk customer.', 403);
         }
 
         const staff = await User.findOne({
@@ -73,7 +75,7 @@ export const getMyWebSessionByStaff = async (req: Request, res: Response) => {
             attributes: ['id', 'name', 'role', 'whatsapp_number']
         });
         if (!staff) {
-            return res.status(404).json({ message: 'Staff tujuan tidak ditemukan.' });
+            throw new CustomError('Staff tujuan tidak ditemukan.', 404);
         }
 
         let thread: ChatThread;
@@ -86,12 +88,12 @@ export const getMyWebSessionByStaff = async (req: Request, res: Response) => {
         } else if (staff.role === 'super_admin' || staff.role === 'kasir') {
             thread = await resolveSupportOmniThread(requester.id);
         } else {
-            return res.status(403).json({ message: 'Customer hanya dapat chat ke support atau driver terkait.' });
+            throw new CustomError('Customer hanya dapat chat ke support atau driver terkait.', 403);
         }
 
         const canAccess = await canAccessThread(thread, actor);
         if (!canAccess) {
-            return res.status(403).json({ message: 'Akses chat ke staff ini ditolak.' });
+            throw new CustomError('Akses chat ke staff ini ditolak.', 403);
         }
 
         return res.json({
@@ -105,19 +107,19 @@ export const getMyWebSessionByStaff = async (req: Request, res: Response) => {
             staff
         });
     } catch (error: any) {
-        return res.status(500).json({ message: error?.message || 'Error resolving session by staff' });
+        throw new CustomError(error?.message || 'Error resolving session by staff', 500);
     }
-};
+});
 
-export const getMyWebSessions = async (req: Request, res: Response) => {
+export const getMyWebSessions = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const actor = asActor(req);
         if (!actor.id) {
-            return res.status(401).json({ message: 'User tidak terautentikasi.' });
+            throw new CustomError('User tidak terautentikasi.', 401);
         }
         const requester = await User.findByPk(actor.id, { attributes: ['id', 'role'] });
         if (!requester || requester.role !== 'customer') {
-            return res.status(403).json({ message: 'Endpoint hanya untuk customer.' });
+            throw new CustomError('Endpoint hanya untuk customer.', 403);
         }
 
         const result = await listThreads({
@@ -158,11 +160,11 @@ export const getMyWebSessions = async (req: Request, res: Response) => {
         return res.json({ sessions });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching web sessions' });
+        throw new CustomError(error?.message || 'Error fetching web sessions', 500);
     }
-};
+});
 
-export const getWebMessages = async (req: Request, res: Response) => {
+export const getWebMessages = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const sessionId = String(req.query.session_id || '').trim();
         const guestId = String(req.query.guest_id || '').trim();
@@ -171,7 +173,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
         const limit = Number.isFinite(requestedLimit) ? Math.min(200, Math.max(1, Math.trunc(requestedLimit))) : 200;
 
         if (!sessionId) {
-            return res.status(400).json({ message: 'session_id wajib diisi.' });
+            throw new CustomError('session_id wajib diisi.', 400);
         }
 
         const { thread } = await resolveThreadByIdOrLegacySession(sessionId);
@@ -180,7 +182,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
         if (requesterUserId) {
             const requester = await User.findByPk(requesterUserId, { attributes: ['id', 'role', 'whatsapp_number'] });
             if (!requester) {
-                return res.status(403).json({ message: 'Akses riwayat chat ditolak.' });
+                throw new CustomError('Akses riwayat chat ditolak.', 403);
             }
             const allowed = await canAccessThread(thread, {
                 id: requester.id,
@@ -188,7 +190,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
                 whatsapp_number: requester.whatsapp_number
             });
             if (!allowed) {
-                return res.status(403).json({ message: 'Akses riwayat chat ditolak.' });
+                throw new CustomError('Akses riwayat chat ditolak.', 403);
             }
 
             const result = await getThreadMessages({
@@ -223,7 +225,7 @@ export const getWebMessages = async (req: Request, res: Response) => {
         if (isGuestThread) {
             const expectedGuest = String(thread.external_whatsapp_number || '').replace(/^webguest:/, '');
             if (!guestId || guestId !== expectedGuest) {
-                return res.status(403).json({ message: 'Akses riwayat chat ditolak.' });
+                throw new CustomError('Akses riwayat chat ditolak.', 403);
             }
             const rows = await Message.findAll({
                 where: { thread_id: thread.id },
@@ -237,17 +239,17 @@ export const getWebMessages = async (req: Request, res: Response) => {
             });
         }
 
-        return res.status(403).json({ message: 'Akses riwayat chat ditolak.' });
+        throw new CustomError('Akses riwayat chat ditolak.', 403);
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching web messages' });
+        throw new CustomError(error?.message || 'Error fetching web messages', 500);
     }
-};
+});
 
-export const uploadWebAttachment = async (req: Request, res: Response) => {
+export const uploadWebAttachment = asyncWrapper(async (req: Request, res: Response) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ message: 'Lampiran tidak ditemukan.' });
+            throw new CustomError('Lampiran tidak ditemukan.', 400);
         }
 
         const attachmentUrl = `/uploads/chat/${path.basename(req.file.path)}`;
@@ -258,10 +260,13 @@ export const uploadWebAttachment = async (req: Request, res: Response) => {
             size: req.file.size
         });
     } catch (error: any) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
         const detail = error instanceof Error ? error.message : 'Unknown error';
-        return res.status(500).json({ message: `Gagal upload lampiran: ${detail}` });
+        throw new CustomError(`Gagal upload lampiran: ${detail}`, 500);
     }
-};
+});
 
 export const resolveSocketThread = async (params: {
     session?: ChatSession | null;

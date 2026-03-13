@@ -10,11 +10,15 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 
-export const verifyPayment = async (req: Request, res: Response) => {
+export const verifyPayment = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params; // Order ID
@@ -24,19 +28,19 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
         if (!['admin_finance', 'super_admin'].includes(verifierRole)) {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya admin finance atau super admin yang boleh verifikasi pembayaran' });
+            throw new CustomError('Hanya admin finance atau super admin yang boleh verifikasi pembayaran', 403);
         }
 
         if (action !== 'approve' && action !== 'reject') {
             await t.rollback();
-            return res.status(400).json({ message: 'Invalid action' });
+            throw new CustomError('Invalid action', 400);
         }
 
         const invoice = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE })
             || await findLatestInvoiceByOrderId(String(id), { transaction: t });
         if (!invoice) {
             await t.rollback();
-            return res.status(404).json({ message: 'Invoice not found' });
+            throw new CustomError('Invoice not found', 404);
         }
 
         const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
@@ -49,7 +53,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
             : [];
         if (orders.length === 0) {
             await t.rollback();
-            return res.status(404).json({ message: 'Order tidak ditemukan untuk invoice ini' });
+            throw new CustomError('Order tidak ditemukan untuk invoice ini', 404);
         }
         const previousStatusByOrderId: Record<string, string> = {};
         const nextStatusByOrderId: Record<string, string> = {};
@@ -65,17 +69,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
             if (isNoProofMethod) {
                 await t.rollback();
-                return res.status(409).json({ message: 'Invoice COD/Cash Store hanya boleh menjadi paid melalui proses settlement.' });
+                throw new CustomError('Invoice COD/Cash Store hanya boleh menjadi paid melalui proses settlement.', 409);
             }
 
             if (!isNoProofMethod && !invoice.payment_proof_url) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Bukti transfer belum tersedia untuk diverifikasi' });
+                throw new CustomError('Bukti transfer belum tersedia untuk diverifikasi', 400);
             }
 
             if (invoice.payment_status === 'paid') {
                 await t.rollback();
-                return res.status(409).json({ message: 'Pembayaran sudah pernah di-approve' });
+                throw new CustomError('Pembayaran sudah pernah di-approve', 409);
             }
 
             await invoice.update({
@@ -115,6 +119,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
                     return;
                 }
                 if (currentStatus === 'delivered') {
+                    if (!isOrderTransitionAllowed(currentStatus, 'completed')) {
+                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'completed'`, 409);
+                    }
                     toCompletedIds.push(orderId);
                     nextStatusByOrderId[orderId] = 'completed';
                     return;
@@ -122,6 +129,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
                 if (currentStatus === 'shipped') {
                     nextStatusByOrderId[orderId] = 'shipped';
                     return;
+                }
+                if (!isOrderTransitionAllowed(currentStatus, 'ready_to_ship')) {
+                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'ready_to_ship'`, 409);
                 }
                 toReadyToShipIds.push(orderId);
                 nextStatusByOrderId[orderId] = 'ready_to_ship';
@@ -140,14 +150,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
             }
 
         } else {
-            // Payment rejected but order should still proceed to warehouse (payment handled by driver).
+            // Payment rejected. Hold the order to prevent it from going to warehouse.
             await invoice.update({
                 payment_status: 'unpaid',
                 payment_proof_url: null,
                 verified_by: null,
                 verified_at: null
             }, { transaction: t });
-            const toReadyToShipIds: string[] = [];
+            const toHoldIds: string[] = [];
             orders.forEach((order: any) => {
                 const orderId = String(order.id || '');
                 const currentStatus = String(order.status || '').toLowerCase();
@@ -156,24 +166,26 @@ export const verifyPayment = async (req: Request, res: Response) => {
                     nextStatusByOrderId[orderId] = currentStatus;
                     return;
                 }
-                toReadyToShipIds.push(orderId);
-                nextStatusByOrderId[orderId] = 'ready_to_ship';
+                if (!isOrderTransitionAllowed(currentStatus, 'hold')) {
+                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'hold'`, 409);
+                }
+                toHoldIds.push(orderId);
+                nextStatusByOrderId[orderId] = 'hold';
             });
-            if (toReadyToShipIds.length > 0) {
+            if (toHoldIds.length > 0) {
                 await Order.update({
-                    status: 'ready_to_ship',
+                    status: 'hold',
                     expiry_date: null
-                }, { where: { id: { [Op.in]: toReadyToShipIds } }, transaction: t });
+                }, { where: { id: { [Op.in]: toHoldIds } }, transaction: t });
             }
         }
 
-        await t.commit();
-        orders.forEach((order: any) => {
+        for (const order of orders as any[]) {
             const orderId = String(order.id || '');
             const prevStatus = String(previousStatusByOrderId[orderId] || order.status || '');
             const nextStatus = String(nextStatusByOrderId[orderId] || prevStatus);
             if (prevStatus !== nextStatus) {
-                emitOrderStatusChanged({
+                await emitOrderStatusChanged({
                     order_id: orderId,
                     from_status: prevStatus,
                     to_status: nextStatus,
@@ -184,19 +196,42 @@ export const verifyPayment = async (req: Request, res: Response) => {
                     target_roles: action === 'approve'
                         ? (nextStatus === 'completed' ? ['admin_finance', 'customer'] : ['admin_gudang', 'customer'])
                         : ['customer'],
+                }, {
+                    transaction: t,
+                    requestContext: 'finance_verify_payment_status_changed'
                 });
             }
+        }
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'finance_verify_payment_refresh_badges'
         });
-        emitAdminRefreshBadges();
+
+        await t.commit();
 
         res.json({ message: `Payment ${action}d` });
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error verifying payment', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error verifying payment', 500);
     }
-};
+});
 
-export const voidPayment = async (req: Request, res: Response) => {
+export const voidPayment = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const idempotencyScope = `finance_void_payment:${String(req.user?.id || '').trim()}:${String(req.params?.id || '').trim()}`;
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, idempotencyScope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan void pembayaran duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const { id } = req.params; // Invoice ID or Order ID? Let's use Invoice ID for precision
@@ -205,12 +240,24 @@ export const voidPayment = async (req: Request, res: Response) => {
         const invoice = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE });
         if (!invoice) {
             await t.rollback();
-            return res.status(404).json({ message: 'Invoice not found' });
+            throw new CustomError('Invoice not found', 404);
         }
 
         if (invoice.payment_status !== 'paid') {
             await t.rollback();
-            return res.status(400).json({ message: 'Invoice belum dibayar/status bukan paid.' });
+            throw new CustomError('Invoice belum dibayar/status bukan paid.', 400);
+        }
+
+        const existingReversalCount = await Journal.count({
+            where: {
+                reference_type: 'order_reversal',
+                reference_id: String(invoice.id)
+            },
+            transaction: t
+        });
+        if (existingReversalCount > 0) {
+            await t.rollback();
+            throw new CustomError('Invoice ini sudah pernah di-void/reversal sebelumnya.', 409);
         }
 
         // 1. Find the Journal related to this payment
@@ -229,7 +276,17 @@ export const voidPayment = async (req: Request, res: Response) => {
             : [];
         if (orders.length === 0) {
             await t.rollback();
-            return res.status(404).json({ message: 'Associated orders not found' });
+            throw new CustomError('Associated orders not found', 404);
+        }
+
+        const nextOrderStatus = 'ready_to_ship';
+        for (const order of orders as any[]) {
+            const currentStatus = String(order?.status || '').toLowerCase();
+            if (currentStatus === 'canceled') continue;
+            if (!isOrderTransitionAllowed(currentStatus, nextOrderStatus)) {
+                await t.rollback();
+                throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextOrderStatus}'`, 409);
+            }
         }
 
         // REVERSE SALES JOURNAL
@@ -293,7 +350,6 @@ export const voidPayment = async (req: Request, res: Response) => {
         orders.forEach((order) => {
             previousOrderStatusById[String(order.id)] = String(order.status || '');
         });
-        const nextOrderStatus = 'ready_to_ship';
         await Order.update({
             status: 'ready_to_ship',
             expiry_date: null
@@ -305,11 +361,10 @@ export const voidPayment = async (req: Request, res: Response) => {
             transaction: t
         });
 
-        await t.commit();
-        orders.forEach((order) => {
+        for (const order of orders as any[]) {
             const previousStatus = previousOrderStatusById[String(order.id)] || '';
             if (previousStatus !== nextOrderStatus && order.status !== 'canceled') {
-                emitOrderStatusChanged({
+                await emitOrderStatusChanged({
                     order_id: String(order.id),
                     from_status: previousStatus,
                     to_status: nextOrderStatus,
@@ -318,16 +373,33 @@ export const voidPayment = async (req: Request, res: Response) => {
                     courier_id: String(order.courier_id || ''),
                     triggered_by_role: String(req.user?.role || ''),
                     target_roles: ['admin_finance', 'customer'],
+                }, {
+                    transaction: t,
+                    requestContext: 'finance_void_payment_status_changed'
                 });
             }
+        }
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'finance_void_payment_refresh_badges'
         });
-        emitAdminRefreshBadges();
 
-        res.json({ message: 'Pembayaran berhasil di-void (Reversed)' });
+        await t.commit();
+
+        const responsePayload = { message: 'Pembayaran berhasil di-void (Reversed)' };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
+        }
+        res.json(responsePayload);
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error voiding payment', error });
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, idempotencyScope);
+        }
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error voiding payment', 500);
     }
-};
-
+});

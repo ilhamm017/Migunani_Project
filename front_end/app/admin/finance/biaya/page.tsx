@@ -78,30 +78,13 @@ export default function FinanceExpensePage() {
 
   useEffect(() => {
     if (!allowed) return;
-    loadLabels();
-    load();
+    Promise.resolve().then(() => {
+      void loadLabels();
+      void load();
+    });
   }, [allowed]);
 
   if (!allowed) return null;
-
-  const addDetailRow = () => {
-    setForm((prev) => ({ ...prev, details: [...prev.details, { key: '', value: '' }] }));
-  };
-
-  const removeDetailRow = (index: number) => {
-    setForm((prev) => {
-      const next = prev.details.filter((_, i) => i !== index);
-      return { ...prev, details: next.length > 0 ? next : [{ key: '', value: '' }] };
-    });
-  };
-
-  const updateDetailRow = (index: number, field: 'key' | 'value', value: string) => {
-    setForm((prev) => {
-      const next = [...prev.details];
-      next[index] = { ...next[index], [field]: value };
-      return { ...prev, details: next };
-    });
-  };
 
   const submit = async () => {
     if (!form.amount || !form.category.trim()) return;
@@ -213,7 +196,7 @@ export default function FinanceExpensePage() {
                     <span className="text-xs text-slate-400">{String(e.date || '').slice(0, 10)}</span>
                   </div>
                   <h4 className="font-bold text-slate-900">{e.category}</h4>
-                  {e.note && <p className="text-xs text-slate-500 mt-1 italic">"{e.note}"</p>}
+                  {e.note && <p className="text-xs text-slate-500 mt-1 italic">{e.note}</p>}
                 </div>
                 <span className="font-black text-slate-900 text-sm">
                   Rp {Number(e.amount || 0).toLocaleString('id-ID')}

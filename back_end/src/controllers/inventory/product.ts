@@ -5,11 +5,14 @@ import path from 'path';
 import { Readable } from 'stream';
 import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
 import { JournalService } from '../../services/JournalService';
-import { Op, Transaction } from 'sequelize';
+import { Op, Transaction, UniqueConstraintError, ValidationError } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
 import { syncProductCategories, toObjectOrEmpty, ensureProductColumnsReady, PRODUCT_IMAGE_MAX_SIZE_BYTES, toPercentageNumber, ALLOWED_PRODUCT_IMAGE_MIME_TYPES, toNonNegativeNumber, roundPrice, readCellText, resolveProductImageExtension } from './utils';
-export const getProducts = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
         await ensureProductColumnsReady();
 
@@ -33,7 +36,7 @@ export const getProducts = async (req: Request, res: Response) => {
         if (category_id) {
             const categoryId = Number(category_id);
             if (!Number.isInteger(categoryId) || categoryId <= 0) {
-                return res.status(400).json({ message: 'category_id tidak valid' });
+                throw new CustomError('category_id tidak valid', 400);
             }
 
             const mappings = await ProductCategory.findAll({
@@ -72,22 +75,23 @@ export const getProducts = async (req: Request, res: Response) => {
             products: rows
         });
     } catch (error) {
+        if (error instanceof CustomError) throw error;
         const message = error instanceof Error ? error.message : 'Error fetching products';
         console.error('Error fetching admin products:', error);
         if (message.includes('Kolom products belum lengkap')) {
-            return res.status(400).json({ message });
+            throw new CustomError(message, 400);
         }
-        res.status(500).json({ message: 'Error fetching products', error });
+        throw new CustomError('Error fetching products', 500);
     }
-};
+});
 
-export const getProductBySku = async (req: Request, res: Response) => {
+export const getProductBySku = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const queryCode = readCellText(req.query.code);
         const paramSku = readCellText(req.params.sku);
         const code = queryCode || paramSku;
         if (!code) {
-            return res.status(400).json({ message: 'SKU/barcode wajib diisi' });
+            throw new CustomError('SKU/barcode wajib diisi', 400);
         }
 
         const product = await Product.findOne({
@@ -104,28 +108,29 @@ export const getProductBySku = async (req: Request, res: Response) => {
         });
 
         if (!product) {
-            return res.status(404).json({ message: 'Product not found' });
+            throw new CustomError('Product not found', 404);
         }
 
         res.json(product);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching product', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching product', 500);
     }
-};
+});
 
-export const uploadProductImage = async (req: Request, res: Response) => {
+export const uploadProductImage = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const file = req.file;
         if (!file) {
-            return res.status(400).json({ message: 'File gambar wajib diunggah' });
+            throw new CustomError('File gambar wajib diunggah', 400);
         }
 
         if (!ALLOWED_PRODUCT_IMAGE_MIME_TYPES.has(file.mimetype)) {
-            return res.status(400).json({ message: 'Format gambar tidak didukung. Gunakan JPG, PNG, WEBP, atau GIF.' });
+            throw new CustomError('Format gambar tidak didukung. Gunakan JPG, PNG, WEBP, atau GIF.', 400);
         }
 
         if (file.size > PRODUCT_IMAGE_MAX_SIZE_BYTES) {
-            return res.status(400).json({ message: 'Ukuran gambar terlalu besar (maksimal 2MB).' });
+            throw new CustomError('Ukuran gambar terlalu besar (maksimal 2MB).', 400);
         }
 
         const userId = (req as any).user?.id || 'anonymous';
@@ -148,19 +153,47 @@ export const uploadProductImage = async (req: Request, res: Response) => {
             file_name: fileName
         });
     } catch (error) {
-        return res.status(500).json({ message: 'Error uploading product image', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error uploading product image', 500);
     }
-};
+});
 
-export const createProduct = async (req: Request, res: Response) => {
+export const createProduct = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { sku, barcode, name, description, image_url, base_price, price, unit, min_stock, category_id, stock_quantity, bin_location, vehicle_compatibility } = req.body;
+        const normalizedSku = String(sku || '').trim();
+        const normalizedName = String(name || '').trim();
+        const normalizedUnit = String(unit || '').trim();
+        const normalizedCategoryId = Number(category_id);
 
-        const existingProduct = await Product.findOne({ where: { sku } });
+        if (!normalizedSku) {
+            await t.rollback();
+            throw new CustomError('SKU wajib diisi', 400);
+        }
+        if (!normalizedName) {
+            await t.rollback();
+            throw new CustomError('Nama produk wajib diisi', 400);
+        }
+        if (!normalizedUnit) {
+            await t.rollback();
+            throw new CustomError('Unit produk wajib diisi', 400);
+        }
+        if (!Number.isInteger(normalizedCategoryId) || normalizedCategoryId <= 0) {
+            await t.rollback();
+            throw new CustomError('category_id tidak valid', 400);
+        }
+
+        const existingProduct = await Product.findOne({ where: { sku: normalizedSku } });
         if (existingProduct) {
             await t.rollback();
-            return res.status(400).json({ message: 'Product with this SKU already exists' });
+            throw new CustomError('Product with this SKU already exists', 400);
+        }
+
+        const category = await Category.findByPk(normalizedCategoryId, { transaction: t });
+        if (!category) {
+            await t.rollback();
+            throw new CustomError('Kategori tidak ditemukan', 404);
         }
 
         const normalizedImageUrl = String(image_url ?? '').trim() || null;
@@ -174,21 +207,21 @@ export const createProduct = async (req: Request, res: Response) => {
         }
 
         const product = await Product.create({
-            sku,
+            sku: normalizedSku,
             barcode,
-            name,
+            name: normalizedName,
             description: normalizedDescription,
             image_url: normalizedImageUrl,
             base_price,
             price,
-            unit,
+            unit: normalizedUnit,
             min_stock,
-            category_id,
+            category_id: normalizedCategoryId,
             stock_quantity: 0,
             bin_location: normalizedBinLocation,
             vehicle_compatibility: normalizedVehicleCompatibility
         }, { transaction: t });
-        await syncProductCategories(product.id, [Number(category_id)], t);
+        await syncProductCategories(product.id, [normalizedCategoryId], t);
 
         // Handles initial stock via mutation if provided
         if (stock_quantity && stock_quantity > 0) {
@@ -197,7 +230,7 @@ export const createProduct = async (req: Request, res: Response) => {
                 type: 'initial',
                 qty: stock_quantity,
                 note: 'Initial Stock via Create Product',
-                reference_id: 'INIT-' + sku
+                reference_id: 'INIT-' + normalizedSku
             }, { transaction: t });
 
             await product.update({ stock_quantity }, { transaction: t });
@@ -206,12 +239,17 @@ export const createProduct = async (req: Request, res: Response) => {
         await t.commit();
         res.status(201).json(product);
     } catch (error) {
-        await t.rollback();
-        res.status(500).json({ message: 'Error creating product', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        if (error instanceof UniqueConstraintError || error instanceof ValidationError) {
+            const firstMessage = error.errors?.[0]?.message;
+            throw new CustomError(firstMessage || 'Data produk tidak valid', 400);
+        }
+        throw new CustomError('Error creating product', 500);
     }
-};
+});
 
-export const updateProduct = async (req: Request, res: Response) => {
+export const updateProduct = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
@@ -220,9 +258,7 @@ export const updateProduct = async (req: Request, res: Response) => {
         const attemptedPricingFields = blockedPricingFields.filter((field) => payload[field] !== undefined);
         if (attemptedPricingFields.length > 0) {
             await t.rollback();
-            return res.status(403).json({
-                message: 'Modifikasi harga tier tidak tersedia di modul gudang. Gunakan modul Admin Sales/Kasir.'
-            });
+            throw new CustomError('Modifikasi harga tier tidak tersedia di modul gudang. Gunakan modul Admin Sales/Kasir.', 403);
         }
 
         const allowedFields = new Set([
@@ -310,28 +346,29 @@ export const updateProduct = async (req: Request, res: Response) => {
         }
 
         await t.rollback();
-        return res.status(404).json({ message: 'Product not found' });
+        throw new CustomError('Product not found', 404);
     } catch (error) {
-        await t.rollback();
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
         const message = error instanceof Error ? error.message : 'Error updating product';
         if (message.toLowerCase().includes('data too long for column') && message.toLowerCase().includes('image_url')) {
-            return res.status(400).json({ message: 'URL gambar terlalu panjang untuk disimpan. Gunakan URL yang lebih pendek atau jalankan migrasi kolom image_url.' });
+            throw new CustomError('URL gambar terlalu panjang untuk disimpan. Gunakan URL yang lebih pendek atau jalankan migrasi kolom image_url.', 400);
         }
         if (message.toLowerCase().includes("unknown column 'image_url'")) {
-            return res.status(400).json({ message: 'Kolom image_url belum ada di database. Jalankan migrasi SQL untuk kolom image_url.' });
+            throw new CustomError('Kolom image_url belum ada di database. Jalankan migrasi SQL untuk kolom image_url.', 400);
         }
-        res.status(500).json({ message: 'Error updating product', error });
+        throw new CustomError('Error updating product', 500);
     }
-};
+});
 
-export const updateProductTierPricing = async (req: Request, res: Response) => {
+export const updateProductTierPricing = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params;
         const actorRole = String(req.user?.role || '');
         if (actorRole !== 'kasir' && actorRole !== 'super_admin') {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya admin sales/kasir yang bisa memodifikasi harga tier.' });
+            throw new CustomError('Hanya admin sales/kasir yang bisa memodifikasi harga tier.', 403);
         }
 
         const regularPrice = toNonNegativeNumber(req.body?.regular_price ?? req.body?.regular);
@@ -342,15 +379,13 @@ export const updateProductTierPricing = async (req: Request, res: Response) => {
 
         if (regularPrice === null || goldPrice === null || platinumPrice === null) {
             await t.rollback();
-            return res.status(400).json({
-                message: 'regular_price, gold_price, dan premium_price/platinum_price wajib berupa angka valid (>= 0).'
-            });
+            throw new CustomError('regular_price, gold_price, dan premium_price/platinum_price wajib berupa angka valid (>= 0).', 400);
         }
 
         const product = await Product.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE });
         if (!product) {
             await t.rollback();
-            return res.status(404).json({ message: 'Product not found' });
+            throw new CustomError('Product not found', 404);
         }
 
         const previousVariant = toObjectOrEmpty(product.varian_harga);
@@ -402,18 +437,19 @@ export const updateProductTierPricing = async (req: Request, res: Response) => {
             tier_pricing: tierPrices
         });
     } catch (error) {
-        await t.rollback();
-        return res.status(500).json({ message: 'Error updating product tier pricing', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error updating product tier pricing', 500);
     }
-};
+});
 
-export const bulkUpdateTierDiscounts = async (req: Request, res: Response) => {
+export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const actorRole = String(req.user?.role || '');
         if (actorRole !== 'kasir' && actorRole !== 'super_admin') {
             await t.rollback();
-            return res.status(403).json({ message: 'Hanya admin sales/kasir yang bisa memodifikasi diskon tier.' });
+            throw new CustomError('Hanya admin sales/kasir yang bisa memodifikasi diskon tier.', 403);
         }
 
         const goldDiscount = toPercentageNumber(req.body?.gold_discount_pct ?? req.body?.gold_discount ?? req.body?.gold);
@@ -428,9 +464,7 @@ export const bulkUpdateTierDiscounts = async (req: Request, res: Response) => {
 
         if (goldDiscount === null || premiumDiscount === null) {
             await t.rollback();
-            return res.status(400).json({
-                message: 'gold_discount_pct dan premium_discount_pct/platinum_discount_pct wajib angka valid antara 0 sampai 100.'
-            });
+            throw new CustomError('gold_discount_pct dan premium_discount_pct/platinum_discount_pct wajib angka valid antara 0 sampai 100.', 400);
         }
 
         const statusRaw = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : 'active';
@@ -498,12 +532,13 @@ export const bulkUpdateTierDiscounts = async (req: Request, res: Response) => {
             }
         });
     } catch (error) {
-        await t.rollback();
-        return res.status(500).json({ message: 'Error bulk updating tier discounts', error });
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error bulk updating tier discounts', 500);
     }
-};
+});
 
-export const scanProduct = async (req: Request, res: Response) => {
+export const scanProduct = asyncWrapper(async (req: Request, res: Response) => {
     // Same as getProductBySku logic basically but intended for scanner
-    return getProductBySku(req, res);
-};
+    return getProductBySku(req, res, () => { });
+});

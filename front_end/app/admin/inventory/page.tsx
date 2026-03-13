@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Camera, Loader2, Pencil, Save, Upload, X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { normalizeProductImageUrl } from '@/lib/image';
+import NextImage from 'next/image';
 
 interface ProductRow {
   id: string;
@@ -49,6 +50,11 @@ interface EditFormState {
   tipe_modal: string;
   total_modal: string;
 }
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
+  message?: string;
+};
 
 const toEditForm = (product: ProductRow): EditFormState => ({
   sku: product.sku || '',
@@ -176,7 +182,7 @@ export default function InventoryAdminPage() {
     return categories.map((category) => ({ id: category.id, name: category.name }));
   }, [categories]);
 
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
       setLoading(true);
       const params: { page: number; limit: number; status: 'all'; search?: string; category_id?: number } = {
@@ -202,29 +208,29 @@ export default function InventoryAdminPage() {
       setHasSearchedProduct(true);
     } catch (error) {
       setMessageType('error');
-      const err = error as any;
+      const err = error as ApiErrorWithMessage;
       setMessage(err?.response?.data?.message || 'Gagal memuat daftar produk.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, search, selectedCategory]);
 
-  const loadCategories = async () => {
+  const loadCategories = useCallback(async () => {
     try {
       const res = await api.admin.inventory.getCategories();
       setCategories(res.data?.categories || []);
     } catch (error) {
       setMessageType('error');
-      const err = error as any;
+      const err = error as ApiErrorWithMessage;
       setMessage(err?.response?.data?.message || 'Gagal memuat kategori.');
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (allowed) {
       void loadCategories();
     }
-  }, [allowed]);
+  }, [allowed, loadCategories]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -232,7 +238,7 @@ export default function InventoryAdminPage() {
       void loadProducts();
     }, 250);
     return () => clearTimeout(timer);
-  }, [allowed, search, selectedCategory, currentPage]);
+  }, [allowed, loadProducts]);
 
   useEffect(() => {
     return () => {
@@ -306,9 +312,10 @@ export default function InventoryAdminPage() {
       updateForm('image_url', imageUrl);
       setMessageType('success');
       setMessage('Gambar berhasil diunggah ke server.');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const apiError = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || error?.message || 'Gagal mengunggah gambar produk.');
+      setMessage(apiError?.response?.data?.message || apiError?.message || 'Gagal mengunggah gambar produk.');
     } finally {
       setIsUploadingImage(false);
     }
@@ -463,9 +470,10 @@ export default function InventoryAdminPage() {
       setMessageType('success');
       setMessage('Produk berhasil diperbarui.');
       closeEditor();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const apiError = error as ApiErrorWithMessage;
       setMessageType('error');
-      setMessage(error?.response?.data?.message || 'Gagal menyimpan perubahan produk.');
+      setMessage(apiError?.response?.data?.message || 'Gagal menyimpan perubahan produk.');
     } finally {
       setIsSaving(false);
     }
@@ -544,7 +552,7 @@ export default function InventoryAdminPage() {
                           <td className="px-4 py-3">
                             <div className="w-10 h-10 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
                               {product.image_url ? (
-                                <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+                                <NextImage src={product.image_url} alt={product.name} width={40} height={40} unoptimized className="w-full h-full object-cover" />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center text-slate-400">
                                   <Camera size={16} />
@@ -747,7 +755,7 @@ export default function InventoryAdminPage() {
                   </label>
                   {form.image_url && (
                     <div className="rounded-lg border border-slate-200 p-2 bg-white">
-                      <img src={form.image_url} alt={form.name || 'Preview gambar produk'} className="h-32 w-32 rounded-lg object-cover bg-slate-100" />
+                      <NextImage src={form.image_url} alt={form.name || 'Preview gambar produk'} width={128} height={128} unoptimized className="h-32 w-32 rounded-lg object-cover bg-slate-100" />
                     </div>
                   )}
                 </div>

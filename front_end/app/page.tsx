@@ -1,28 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import GuestLanding from '@/components/home/GuestLanding';
 import MemberHome from '@/components/home/MemberHome';
 import { useAuthStore } from '@/store/authStore';
 
+type PersistApi = {
+  hasHydrated?: () => boolean;
+  onFinishHydration?: (callback: () => void) => (() => void) | void;
+};
+
+const getPersistApi = (): PersistApi | undefined => {
+  const store = useAuthStore as unknown as { persist?: PersistApi };
+  return store.persist;
+};
+
 export default function HomePage() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    const persistApi = (useAuthStore as any).persist;
-    if (!persistApi) {
-      setHydrated(true);
-      return;
-    }
-
-    const unsub = persistApi.onFinishHydration?.(() => setHydrated(true));
-    setHydrated(persistApi.hasHydrated?.() ?? true);
-
-    return () => {
-      if (typeof unsub === 'function') unsub();
-    };
-  }, []);
+  const hydrated = useSyncExternalStore(
+    (onStoreChange) => {
+      const persistApi = getPersistApi();
+      const unsubscribe = persistApi?.onFinishHydration?.(onStoreChange);
+      return typeof unsubscribe === 'function' ? unsubscribe : () => undefined;
+    },
+    () => {
+      const persistApi = getPersistApi();
+      return persistApi?.hasHydrated?.() ?? true;
+    },
+    () => true
+  );
 
   if (!hydrated) {
     return (

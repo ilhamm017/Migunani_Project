@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import multer from 'multer';
 import * as InventoryController from '../controllers/inventory';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
+import { createMemoryImageUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
 const router = Router();
 const uploadImport = multer({
@@ -10,20 +11,19 @@ const uploadImport = multer({
         fileSize: 20 * 1024 * 1024
     }
 });
-const uploadImage = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 2 * 1024 * 1024
-    }
+const uploadImage = createMemoryImageUpload(2 * 1024 * 1024);
+const uploadProductImageMiddleware = createSingleUploadMiddleware(uploadImage, {
+    fieldName: 'image',
+    sizeExceededMessage: 'Ukuran gambar terlalu besar (maksimal 2MB).',
+    fallbackMessage: 'Upload gambar gagal diproses.'
 });
-
-const uploadProductImageMiddleware = (req: Request, res: Response, next: NextFunction) => {
-    uploadImage.single('image')(req, res, (err) => {
+const uploadImportMiddleware = (req: Request, res: Response, next: NextFunction) => {
+    uploadImport.single('file')(req, res, (err) => {
         if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ message: 'Ukuran gambar terlalu besar (maksimal 2MB).' });
+            return res.status(400).json({ message: 'Ukuran file import terlalu besar (maksimal 20MB).' });
         }
-        if (err) {
-            return res.status(400).json({ message: 'Upload gambar gagal diproses.' });
+        if (err instanceof Error) {
+            return res.status(400).json({ message: err.message || 'Upload file import gagal diproses.' });
         }
         return next();
     });
@@ -55,9 +55,9 @@ router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin
 router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrderById);
 router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'kasir'), InventoryController.createPurchaseOrder);
 router.patch('/admin/inventory/po/:id/receive', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.receivePurchaseOrder);
-router.post('/admin/inventory/import/preview', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImport.single('file'), InventoryController.previewProductsImportFromUpload);
+router.post('/admin/inventory/import/preview', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImportMiddleware, InventoryController.previewProductsImportFromUpload);
 router.post('/admin/inventory/import/commit', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.commitProductsImport);
-router.post('/admin/inventory/import', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImport.single('file'), InventoryController.importProductsFromUpload);
+router.post('/admin/inventory/import', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImportMiddleware, InventoryController.importProductsFromUpload);
 router.post('/admin/inventory/import-from-path', authenticateToken, authorizeRoles('super_admin'), InventoryController.importProductsFromPath);
 
 // Scan (Admin/Gudang/Kasir)

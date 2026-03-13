@@ -11,16 +11,25 @@ import {
     XCircle,
     PackageSearch,
     ChevronRight,
-    Search
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { formatDateTime } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
+type ReturItem = {
+    id: string;
+    status: string;
+    order_id: string;
+    qty: number;
+    createdAt?: string;
+    admin_response?: string;
+    Product?: { name?: string };
+};
+
 export default function MyReturnsPage() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-    const [returs, setReturs] = useState<any[]>([]);
+    const [returs, setReturs] = useState<ReturItem[]>([]);
     const [loading, setLoading] = useState(true);
 
     const loadReturs = useCallback(async () => {
@@ -158,7 +167,7 @@ export default function MyReturnsPage() {
                                 {r.admin_response && (
                                     <div className="mb-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl p-3">
                                         <p className="text-[9px] font-black text-emerald-600 uppercase tracking-wider mb-1">Pesan dari Admin:</p>
-                                        <p className="text-[11px] text-slate-600 italic leading-relaxed">"{r.admin_response}"</p>
+                                        <p className="text-[11px] text-slate-600 italic leading-relaxed">{r.admin_response}</p>
                                     </div>
                                 )}
 

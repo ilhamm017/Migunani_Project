@@ -8,6 +8,16 @@ import { useAuthStore } from '@/store/authStore';
 import { getDashboardPathByRole } from '@/lib/roleRedirect';
 import { Eye, EyeOff } from 'lucide-react';
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+        if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message;
+    }
+    return fallback;
+};
+
 export default function LoginPage() {
     const router = useRouter();
     const login = useAuthStore((state) => state.login);
@@ -31,8 +41,8 @@ export default function LoginPage() {
 
             login(token, user);
             router.replace(getDashboardPathByRole(user?.role));
-        } catch (err: any) {
-            setError(err.response?.data?.message || 'Login gagal. Coba lagi.');
+        } catch (error: unknown) {
+            setError(getErrorMessage(error, 'Login gagal. Coba lagi.'));
         } finally {
             setLoading(false);
         }

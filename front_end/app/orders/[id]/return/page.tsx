@@ -1,34 +1,52 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Upload, Check } from 'lucide-react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/utils';
 
+type OrderItemRow = {
+    id: string;
+    product_id: string;
+    qty: number;
+    price_at_purchase: number;
+    Product?: { name?: string };
+};
+
+type OrderDetail = {
+    id: string;
+    OrderItems?: OrderItemRow[];
+};
+
+type ApiErrorWithMessage = {
+    response?: { data?: { message?: string } };
+};
+
 export default function ReturnRequestPage() {
     const { id } = useParams();
     const router = useRouter();
-    const [order, setOrder] = useState<any>(null);
+    const [order, setOrder] = useState<OrderDetail | null>(null);
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
     const [qty, setQty] = useState(1);
     const [reason, setReason] = useState('');
     const [evidence, setEvidence] = useState<File | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
-    useEffect(() => {
-        if (id) loadOrder();
-    }, [id]);
-
-    const loadOrder = async () => {
+    const loadOrder = useCallback(async () => {
+        if (!id) return;
         try {
             const res = await api.orders.getOrderById(id as string);
-            setOrder(res.data);
+            setOrder(res.data as OrderDetail);
         } catch (error) {
             console.error('Failed to load order', error);
         }
-    };
+    }, [id]);
+
+    useEffect(() => {
+        if (id) void loadOrder();
+    }, [id, loadOrder]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -48,8 +66,9 @@ export default function ReturnRequestPage() {
             await api.retur.request(formData);
             alert('Permintaan retur berhasil dikirim!');
             router.push(`/orders/${id}`);
-        } catch (error: any) {
-            alert(error.response?.data?.message || 'Gagal mengirim permintaan retur');
+        } catch (error: unknown) {
+            const err = error as ApiErrorWithMessage;
+            alert(err.response?.data?.message || 'Gagal mengirim permintaan retur');
         } finally {
             setSubmitting(false);
         }
@@ -57,7 +76,7 @@ export default function ReturnRequestPage() {
 
     if (!order) return <div className="p-6">Loading...</div>;
 
-    const selectedProduct = order.OrderItems?.find((i: any) => i.product_id === selectedItem);
+    const selectedProduct = order.OrderItems?.find((i) => i.product_id === selectedItem);
 
     return (
         <div className="p-6">
@@ -73,7 +92,7 @@ export default function ReturnRequestPage() {
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                     <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Barang</label>
                     <div className="space-y-2">
-                        {order.OrderItems?.map((item: any) => (
+                        {order.OrderItems?.map((item) => (
                             <div
                                 key={item.id}
                                 onClick={() => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, MapPin, Plus, Home, Briefcase, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -21,16 +21,7 @@ export default function AddressesPage() {
     const [newLabel, setNewLabel] = useState('');
     const [newAddress, setNewAddress] = useState('');
 
-    useEffect(() => {
-        if (!isAuthenticated) {
-            router.push('/auth/login');
-            return;
-        }
-
-        fetchAddresses();
-    }, [isAuthenticated]);
-
-    const fetchAddresses = async () => {
+    const fetchAddresses = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.profile.getMe();
@@ -43,7 +34,16 @@ export default function AddressesPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!isAuthenticated) {
+            router.push('/auth/login');
+            return;
+        }
+
+        void fetchAddresses();
+    }, [fetchAddresses, isAuthenticated, router]);
 
     const handleAddAddress = async () => {
         if (!newLabel || !newAddress) return;
@@ -55,7 +55,7 @@ export default function AddressesPage() {
             setNewLabel('');
             setNewAddress('');
             setShowAddForm(false);
-        } catch (error) {
+        } catch {
             alert('Gagal menambah alamat');
         }
     };
@@ -65,7 +65,7 @@ export default function AddressesPage() {
         try {
             await api.profile.updateAddresses(updated);
             setAddresses(updated);
-        } catch (error) {
+        } catch {
             alert('Gagal menghapus alamat');
         }
     };

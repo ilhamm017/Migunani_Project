@@ -13,7 +13,6 @@ import {
     markThreadAsRead,
     openThread
 } from '../../services/ChatThreadService';
-import { getStatus as getWhatsappStatus } from '../../services/whatsappClient';
 import {
     ATTACHMENT_FALLBACK_BODY,
     asActor,
@@ -28,7 +27,10 @@ import {
     toLegacySessionRow
 } from './utils';
 
-export const getSessions = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const getSessions = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const actor = asActor(req);
         const platform = String(req.query.platform || '').trim();
@@ -154,11 +156,14 @@ export const getSessions = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching sessions' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error fetching sessions', 500);
     }
-};
+});
 
-export const getMessages = async (req: Request, res: Response) => {
+export const getMessages = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id || '').trim();
         const requestedLimit = Number(req.query.limit || 50);
@@ -167,7 +172,7 @@ export const getMessages = async (req: Request, res: Response) => {
         const { thread } = await resolveThreadByIdOrLegacySession(id);
         const canAccess = await canAccessThread(thread, asActor(req));
         if (!canAccess) {
-            return res.status(403).json({ message: 'Akses thread ditolak.' });
+            throw new CustomError('Akses thread ditolak.', 403);
         }
 
         const result = await getThreadMessages({
@@ -202,11 +207,14 @@ export const getMessages = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching messages' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error fetching messages', 500);
     }
-};
+});
 
-export const replyToChat = async (req: Request, res: Response) => {
+export const replyToChat = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id || '').trim();
         const rawMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
@@ -217,14 +225,14 @@ export const replyToChat = async (req: Request, res: Response) => {
         const body = rawMessage || (attachmentUrl ? ATTACHMENT_FALLBACK_BODY : '');
 
         if (!body && !attachmentUrl) {
-            return res.status(400).json({ message: 'Pesan atau lampiran wajib diisi.' });
+            throw new CustomError('Pesan atau lampiran wajib diisi.', 400);
         }
 
         const actor = asActor(req);
         const { thread, session } = await resolveThreadByIdOrLegacySession(id);
         const canAccess = await canAccessThread(thread, actor);
         if (!canAccess) {
-            return res.status(403).json({ message: 'Anda tidak memiliki akses ke sesi chat ini.' });
+            throw new CustomError('Anda tidak memiliki akses ke sesi chat ini.', 403);
         }
 
         let channel: ChatMessageChannel = 'app';
@@ -248,10 +256,7 @@ export const replyToChat = async (req: Request, res: Response) => {
         if (channel === 'whatsapp') {
             const targetNumber = await resolveWhatsappTargetForThread(thread);
             if (!targetNumber) {
-                return res.status(400).json({ message: 'Target WhatsApp thread tidak valid.' });
-            }
-            if (getWhatsappStatus() !== 'READY') {
-                return res.status(409).json({ message: 'WhatsApp belum terhubung. Silakan Connect WhatsApp terlebih dahulu.' });
+                throw new CustomError('Target WhatsApp thread tidak valid.', 400);
             }
             await sendViaWhatsApp(targetNumber, {
                 body: rawMessage,
@@ -287,11 +292,14 @@ export const replyToChat = async (req: Request, res: Response) => {
         return res.json({ message: 'Reply sent' });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error sending reply' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error sending reply', 500);
     }
-};
+});
 
-export const searchContacts = async (req: Request, res: Response) => {
+export const searchContacts = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const q = String(req.query.q || '').trim();
         const requestedLimit = Number(req.query.limit || 20);
@@ -307,6 +315,9 @@ export const searchContacts = async (req: Request, res: Response) => {
         return res.json({ contacts });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error searching contacts' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error searching contacts', 500);
     }
-};
+});

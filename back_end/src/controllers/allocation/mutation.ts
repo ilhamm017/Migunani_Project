@@ -3,9 +3,43 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder, InvoiceItem } from '../../models';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
-import { buildShortageSummary, ALLOCATION_EDITABLE_STATUSES, REALLOCATABLE_STATUSES } from './utils';
+import { recordOrderEvent } from '../../utils/orderEvent';
+import { buildShortageSummary, isAllocationEditableStatus, isReallocatableStatus, TERMINAL_ORDER_STATUSES } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 
-export const allocateOrder = async (req: Request, res: Response) => {
+const distributeAllocationByItem = (items: any[], allocatedByProduct: Map<string, number>) => {
+    const byProduct = new Map<string, any[]>();
+    items.forEach((item: any) => {
+        const productId = String(item?.product_id || '').trim();
+        if (!productId) return;
+        const rows = byProduct.get(productId) || [];
+        rows.push(item);
+        byProduct.set(productId, rows);
+    });
+
+    const result = new Map<string, { ordered_qty: number; allocated_qty: number; shortage_qty: number }>();
+    byProduct.forEach((rows, productId) => {
+        let remaining = Number(allocatedByProduct.get(productId) || 0);
+        const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+        sortedRows.forEach((row: any) => {
+            const rowId = String(row?.id || '').trim();
+            if (!rowId) return;
+            const orderedQty = Math.max(0, Number(row?.ordered_qty_original || row?.qty || 0));
+            const allocatedQty = Math.max(0, Math.min(remaining, orderedQty));
+            remaining = Math.max(0, remaining - allocatedQty);
+            result.set(rowId, {
+                ordered_qty: orderedQty,
+                allocated_qty: allocatedQty,
+                shortage_qty: Math.max(0, orderedQty - allocatedQty),
+            });
+        });
+    });
+    return result;
+};
+
+export const allocateOrder = asyncWrapper(async (req: Request, res: Response) => {
     /**
      * KEBIJAKAN ALOKASI MANUAL:
      * Fungsi ini adalah satu-satunya titik masuk untuk alokasi stok ke pesanan.
@@ -20,24 +54,22 @@ export const allocateOrder = async (req: Request, res: Response) => {
         const order = await Order.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!order) {
             await t.rollback();
-            return res.status(404).json({ message: 'Order not found' });
+            throw new CustomError('Order not found', 404);
         }
 
-        if (!(REALLOCATABLE_STATUSES as readonly string[]).includes(order.status)) {
+        if (!isReallocatableStatus(order.status)) {
             await t.rollback();
-            return res.status(400).json({ message: `Order dengan status '${order.status}' tidak bisa dialokasikan` });
+            throw new CustomError(`Order dengan status '${order.status}' tidak bisa dialokasikan`, 400);
         }
-        if (!(ALLOCATION_EDITABLE_STATUSES as readonly string[]).includes(order.status)) {
+        if (!isAllocationEditableStatus(order.status)) {
             await t.rollback();
-            return res.status(400).json({
-                message: `Alokasi dikunci karena order sudah masuk proses finance/pengiriman (status: '${order.status}').`
-            });
+            throw new CustomError(`Alokasi dikunci karena order sudah masuk proses finance/pengiriman (status: '${order.status}').`, 400);
         }
 
         const incomingItems = Array.isArray(items) ? items : [];
         if (incomingItems.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'items wajib diisi' });
+            throw new CustomError('items wajib diisi', 400);
         }
 
         const requestedQtyByProduct = new Map<string, number>();
@@ -45,12 +77,12 @@ export const allocateOrder = async (req: Request, res: Response) => {
             const productId = String(rawItem?.product_id || '').trim();
             if (!productId) {
                 await t.rollback();
-                return res.status(400).json({ message: 'product_id wajib diisi' });
+                throw new CustomError('product_id wajib diisi', 400);
             }
             const parsedQty = Number(rawItem?.qty);
             if (!Number.isFinite(parsedQty) || parsedQty < 0) {
                 await t.rollback();
-                return res.status(400).json({ message: `Qty alokasi untuk produk ${productId} tidak valid` });
+                throw new CustomError(`Qty alokasi untuk produk ${productId} tidak valid`, 400);
             }
             requestedQtyByProduct.set(productId, Math.trunc(parsedQty));
         }
@@ -58,7 +90,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
         const requestedProductIds = Array.from(requestedQtyByProduct.keys());
         if (requestedProductIds.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada item alokasi yang valid' });
+            throw new CustomError('Tidak ada item alokasi yang valid', 400);
         }
 
         const orderItemsForValidation = await OrderItem.findAll({
@@ -79,13 +111,11 @@ export const allocateOrder = async (req: Request, res: Response) => {
             const requestedQty = Number(requestedQtyByProduct.get(productId) || 0);
             if (orderedQty <= 0) {
                 await t.rollback();
-                return res.status(400).json({ message: `Produk ${productId} tidak ada pada order ini` });
+                throw new CustomError(`Produk ${productId} tidak ada pada order ini`, 400);
             }
             if (requestedQty > orderedQty) {
                 await t.rollback();
-                return res.status(400).json({
-                    message: `Qty alokasi untuk produk ${productId} melebihi qty order (${requestedQty}/${orderedQty})`
-                });
+                throw new CustomError(`Qty alokasi untuk produk ${productId} melebihi qty order (${requestedQty}/${orderedQty})`, 400);
             }
         }
 
@@ -101,7 +131,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
         if (productById.size !== requestedProductIds.length) {
             const missingProductIds = requestedProductIds.filter((productId) => !productById.has(productId));
             await t.rollback();
-            return res.status(404).json({ message: `Produk tidak ditemukan: ${missingProductIds.join(', ')}` });
+            throw new CustomError(`Produk tidak ditemukan: ${missingProductIds.join(', ')}`, 404);
         }
 
         const existingAllocations = await OrderAllocation.findAll({
@@ -121,6 +151,17 @@ export const allocateOrder = async (req: Request, res: Response) => {
             rows.push(allocation);
             allocationsByProduct.set(productId, rows);
         }
+        const beforeAllocatedByProduct = new Map<string, number>();
+        existingAllocations.forEach((allocation: any) => {
+            const productId = String(allocation?.product_id || '').trim();
+            if (!productId) return;
+            const prev = Number(beforeAllocatedByProduct.get(productId) || 0);
+            beforeAllocatedByProduct.set(productId, prev + Number(allocation?.allocated_qty || 0));
+        });
+        const beforeItemAllocation = distributeAllocationByItem(
+            orderItemsForValidation.map((row: any) => row.get({ plain: true })),
+            beforeAllocatedByProduct
+        );
 
         for (const productId of requestedProductIds) {
             const product = productById.get(productId);
@@ -132,9 +173,7 @@ export const allocateOrder = async (req: Request, res: Response) => {
 
             if (requestedQty > maxAllocatableQty) {
                 await t.rollback();
-                return res.status(400).json({
-                    message: `Stok tidak cukup untuk ${product?.name || productId}. Sisa stok: ${Math.max(0, currentStockQty)}, maksimal alokasi saat ini: ${maxAllocatableQty}`
-                });
+                throw new CustomError(`Stok tidak cukup untuk ${product?.name || productId}. Sisa stok: ${Math.max(0, currentStockQty)}, maksimal alokasi saat ini: ${maxAllocatableQty}`, 400);
             }
 
             const delta = requestedQty - previouslyAllocatedTotal;
@@ -262,6 +301,8 @@ export const allocateOrder = async (req: Request, res: Response) => {
 
         // --- Auto-transition order status based on allocation progress ---
         let previousStatusForNotification: string | null = null;
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
 
         if (fullyAllocated || partiallyAllocated) {
             const statusProgressRank: Record<string, number> = {
@@ -289,7 +330,23 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }
 
             if (nextStatus !== previousOrderStatus) {
+                if (!isOrderTransitionAllowed(previousOrderStatus, nextStatus)) {
+                    await t.rollback();
+                    throw new CustomError(`Transisi status tidak diizinkan: '${previousOrderStatus}' -> '${nextStatus}'`, 409);
+                }
                 await order.update({ status: nextStatus as any }, { transaction: t });
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: String(id),
+                    event_type: 'order_status_changed',
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    payload: {
+                        before: { status: previousOrderStatus },
+                        after: { status: nextStatus },
+                        delta: { status_changed: true }
+                    }
+                });
             }
             previousStatusForNotification = previousOrderStatus;
         }
@@ -301,6 +358,56 @@ export const allocateOrder = async (req: Request, res: Response) => {
         // If order was split, parent item shortage is moved to child and parent becomes fulfilled.
         for (const row of itemBreakdown) {
             const shortage = Number(row.shortage_qty || 0);
+            const orderItemId = String(row?.oi?.id || '');
+            const beforeItem = beforeItemAllocation.get(orderItemId) || {
+                ordered_qty: Number(row.ordered_qty || 0),
+                allocated_qty: 0,
+                shortage_qty: Number(row.ordered_qty || 0),
+            };
+
+            if (Number(beforeItem.allocated_qty || 0) !== Number(row.allocated_qty || 0)) {
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: String(id),
+                    order_item_id: orderItemId,
+                    event_type: 'allocation_set',
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    payload: {
+                        before: {
+                            allocated_qty: Number(beforeItem.allocated_qty || 0),
+                            shortage_qty: Number(beforeItem.shortage_qty || 0),
+                        },
+                        after: {
+                            allocated_qty: Number(row.allocated_qty || 0),
+                            shortage_qty: Number(row.shortage_qty || 0),
+                        },
+                        delta: {
+                            allocated_qty: Number(row.allocated_qty || 0) - Number(beforeItem.allocated_qty || 0),
+                            shortage_qty: Number(row.shortage_qty || 0) - Number(beforeItem.shortage_qty || 0),
+                        }
+                    }
+                });
+            }
+
+            if (Number(beforeItem.shortage_qty || 0) !== Number(row.shortage_qty || 0)) {
+                const eventType = Number(row.shortage_qty || 0) > Number(beforeItem.shortage_qty || 0)
+                    ? 'backorder_opened'
+                    : 'backorder_reallocated';
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: String(id),
+                    order_item_id: orderItemId,
+                    event_type: eventType,
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    payload: {
+                        before: { shortage_qty: Number(beforeItem.shortage_qty || 0) },
+                        after: { shortage_qty: Number(row.shortage_qty || 0) },
+                        delta: { shortage_qty: Number(row.shortage_qty || 0) - Number(beforeItem.shortage_qty || 0) }
+                    }
+                });
+            }
 
             const [backorder, created] = await Backorder.findOrCreate({
                 where: { order_item_id: row.oi.id },
@@ -354,11 +461,10 @@ export const allocateOrder = async (req: Request, res: Response) => {
             }
         }
 
-        await t.commit();
         const previousStatus = String(previousStatusForNotification || '');
         const nextStatus = String(order.status || '');
         if (previousStatus && nextStatus && previousStatus !== nextStatus) {
-            emitOrderStatusChanged({
+            await emitOrderStatusChanged({
                 order_id: order.id,
                 from_status: previousStatus,
                 to_status: nextStatus,
@@ -369,10 +475,18 @@ export const allocateOrder = async (req: Request, res: Response) => {
                 target_roles: nextStatus === 'waiting_invoice'
                     ? ['kasir', 'super_admin']
                     : ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
+            }, {
+                transaction: t,
+                requestContext: 'allocation_status_changed'
             });
         } else {
-            emitAdminRefreshBadges();
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'allocation_refresh_badges'
+            });
         }
+
+        await t.commit();
 
         res.json({
             message: 'Alokasi berhasil',
@@ -385,13 +499,12 @@ export const allocateOrder = async (req: Request, res: Response) => {
         });
 
     } catch (error) {
-        await t.rollback();
-        console.error('Allocation error:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        try { await t.rollback(); } catch { }
+        throw error;
     }
-};
+});
 
-export const cancelBackorder = async (req: Request, res: Response) => {
+export const cancelBackorder = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { id } = req.params as { id: string };
@@ -400,19 +513,21 @@ export const cancelBackorder = async (req: Request, res: Response) => {
 
         if (!reason) {
             await t.rollback();
-            return res.status(400).json({ message: 'Alasan cancel wajib diisi.' });
+            throw new CustomError('Alasan cancel wajib diisi.', 400);
         }
 
         const order = await Order.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!order) {
             await t.rollback();
-            return res.status(404).json({ message: 'Order tidak ditemukan.' });
+            throw new CustomError('Order tidak ditemukan.', 404);
         }
         const previousOrderStatus = String(order.status || '');
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
 
-        if (!(REALLOCATABLE_STATUSES as readonly string[]).includes(order.status)) {
+        if ((TERMINAL_ORDER_STATUSES as readonly string[]).includes(String(order.status || '').trim().toLowerCase())) {
             await t.rollback();
-            return res.status(400).json({ message: `Order dengan status '${order.status}' tidak bisa cancel backorder.` });
+            throw new CustomError(`Order dengan status '${order.status}' tidak bisa cancel backorder.`, 400);
         }
 
         const orderItems = await OrderItem.findAll({
@@ -430,7 +545,7 @@ export const cancelBackorder = async (req: Request, res: Response) => {
 
         if (shortageItems.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Order ini tidak memiliki kekurangan alokasi (bukan backorder/pre-order).' });
+            throw new CustomError('Order ini tidak memiliki kekurangan alokasi (bukan backorder/pre-order).', 400);
         }
 
         const allocatedByProduct = new Map<string, number>();
@@ -468,7 +583,33 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             remainingSubtotal += price * Number(row.allocated_qty || 0);
 
             if (row.shortage_qty > 0) {
-                await row.oi.update({ qty: row.allocated_qty }, { transaction: t });
+                await row.oi.update({
+                    qty: row.allocated_qty,
+                    qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0) + Number(row.shortage_qty || 0),
+                }, { transaction: t });
+
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: String(id),
+                    order_item_id: String(row?.oi?.id || ''),
+                    event_type: 'backorder_canceled',
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    reason,
+                    payload: {
+                        before: {
+                            shortage_qty: Number(row.shortage_qty || 0),
+                            qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0),
+                        },
+                        after: {
+                            shortage_qty: 0,
+                            qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0) + Number(row.shortage_qty || 0),
+                        },
+                        delta: {
+                            canceled_qty: Number(row.shortage_qty || 0)
+                        }
+                    }
+                });
             }
 
             const backorder = await Backorder.findOne({
@@ -495,9 +636,33 @@ export const cancelBackorder = async (req: Request, res: Response) => {
         const nextDiscount = Math.round(currentDiscount * discountRatio * 100) / 100;
         const nextTotal = Math.max(0, Math.round((remainingSubtotal + shippingFee - nextDiscount) * 100) / 100);
 
-        const nextStatus = remainingSubtotal <= 0
+        const [orderWithInvoice] = await attachInvoicesToOrders([order], { transaction: t });
+        const attachedInvoice = orderWithInvoice?.Invoice || null;
+        const attachedPaymentMethod = String(attachedInvoice?.payment_method || order.payment_method || '').trim().toLowerCase();
+        const attachedPaymentStatus = String(attachedInvoice?.payment_status || '').trim().toLowerCase();
+        const paymentSettled =
+            attachedPaymentStatus === 'paid'
+            || (attachedPaymentMethod === 'cod' && attachedPaymentStatus === 'cod_pending');
+
+        const openBackorderCount = await Backorder.count({
+            where: {
+                order_item_id: { [Op.in]: orderItems.map((row: any) => row.id) },
+                qty_pending: { [Op.gt]: 0 },
+                status: 'waiting_stock'
+            },
+            transaction: t
+        });
+
+        let nextStatus = remainingSubtotal <= 0
             ? 'canceled'
             : (order.status === 'hold' ? 'waiting_invoice' : order.status);
+
+        if (remainingSubtotal > 0 && openBackorderCount === 0) {
+            const currentStatus = String(order.status || '').trim().toLowerCase();
+            if (currentStatus === 'partially_fulfilled') {
+                nextStatus = paymentSettled ? 'completed' : 'delivered';
+            }
+        }
 
         await order.update({
             total_amount: nextTotal,
@@ -505,6 +670,20 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             status: nextStatus,
             stock_released: remainingSubtotal <= 0 ? true : order.stock_released
         }, { transaction: t });
+        if (previousOrderStatus !== nextStatus) {
+            await recordOrderEvent({
+                transaction: t,
+                order_id: String(id),
+                event_type: 'order_status_changed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: { status: previousOrderStatus },
+                    after: { status: nextStatus },
+                    delta: { status_changed: true }
+                }
+            });
+        }
 
         const openIssues = await OrderIssue.findAll({
             where: { order_id: id, status: 'open' },
@@ -531,10 +710,9 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             resolved_by: req.user?.id || null,
         }, { transaction: t });
 
-        await t.commit();
         const finalStatus = String(nextStatus || order.status || '');
         if (previousOrderStatus !== finalStatus) {
-            emitOrderStatusChanged({
+            await emitOrderStatusChanged({
                 order_id: String(order.id),
                 from_status: previousOrderStatus || null,
                 to_status: finalStatus,
@@ -543,10 +721,18 @@ export const cancelBackorder = async (req: Request, res: Response) => {
                 courier_id: String(order.courier_id || ''),
                 triggered_by_role: String(req.user?.role || ''),
                 target_roles: ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
+            }, {
+                transaction: t,
+                requestContext: 'allocation_cancel_backorder_status_changed'
             });
         } else {
-            emitAdminRefreshBadges();
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'allocation_cancel_backorder_refresh_badges'
+            });
         }
+
+        await t.commit();
 
         return res.json({
             message: 'Backorder / pre-order berhasil dibatalkan.',
@@ -555,8 +741,7 @@ export const cancelBackorder = async (req: Request, res: Response) => {
             shortage_items: shortageItems,
         });
     } catch (error) {
-        await t.rollback();
-        console.error('Error canceling backorder:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        try { await t.rollback(); } catch { }
+        throw error;
     }
-};
+});

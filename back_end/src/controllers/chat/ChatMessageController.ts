@@ -6,7 +6,6 @@ import {
     createThreadMessage,
     getThreadMessages
 } from '../../services/ChatThreadService';
-import { getStatus as getWhatsappStatus } from '../../services/whatsappClient';
 import {
     ATTACHMENT_FALLBACK_BODY,
     asActor,
@@ -18,8 +17,10 @@ import {
     resolveWhatsappTargetForThread,
     sendViaWhatsApp
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getThreadMessagesV2 = async (req: Request, res: Response) => {
+export const getThreadMessagesV2 = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const threadId = String(req.params.threadId || '').trim();
         const cursor = String(req.query.cursor || '').trim();
@@ -47,11 +48,14 @@ export const getThreadMessagesV2 = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching thread messages' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error fetching thread messages', 500);
     }
-};
+});
 
-export const sendThreadMessage = async (req: Request, res: Response) => {
+export const sendThreadMessage = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const actor = asActor(req);
         const threadId = String(req.params.threadId || '').trim();
@@ -64,13 +68,13 @@ export const sendThreadMessage = async (req: Request, res: Response) => {
         const body = rawMessage || (attachmentUrl ? ATTACHMENT_FALLBACK_BODY : '');
 
         if (!body && !attachmentUrl) {
-            return res.status(400).json({ message: 'Pesan atau lampiran wajib diisi.' });
+            throw new CustomError('Pesan atau lampiran wajib diisi.', 400);
         }
 
         const { thread } = await resolveThreadByIdOrLegacySession(threadId);
         const canAccess = await canAccessThread(thread, actor);
         if (!canAccess) {
-            return res.status(403).json({ message: 'Anda tidak memiliki akses ke thread ini.' });
+            throw new CustomError('Anda tidak memiliki akses ke thread ini.', 403);
         }
 
         let channel: ChatMessageChannel = requestedChannel === 'whatsapp' ? 'whatsapp' : 'app';
@@ -78,16 +82,13 @@ export const sendThreadMessage = async (req: Request, res: Response) => {
             channel = 'app';
         }
         if (channel === 'whatsapp' && !(thread.thread_type === 'support_omni' || thread.thread_type === 'wa_lead')) {
-            return res.status(400).json({ message: 'Channel WhatsApp hanya untuk thread support omnichannel/lead.' });
+            throw new CustomError('Channel WhatsApp hanya untuk thread support omnichannel/lead.', 400);
         }
 
         if (channel === 'whatsapp') {
             const targetNumber = await resolveWhatsappTargetForThread(thread);
             if (!targetNumber) {
-                return res.status(400).json({ message: 'Target WhatsApp thread tidak valid.' });
-            }
-            if (getWhatsappStatus() !== 'READY') {
-                return res.status(409).json({ message: 'WhatsApp belum terhubung. Silakan Connect WhatsApp terlebih dahulu.' });
+                throw new CustomError('Target WhatsApp thread tidak valid.', 400);
             }
             await sendViaWhatsApp(targetNumber, {
                 body: rawMessage,
@@ -138,6 +139,9 @@ export const sendThreadMessage = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error sending thread message' });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError(error?.message || 'Error sending thread message', 500);
     }
-};
+});

@@ -4,8 +4,10 @@ import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
 import { buildShortageSummary, TERMINAL_ORDER_STATUSES } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getPendingAllocations = async (req: Request, res: Response) => {
+export const getPendingAllocations = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const scope = String(req.query?.scope || 'shortage').toLowerCase();
         const includeAllOpenOrders = scope === 'all';
@@ -46,16 +48,16 @@ export const getPendingAllocations = async (req: Request, res: Response) => {
             rows,
         });
     } catch (error) {
-        console.error('Error fetching pending allocations:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Internal server error', 500);
     }
-};
+});
 
-export const getProductAllocations = async (req: Request, res: Response) => {
+export const getProductAllocations = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { productId } = req.params as { productId: string };
         if (!productId || !String(productId).trim()) {
-            return res.status(400).json({ message: 'productId wajib diisi' });
+            throw new CustomError('productId wajib diisi', 400);
         }
 
         const allocations = await OrderAllocation.findAll({
@@ -124,7 +126,7 @@ export const getProductAllocations = async (req: Request, res: Response) => {
             rows
         });
     } catch (error) {
-        console.error('Error fetching product allocations:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Internal server error', 500);
     }
-};
+});

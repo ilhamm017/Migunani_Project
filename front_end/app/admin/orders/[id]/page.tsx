@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
@@ -56,25 +57,38 @@ const normalizeProofImageUrl = (raw?: string | null) => {
   return val;
 };
 
-const collectOrderIdsFromInvoice = (invoiceData: any): string[] => {
+const collectOrderIdsFromInvoice = (invoiceData: unknown): string[] => {
   const ids = new Set<string>();
   const rows = Array.isArray(invoiceData?.Orders) ? invoiceData.Orders : [];
-  rows.forEach((row: any) => {
+  rows.forEach((row: unknown) => {
     const id = String(row?.id || row?.order_id || row?.Order?.id || '').trim();
     if (id) ids.add(id);
   });
   const items = Array.isArray(invoiceData?.InvoiceItems) ? invoiceData.InvoiceItems : [];
-  items.forEach((item: any) => {
+  items.forEach((item: unknown) => {
     const id = String(item?.OrderItem?.order_id || item?.order_id || item?.Order?.id || '').trim();
     if (id) ids.add(id);
   });
   return Array.from(ids);
 };
 
-const getInvoiceRefFromOrder = (orderData: any): string => {
+const getInvoiceRefFromOrder = (orderData: unknown): string => {
   const invoiceId = String(orderData?.invoice_id || orderData?.Invoice?.id || '').trim();
   if (invoiceId) return invoiceId;
   return '';
+};
+
+const getOrderItemSuppliedQty = (orderData: unknown, invoiceData: unknown, itemId: string) => {
+  const summaries = Array.isArray(orderData?.item_summaries) ? orderData.item_summaries : [];
+  const summaryRow = summaries.find((row: unknown) => String(row?.order_item_id || '') === itemId);
+  if (summaryRow) return Number(summaryRow?.invoiced_qty_total || 0);
+
+  const invoiceItems = Array.isArray(invoiceData?.InvoiceItems) ? invoiceData.InvoiceItems : [];
+  return invoiceItems.reduce((sum: number, invoiceItem: unknown) => {
+    const targetItemId = String(invoiceItem?.order_item_id || invoiceItem?.OrderItem?.id || '').trim();
+    if (targetItemId !== itemId) return sum;
+    return sum + Number(invoiceItem?.qty || 0);
+  }, 0);
 };
 
 export default function AdminInvoiceDetailPage() {
@@ -84,8 +98,8 @@ export default function AdminInvoiceDetailPage() {
   const router = useRouter();
   const routeRefId = String(params?.id || '').trim();
 
-  const [invoice, setInvoice] = useState<any>(null);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [invoice, setInvoice] = useState<unknown>(null);
+  const [orders, setOrders] = useState<unknown[]>([]);
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -93,7 +107,7 @@ export default function AdminInvoiceDetailPage() {
   const [error, setError] = useState('');
   const [proofLoadError, setProofLoadError] = useState(false);
 
-  const [couriers, setCouriers] = useState<any[]>([]);
+  const [couriers, setCouriers] = useState<unknown[]>([]);
   const [selectedCourierId, setSelectedCourierId] = useState('');
 
   const canManageWarehouseFlow = useMemo(
@@ -125,9 +139,9 @@ export default function AdminInvoiceDetailPage() {
       setError('');
       setProofLoadError(false);
 
-      let invoiceData: any = null;
+      let invoiceData: unknown = null;
       let invoiceId = '';
-      let fallbackOrderData: any = null;
+      let fallbackOrderData: unknown = null;
       let fallbackOrderId = '';
 
       try {
@@ -153,10 +167,10 @@ export default function AdminInvoiceDetailPage() {
       const fetchedOrders = orderDetailsResults
         .map((result) => (result.status === 'fulfilled' ? result.value.data : null))
         .filter(Boolean);
-      if (fallbackOrderData && !fetchedOrders.some((row: any) => String(row?.id || '') === String(fallbackOrderData?.id || ''))) {
+      if (fallbackOrderData && !fetchedOrders.some((row: unknown) => String(row?.id || '') === String(fallbackOrderData?.id || ''))) {
         fetchedOrders.push(fallbackOrderData);
       }
-      fetchedOrders.sort((a: any, b: any) => {
+      fetchedOrders.sort((a: unknown, b: unknown) => {
         const bTs = Date.parse(String(b?.createdAt || ''));
         const aTs = Date.parse(String(a?.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -172,12 +186,12 @@ export default function AdminInvoiceDetailPage() {
       const assignedCourierIds = Array.from(
         new Set(
           fetchedOrders
-            .map((row: any) => String(row?.courier_id || '').trim())
+            .map((row: unknown) => String(row?.courier_id || '').trim())
             .filter(Boolean)
         )
       );
       setSelectedCourierId(assignedCourierIds.length === 1 ? assignedCourierIds[0] : '');
-    } catch (e: any) {
+    } catch (e: unknown) {
       setInvoice(null);
       setOrders([]);
       setResolvedInvoiceId('');
@@ -206,7 +220,7 @@ export default function AdminInvoiceDetailPage() {
         : [];
 
     return rawItems
-      .map((item: any) => {
+      .map((item: unknown) => {
         const orderItem = item?.OrderItem || {};
         const product = orderItem?.Product || {};
         const orderId = String(orderItem?.order_id || item?.order_id || '').trim();
@@ -220,12 +234,12 @@ export default function AdminInvoiceDetailPage() {
           sku: String(product?.sku || productId || '-'),
         };
       })
-      .filter((line: any) => line.orderId && line.productId && line.qty > 0);
+      .filter((line: unknown) => line.orderId && line.productId && line.qty > 0);
   }, [invoice]);
 
   const invoiceQtyByOrderId = useMemo(() => {
     const map = new Map<string, number>();
-    invoiceItemLines.forEach((line: any) => {
+    invoiceItemLines.forEach((line: unknown) => {
       map.set(line.orderId, Number(map.get(line.orderId) || 0) + Number(line.qty || 0));
     });
     return map;
@@ -233,7 +247,7 @@ export default function AdminInvoiceDetailPage() {
 
   const invoiceSkuCountByOrderId = useMemo(() => {
     const map = new Map<string, Set<string>>();
-    invoiceItemLines.forEach((line: any) => {
+    invoiceItemLines.forEach((line: unknown) => {
       const set = map.get(line.orderId) || new Set<string>();
       set.add(line.productId);
       map.set(line.orderId, set);
@@ -245,21 +259,34 @@ export default function AdminInvoiceDetailPage() {
 
   const orderRows = useMemo(() => {
     const hasInvoiceSnapshot = invoiceItemLines.length > 0;
-    return orders.map((order: any) => {
+    return orders.map((order: unknown) => {
       const orderId = String(order?.id || '');
       const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+      const itemSummaries = Array.isArray(order?.item_summaries) ? order.item_summaries : [];
       const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
-      const orderedQty = items.reduce((sum: number, item: any) => sum + Number(item?.qty || 0), 0);
-      const allocatedQtyRaw = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
+      const orderedQty = items.reduce((sum: number, item: unknown) => sum + Number(item?.qty || 0), 0);
+      const allocatedQtyRaw = allocations.reduce((sum: number, alloc: unknown) => sum + Number(alloc?.allocated_qty || 0), 0);
       const allocatedQtyFromInvoice = Number(invoiceQtyByOrderId.get(orderId) || 0);
       const allocatedQtyFromOrder = Math.max(0, Math.min(orderedQty || allocatedQtyRaw, allocatedQtyRaw));
+      const suppliedQtyFromSummaries = itemSummaries.reduce(
+        (sum: number, row: unknown) => sum + Number(row?.invoiced_qty_total || 0),
+        0
+      );
+      const backorderQtyFromSummaries = itemSummaries.reduce(
+        (sum: number, row: unknown) => sum + Number(row?.backorder_open_qty || 0),
+        0
+      );
       const allocatedSkuSet = new Set<string>();
-      allocations.forEach((alloc: any) => {
+      allocations.forEach((alloc: unknown) => {
         const productId = String(alloc?.product_id || '').trim();
         const qty = Number(alloc?.allocated_qty || 0);
         if (productId && qty > 0) allocatedSkuSet.add(productId);
       });
       const allocatedQty = hasInvoiceSnapshot ? allocatedQtyFromInvoice : allocatedQtyFromOrder;
+      const suppliedQty = hasInvoiceSnapshot ? allocatedQtyFromInvoice : suppliedQtyFromSummaries;
+      const backorderQty = itemSummaries.length > 0
+        ? backorderQtyFromSummaries
+        : Math.max(0, orderedQty - suppliedQty);
       const allocatedSkuCount = hasInvoiceSnapshot
         ? Number(invoiceSkuCountByOrderId.get(orderId) || 0)
         : allocatedSkuSet.size;
@@ -270,7 +297,10 @@ export default function AdminInvoiceDetailPage() {
         source: String(order?.source || '-'),
         customerName: String(order?.customer_name || order?.Customer?.name || '-'),
         totalAmount: Number(order?.total_amount || 0),
+        orderedQty,
         allocatedQty,
+        suppliedQty,
+        backorderQty,
         allocatedSkuCount,
         courierName: String(order?.courier_display_name || order?.Courier?.name || '-'),
       };
@@ -301,7 +331,7 @@ export default function AdminInvoiceDetailPage() {
     if (invoiceItemLines.length > 0) {
       const map = new Map<string, PickingRow>();
 
-      invoiceItemLines.forEach((line: any) => {
+      invoiceItemLines.forEach((line: unknown) => {
         const orderId = String(line.orderId || '').trim();
         if (!orderId || !activeOrderSet.has(orderId)) return;
         const productId = String(line.productId || '').trim();
@@ -339,13 +369,13 @@ export default function AdminInvoiceDetailPage() {
 
     const map = new Map<string, PickingRow>();
 
-    orders.forEach((order: any) => {
+    orders.forEach((order: unknown) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId || !activeOrderSet.has(orderId)) return;
 
       const itemMeta = new Map<string, { name: string; sku: string }>();
       const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-      orderItems.forEach((item: any) => {
+      orderItems.forEach((item: unknown) => {
         const productId = String(item?.product_id || '').trim();
         if (!productId) return;
         const product = item?.Product || {};
@@ -358,7 +388,7 @@ export default function AdminInvoiceDetailPage() {
       });
 
       const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
-      allocations.forEach((allocation: any) => {
+      allocations.forEach((allocation: unknown) => {
         const productId = String(allocation?.product_id || '').trim();
         const qty = Number(allocation?.allocated_qty || 0);
         if (!productId || qty <= 0) return;
@@ -397,12 +427,15 @@ export default function AdminInvoiceDetailPage() {
   const allocatedSummary = useMemo(() => {
     return orderRows.reduce(
       (acc, row) => {
+        acc.ordered += Number(row.orderedQty || 0);
         acc.qty += Number(row.allocatedQty || 0);
+        acc.supplied += Number(row.suppliedQty || 0);
+        acc.backorder += Number(row.backorderQty || 0);
         acc.sku += Number(row.allocatedSkuCount || 0);
         acc.total += Number(row.totalAmount || 0);
         return acc;
       },
-      { qty: 0, sku: 0, total: 0 }
+      { ordered: 0, qty: 0, supplied: 0, backorder: 0, sku: 0, total: 0 }
     );
   }, [orderRows]);
 
@@ -410,7 +443,14 @@ export default function AdminInvoiceDetailPage() {
   const paymentMethod = String(invoice?.payment_method || '-');
   const paymentStatus = String(invoice?.payment_status || '-');
   const amountPaid = Number(invoice?.amount_paid || 0);
-  const invoiceTotal = Number(invoice?.total || allocatedSummary.total || 0);
+
+  // If we have an actual invoice, prioritize its total field.
+  // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
+  const hasActualInvoice = Boolean(invoice?.invoice_number);
+  const invoiceTotal = hasActualInvoice
+    ? Number(invoice?.total || 0)
+    : Number(allocatedSummary.total || 0);
+
   const customerName = String(
     invoice?.customer?.name ||
     invoice?.Customer?.name ||
@@ -449,7 +489,7 @@ export default function AdminInvoiceDetailPage() {
         setError(`Sebagian order gagal assign driver (${failedIds.length}/${targetIds.length}): ${failedIds.join(', ')}`);
       }
       await loadInvoiceDetail();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(e?.response?.data?.message || 'Gagal assign driver invoice');
     } finally {
       setUpdating(false);
@@ -496,12 +536,17 @@ export default function AdminInvoiceDetailPage() {
           <div className="text-right">
             <p className="text-xs text-slate-500">Total Invoice</p>
             <p className="text-lg font-black text-slate-900">{formatCurrency(invoiceTotal)}</p>
+            {hasActualInvoice && Math.abs(invoiceTotal - allocatedSummary.total) > 1 && (
+              <p className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg inline-block mt-1">
+                Original Order(s): {formatCurrency(allocatedSummary.total)}
+              </p>
+            )}
           </div>
         </div>
 
-        {orders.some((o: any) => o.active_issue) && (
+        {orders.some((o: unknown) => o.active_issue) && (
           <div className="space-y-3">
-            {orders.filter((o: any) => o.active_issue).map((order: any) => (
+            {orders.filter((o: unknown) => o.active_issue).map((order: unknown) => (
               <div key={`issue-${order.id}`} className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm space-y-3">
                 <div className="flex items-center gap-3 text-amber-700">
                   <div className="bg-amber-200 p-2 rounded-xl">
@@ -518,15 +563,17 @@ export default function AdminInvoiceDetailPage() {
                 <div className="bg-white/60 rounded-2xl p-4 border border-amber-100">
                   <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Catatan Driver:</p>
                   <p className="text-sm font-semibold text-slate-800 italic whitespace-pre-wrap">
-                    "{order.active_issue.note}"
+                    {order.active_issue.note}
                   </p>
                 </div>
                 {order.active_issue.evidence_url && (
                   <div className="space-y-1">
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">Lampiran Bukti:</p>
-                    <img
+                    <Image
                       src={normalizeProofImageUrl(order.active_issue.evidence_url) || ''}
                       alt="Bukti Masalah"
+                      width={640}
+                      height={360}
                       className="max-h-60 rounded-xl border border-amber-200 shadow-sm"
                     />
                   </div>
@@ -543,8 +590,9 @@ export default function AdminInvoiceDetailPage() {
           <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
             <p className="text-xs text-slate-600">Customer: <span className="font-bold text-slate-900">{customerName}</span></p>
             <p className="text-xs text-slate-600">Order dalam invoice: <span className="font-bold text-slate-900">{orderRows.length}</span></p>
-            <p className="text-xs text-slate-600">Qty dialokasikan: <span className="font-bold text-slate-900">{allocatedSummary.qty}</span></p>
-            <p className="text-xs text-slate-600">SKU dialokasikan: <span className="font-bold text-slate-900">{allocatedSummary.sku}</span></p>
+            <p className="text-xs text-slate-600">Qty diminta: <span className="font-bold text-slate-900">{allocatedSummary.ordered}</span></p>
+            <p className="text-xs text-slate-600">Sudah tersuplai: <span className="font-bold text-emerald-700">{allocatedSummary.supplied}</span></p>
+            <p className="text-xs text-slate-600">Backorder aktif: <span className="font-bold text-amber-700">{allocatedSummary.backorder}</span></p>
             <p className="text-xs text-slate-600">Ready to ship: <span className="font-bold text-slate-900">{readyToShipOrderIds.length}</span></p>
           </div>
 
@@ -555,9 +603,11 @@ export default function AdminInvoiceDetailPage() {
             <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoice?.createdAt ? formatDateTime(invoice.createdAt) : '-'}</span></p>
             {proofImageUrl && !proofLoadError && (
               <div className="pt-1">
-                <img
+                <Image
                   src={proofImageUrl}
                   alt="Bukti pembayaran"
+                  width={960}
+                  height={540}
                   className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
                   onError={() => setProofLoadError(true)}
                 />
@@ -576,15 +626,54 @@ export default function AdminInvoiceDetailPage() {
             <div className="space-y-2">
               {orderRows.map((row) => (
                 <div key={row.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div>
+                  <div className="flex-1">
                     <p className="text-sm font-black text-slate-900">#{row.id}</p>
                     <p className="text-[11px] text-slate-500">
                       {row.createdAt ? formatDateTime(row.createdAt) : '-'} • Source {row.source}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                      <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
+                      <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Tersuplai {row.suppliedQty}</span>
+                      <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {row.backorderQty}</span>
                       <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
                       <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
                     </div>
+                    {Array.isArray(orders.find((order: unknown) => String(order?.id || '') === row.id)?.OrderItems) && (
+                      <div className="mt-3 space-y-2">
+                        {(orders.find((order: unknown) => String(order?.id || '') === row.id)?.OrderItems || []).map((item: unknown) => {
+                          const itemId = String(item?.id || '');
+                          const productName = String(item?.Product?.name || 'Produk');
+                          const sku = String(item?.Product?.sku || '-');
+                          const orderedQty = Number(item?.qty || 0);
+                          const suppliedQty = getOrderItemSuppliedQty(
+                            orders.find((order: unknown) => String(order?.id || '') === row.id),
+                            invoice,
+                            itemId
+                          );
+                          const summaryRow = Array.isArray(orders.find((order: unknown) => String(order?.id || '') === row.id)?.item_summaries)
+                            ? orders.find((order: unknown) => String(order?.id || '') === row.id)?.item_summaries.find((summary: unknown) => String(summary?.order_item_id || '') === itemId)
+                            : null;
+                          const backorderQty = summaryRow
+                            ? Number(summaryRow?.backorder_open_qty || 0)
+                            : Math.max(0, orderedQty - suppliedQty);
+                          return (
+                            <div key={itemId} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-900">{productName}</p>
+                                  <p className="text-[10px] text-slate-500">SKU {sku}</p>
+                                </div>
+                                <div className="text-right text-[10px] font-bold">
+                                  <p className="text-slate-700">Diminta {orderedQty}</p>
+                                  <p className="text-emerald-700">Tersuplai {suppliedQty}</p>
+                                  <p className="text-amber-700">Backorder {backorderQty}</p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <div className="text-left sm:text-right">
                     <p className={`inline-flex px-2 py-1 rounded-full text-[10px] font-bold ${statusBadgeClass(row.status)}`}>

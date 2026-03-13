@@ -17,6 +17,14 @@ interface Product {
     stock?: number;
 }
 
+type ApiCatalogRow = {
+    id: string;
+    name?: string;
+    price?: number;
+    image_url?: string | null;
+    stock_quantity?: number;
+};
+
 const CATALOG_PAGE_SIZE = 20;
 
 // Filter categories
@@ -46,7 +54,7 @@ function CatalogContent() {
     const [totalPages, setTotalPages] = useState(1);
     const [hasMore, setHasMore] = useState(false);
 
-    const mapApiProduct = (item: any): Product => ({
+    const mapApiProduct = (item: ApiCatalogRow): Product => ({
         id: String(item.id),
         name: String(item.name || ''),
         price: Number(item.price || 0),

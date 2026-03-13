@@ -10,11 +10,13 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getProfitAndLoss = async (req: Request, res: Response) => {
+export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { startDate, endDate } = req.query;
 
@@ -74,7 +76,7 @@ export const getProfitAndLoss = async (req: Request, res: Response) => {
         });
 
     } catch (error) {
-        res.status(500).json({ message: 'Error calculating P&L', error });
+        throw new CustomError('Error calculating P&L', 500);
     }
-};
+});
 

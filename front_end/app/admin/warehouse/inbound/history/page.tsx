@@ -1,13 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
     ChevronLeft,
     Search,
     Calendar,
-    User,
-    Truck,
     Clock,
     ChevronRight,
     Package,
@@ -36,13 +34,7 @@ export default function POHistoryPage() {
     const [totalPages, setTotalPages] = useState(1);
     const [statusFilter, setStatusFilter] = useState('');
 
-    useEffect(() => {
-        if (allowed) {
-            loadPOs();
-        }
-    }, [allowed, page, statusFilter]);
-
-    const loadPOs = async () => {
+    const loadPOs = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.inventory.getPOs({
@@ -57,7 +49,13 @@ export default function POHistoryPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [page, statusFilter]);
+
+    useEffect(() => {
+        if (allowed) {
+            void loadPOs();
+        }
+    }, [allowed, loadPOs]);
 
     if (!allowed) return null;
 

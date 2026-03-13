@@ -1,7 +1,258 @@
 import { Op, QueryTypes } from 'sequelize';
 import { Account, Journal, JournalLine, Product, Invoice, User, Order, sequelize, Backorder, OrderItem, ProductCostState, OrderAllocation } from '../models';
 
+type StockReductionEventType = 'allocation' | 'goods_out';
+
+type StockReductionRow = {
+    event_type: StockReductionEventType;
+    product_id: string;
+    sku: string;
+    product_name: string;
+    unit: string;
+    qty_reduced: number;
+    order_count: number;
+    related_order_ids: string[];
+    latest_order_id: string | null;
+    latest_event_at: string | null;
+    breakdown: {
+        allocation: number;
+        goods_out: number;
+    };
+};
+
+type StockReductionResult = {
+    period: { start: Date; end: Date };
+    event_type: 'all' | StockReductionEventType;
+    search: string;
+    summary: {
+        total_qty_reduced: number;
+        total_products: number;
+        total_orders: number;
+    };
+    rows: StockReductionRow[];
+};
+
 export class ReportService {
+    private static normalizeStockReductionEventType(raw?: string): 'all' | StockReductionEventType {
+        const value = String(raw || '').trim().toLowerCase();
+        if (value === 'allocation') return 'allocation';
+        if (value === 'goods_out') return 'goods_out';
+        return 'all';
+    }
+
+    private static resolveStockReductionPeriod(startDate?: string, endDate?: string) {
+        const end = endDate ? new Date(endDate) : new Date();
+        const start = startDate ? new Date(startDate) : new Date(end.getTime() - (30 * 24 * 60 * 60 * 1000));
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new Error('Tanggal tidak valid');
+        }
+        // Treat date filters as full-day windows to avoid excluding same-day records.
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        if (start > end) {
+            throw new Error('Rentang tanggal tidak valid');
+        }
+        return { start, end };
+    }
+
+    static async calculateStockReductionReport(params: {
+        startDate?: string;
+        endDate?: string;
+        eventType?: string;
+        search?: string;
+    }): Promise<StockReductionResult> {
+        const { startDate, endDate, eventType, search } = params;
+        const period = this.resolveStockReductionPeriod(startDate, endDate);
+        const normalizedEventType = this.normalizeStockReductionEventType(eventType);
+        const searchText = String(search || '').trim().toLowerCase();
+
+        const allocations = normalizedEventType === 'goods_out'
+            ? []
+            : await OrderAllocation.findAll({
+                where: {
+                    allocated_qty: { [Op.gt]: 0 },
+                    createdAt: { [Op.between]: [period.start, period.end] }
+                } as any,
+                include: [{ model: Product, as: 'Product', attributes: ['id', 'sku', 'name', 'unit'] }],
+                attributes: ['order_id', 'product_id', 'allocated_qty', 'createdAt'],
+                order: [['createdAt', 'DESC']],
+                raw: false
+            });
+
+        const goodsOutRows = normalizedEventType === 'allocation'
+            ? []
+            : await sequelize.query(
+                `SELECT 
+                    l.product_id,
+                    p.sku,
+                    p.name,
+                    p.unit,
+                    l.reference_id AS order_id,
+                    l.qty,
+                    l.createdAt
+                 FROM inventory_cost_ledger l
+                 INNER JOIN products p ON p.id = l.product_id
+                 WHERE l.movement_type = 'out'
+                   AND l.reference_type = 'order'
+                   AND l.qty > 0
+                   AND l.createdAt BETWEEN :startDate AND :endDate
+                 ORDER BY l.createdAt DESC`,
+                {
+                    type: QueryTypes.SELECT,
+                    replacements: { startDate: period.start, endDate: period.end }
+                }
+            ) as Array<{
+                product_id: string;
+                sku: string;
+                name: string;
+                unit: string | null;
+                order_id: string | null;
+                qty: number;
+                createdAt: string | Date;
+            }>;
+
+        type RowBucket = {
+            product_id: string;
+            sku: string;
+            product_name: string;
+            unit: string;
+            qty_reduced: number;
+            orderIds: Set<string>;
+            sampleOrderIds: string[];
+            latest_event_at: Date | null;
+            latest_order_id: string | null;
+            breakdown: {
+                allocation: number;
+                goods_out: number;
+            };
+        };
+
+        const byProduct = new Map<string, RowBucket>();
+        const globalOrderIds = new Set<string>();
+
+        const ensureBucket = (productId: string, sku: string, productName: string, unit?: string | null) => {
+            const existing = byProduct.get(productId);
+            if (existing) return existing;
+            const next: RowBucket = {
+                product_id: productId,
+                sku: sku || '-',
+                product_name: productName || 'Produk',
+                unit: String(unit || '-'),
+                qty_reduced: 0,
+                orderIds: new Set<string>(),
+                sampleOrderIds: [],
+                latest_event_at: null,
+                latest_order_id: null,
+                breakdown: {
+                    allocation: 0,
+                    goods_out: 0
+                }
+            };
+            byProduct.set(productId, next);
+            return next;
+        };
+
+        for (const row of allocations as any[]) {
+            const product = row?.Product || {};
+            const productId = String(row?.product_id || product?.id || '').trim();
+            if (!productId) continue;
+            const sku = String(product?.sku || '').trim();
+            const productName = String(product?.name || '').trim();
+            if (searchText) {
+                const haystack = `${sku} ${productName}`.toLowerCase();
+                if (!haystack.includes(searchText)) continue;
+            }
+            const qty = Number(row?.allocated_qty || 0);
+            if (qty <= 0) continue;
+            const orderId = String(row?.order_id || '').trim();
+            const createdAt = new Date(row?.createdAt);
+            const bucket = ensureBucket(productId, sku, productName, product?.unit);
+            bucket.qty_reduced += qty;
+            bucket.breakdown.allocation += qty;
+            if (orderId) {
+                bucket.orderIds.add(orderId);
+                globalOrderIds.add(orderId);
+                if (bucket.sampleOrderIds.length < 5 && !bucket.sampleOrderIds.includes(orderId)) {
+                    bucket.sampleOrderIds.push(orderId);
+                }
+            }
+            if (!bucket.latest_event_at || createdAt > bucket.latest_event_at) {
+                bucket.latest_event_at = createdAt;
+                bucket.latest_order_id = orderId || null;
+            }
+        }
+
+        for (const row of goodsOutRows) {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) continue;
+            const sku = String(row?.sku || '').trim();
+            const productName = String(row?.name || '').trim();
+            if (searchText) {
+                const haystack = `${sku} ${productName}`.toLowerCase();
+                if (!haystack.includes(searchText)) continue;
+            }
+            const qty = Number(row?.qty || 0);
+            if (qty <= 0) continue;
+            const orderId = String(row?.order_id || '').trim();
+            const createdAt = new Date(row?.createdAt);
+            const bucket = ensureBucket(productId, sku, productName, row?.unit || null);
+            bucket.qty_reduced += qty;
+            bucket.breakdown.goods_out += qty;
+            if (orderId) {
+                bucket.orderIds.add(orderId);
+                globalOrderIds.add(orderId);
+                if (bucket.sampleOrderIds.length < 5 && !bucket.sampleOrderIds.includes(orderId)) {
+                    bucket.sampleOrderIds.push(orderId);
+                }
+            }
+            if (!bucket.latest_event_at || createdAt > bucket.latest_event_at) {
+                bucket.latest_event_at = createdAt;
+                bucket.latest_order_id = orderId || null;
+            }
+        }
+
+        const rows = Array.from(byProduct.values())
+            .map((bucket): StockReductionRow => ({
+                event_type: normalizedEventType === 'all'
+                    ? (bucket.breakdown.goods_out > bucket.breakdown.allocation ? 'goods_out' : 'allocation')
+                    : normalizedEventType,
+                product_id: bucket.product_id,
+                sku: bucket.sku,
+                product_name: bucket.product_name,
+                unit: bucket.unit,
+                qty_reduced: Number(bucket.qty_reduced || 0),
+                order_count: bucket.orderIds.size,
+                related_order_ids: bucket.sampleOrderIds,
+                latest_order_id: bucket.latest_order_id,
+                latest_event_at: bucket.latest_event_at ? bucket.latest_event_at.toISOString() : null,
+                breakdown: {
+                    allocation: Number(bucket.breakdown.allocation || 0),
+                    goods_out: Number(bucket.breakdown.goods_out || 0)
+                }
+            }))
+            .sort((a, b) => {
+                const qtyDiff = Number(b.qty_reduced || 0) - Number(a.qty_reduced || 0);
+                if (qtyDiff !== 0) return qtyDiff;
+                const bTs = Date.parse(String(b.latest_event_at || ''));
+                const aTs = Date.parse(String(a.latest_event_at || ''));
+                const bVal = Number.isFinite(bTs) ? bTs : 0;
+                const aVal = Number.isFinite(aTs) ? aTs : 0;
+                return bVal - aVal;
+            });
+
+        return {
+            period,
+            event_type: normalizedEventType,
+            search: String(search || '').trim(),
+            summary: {
+                total_qty_reduced: rows.reduce((sum, row) => sum + Number(row.qty_reduced || 0), 0),
+                total_products: rows.length,
+                total_orders: globalOrderIds.size
+            },
+            rows
+        };
+    }
+
     static async getJournalBalance(
         accountType: string | string[],
         dateFilter: any,

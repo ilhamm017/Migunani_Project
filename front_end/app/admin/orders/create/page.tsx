@@ -44,17 +44,17 @@ function ManualOrderContent() {
 
     // Customer Search State
     const [customerSearch, setCustomerSearch] = useState('');
-    const [customers, setCustomers] = useState<any[]>([]);
-    const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
-    const [searchingCustomers, setSearchingCustomers] = useState(false);
+    const [customers, setCustomers] = useState<unknown[]>([]);
+    const [selectedCustomer, setSelectedCustomer] = useState<unknown>(null);
+    const [, setSearchingCustomers] = useState(false);
 
     // Product Search State
     const [productSearch, setProductSearch] = useState('');
-    const [products, setProducts] = useState<any[]>([]);
-    const [searchingProducts, setSearchingProducts] = useState(false);
+    const [products, setProducts] = useState<unknown[]>([]);
+    const [, setSearchingProducts] = useState(false);
 
     // Cart State
-    const [cart, setCart] = useState<any[]>([]);
+    const [cart, setCart] = useState<unknown[]>([]);
     const [paymentMethod, setPaymentMethod] = useState<'transfer_manual' | 'cod' | 'cash_store'>('cash_store');
     const [submitting, setSubmitting] = useState(false);
     const [prefillingCustomer, setPrefillingCustomer] = useState(false);
@@ -90,7 +90,7 @@ function ManualOrderContent() {
 
             const customerRes = await api.admin.customers.search(whatsappFromSession, { status: 'active', limit: 10 });
             const found = Array.isArray(customerRes.data?.customers)
-                ? customerRes.data.customers.find((item: any) =>
+                ? customerRes.data.customers.find((item: unknown) =>
                     normalizeWhatsapp(item?.whatsapp_number) === whatsappFromSession
                 )
                 : null;
@@ -142,7 +142,7 @@ function ManualOrderContent() {
                     return;
                 }
                 alert('Customer tidak aktif. Order tidak bisa dibuat.');
-            } catch (error: any) {
+            } catch (error: unknown) {
                 const statusCode = Number(error?.response?.status || 0);
                 if (statusCode === 404) {
                     if (isChatDrivenOrder) {
@@ -257,7 +257,7 @@ function ManualOrderContent() {
         return parsed;
     };
 
-    const getProductPrice = (product: any) => {
+    const getProductPrice = (product: unknown) => {
         const tier = selectedCustomer?.CustomerProfile?.tier || 'regular';
         const basePrice = Math.max(0, Number(product.price || 0));
         if (tier === 'regular') return basePrice;
@@ -300,7 +300,7 @@ function ManualOrderContent() {
         return basePrice;
     };
 
-    const addToCart = (product: any) => {
+    const addToCart = (product: unknown) => {
         setCart(prev => {
             const existing = prev.find(item => item.product_id === product.id);
             if (existing) {
@@ -366,7 +366,7 @@ function ManualOrderContent() {
             setChatReplyText('');
             setChatReplyAttachment(null);
             await refreshChatContext(chatSessionIdParam);
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to send chat context reply:', error);
             setChatReplyError(error?.response?.data?.message || 'Gagal mengirim balasan chat.');
         } finally {
@@ -393,7 +393,7 @@ function ManualOrderContent() {
             });
             alert('Pesanan berhasil dibuat!');
             router.push('/admin/orders');
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(error);
             alert(error.response?.data?.message || 'Gagal membuat pesanan');
         } finally {
@@ -459,7 +459,7 @@ function ManualOrderContent() {
                                                 <div className="mt-2">
                                                     {isImageAttachment(message.attachment_url) ? (
                                                         <a href={message.attachment_url} target="_blank" rel="noopener noreferrer" className="inline-block">
-                                                            <img src={message.attachment_url} alt="Lampiran chat" className="h-24 w-24 rounded-lg border border-slate-200 object-cover" />
+                                                            <Image src={message.attachment_url} alt="Lampiran chat" width={96} height={96} className="h-24 w-24 rounded-lg border border-slate-200 object-cover" />
                                                         </a>
                                                     ) : (
                                                         <a
@@ -704,7 +704,7 @@ function ManualOrderContent() {
                                 <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
                                 <select
                                     value={paymentMethod}
-                                    onChange={(e) => setPaymentMethod(e.target.value as any)}
+                                    onChange={(e) => setPaymentMethod(e.target.value as unknown)}
                                     className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
                                 >
                                     <option value="cash_store">Cash (Bayar di Toko)</option>

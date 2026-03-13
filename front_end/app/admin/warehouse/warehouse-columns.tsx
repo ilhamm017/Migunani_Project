@@ -14,7 +14,7 @@ export interface WarehouseTableMeta {
     onExpandEdit?: (product: ProductRow) => void;
 }
 
-const getMeta = (table: any): WarehouseTableMeta => {
+const getMeta = (table: unknown): WarehouseTableMeta => {
     return (table.options.meta || {}) as WarehouseTableMeta;
 };
 
@@ -25,7 +25,7 @@ const currency = (value: number) =>
         maximumFractionDigits: 0,
     }).format(Number(value || 0));
 
-const CopySKUCell = ({ row }: { row: any }) => {
+const CopySKUCell = ({ row }: { row: unknown }) => {
     const sku: string = row.original.sku || '';
     const [copied, setCopied] = useState(false);
 
@@ -61,9 +61,9 @@ const EditableTextCell = ({
     transform,
     className,
 }: {
-    row: any;
-    getValue: () => any;
-    table: any;
+    row: unknown;
+    getValue: () => unknown;
+    table: unknown;
     field: InlineField;
     placeholder?: string;
     transform?: (value: string) => string;
@@ -125,9 +125,9 @@ const EditableNumberCell = ({
     displayAsCurrency = false,
     alignRight = false,
 }: {
-    row: any;
-    getValue: () => any;
-    table: any;
+    row: unknown;
+    getValue: () => unknown;
+    table: unknown;
     field: InlineField;
     integer?: boolean;
     displayAsCurrency?: boolean;
@@ -191,7 +191,7 @@ const EditableNumberCell = ({
     );
 };
 
-const EditableStockCell = ({ row, getValue, table }: { row: any; getValue: () => any; table: any }) => {
+const EditableStockCell = ({ row, getValue, table }: { row: unknown; getValue: () => unknown; table: unknown }) => {
     const meta = getMeta(table);
     const initialStock = Number(getValue() || 0);
     const minStock = Number(row.original.min_stock || 0);
@@ -252,7 +252,7 @@ const EditableStockCell = ({ row, getValue, table }: { row: any; getValue: () =>
     );
 };
 
-const EditableStatusCell = ({ row, table }: { row: any; table: any }) => {
+const EditableStatusCell = ({ row, table }: { row: unknown; table: unknown }) => {
     const meta = getMeta(table);
     const initialValue = String(row.original.status || 'inactive').toLowerCase() === 'active' ? 'active' : 'inactive';
     const [value, setValue] = useState<'active' | 'inactive'>(initialValue);
@@ -301,7 +301,7 @@ const EditableStatusCell = ({ row, table }: { row: any; table: any }) => {
     );
 };
 
-const StatusCell = ({ row }: { row: any }) => {
+const StatusCell = ({ row }: { row: unknown }) => {
     const stock = Number(row.original.stock_quantity || 0);
     const minStock = Number(row.original.min_stock || 0);
 

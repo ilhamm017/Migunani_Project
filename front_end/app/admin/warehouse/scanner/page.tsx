@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff, Keyboard, ScanLine } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -14,10 +13,17 @@ type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => BarcodeDete
 
 const BARCODE_DETECTOR_FORMATS = ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code'];
 
+type ScanResult = {
+  name: string;
+  sku: string;
+  stock_quantity: number;
+  price: number;
+};
+
 export default function InventoryScannerPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
   const [sku, setSku] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ScanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [scanSource, setScanSource] = useState<'manual' | 'camera' | 'device' | null>(null);
   const [cameraRunning, setCameraRunning] = useState(false);
@@ -56,7 +62,13 @@ export default function InventoryScannerPage() {
       setScanSource(source);
       setSku(code);
       const res = await api.admin.inventory.scanBySku(code);
-      setResult(res.data);
+      const payload = (res.data || {}) as Record<string, unknown>;
+      setResult({
+        name: String(payload.name ?? ''),
+        sku: String(payload.sku ?? ''),
+        stock_quantity: Number(payload.stock_quantity ?? 0),
+        price: Number(payload.price ?? 0),
+      });
       setScannerHint('');
     } catch (error) {
       console.error('Scan failed:', error);

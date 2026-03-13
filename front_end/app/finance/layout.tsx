@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, ListTodo, PieChart, Menu, CheckCircle } from 'lucide-react';
+import { Home, ListTodo, PieChart, Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
 // import { useFinanceBadges } from '@/lib/useFinanceBadges'; // To be implemented later
 

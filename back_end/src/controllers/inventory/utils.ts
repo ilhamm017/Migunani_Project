@@ -890,11 +890,18 @@ export const resolveImportErrorStatus = (message: string): number => {
         normalized.includes('worksheet') ||
         normalized.includes('format file') ||
         normalized.includes('file wajib') ||
+        normalized.includes('file_path wajib') ||
         normalized.includes('invalid signature') ||
         normalized.includes('kolom products belum lengkap') ||
         normalized.includes('rows wajib diisi')
     ) {
         return 400;
+    }
+    if (
+        normalized.includes('import local path tidak diaktifkan') ||
+        normalized.includes('akses path ditolak oleh allowlist import')
+    ) {
+        return 403;
     }
     return 500;
 };
@@ -978,7 +985,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
 
 
 

@@ -6,9 +6,25 @@ import waClient, { getStatus as getWaStatus } from '../../services/whatsappClien
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { recordOrderEvent } from '../../utils/orderEvent';
 import { resolveEffectiveTierPricing, normalizeShippingMethodCode, CheckoutPaymentMethod, normalizeCheckoutItems, resolveShippingMethodForCheckout, ALLOWED_PAYMENT_METHODS } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 
-export const checkout = async (req: Request, res: Response) => {
+export const checkout = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const idempotencyScope = `checkout:${String(req.user?.id || '')}`;
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, idempotencyScope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan checkout duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const userId = req.user!.id; // Authenticated user
@@ -31,7 +47,7 @@ export const checkout = async (req: Request, res: Response) => {
             : '';
         if (requestedPaymentMethod && !ALLOWED_PAYMENT_METHODS.includes(requestedPaymentMethod as CheckoutPaymentMethod)) {
             await t.rollback();
-            return res.status(400).json({ message: 'Metode pembayaran tidak valid' });
+            throw new CustomError('Metode pembayaran tidak valid', 400);
         }
         const resolvedPaymentMethod: CheckoutPaymentMethod = (requestedPaymentMethod || 'transfer_manual') as CheckoutPaymentMethod;
 
@@ -48,7 +64,7 @@ export const checkout = async (req: Request, res: Response) => {
 
             if (!cart || !cart.CartItems || cart.CartItems.length === 0) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Cart is empty' });
+                throw new CustomError('Cart is empty', 400);
             }
 
             // Map CartItems to standard items format
@@ -58,12 +74,12 @@ export const checkout = async (req: Request, res: Response) => {
             }));
         } else if (!finalItems || finalItems.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Cart is empty' });
+            throw new CustomError('Cart is empty', 400);
         }
 
         if (!finalItems || finalItems.length === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Item checkout tidak valid' });
+            throw new CustomError('Item checkout tidak valid', 400);
         }
 
         let totalAmount = 0;
@@ -77,15 +93,15 @@ export const checkout = async (req: Request, res: Response) => {
         });
         if (!customer) {
             await t.rollback();
-            return res.status(404).json({ message: 'Customer tidak ditemukan' });
+            throw new CustomError('Customer tidak ditemukan', 404);
         }
         if (customer.role !== 'customer') {
             await t.rollback();
-            return res.status(400).json({ message: 'Order hanya bisa dibuat untuk akun customer' });
+            throw new CustomError('Order hanya bisa dibuat untuk akun customer', 400);
         }
         if (customer.status !== 'active') {
             await t.rollback();
-            return res.status(403).json({ message: 'Akun customer sedang diblokir' });
+            throw new CustomError('Akun customer sedang diblokir', 403);
         }
         const customerName = typeof customer?.name === 'string' && customer.name.trim()
             ? customer.name.trim()
@@ -104,7 +120,7 @@ export const checkout = async (req: Request, res: Response) => {
 
             if (!product) {
                 await t.rollback();
-                return res.status(404).json({ message: `Product ${item.product_id} not found` });
+                throw new CustomError(`Product ${item.product_id} not found`, 404);
             }
 
             // Stock check is informational only — admin will do final allocation
@@ -142,7 +158,7 @@ export const checkout = async (req: Request, res: Response) => {
         const selectedShippingMethod = await resolveShippingMethodForCheckout(requestedShippingCode);
         if (requestedShippingCode && !selectedShippingMethod) {
             await t.rollback();
-            return res.status(400).json({ message: 'Metode pengiriman tidak valid atau tidak aktif' });
+            throw new CustomError('Metode pengiriman tidak valid atau tidak aktif', 400);
         }
         const shippingFee = Number(selectedShippingMethod?.fee || 0);
         totalAmount += shippingFee;
@@ -150,31 +166,34 @@ export const checkout = async (req: Request, res: Response) => {
         // Apply promo code if present
         let promoDiscountAmount = 0;
         if (promo_code) {
-            const settings = await Setting.findByPk('discount_vouchers', { transaction: t });
+            const settings = await Setting.findByPk('discount_vouchers', {
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
             const vouchers = Array.isArray(settings?.value) ? settings.value : [];
             const normalizedPromoCode = String(promo_code).trim().toUpperCase();
             const voucher = vouchers.find((v: any) => v.code === normalizedPromoCode);
 
             if (!voucher || !voucher.is_active) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Kode promo tidak valid atau sudah tidak aktif' });
+                throw new CustomError('Kode promo tidak valid atau sudah tidak aktif', 400);
             }
 
             const now = new Date();
             if (now < new Date(voucher.starts_at) || now > new Date(voucher.expires_at)) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Kode promo sudah kedaluwarsa atau belum bisa digunakan' });
+                throw new CustomError('Kode promo sudah kedaluwarsa atau belum bisa digunakan', 400);
             }
 
             if (voucher.usage_count >= voucher.usage_limit) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Kuota kode promo sudah habis' });
+                throw new CustomError('Kuota kode promo sudah habis', 400);
             }
 
             const voucherProductId = typeof voucher.product_id === 'string' ? voucher.product_id.trim() : '';
             if (!voucherProductId) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Kode promo tidak valid untuk produk.' });
+                throw new CustomError('Kode promo tidak valid untuk produk.', 400);
             }
 
             const eligibleSubtotal = orderItemsData.reduce((sum, item: any) => {
@@ -184,7 +203,7 @@ export const checkout = async (req: Request, res: Response) => {
 
             if (eligibleSubtotal <= 0) {
                 await t.rollback();
-                return res.status(400).json({ message: 'Kode promo tidak berlaku untuk produk di keranjang.' });
+                throw new CustomError('Kode promo tidak berlaku untuk produk di keranjang.', 400);
             }
 
             promoDiscountAmount = Math.min(
@@ -207,6 +226,13 @@ export const checkout = async (req: Request, res: Response) => {
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + 30); // 30 Days expiry
 
+        let finalCustomerNote = typeof customer_note === 'string' ? customer_note.trim() : null;
+        if (userRole !== 'customer') {
+            const userName = (req.user as any)?.name || userId;
+            const adminNote = `[Dibuat oleh ${userRole}: ${userName}]`;
+            finalCustomerNote = finalCustomerNote ? `${adminNote} ${finalCustomerNote}` : adminNote;
+        }
+
         const order = await Order.create({
             customer_id: targetCustomerId,
             customer_name: customerName,
@@ -221,13 +247,27 @@ export const checkout = async (req: Request, res: Response) => {
             shipping_method_name: selectedShippingMethod?.name || null,
             shipping_fee: shippingFee,
             shipping_address: typeof shipping_address === 'string' ? shipping_address.trim() : null,
-            customer_note: typeof customer_note === 'string' ? customer_note.trim() : null
+            customer_note: finalCustomerNote
         }, { transaction: t });
+        await recordOrderEvent({
+            transaction: t,
+            order_id: String(order.id),
+            event_type: 'order_status_changed',
+            actor_user_id: String(req.user?.id || ''),
+            actor_role: String(req.user?.role || ''),
+            payload: {
+                before: { status: null },
+                after: { status: 'pending' },
+                delta: { status_changed: true }
+            }
+        });
 
         // Create Order Items
         for (const itemData of orderItemsData) {
             const createdItem = await OrderItem.create({
                 order_id: order.id,
+                ordered_qty_original: Number(itemData.qty || 0),
+                qty_canceled_backorder: 0,
                 ...itemData
             }, { transaction: t });
 
@@ -241,6 +281,19 @@ export const checkout = async (req: Request, res: Response) => {
                     status: 'waiting_stock',
                     notes: 'Auto created on order placement'
                 }, { transaction: t });
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: String(order.id),
+                    order_item_id: String(createdItem.id),
+                    event_type: 'backorder_opened',
+                    actor_user_id: String(req.user?.id || ''),
+                    actor_role: String(req.user?.role || ''),
+                    payload: {
+                        before: { shortage_qty: 0 },
+                        after: { shortage_qty: Number(shortage || 0) },
+                        delta: { shortage_qty: Number(shortage || 0) }
+                    }
+                });
             }
         }
 
@@ -266,8 +319,7 @@ export const checkout = async (req: Request, res: Response) => {
             }
         }
 
-        await t.commit();
-        emitOrderStatusChanged({
+        await emitOrderStatusChanged({
             order_id: order.id,
             from_status: null,
             to_status: String(order.status || 'pending'),
@@ -276,7 +328,12 @@ export const checkout = async (req: Request, res: Response) => {
             courier_id: null,
             triggered_by_role: userRole || null,
             target_roles: ['kasir'],
+        }, {
+            transaction: t,
+            requestContext: 'checkout_order_status_changed'
         });
+
+        await t.commit();
 
 
         // If successful and from_cart, clear the cart
@@ -287,7 +344,7 @@ export const checkout = async (req: Request, res: Response) => {
             }
         }
 
-        res.status(201).json({
+        const responsePayload = {
             message: 'Order placed successfully',
             order_id: order.id,
             total_amount: totalAmount,
@@ -297,16 +354,17 @@ export const checkout = async (req: Request, res: Response) => {
             shipping_method_name: selectedShippingMethod?.name || null,
             shipping_fee: shippingFee,
             status: order.status
-        });
+        };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, idempotencyScope, 201, responsePayload);
+        }
+        res.status(201).json(responsePayload);
 
     } catch (error) {
-        console.error('Checkout failed:', error);
-        // t.rollback() is handled by each return or here if error matches
-        // Actually, if we return inside try, we explicitly rollback. 
-        // If error thrown, we rollback here.
-        // We need to check if transaction is finished?
-        // simple way:
         try { await t.rollback(); } catch (e) { }
-        res.status(500).json({ message: 'Checkout failed', error });
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, idempotencyScope);
+        }
+        throw error;
     }
-};
+});

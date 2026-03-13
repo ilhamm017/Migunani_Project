@@ -1,30 +1,34 @@
 import { Request, Response } from 'express';
 import { StockOpnameService } from '../services/StockOpnameService';
+import { asyncWrapper } from '../utils/asyncWrapper';
+import { CustomError } from '../utils/CustomError';
 
-export const getAllOpnames = async (req: Request, res: Response) => {
+export const getAllOpnames = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const opnames = await StockOpnameService.getAllOpnames();
         return res.json(opnames);
     } catch (error) {
+        if (error instanceof CustomError) throw error;
         console.error('Error fetching opnames:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        throw new CustomError('Internal server error', 500);
     }
-};
+});
 
-export const getOpnameDetail = async (req: Request, res: Response) => {
+export const getOpnameDetail = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { id } = req.params as { id: string };
         const opname = await StockOpnameService.getOpnameDetail(id);
 
-        if (!opname) return res.status(404).json({ message: 'Opname not found' });
+        if (!opname) throw new CustomError('Opname not found', 404);
         return res.json(opname);
     } catch (error) {
+        if (error instanceof CustomError) throw error;
         console.error('Error fetching opname detail:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        throw new CustomError('Internal server error', 500);
     }
-};
+});
 
-export const startOpname = async (req: Request, res: Response) => {
+export const startOpname = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const userId = (req as any).user?.id;
         const { notes } = req.body;
@@ -32,12 +36,13 @@ export const startOpname = async (req: Request, res: Response) => {
         const opname = await StockOpnameService.startOpname(userId, notes);
         return res.status(201).json(opname);
     } catch (error) {
+        if (error instanceof CustomError) throw error;
         console.error('Error starting opname:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        throw new CustomError('Internal server error', 500);
     }
-};
+});
 
-export const submitOpnameItem = async (req: Request, res: Response) => {
+export const submitOpnameItem = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { id } = req.params as { id: string };
         const { product_id, physical_qty } = req.body;
@@ -45,18 +50,19 @@ export const submitOpnameItem = async (req: Request, res: Response) => {
         const result = await StockOpnameService.submitOpnameItem(id, product_id, physical_qty);
         return res.json(result);
     } catch (error: any) {
+        if (error instanceof CustomError) throw error;
         console.error('Error submitting opname item:', error);
         if (error.message === 'Opname not found or not open') {
-            return res.status(400).json({ message: error.message });
+            throw new CustomError(error.message, 400);
         }
         if (error.message === 'Product not found') {
-            return res.status(404).json({ message: error.message });
+            throw new CustomError(error.message, 404);
         }
-        return res.status(500).json({ message: 'Internal server error' });
+        throw new CustomError('Internal server error', 500);
     }
-};
+});
 
-export const finishOpname = async (req: Request, res: Response) => {
+export const finishOpname = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { id } = req.params as { id: string };
         const userId = (req as any).user?.id;
@@ -64,11 +70,11 @@ export const finishOpname = async (req: Request, res: Response) => {
         const opname = await StockOpnameService.finishOpname(id, userId);
         return res.json(opname);
     } catch (error: any) {
+        if (error instanceof CustomError) throw error;
         console.error('Error finishing opname:', error);
         if (error.message === 'Opname not found or not open') {
-            return res.status(400).json({ message: error.message });
+            throw new CustomError(error.message, 400);
         }
-        return res.status(500).json({ message: 'Internal server error' });
+        throw new CustomError('Internal server error', 500);
     }
-};
-
+});

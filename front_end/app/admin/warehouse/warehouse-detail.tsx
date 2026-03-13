@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useEffect, useMemo, useState } from 'react';
 import { ProductRow } from '../inventory/types';
 import { api } from '@/lib/api';
@@ -62,6 +63,25 @@ interface ProductAllocationResponse {
     order_count: number;
     rows: ProductAllocationRow[];
 }
+
+interface MutationRow {
+    id: string;
+    type: 'in' | 'out' | string;
+    qty: number;
+    note?: string | null;
+    reference_id?: string | null;
+    createdAt: string;
+}
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+        if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message;
+    }
+    return fallback;
+};
 
 const toNullableNumber = (value: unknown): number | null => {
     if (value === null || value === undefined || value === '') return null;
@@ -249,7 +269,7 @@ const parseOptionalNonNegativeNumber = (value: string, label: string): number | 
 };
 
 export default function WarehouseDetailPanel({ product, categories, onClose, onProductUpdated, mode = 'info', onRequestEdit }: WarehouseDetailProps) {
-    const [mutations, setMutations] = useState<any[]>([]);
+    const [mutations, setMutations] = useState<MutationRow[]>([]);
     const [loadingMutations, setLoadingMutations] = useState(false);
     const [allocationRows, setAllocationRows] = useState<ProductAllocationRow[]>([]);
     const [allocationSummary, setAllocationSummary] = useState({ totalAllocated: 0, openAllocated: 0, orderCount: 0 });
@@ -279,7 +299,18 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
         }
         setLoadingMutations(true);
         api.admin.inventory.getMutations(product.id)
-            .then((res) => setMutations((res.data?.mutations || []).slice(0, 10)))
+            .then((res) => {
+                const rows = Array.isArray(res.data?.mutations) ? res.data.mutations : [];
+                const mapped: MutationRow[] = rows.map((row: Record<string, unknown>) => ({
+                    id: String(row.id ?? ''),
+                    type: String(row.type ?? ''),
+                    qty: Number(row.qty ?? 0),
+                    note: row.note ? String(row.note) : null,
+                    reference_id: row.reference_id ? String(row.reference_id) : null,
+                    createdAt: String(row.createdAt ?? ''),
+                })).filter((row) => Boolean(row.id));
+                setMutations(mapped.slice(0, 10));
+            })
             .catch(() => setMutations([]))
             .finally(() => setLoadingMutations(false));
     }, [product?.id]);
@@ -445,10 +476,21 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             onProductUpdated?.(mergedProduct);
 
             api.admin.inventory.getMutations(product.id)
-                .then((res) => setMutations((res.data?.mutations || []).slice(0, 10)))
+                .then((res) => {
+                    const rows = Array.isArray(res.data?.mutations) ? res.data.mutations : [];
+                    const mapped: MutationRow[] = rows.map((row: Record<string, unknown>) => ({
+                        id: String(row.id ?? ''),
+                        type: String(row.type ?? ''),
+                        qty: Number(row.qty ?? 0),
+                        note: row.note ? String(row.note) : null,
+                        reference_id: row.reference_id ? String(row.reference_id) : null,
+                        createdAt: String(row.createdAt ?? ''),
+                    })).filter((row) => Boolean(row.id));
+                    setMutations(mapped.slice(0, 10));
+                })
                 .catch(() => undefined);
-        } catch (error: any) {
-            const message = error?.response?.data?.message || error?.message || 'Gagal menyimpan perubahan produk.';
+        } catch (error: unknown) {
+            const message = getErrorMessage(error, 'Gagal menyimpan perubahan produk.');
             setFeedback({ type: 'error', message });
         } finally {
             setIsSaving(false);
@@ -502,7 +544,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
 
                 <div className="aspect-[4/3] w-full bg-slate-100 rounded-2xl border border-slate-200 overflow-hidden">
                     {form.image_url ? (
-                        <img src={form.image_url} alt={form.name} className="w-full h-full object-contain" />
+                        <Image src={form.image_url} alt={form.name} className="w-full h-full object-contain" width={800} height={600} />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-300">
                             <Camera size={40} />
@@ -746,7 +788,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {mutations.map((mut: any) => (
+                                    {mutations.map((mut) => (
                                         <tr key={mut.id} className="hover:bg-slate-50/50">
                                             <td className="px-3 py-2 text-slate-500">
                                                 {new Date(mut.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

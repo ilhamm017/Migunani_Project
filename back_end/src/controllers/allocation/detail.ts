@@ -3,7 +3,10 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder, InvoiceItem } from '../../models';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
-export const getOrderDetails = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { id } = req.params as { id: string };
         const order = await Order.findByPk(id, {
@@ -18,11 +21,11 @@ export const getOrderDetails = async (req: Request, res: Response) => {
         });
 
         if (!order) {
-            return res.status(404).json({ message: 'Order not found' });
+            throw new CustomError('Order not found', 404);
         }
         res.json(order);
     } catch (error) {
-        console.error('Error fetching order details:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Internal server error', 500);
     }
-};
+});

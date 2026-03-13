@@ -1,75 +1,39 @@
-import fs from 'fs';
-import path from 'path';
-import { NextFunction, Request, Response, Router } from 'express';
-import multer from 'multer';
+import { Router } from 'express';
 import * as ChatController from '../controllers/ChatController';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
+import { createAttachmentUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
 const router = Router();
-const chatUploadsDir = path.resolve(process.cwd(), 'uploads', 'chat');
-if (!fs.existsSync(chatUploadsDir)) {
-    fs.mkdirSync(chatUploadsDir, { recursive: true });
-}
-
-const allowedAttachmentMimeTypes = new Set([
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-    'image/gif',
-    'application/pdf',
-    'text/plain',
-    'text/csv',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/zip',
-    'application/x-rar-compressed'
-]);
-
-const chatUpload = multer({
-    storage: multer.diskStorage({
-        destination: (req, _file, cb) => {
-            const userId = req.user?.id || req.body.guest_id || 'anonymous';
-            const dest = path.join('uploads', String(userId), 'chat');
-            if (!fs.existsSync(dest)) {
-                fs.mkdirSync(dest, { recursive: true });
-            }
-            cb(null, dest);
-        },
-        filename: (_req, file, cb) => {
-            const ext = path.extname(file.originalname || '').toLowerCase();
-            const safeExt = ext.replace(/[^a-z0-9.]/g, '');
-            const stamp = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `chat-${stamp}${safeExt}`);
-        }
-    }),
-    limits: {
-        fileSize: 10 * 1024 * 1024
-    },
-    fileFilter: (_req, file, cb) => {
-        if (allowedAttachmentMimeTypes.has(file.mimetype)) {
-            cb(null, true);
-            return;
-        }
-        cb(new Error('UNSUPPORTED_ATTACHMENT_TYPE'));
-    }
+const chatUpload = createAttachmentUpload({
+    folderName: 'chat',
+    prefix: 'chat',
+    allowedMimeTypes: [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+        'image/gif',
+        'application/pdf',
+        'text/plain',
+        'text/csv',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/zip',
+        'application/x-rar-compressed'
+    ],
+    allowedExtensions: ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.pdf', '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar'],
+    fallbackExtension: '.bin',
+    maxSizeBytes: 10 * 1024 * 1024,
+    resolveOwnerSegment: (req) => String(req.user?.id || req.body.guest_id || 'anonymous'),
+    unsupportedTypeMessage: 'Format lampiran tidak didukung.'
 });
 
-const uploadAttachmentMiddleware = (req: Request, res: Response, next: NextFunction) => {
-    chatUpload.single('attachment')(req, res, (err) => {
-        if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ message: 'Ukuran lampiran terlalu besar (maksimal 10MB).' });
-        }
-        if (err instanceof Error && err.message === 'UNSUPPORTED_ATTACHMENT_TYPE') {
-            return res.status(400).json({ message: 'Format lampiran tidak didukung.' });
-        }
-        if (err) {
-            return res.status(400).json({ message: 'Upload lampiran gagal diproses.' });
-        }
-        return next();
-    });
-};
+const uploadAttachmentMiddleware = createSingleUploadMiddleware(chatUpload, {
+    fieldName: 'attachment',
+    sizeExceededMessage: 'Ukuran lampiran terlalu besar (maksimal 10MB).',
+    fallbackMessage: 'Upload lampiran gagal diproses.'
+});
 
 // Public endpoint for customer web widget attachment upload
 router.post('/web/attachment', uploadAttachmentMiddleware, ChatController.uploadWebAttachment);

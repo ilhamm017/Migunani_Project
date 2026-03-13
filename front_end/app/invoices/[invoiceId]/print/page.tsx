@@ -12,13 +12,18 @@ type InvoiceItem = {
   id: string;
   qty: number;
   ordered_qty?: number;
+  invoice_qty?: number;
   allocated_qty?: number;
   remaining_qty?: number;
+  previously_allocated_qty?: number;
   unit_price: number;
   line_total: number;
   OrderItem?: {
     id: string;
     order_id: string;
+    ordered_qty_original?: number;
+    qty?: number;
+    qty_canceled_backorder?: number;
     Product?: {
       name?: string | null;
       sku?: string | null;
@@ -60,9 +65,19 @@ const paymentMethodLabel = (method?: string) => {
 
 const paymentStatusLabel = (status?: string) => {
   if (status === 'unpaid') return 'Belum Lunas';
-  if (status === 'cod_pending') return 'COD Pending';
+  if (status === 'cod_pending') return 'Sudah Dibayar ke Driver';
   if (status === 'paid') return 'Lunas';
   return status || '-';
+};
+
+const paymentInstructionLabel = (method?: string) => {
+  if (method === 'cod') {
+    return 'Jika customer sudah membayar COD ke driver, invoice ini dianggap selesai dari sisi customer. Proses setoran ke admin finance ditangani internal.';
+  }
+  if (method === 'transfer_manual') {
+    return 'Untuk transfer manual, pembayaran diverifikasi finance setelah bukti transfer diterima.';
+  }
+  return 'Ikuti metode pembayaran yang tercantum pada invoice ini.';
 };
 
 export default function InvoicePrintPage() {
@@ -263,8 +278,9 @@ export default function InvoicePrintPage() {
                           <th className="px-4 py-3 text-left">Produk</th>
                           <th className="px-4 py-3 text-left">Order</th>
                           <th className="px-4 py-3 text-right">Dipesan</th>
-                          <th className="px-4 py-3 text-right">Dialokasikan</th>
-                          <th className="px-4 py-3 text-right">Sisa</th>
+                          <th className="px-4 py-3 text-right">Invoice Ini</th>
+                          <th className="px-4 py-3 text-right">Total Alokasi</th>
+                          <th className="px-4 py-3 text-right">Sisa Backorder</th>
                           <th className="px-4 py-3 text-right">Harga</th>
                           <th className="px-4 py-3 text-right">Subtotal</th>
                         </tr>
@@ -272,7 +288,7 @@ export default function InvoicePrintPage() {
                       <tbody>
                         {items.length === 0 && (
                           <tr>
-                            <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                            <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
                               Tidak ada item di invoice ini.
                             </td>
                           </tr>
@@ -280,9 +296,20 @@ export default function InvoicePrintPage() {
                         {items.map((item) => {
                           const product = item.OrderItem?.Product || {};
                           const orderId = String(item.OrderItem?.order_id || '-');
-                          const orderedQty = Number(item.ordered_qty ?? item.qty ?? 0);
-                          const allocatedQty = Number(item.allocated_qty ?? item.qty ?? 0);
-                          const remainingQty = Number(item.remaining_qty ?? Math.max(0, orderedQty - allocatedQty));
+                          const orderedQty = Number(
+                            item.OrderItem?.ordered_qty_original
+                            ?? item.ordered_qty
+                            ?? item.OrderItem?.qty
+                            ?? item.qty
+                            ?? 0
+                          );
+                          const invoiceQty = Number(item.invoice_qty ?? item.qty ?? 0);
+                          const allocatedQty = Number(item.allocated_qty ?? invoiceQty);
+                          const canceledBackorderQty = Number(item.OrderItem?.qty_canceled_backorder || 0);
+                          const remainingQty = Number(
+                            item.remaining_qty
+                            ?? Math.max(0, orderedQty - allocatedQty - canceledBackorderQty)
+                          );
                           return (
                             <tr key={item.id} className="border-t border-slate-100">
                               <td className="px-4 py-3">
@@ -292,6 +319,7 @@ export default function InvoicePrintPage() {
                               </td>
                               <td className="px-4 py-3 text-slate-600">{orderId}</td>
                               <td className="px-4 py-3 text-right text-slate-700">{orderedQty}</td>
+                              <td className="px-4 py-3 text-right text-slate-700">{invoiceQty}</td>
                               <td className="px-4 py-3 text-right text-slate-700">{allocatedQty}</td>
                               <td className="px-4 py-3 text-right text-slate-700">{remainingQty}</td>
                               <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(Number(item.unit_price || 0))}</td>
@@ -308,7 +336,7 @@ export default function InvoicePrintPage() {
                   <div className="rounded-2xl border border-slate-200 p-4">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">Catatan</p>
                     <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                      Pembayaran ditangani oleh driver saat pengantaran atau sesuai metode yang disepakati.
+                      {paymentInstructionLabel(detail.payment_method)}
                       Simpan invoice ini sebagai bukti transaksi dan rujukan layanan purna jual.
                     </p>
                   </div>
@@ -400,9 +428,20 @@ export default function InvoicePrintPage() {
                 {items.map((item) => {
                   const product = item.OrderItem?.Product || {};
                   const orderId = String(item.OrderItem?.order_id || '-');
-                  const orderedQty = Number(item.ordered_qty ?? item.qty ?? 0);
-                  const allocatedQty = Number(item.allocated_qty ?? item.qty ?? 0);
-                  const remainingQty = Number(item.remaining_qty ?? Math.max(0, orderedQty - allocatedQty));
+                  const orderedQty = Number(
+                    item.OrderItem?.ordered_qty_original
+                    ?? item.ordered_qty
+                    ?? item.OrderItem?.qty
+                    ?? item.qty
+                    ?? 0
+                  );
+                  const invoiceQty = Number(item.invoice_qty ?? item.qty ?? 0);
+                  const allocatedQty = Number(item.allocated_qty ?? invoiceQty);
+                  const canceledBackorderQty = Number(item.OrderItem?.qty_canceled_backorder || 0);
+                  const remainingQty = Number(
+                    item.remaining_qty
+                    ?? Math.max(0, orderedQty - allocatedQty - canceledBackorderQty)
+                  );
                   return (
                     <div key={item.id} className="space-y-1">
                       <div className="flex items-start justify-between gap-2">
@@ -417,7 +456,7 @@ export default function InvoicePrintPage() {
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-slate-600">
                         <span>{orderedQty} x {formatCurrency(Number(item.unit_price || 0))}</span>
-                        <span>Alloc {allocatedQty} | Sisa {remainingQty}</span>
+                        <span>Inv {invoiceQty} | Total {allocatedQty} | Sisa {remainingQty}</span>
                       </div>
                     </div>
                   );
@@ -452,7 +491,7 @@ export default function InvoicePrintPage() {
               <div className="border-t border-dashed border-slate-300 my-3" />
 
               <p className="text-[10px] text-slate-500 text-center">
-                Pembayaran ditangani oleh driver saat pengantaran atau sesuai metode yang disepakati.
+                {paymentInstructionLabel(detail.payment_method)}
               </p>
               <p className="text-[10px] text-slate-400 text-center mt-1">Terima kasih telah berbelanja.</p>
             </div>

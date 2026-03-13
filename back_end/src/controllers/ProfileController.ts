@@ -1,54 +1,48 @@
 import { Request, Response } from 'express';
 import { User, CustomerProfile } from '../models';
+import { asyncWrapper } from '../utils/asyncWrapper';
+import { CustomError } from '../utils/CustomError';
 
-export const getMe = async (req: Request, res: Response) => {
-    try {
-        const userId = req.user?.id;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const user = await User.findByPk(userId, {
-            attributes: ['id', 'name', 'email', 'whatsapp_number', 'role', 'status'],
-            include: [
-                {
-                    model: CustomerProfile,
-                    attributes: ['tier', 'credit_limit', 'points', 'saved_addresses']
-                }
-            ]
-        });
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-
-        res.json({ user });
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching profile', error });
+export const getMe = asyncWrapper(async (req: Request, res: Response) => {
+    const userId = req.user?.id;
+    if (!userId) {
+        throw new CustomError('Unauthorized', 401);
     }
-};
 
-export const updateAddresses = async (req: Request, res: Response) => {
-    try {
-        const userId = req.user?.id;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
+    const user = await User.findByPk(userId, {
+        attributes: ['id', 'name', 'email', 'whatsapp_number', 'role', 'status'],
+        include: [
+            {
+                model: CustomerProfile,
+                attributes: ['tier', 'credit_limit', 'points', 'saved_addresses']
+            }
+        ]
+    });
 
-        const { saved_addresses } = req.body;
-        if (!Array.isArray(saved_addresses)) {
-            return res.status(400).json({ message: 'Invalid addresses format' });
-        }
-
-        const profile = await CustomerProfile.findOne({ where: { user_id: userId } });
-        if (!profile) {
-            return res.status(404).json({ message: 'Customer profile not found' });
-        }
-
-        await profile.update({ saved_addresses });
-
-        res.json({ message: 'Addresses updated successfully', saved_addresses });
-    } catch (error) {
-        res.status(500).json({ message: 'Error updating addresses', error });
+    if (!user) {
+        throw new CustomError('User not found', 404);
     }
-};
+
+    res.json({ user });
+});
+
+export const updateAddresses = asyncWrapper(async (req: Request, res: Response) => {
+    const userId = req.user?.id;
+    if (!userId) {
+        throw new CustomError('Unauthorized', 401);
+    }
+
+    const { saved_addresses } = req.body;
+    if (!Array.isArray(saved_addresses)) {
+        throw new CustomError('Invalid addresses format', 400);
+    }
+
+    const profile = await CustomerProfile.findOne({ where: { user_id: userId } });
+    if (!profile) {
+        throw new CustomError('Customer profile not found', 404);
+    }
+
+    await profile.update({ saved_addresses });
+
+    res.json({ message: 'Addresses updated successfully', saved_addresses });
+});

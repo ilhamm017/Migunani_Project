@@ -9,6 +9,26 @@ import { api } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { formatCurrency } from '@/lib/utils';
 
+type ProductPreview = {
+  id: string;
+  name: string;
+  price: number;
+  image_url: string | null;
+  stock_quantity: number;
+};
+
+type OrderInvoiceSummary = {
+  id: string;
+  total: number;
+  payment_status: string | null;
+};
+
+type MyOrderSummary = {
+  id: string;
+  Invoices?: OrderInvoiceSummary[] | null;
+  Invoice?: OrderInvoiceSummary | null;
+};
+
 const combinedStats = [
   { label: 'Produk', value: '120+', color: 'bg-emerald-500', trend: 'Tersedia', icon: Package },
   { label: 'Kategori', value: '8', color: 'bg-blue-500', trend: 'Lengkap', icon: TrendingUp },
@@ -17,7 +37,7 @@ const combinedStats = [
 ];
 
 export default function MemberHome() {
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<ProductPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
   const [invoiceSummary, setInvoiceSummary] = useState({ count: 0, total: 0 });
@@ -30,26 +50,44 @@ export default function MemberHome() {
           api.catalog.getProducts({ limit: 4 }),
           api.orders.getMyOrders({ page: 1, limit: 200 })
         ]);
-        setProducts(productsRes.data?.products || []);
-        const orders = ordersRes.data?.orders || [];
-        const invoiceMap = new Map<string, any>();
-        orders.forEach((order: any) => {
+        const nextProducts: ProductPreview[] = Array.isArray(productsRes.data?.products)
+          ? productsRes.data.products.map((product: Record<string, unknown>) => ({
+            id: String(product.id ?? ''),
+            name: String(product.name ?? ''),
+            price: Number(product.price ?? 0),
+            image_url: product.image_url ? String(product.image_url) : null,
+            stock_quantity: Number(product.stock_quantity ?? 0),
+          }))
+          : [];
+        setProducts(nextProducts);
+
+        const orders: MyOrderSummary[] = Array.isArray(ordersRes.data?.orders) ? ordersRes.data.orders : [];
+        const invoiceMap = new Map<string, OrderInvoiceSummary & { orderIds: string[] }>();
+        orders.forEach((order) => {
           const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
             ? order.Invoices
             : order?.Invoice
               ? [order.Invoice]
               : [];
-          invoices.forEach((invoice: any) => {
+          invoices.forEach((invoice) => {
             const id = String(invoice?.id || '');
             if (!id) return;
-            const existing = invoiceMap.get(id) || { ...invoice, orderIds: [] as string[] };
+            const existing = invoiceMap.get(id) || {
+              id,
+              total: Number(invoice?.total ?? 0),
+              payment_status: invoice?.payment_status ? String(invoice.payment_status) : null,
+              orderIds: [] as string[],
+            };
             if (!existing.orderIds.includes(String(order.id))) {
               existing.orderIds.push(String(order.id));
             }
             invoiceMap.set(id, existing);
           });
         });
-        const unpaidInvoices = Array.from(invoiceMap.values()).filter((inv) => String(inv?.payment_status || '') !== 'paid');
+        const unpaidInvoices = Array.from(invoiceMap.values()).filter((inv) => {
+          const status = String(inv?.payment_status || '');
+          return status !== 'paid' && status !== 'cod_pending';
+        });
         const total = unpaidInvoices.reduce((sum, inv) => sum + Number(inv?.total || 0), 0);
         setInvoiceSummary({ count: unpaidInvoices.length, total });
       } catch (error) {
@@ -62,7 +100,7 @@ export default function MemberHome() {
   }, []);
 
   const handleAddToCart = async (productId: string) => {
-    const product = products.find((p) => String(p.id) === String(productId));
+    const product = products.find((item) => String(item.id) === String(productId));
     if (!product) return;
 
     addItem({

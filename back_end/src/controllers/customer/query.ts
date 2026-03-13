@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { User, CustomerProfile, Order, sequelize } from '../../models';
+import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice } from '../../models';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
 import { OPEN_ORDER_STATUSES } from './types';
 import { normalizeId, parsePositiveNumber, applyCustomerSearch, applyStatusFilter } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const searchCustomers = async (req: Request, res: Response) => {
+export const searchCustomers = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { search, status = 'active', limit = 20 } = req.query;
 
@@ -27,11 +29,14 @@ export const searchCustomers = async (req: Request, res: Response) => {
 
         res.json({ customers });
     } catch (error) {
-        res.status(500).json({ message: 'Error searching customers', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error searching customers', 500);
     }
-};
+});
 
-export const getCustomers = async (req: Request, res: Response) => {
+export const getCustomers = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { page = 1, limit = 20, search, status = 'all' } = req.query;
         const safePage = parsePositiveNumber(page, 1, 100000);
@@ -92,15 +97,18 @@ export const getCustomers = async (req: Request, res: Response) => {
             customers: rows,
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching customers', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching customers', 500);
     }
-};
+});
 
-export const getCustomerById = async (req: Request, res: Response) => {
+export const getCustomerById = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = normalizeId(req.params?.id);
         if (!id) {
-            return res.status(400).json({ message: 'ID customer tidak valid' });
+            throw new CustomError('ID customer tidak valid', 400);
         }
 
         const customer = await User.findOne({
@@ -112,7 +120,7 @@ export const getCustomerById = async (req: Request, res: Response) => {
         });
 
         if (!customer) {
-            return res.status(404).json({ message: 'Customer tidak ditemukan' });
+            throw new CustomError('Customer tidak ditemukan', 404);
         }
 
         const orderCountRows = await Order.findAll({
@@ -146,15 +154,18 @@ export const getCustomerById = async (req: Request, res: Response) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching customer detail', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching customer detail', 500);
     }
-};
+});
 
-export const getCustomerOrders = async (req: Request, res: Response) => {
+export const getCustomerOrders = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const customerId = normalizeId(req.params?.id);
         if (!customerId) {
-            return res.status(400).json({ message: 'ID customer tidak valid' });
+            throw new CustomError('ID customer tidak valid', 400);
         }
 
         const customer = await User.findOne({
@@ -162,10 +173,10 @@ export const getCustomerOrders = async (req: Request, res: Response) => {
             attributes: ['id']
         });
         if (!customer) {
-            return res.status(404).json({ message: 'Customer tidak ditemukan' });
+            throw new CustomError('Customer tidak ditemukan', 404);
         }
 
-        const { page = 1, limit = 20, scope = 'all', status } = req.query;
+        const { page = 1, limit = 20, scope = 'all', status, startDate, endDate } = req.query;
         const safePage = parsePositiveNumber(page, 1, 100000);
         const safeLimit = parsePositiveNumber(limit, 20, 100);
         const offset = (safePage - 1) * safeLimit;
@@ -183,11 +194,48 @@ export const getCustomerOrders = async (req: Request, res: Response) => {
             whereClause.status = statusParam;
         }
 
+        const createdAtRange: Record<symbol, Date> = {} as Record<symbol, Date>;
+        if (typeof startDate === 'string' && startDate.trim()) {
+            const parsedStart = new Date(startDate);
+            if (!Number.isNaN(parsedStart.getTime())) {
+                parsedStart.setHours(0, 0, 0, 0);
+                createdAtRange[Op.gte] = parsedStart;
+            }
+        }
+        if (typeof endDate === 'string' && endDate.trim()) {
+            const parsedEnd = new Date(endDate);
+            if (!Number.isNaN(parsedEnd.getTime())) {
+                parsedEnd.setHours(23, 59, 59, 999);
+                createdAtRange[Op.lte] = parsedEnd;
+            }
+        }
+        if (Object.keys(createdAtRange).length > 0 || Object.getOwnPropertySymbols(createdAtRange).length > 0) {
+            whereClause.createdAt = createdAtRange;
+        }
+
         const orders = await Order.findAndCountAll({
             where: whereClause,
             distinct: true,
             limit: safeLimit,
             offset,
+            include: [
+                {
+                    model: OrderItem,
+                    include: [
+                        { model: Product, attributes: ['id', 'name', 'sku'] },
+                        { model: Backorder, attributes: ['id', 'qty_pending', 'status', 'notes'] },
+                        {
+                            model: InvoiceItem,
+                            as: 'InvoiceItems',
+                            attributes: ['id', 'invoice_id', 'order_item_id', 'qty', 'unit_price', 'line_total', 'createdAt'],
+                            include: [{
+                                model: Invoice,
+                                attributes: ['id', 'invoice_number', 'payment_status', 'payment_method', 'createdAt']
+                            }]
+                        }
+                    ]
+                }
+            ],
             order: [['createdAt', 'DESC']]
         });
 
@@ -201,6 +249,9 @@ export const getCustomerOrders = async (req: Request, res: Response) => {
             orders: ordersWithInvoices,
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching customer orders', error });
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching customer orders', 500);
     }
-};
+});

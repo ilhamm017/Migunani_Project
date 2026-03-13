@@ -19,6 +19,42 @@ import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
+type AddressRow = {
+    isPrimary?: boolean;
+    fullAddress?: string | null;
+    address?: string | null;
+};
+
+type CreatorProfile = {
+    saved_addresses?: AddressRow[] | null;
+};
+
+type ReturCreator = {
+    id?: string;
+    name?: string | null;
+    whatsapp_number?: string | null;
+    CustomerProfile?: CreatorProfile | null;
+};
+
+type ReturTask = {
+    id: string;
+    status: string;
+    qty: number;
+    order_id?: string | null;
+    Product?: { name?: string | null } | null;
+    Creator?: ReturCreator | null;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+        if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message;
+    }
+    return fallback;
+};
+
 export default function DriverReturDetailPage() {
     const allowed = useRequireRoles(['driver', 'super_admin']);
     const { user } = useAuthStore();
@@ -26,7 +62,7 @@ export default function DriverReturDetailPage() {
     const router = useRouter();
     const returId = String(params?.id || '');
 
-    const [retur, setRetur] = useState<any>(null);
+    const [retur, setRetur] = useState<ReturTask | null>(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
 
@@ -35,7 +71,43 @@ export default function DriverReturDetailPage() {
         try {
             setLoading(true);
             const res = await api.driver.getReturById(returId);
-            setRetur(res.data || null);
+            const row = res.data as Record<string, unknown> | null;
+            if (!row || typeof row !== 'object') {
+                setRetur(null);
+                return;
+            }
+            setRetur({
+                id: String(row.id ?? ''),
+                status: String(row.status ?? ''),
+                qty: Number(row.qty ?? 0),
+                order_id: row.order_id ? String(row.order_id) : null,
+                Product: row.Product && typeof row.Product === 'object'
+                    ? { name: String((row.Product as Record<string, unknown>).name ?? '') }
+                    : null,
+                Creator: row.Creator && typeof row.Creator === 'object'
+                    ? {
+                        id: (row.Creator as Record<string, unknown>).id ? String((row.Creator as Record<string, unknown>).id) : undefined,
+                        name: (row.Creator as Record<string, unknown>).name ? String((row.Creator as Record<string, unknown>).name) : null,
+                        whatsapp_number: (row.Creator as Record<string, unknown>).whatsapp_number ? String((row.Creator as Record<string, unknown>).whatsapp_number) : null,
+                        CustomerProfile: (() => {
+                            const profileRaw = (row.Creator as Record<string, unknown>).CustomerProfile;
+                            if (!profileRaw || typeof profileRaw !== 'object') return null;
+                            const addressesRaw = (profileRaw as Record<string, unknown>).saved_addresses;
+                            const savedAddresses: AddressRow[] = Array.isArray(addressesRaw)
+                                ? addressesRaw.map((address) => {
+                                    const addressObj = address as Record<string, unknown>;
+                                    return {
+                                        isPrimary: Boolean(addressObj.isPrimary),
+                                        fullAddress: addressObj.fullAddress ? String(addressObj.fullAddress) : null,
+                                        address: addressObj.address ? String(addressObj.address) : null,
+                                    };
+                                })
+                                : [];
+                            return { saved_addresses: savedAddresses };
+                        })(),
+                    }
+                    : null,
+            });
         } catch (error) {
             console.error('Failed to load retur detail:', error);
             setRetur(null);
@@ -109,9 +181,9 @@ export default function DriverReturDetailPage() {
                 ? 'Pickup retur berhasil dikonfirmasi.'
                 : 'Penyerahan ke kasir berhasil dikonfirmasi.');
             await loadRetur();
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to update retur status:', error);
-            alert(error?.response?.data?.message || 'Gagal memperbarui status tugas retur.');
+            alert(getErrorMessage(error, 'Gagal memperbarui status tugas retur.'));
         } finally {
             setSubmitting(false);
         }
@@ -142,10 +214,10 @@ export default function DriverReturDetailPage() {
         );
     }
 
-    const customer = retur.Creator || {};
-    const profile = customer.CustomerProfile || {};
+    const customer: ReturCreator = retur.Creator || {};
+    const profile: CreatorProfile = customer.CustomerProfile || {};
     const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-    const addressObj = addresses.find((a: any) => a.isPrimary) || addresses[0];
+    const addressObj = addresses.find((addressRow) => addressRow.isPrimary) || addresses[0];
     const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
 
     return (

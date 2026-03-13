@@ -4,8 +4,10 @@ import { Op, UniqueConstraintError, ValidationError } from 'sequelize';
 import { User, CustomerProfile, sequelize } from '../models';
 import { generateToken } from '../middleware/authMiddleware';
 import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
+import { asyncWrapper } from '../utils/asyncWrapper';
+import { CustomError } from '../utils/CustomError';
 
-export const register = async (req: Request, res: Response) => {
+export const register = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { name, email, password, whatsapp_number } = req.body;
@@ -16,7 +18,7 @@ export const register = async (req: Request, res: Response) => {
         // Validation
         if (!normalizedName || !password || !normalizedWhatsapp) {
             await t.rollback();
-            return res.status(400).json({ message: 'Name, password, and valid WhatsApp number are required' });
+            throw new CustomError('Name, password, and valid WhatsApp number are required', 400);
         }
 
         // Check existing
@@ -37,7 +39,7 @@ export const register = async (req: Request, res: Response) => {
 
         if (existingUser) {
             await t.rollback();
-            return res.status(409).json({ message: 'User with this Email or WhatsApp number already exists' });
+            throw new CustomError('User with this Email or WhatsApp number already exists', 409);
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -79,71 +81,55 @@ export const register = async (req: Request, res: Response) => {
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        console.error('Register error:', error);
-        if (error instanceof UniqueConstraintError) {
-            return res.status(409).json({ message: 'Email atau nomor WhatsApp sudah terdaftar' });
-        }
-        if (error instanceof ValidationError) {
-            return res.status(400).json({
-                message: 'Data registrasi tidak valid',
-                errors: error.errors.map((e) => e.message)
-            });
-        }
-        res.status(500).json({ message: 'Registration failed' });
+        throw error;
     }
-};
+});
 
-export const login = async (req: Request, res: Response) => {
-    try {
-        const { email, whatsapp_number, password } = req.body;
-        const normalizedEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : '';
-        const normalizedWhatsapp = normalizeWhatsappNumber(whatsapp_number);
+export const login = asyncWrapper(async (req: Request, res: Response) => {
+    const { email, whatsapp_number, password } = req.body;
+    const normalizedEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : '';
+    const normalizedWhatsapp = normalizeWhatsappNumber(whatsapp_number);
 
-        // Allow login by Email OR WhatsApp
-        if (!password || (!normalizedEmail && !normalizedWhatsapp)) {
-            return res.status(400).json({ message: 'Password and Email/WhatsApp are required' });
-        }
-
-        const whereClause: any = {};
-        if (normalizedEmail) {
-            whereClause.email = normalizedEmail;
-        } else if (normalizedWhatsapp) {
-            const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
-            whereClause.whatsapp_number = { [Op.in]: whatsappCandidates };
-        }
-
-        const user = await User.findOne({ where: whereClause });
-
-        if (!user || !user.password) {
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
-
-        if (user.status === 'banned') {
-            return res.status(403).json({ message: 'Account is banned' });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
-
-        const token = generateToken({ id: user.id, role: user.role, whatsapp_number: user.whatsapp_number });
-
-        res.json({
-            message: 'Login successful',
-            token,
-            user: {
-                id: user.id,
-                name: user.name,
-                role: user.role,
-                tier: 'regular', // Ideally fetch from profile, but skipped for brevity
-                email: user.email,
-                whatsapp_number: user.whatsapp_number
-            }
-        });
-
-    } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ message: 'Login failed', error });
+    // Allow login by Email OR WhatsApp
+    if (!password || (!normalizedEmail && !normalizedWhatsapp)) {
+        throw new CustomError('Password and Email/WhatsApp are required', 400);
     }
-};
+
+    const whereClause: any = {};
+    if (normalizedEmail) {
+        whereClause.email = normalizedEmail;
+    } else if (normalizedWhatsapp) {
+        const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
+        whereClause.whatsapp_number = { [Op.in]: whatsappCandidates };
+    }
+
+    const user = await User.findOne({ where: whereClause });
+
+    if (!user || !user.password) {
+        throw new CustomError('Invalid credentials', 401);
+    }
+
+    if (user.status === 'banned') {
+        throw new CustomError('Account is banned', 403);
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+        throw new CustomError('Invalid credentials', 401);
+    }
+
+    const token = generateToken({ id: user.id, role: user.role, whatsapp_number: user.whatsapp_number });
+
+    res.json({
+        message: 'Login successful',
+        token,
+        user: {
+            id: user.id,
+            name: user.name,
+            role: user.role,
+            tier: 'regular', // Ideally fetch from profile, but skipped for brevity
+            email: user.email,
+            whatsapp_number: user.whatsapp_number
+        }
+    });
+});

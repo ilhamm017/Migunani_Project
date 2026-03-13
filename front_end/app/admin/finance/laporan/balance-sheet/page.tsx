@@ -1,35 +1,57 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
+type BalanceSheetData = {
+    assets: number;
+    liabilities: number;
+    balance_check: number;
+    equity?: {
+        initial: number;
+        current_earnings: number;
+        total: number;
+    };
+};
+
 export default function BalanceSheetPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
 
     const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<BalanceSheetData | null>(null);
     const [loading, setLoading] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getBalanceSheet({ asOfDate });
-            setData(res.data);
+            const payload = (res.data || {}) as Record<string, unknown>;
+            const equityRaw = payload.equity as Record<string, unknown> | undefined;
+            setData({
+                assets: Number(payload.assets ?? 0),
+                liabilities: Number(payload.liabilities ?? 0),
+                balance_check: Number(payload.balance_check ?? 0),
+                equity: {
+                    initial: Number(equityRaw?.initial ?? 0),
+                    current_earnings: Number(equityRaw?.current_earnings ?? 0),
+                    total: Number(equityRaw?.total ?? 0),
+                },
+            });
         } catch (e) {
             console.error(e);
             alert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
-    };
+    }, [asOfDate]);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]);
+        if (allowed) void load();
+    }, [allowed, load]);
 
     if (!allowed) return null;
 

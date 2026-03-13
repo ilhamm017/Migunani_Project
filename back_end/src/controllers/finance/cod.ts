@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting } from '../../models';
+import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, Backorder } from '../../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -10,13 +10,17 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils
 
 
 import {
-  toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
-  genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
+    toSafeText, normalizeExpenseDetails, parseExpenseNote, buildExpenseNote, ensureDefaultExpenseLabels,
+    genCreditNoteNumber, normalizeTaxNumber, buildAccountsReceivableInclude, buildAccountsReceivableContext, mapAccountsReceivableRows,
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 
 // --- Driver COD Deposit ---
 
-export const getDriverCodList = async (req: Request, res: Response) => {
+export const getDriverCodList = asyncWrapper(async (req: Request, res: Response) => {
     try {
         // 1. Get drivers with debt > 0
         const debtors = await User.findAll({
@@ -40,24 +44,22 @@ export const getDriverCodList = async (req: Request, res: Response) => {
             }]
         });
 
-        const orderInvoiceMap = new Map<string, any>();
+        const orderInvoicesMap = new Map<string, Set<string>>();
+        const invoiceDataMap = new Map<string, any>();
         invoiceItems.forEach((item: any) => {
             const orderId = item?.OrderItem?.order_id ? String(item.OrderItem.order_id) : '';
             const invoice = item.Invoice;
             if (!orderId || !invoice) return;
-            const existing = orderInvoiceMap.get(orderId);
-            if (!existing) {
-                orderInvoiceMap.set(orderId, invoice);
-                return;
-            }
-            const existingTime = new Date(existing.createdAt || 0).getTime();
-            const nextTime = new Date(invoice.createdAt || 0).getTime();
-            if (nextTime > existingTime) {
-                orderInvoiceMap.set(orderId, invoice);
-            }
+
+            const invId = String(invoice.id);
+            invoiceDataMap.set(invId, invoice);
+
+            const invSet = orderInvoicesMap.get(orderId) || new Set<string>();
+            invSet.add(invId);
+            orderInvoicesMap.set(orderId, invSet);
         });
 
-        const orderIds = Array.from(orderInvoiceMap.keys());
+        const orderIds = Array.from(orderInvoicesMap.keys());
         const orders = orderIds.length > 0
             ? await Order.findAll({
                 where: { id: { [Op.in]: orderIds } },
@@ -73,17 +75,32 @@ export const getDriverCodList = async (req: Request, res: Response) => {
             })
             : [];
 
+        // 3. Get all pending COD collections for these drivers to calculate dynamic debt
+        const pendingCollections = await CodCollection.findAll({
+            where: {
+                status: 'collected'
+            }
+        });
+
+        const driverCollectionDebtMap = new Map<string, number>();
+        pendingCollections.forEach(c => {
+            const dId = String(c.driver_id);
+            const amt = Number(c.amount || 0);
+            driverCollectionDebtMap.set(dId, (driverCollectionDebtMap.get(dId) || 0) + amt);
+        });
+
         const grouped: Record<string, any> = {};
         const driverInvoiceTotals = new Map<string, Map<string, number>>();
 
         // Initialize from debtors
         debtors.forEach(driver => {
+            const dynamicDebt = driverCollectionDebtMap.get(String(driver.id)) || 0;
             grouped[driver.id] = {
                 driver: {
                     id: driver.id,
                     name: driver.name,
                     whatsapp_number: driver.whatsapp_number,
-                    debt: Number(driver.debt || 0)
+                    debt: Math.max(Number(driver.debt || 0), dynamicDebt)
                 },
                 orders: [],
                 total_pending: 0
@@ -95,16 +112,18 @@ export const getDriverCodList = async (req: Request, res: Response) => {
         orders.forEach((order) => {
             const courier = (order as any).Courier;
             if (!courier) return;
-            const inv = orderInvoiceMap.get(String(order.id));
-            if (!inv) return;
+
+            const invIds = orderInvoicesMap.get(String(order.id));
+            if (!invIds) return;
 
             if (!grouped[courier.id]) {
+                const dynamicDebt = driverCollectionDebtMap.get(String(courier.id)) || 0;
                 grouped[courier.id] = {
                     driver: {
                         id: courier.id,
                         name: courier.name,
                         whatsapp_number: courier.whatsapp_number,
-                        debt: Number(courier.debt || 0)
+                        debt: Math.max(Number(courier.debt || 0), dynamicDebt)
                     },
                     orders: [],
                     total_pending: 0
@@ -112,27 +131,32 @@ export const getDriverCodList = async (req: Request, res: Response) => {
                 driverInvoiceTotals.set(String(courier.id), new Map<string, number>());
             }
 
-            const invoiceId = String((inv as any).id || '');
-            const invoiceNumber = String((inv as any).invoice_number || '');
-            const invoiceTotalRaw = Number((inv as any).total);
-            const invoiceTotal = Number.isFinite(invoiceTotalRaw) ? invoiceTotalRaw : 0;
-            grouped[courier.id].orders.push({
-                id: order.id,
-                order_number: order.id,
-                customer_name: (order as any).Customer?.name || 'Customer',
-                total_amount: invoiceTotal,
-                invoice_id: invoiceId || null,
-                invoice_number: invoiceNumber || null,
-                invoice_total: invoiceTotal,
-                created_at: order.createdAt
-            });
+            invIds.forEach(invId => {
+                const inv = invoiceDataMap.get(invId);
+                if (!inv) return;
 
-            const driverInvoiceMap = driverInvoiceTotals.get(String(courier.id)) || new Map<string, number>();
-            const invoiceKey = invoiceId || `order-${String(order.id)}`;
-            if (!driverInvoiceMap.has(invoiceKey)) {
-                driverInvoiceMap.set(invoiceKey, invoiceTotal);
-            }
-            driverInvoiceTotals.set(String(courier.id), driverInvoiceMap);
+                const invoiceNumber = String((inv as any).invoice_number || '');
+                const invoiceTotalRaw = Number((inv as any).total);
+                const invoiceTotal = Number.isFinite(invoiceTotalRaw) ? invoiceTotalRaw : 0;
+
+                grouped[courier.id].orders.push({
+                    id: order.id,
+                    order_number: order.id,
+                    customer_name: (order as any).Customer?.name || 'Customer',
+                    total_amount: invoiceTotal,
+                    invoice_id: invId || null,
+                    invoice_number: invoiceNumber || null,
+                    invoice_total: invoiceTotal,
+                    created_at: order.createdAt
+                });
+
+                const driverInvoiceMap = driverInvoiceTotals.get(String(courier.id)) || new Map<string, number>();
+                const invoiceKey = invId || `order-${String(order.id)}`;
+                if (!driverInvoiceMap.has(invoiceKey)) {
+                    driverInvoiceMap.set(invoiceKey, invoiceTotal);
+                }
+                driverInvoiceTotals.set(String(courier.id), driverInvoiceMap);
+            });
         });
 
         Object.keys(grouped).forEach((driverId) => {
@@ -141,15 +165,33 @@ export const getDriverCodList = async (req: Request, res: Response) => {
                 ? Array.from(driverInvoiceMap.values()).reduce((sum, value) => sum + Number(value || 0), 0)
                 : 0;
             grouped[driverId].total_pending = totalPending;
+
+            // Ensure the displayed debt is at least equal to the total of pending invoices
+            // This fixes cases where CodCollection record might be missing but invoice is cod_pending
+            if (totalPending > Number(grouped[driverId].driver.debt || 0)) {
+                grouped[driverId].driver.debt = totalPending;
+            }
         });
 
         res.json(Object.values(grouped));
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching driver COD list', error });
+        throw new CustomError('Error fetching driver COD list', 500);
     }
-};
+});
 
-export const verifyDriverCod = async (req: Request, res: Response) => {
+export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const scopeBase = `verify_driver_cod:${String(req.user?.id || '')}:${String(req.body?.driver_id || '')}`;
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, scopeBase);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan verifikasi COD duplikat sedang diproses', 409);
+        }
+    }
+
     const t = await sequelize.transaction();
     try {
         const { driver_id, order_ids = [], amount_received } = req.body;
@@ -160,18 +202,18 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
 
         if (!driver_id) {
             await t.rollback();
-            return res.status(400).json({ message: 'Driver ID required' });
+            throw new CustomError('Driver ID required', 400);
         }
 
         const received = Number(amount_received);
         if (isNaN(received) || received < 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Jumlah uang tidak valid' });
+            throw new CustomError('Jumlah uang tidak valid', 400);
         }
 
         if (selectedOrderIds.length === 0 && received === 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Tidak ada order dipilih dan tidak ada pembayaran.' });
+            throw new CustomError('Tidak ada order dipilih dan tidak ada pembayaran.', 400);
         }
 
         let invoices: any[] = [];
@@ -183,7 +225,11 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         let settlementId: string | null = null;
         let settledAtIso: string | null = null;
         let settledInvoiceIds: string[] = [];
-        let completedOrderIds: string[] = [];
+        let finalizedOrderResults: Array<{
+            orderId: string;
+            previousStatus: string;
+            nextStatus: 'partially_fulfilled' | 'completed';
+        }> = [];
 
         if (selectedOrderIds.length > 0) {
             const selectedOrders = await Order.findAll({
@@ -197,7 +243,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
 
             if (selectedOrders.length !== selectedOrderIds.length) {
                 await t.rollback();
-                return res.status(409).json({ message: 'Beberapa pesanan tidak ditemukan atau bukan milik driver ini.' });
+                throw new CustomError('Beberapa pesanan tidak ditemukan atau bukan milik driver ini.', 409);
             }
 
             const orderItems = await OrderItem.findAll({
@@ -208,7 +254,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             const orderItemIds = orderItems.map((item: any) => String(item.id));
             if (orderItemIds.length === 0) {
                 await t.rollback();
-                return res.status(409).json({ message: 'Order tidak memiliki item untuk ditagihkan.' });
+                throw new CustomError('Order tidak memiliki item untuk ditagihkan.', 409);
             }
 
             const invoiceItems = await InvoiceItem.findAll({
@@ -235,7 +281,7 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
 
             if (invoiceMap.size === 0) {
                 await t.rollback();
-                return res.status(409).json({ message: 'Invoice COD pending tidak ditemukan untuk order yang dipilih.' });
+                throw new CustomError('Invoice COD pending tidak ditemukan untuk order yang dipilih.', 409);
             }
 
             const invoiceIds = Array.from(invoiceMap.keys());
@@ -276,11 +322,11 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                     const order = orderById.get(orderId);
                     if (!order || String(order.courier_id || '') !== String(driver_id)) {
                         await t.rollback();
-                        return res.status(409).json({ message: 'Invoice COD gabungan hanya bisa diselesaikan oleh driver yang sama.' });
+                        throw new CustomError('Invoice COD gabungan hanya bisa diselesaikan oleh driver yang sama.', 409);
                     }
                     if (!selectedOrderIds.includes(orderId)) {
                         await t.rollback();
-                        return res.status(409).json({ message: 'Pilih semua order dalam invoice COD gabungan.' });
+                        throw new CustomError('Pilih semua order dalam invoice COD gabungan.', 409);
                     }
                 }
             }
@@ -306,17 +352,18 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
         }
 
         const diff = received - totalExpected;
-        // diff < 0 : Shortage -> Driver Debt increases
-        // diff > 0 : Surplus -> Driver Debt decreases (pay off)
+        // Driver debt already includes COD collected by the driver.
+        // Settlement must reduce existing debt by the cash handed to finance,
+        // not add the invoice total a second time.
 
         const driver = await User.findByPk(driver_id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!driver) {
             await t.rollback();
-            return res.status(404).json({ message: 'Driver tidak ditemukan' });
+            throw new CustomError('Driver tidak ditemukan', 404);
         }
 
         const previousDebt = Number(driver.debt || 0);
-        const newDebt = Math.max(0, previousDebt + totalExpected - received);
+        const newDebt = Math.max(0, previousDebt - received);
 
         await driver.update({ debt: newDebt }, { transaction: t });
 
@@ -358,6 +405,50 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
 
             const fullySettled = received >= totalExpected;
             if (fullySettled) {
+                const targetOrderIds = affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds;
+                const targetOrders = await Order.findAll({
+                    where: { id: { [Op.in]: targetOrderIds } },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const targetOrderMap = new Map<string, any>();
+                targetOrders.forEach((row: any) => targetOrderMap.set(String(row.id), row));
+
+                for (const orderId of targetOrderIds) {
+                    const currentStatus = String(previousOrderStatusById[orderId] || targetOrderMap.get(orderId)?.status || '').toLowerCase();
+                    if (!currentStatus) continue;
+
+                    const orderItems = await OrderItem.findAll({
+                        where: { order_id: orderId },
+                        attributes: ['id'],
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    });
+                    const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
+                    const openBackorderCount = orderItemIds.length > 0
+                        ? await Backorder.count({
+                            where: {
+                                order_item_id: { [Op.in]: orderItemIds },
+                                qty_pending: { [Op.gt]: 0 },
+                                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+                            },
+                            transaction: t
+                        })
+                        : 0;
+
+                    const nextStatus: 'partially_fulfilled' | 'completed' =
+                        openBackorderCount > 0 ? 'partially_fulfilled' : 'completed';
+                    if (currentStatus === nextStatus) continue;
+                    if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
+                        await t.rollback();
+                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextStatus}'`, 409);
+                    }
+                    finalizedOrderResults.push({
+                        orderId,
+                        previousStatus: currentStatus,
+                        nextStatus
+                    });
+                }
                 await Invoice.update({
                     payment_status: 'paid',
                     verified_at: new Date(),
@@ -367,13 +458,14 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                     transaction: t
                 });
 
-                await Order.update({
-                    status: 'completed'
-                }, {
-                    where: { id: { [Op.in]: affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds } },
-                    transaction: t
-                });
-                completedOrderIds = [...(affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds)];
+                for (const result of finalizedOrderResults) {
+                    await Order.update({
+                        status: result.nextStatus
+                    }, {
+                        where: { id: result.orderId },
+                        transaction: t
+                    });
+                }
             }
 
             // --- Journal Entry for Settlement (Cash vs Piutang Driver) ---
@@ -405,29 +497,32 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             }
         }
 
-        await t.commit();
-        if (completedOrderIds.length > 0) {
-            for (const orderId of completedOrderIds) {
+        if (finalizedOrderResults.length > 0) {
+            for (const result of finalizedOrderResults) {
+                const orderId = result.orderId;
                 const inv = orderToInvoiceMap.get(orderId);
                 const orderData = orderById.get(orderId);
-                const previousStatus = previousOrderStatusById[orderId] || String(orderData?.status || '');
-                if (previousStatus === 'completed') continue;
                 const courierId = String(orderData?.courier_id || '');
-                emitOrderStatusChanged({
+                await emitOrderStatusChanged({
                     order_id: orderId,
-                    from_status: previousStatus || null,
-                    to_status: 'completed',
+                    from_status: result.previousStatus || null,
+                    to_status: result.nextStatus,
                     source: String(orderData?.source || ''),
                     payment_method: String((inv as any)?.payment_method || ''),
                     courier_id: courierId || null,
                     triggered_by_role: String(req.user?.role || ''),
-                    target_roles: ['admin_finance', 'driver', 'customer'],
+                    target_roles: result.nextStatus === 'completed'
+                        ? ['admin_finance', 'driver', 'customer']
+                        : ['admin_finance', 'driver', 'customer', 'kasir', 'admin_gudang'],
                     target_user_ids: courierId ? [courierId] : [],
+                }, {
+                    transaction: t,
+                    requestContext: 'finance_verify_cod_status_changed'
                 });
             }
         }
 
-        emitCodSettlementUpdated({
+        await emitCodSettlementUpdated({
             driver_id: String(driver_id),
             order_ids: affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds,
             invoice_ids: settledInvoiceIds,
@@ -439,9 +534,14 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
             triggered_by_role: String(req.user?.role || ''),
             target_roles: ['admin_finance', 'driver'],
             target_user_ids: [String(driver_id)],
+        }, {
+            transaction: t,
+            requestContext: 'finance_verify_cod_settlement_updated'
         });
 
-        res.json({
+        await t.commit();
+
+        const responsePayload = {
             message: 'Setoran COD berhasil dikonfirmasi',
             summary: {
                 total_expected: totalExpected,
@@ -451,13 +551,22 @@ export const verifyDriverCod = async (req: Request, res: Response) => {
                 driver_debt_before: previousDebt,
                 driver_debt_after: newDebt
             },
-            settlement: settlementId ? 'created' : 'skipped'
-        });
+            settlement: settlementId ? 'created' : 'skipped',
+            settlement_id: settlementId
+        };
+        if (idempotencyKey) {
+            await commitIdempotentRequest(idempotencyKey, scopeBase, 200, responsePayload);
+        }
+        res.json(responsePayload);
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        const errMsg = error instanceof Error ? error.message : 'Unknown error';
-        res.status(500).json({ message: 'Error verifying driver COD', error: errMsg });
+        if (idempotencyKey) {
+            await clearIdempotentRequest(idempotencyKey, scopeBase);
+        }
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error verifying driver COD', 500);
     }
-};
-
+});

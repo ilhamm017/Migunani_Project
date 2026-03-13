@@ -6,26 +6,61 @@ import { useRequireRoles } from '@/lib/guards';
 import {
     PackageSearch,
     CheckCircle,
-    XCircle,
     Truck,
     ChevronRight,
     Image as ImageIcon,
     Clock,
     AlertCircle,
     User as UserIcon,
-    DollarSign,
     Box
 } from 'lucide-react';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import Image from 'next/image';
+
+type ReturOrderItem = {
+    product_id: string;
+    price_at_purchase?: number | string | null;
+};
+
+type ReturOrder = {
+    OrderItems?: ReturOrderItem[];
+};
+
+type ReturRow = {
+    id: string;
+    status: string;
+    order_id: string;
+    product_id: string;
+    qty: number;
+    reason?: string;
+    evidence_img?: string | null;
+    admin_response?: string | null;
+    courier_id?: string | null;
+    is_back_to_stock?: boolean | null;
+    createdAt?: string;
+    refund_amount?: number | string | null;
+    Product?: { name?: string; sku?: string } | null;
+    Creator?: { name?: string; whatsapp_number?: string } | null;
+    Order?: ReturOrder | null;
+};
+
+type CourierRow = {
+    id: string;
+    name?: string;
+};
+
+type ApiErrorWithMessage = {
+    response?: { data?: { message?: string } };
+};
 
 export default function WarehouseReturPage() {
     const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
-    const [returs, setReturs] = useState<any[]>([]);
-    const [couriers, setCouriers] = useState<any[]>([]);
+    const [returs, setReturs] = useState<ReturRow[]>([]);
+    const [couriers, setCouriers] = useState<CourierRow[]>([]);
     const [loading, setLoading] = useState(true);
-    const [selectedRetur, setSelectedRetur] = useState<any>(null);
+    const [selectedRetur, setSelectedRetur] = useState<ReturRow | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
     // Form states for management
@@ -91,7 +126,7 @@ export default function WarehouseReturPage() {
         console.log('Auto-calc: product_id=', selectedRetur.product_id, 'OrderItems=', orderItems);
 
         if (orderItems && orderItems.length > 0) {
-            const item = orderItems.find((oi: any) => String(oi.product_id) === String(selectedRetur.product_id));
+            const item = orderItems.find((oi: ReturOrderItem) => String(oi.product_id) === String(selectedRetur.product_id));
             if (item) {
                 const price = Number(item.price_at_purchase || 0);
                 const total = price * Number(selectedRetur.qty);
@@ -109,7 +144,13 @@ export default function WarehouseReturPage() {
     const handleUpdateStatus = async (id: string, nextStatus: string) => {
         try {
             setSubmitting(true);
-            const payload: any = { status: nextStatus, admin_response: adminResponse };
+            const payload: {
+                status: string;
+                admin_response: string;
+                courier_id?: string;
+                refund_amount?: number;
+                is_back_to_stock?: boolean;
+            } = { status: nextStatus, admin_response: adminResponse };
 
             if (nextStatus === 'pickup_assigned') {
                 payload.courier_id = courierId;
@@ -127,8 +168,9 @@ export default function WarehouseReturPage() {
             setCourierId('');
             setRefundAmount('');
             loadData();
-        } catch (error: any) {
-            alert('Gagal update: ' + (error.response?.data?.message || 'Error unknown'));
+        } catch (error: unknown) {
+            const apiError = error as ApiErrorWithMessage;
+            alert('Gagal update: ' + (apiError.response?.data?.message || 'Error unknown'));
         } finally {
             setSubmitting(false);
         }
@@ -262,16 +304,19 @@ export default function WarehouseReturPage() {
                                             <ImageIcon size={14} /> Alasan & Bukti
                                         </h3>
                                         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                                            <p className="text-sm text-slate-700 leading-relaxed italic">"{selectedRetur.reason}"</p>
+                                            <p className="text-sm text-slate-700 leading-relaxed italic">{selectedRetur.reason}</p>
                                             {selectedRetur.evidence_img && (
                                                 <Link
                                                     href={`/${selectedRetur.evidence_img}`}
                                                     target="_blank"
                                                     className="mt-4 block relative rounded-xl overflow-hidden border border-slate-200 group"
                                                 >
-                                                    <img
+                                                    <Image
                                                         src={`/${selectedRetur.evidence_img}`}
                                                         alt="Evidence"
+                                                        width={1280}
+                                                        height={640}
+                                                        unoptimized
                                                         className="w-full h-40 object-cover group-hover:scale-105 transition-transform"
                                                     />
                                                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

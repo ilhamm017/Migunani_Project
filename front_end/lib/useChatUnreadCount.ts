@@ -20,11 +20,10 @@ const CHAT_ENABLED_ROLES = new Set([
 
 export const useChatUnreadCount = ({ enabled, userId }: UseChatUnreadCountParams): number => {
     const [unreadCount, setUnreadCount] = useState(0);
+    const currentUserId = String(userId || '').trim();
 
     useEffect(() => {
-        const currentUserId = String(userId || '').trim();
         if (!enabled || !currentUserId) {
-            setUnreadCount(0);
             return;
         }
 
@@ -41,7 +40,7 @@ export const useChatUnreadCount = ({ enabled, userId }: UseChatUnreadCountParams
                 const rows = Array.isArray(res.data?.threads) ? (res.data.threads as Array<{ unread_count?: number | string }>) : [];
                 const total = rows.reduce((acc, row) => acc + Number(row.unread_count || 0), 0);
                 applyUnreadCount(total);
-            } catch (_error) {
+            } catch {
                 applyUnreadCount(0);
             }
         };
@@ -86,8 +85,9 @@ export const useChatUnreadCount = ({ enabled, userId }: UseChatUnreadCountParams
             window.removeEventListener('focus', onFocus);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [enabled, userId]);
+    }, [currentUserId, enabled]);
 
+    if (!enabled || !currentUserId) return 0;
     return unreadCount;
 };
 

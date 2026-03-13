@@ -24,7 +24,6 @@ export default function ProductCard({
     onAddToCart,
 }: ProductCardProps) {
     const isOutOfStock = stock <= 0;
-    const isLowStock = stock > 0 && stock < 5;
     const normalizedImageUrl = normalizeProductImageUrl(imageUrl);
 
     return (

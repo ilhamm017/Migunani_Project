@@ -1,12 +1,22 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Save } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 
 type TaxMode = 'pkp' | 'non_pkp';
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (typeof error === 'object' && error !== null) {
+        const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
+        if (typeof responseMessage === 'string' && responseMessage.trim()) return responseMessage;
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message;
+    }
+    return fallback;
+};
 
 export default function FinanceTaxSettingsPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
@@ -16,7 +26,7 @@ export default function FinanceTaxSettingsPage() {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             setLoading(true);
             const res = await api.admin.finance.getTaxSettings();
@@ -30,11 +40,11 @@ export default function FinanceTaxSettingsPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        if (allowed) load();
-    }, [allowed]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (allowed) void load();
+    }, [allowed, load]);
 
     const save = async () => {
         try {
@@ -46,8 +56,8 @@ export default function FinanceTaxSettingsPage() {
             });
             alert('Konfigurasi pajak berhasil disimpan');
             await load();
-        } catch (error: any) {
-            alert(error?.response?.data?.message || 'Gagal menyimpan konfigurasi pajak');
+        } catch (error: unknown) {
+            alert(getErrorMessage(error, 'Gagal menyimpan konfigurasi pajak'));
         } finally {
             setSaving(false);
         }

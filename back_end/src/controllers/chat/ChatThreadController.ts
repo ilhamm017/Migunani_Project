@@ -14,8 +14,10 @@ import {
     emitUnreadBadgeForThread,
     mapChatServiceError
 } from './utils';
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
 
-export const getThreads = async (req: Request, res: Response) => {
+export const getThreads = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const scope = String(req.query.scope || '').trim() as ThreadScope;
         const q = String(req.query.q || '').trim();
@@ -34,16 +36,16 @@ export const getThreads = async (req: Request, res: Response) => {
         return res.json(result);
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching threads' });
+        throw new CustomError(error?.message || 'Error fetching threads', 500);
     }
-};
+});
 
-export const openChatThread = async (req: Request, res: Response) => {
+export const openChatThread = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const mode = String(req.body?.mode || '').trim() as OpenThreadMode;
         const targetUserId = String(req.body?.target_user_id || '').trim();
         if (!mode || !['staff_dm', 'staff_customer', 'support'].includes(mode)) {
-            return res.status(400).json({ message: 'Mode thread tidak valid.' });
+            throw new CustomError('Mode thread tidak valid.', 400);
         }
 
         const thread = await openThread({
@@ -64,17 +66,17 @@ export const openChatThread = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         const code = String(error?.message || '');
-        if (code === 'TARGET_NOT_FOUND') return res.status(404).json({ message: 'Target user tidak ditemukan.' });
-        if (code === 'TARGET_REQUIRED') return res.status(400).json({ message: 'target_user_id wajib diisi.' });
+        if (code === 'TARGET_NOT_FOUND') throw new CustomError('Target user tidak ditemukan.', 404);
+        if (code === 'TARGET_REQUIRED') throw new CustomError('target_user_id wajib diisi.', 400);
         if (mapChatServiceError(res, error)) return;
         if (code.includes('FORBIDDEN') || code.startsWith('INVALID_') || code === 'SUPPORT_FORBIDDEN') {
-            return res.status(403).json({ message: 'Anda tidak memiliki akses membuka thread ini.' });
+            throw new CustomError('Anda tidak memiliki akses membuka thread ini.', 403);
         }
-        return res.status(500).json({ message: error?.message || 'Error opening thread' });
+        throw new CustomError(error?.message || 'Error opening thread', 500);
     }
-};
+});
 
-export const markThreadRead = async (req: Request, res: Response) => {
+export const markThreadRead = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const threadId = String(req.params.threadId || '').trim();
         const result = await markThreadAsRead({
@@ -92,18 +94,18 @@ export const markThreadRead = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error marking thread as read' });
+        throw new CustomError(error?.message || 'Error marking thread as read', 500);
     }
-};
+});
 
-export const getThreadContacts = async (req: Request, res: Response) => {
+export const getThreadContacts = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const type = String(req.query.type || 'staff').trim() as ContactQueryType;
         const q = String(req.query.q || '').trim();
         const requestedLimit = Number(req.query.limit || 20);
         const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, Math.trunc(requestedLimit))) : 20;
         if (!['staff', 'customer_contextual'].includes(type)) {
-            return res.status(400).json({ message: 'Tipe kontak tidak valid.' });
+            throw new CustomError('Tipe kontak tidak valid.', 400);
         }
 
         const contacts = await listContacts({
@@ -115,6 +117,6 @@ export const getThreadContacts = async (req: Request, res: Response) => {
         return res.json({ contacts });
     } catch (error: any) {
         if (mapChatServiceError(res, error)) return;
-        return res.status(500).json({ message: error?.message || 'Error fetching contacts' });
+        throw new CustomError(error?.message || 'Error fetching contacts', 500);
     }
-};
+});

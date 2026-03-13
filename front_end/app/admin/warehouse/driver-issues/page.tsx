@@ -6,12 +6,40 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import Image from 'next/image';
 
 type FollowUpFormState = {
   courierId: string;
   resolutionNote: string;
   submitting: boolean;
   feedback: string;
+};
+
+type CourierOption = {
+  id: string;
+  name?: string;
+  display_name?: string;
+};
+
+type ActiveIssue = {
+  evidence_url?: string | null;
+  due_at?: string | Date | null;
+  note?: string;
+  reporter_name?: string;
+};
+
+type DriverIssueOrder = {
+  id: string;
+  createdAt?: string | Date;
+  customer_name?: string;
+  courier_display_name?: string;
+  issue_overdue?: boolean;
+  active_issue?: ActiveIssue | null;
+  Courier?: { name?: string } | null;
+};
+
+type ApiErrorWithMessage = {
+  response?: { data?: { message?: string } };
 };
 const PAGE_SIZE = 100;
 
@@ -46,8 +74,8 @@ const normalizeEvidenceUrl = (raw?: string | null): string | null => {
 
 export default function WarehouseDriverIssuesPage() {
   const allowed = useRequireRoles(['admin_gudang', 'super_admin'], '/admin');
-  const [orders, setOrders] = useState<any[]>([]);
-  const [couriers, setCouriers] = useState<any[]>([]);
+  const [orders, setOrders] = useState<DriverIssueOrder[]>([]);
+  const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -80,11 +108,11 @@ export default function WarehouseDriverIssuesPage() {
         append ? Promise.resolve(null) : api.admin.orderManagement.getCouriers(),
       ]);
 
-      const rows = (ordersRes.data?.orders || []) as any[];
-      let mergedRows: any[] = rows;
+      const rows = (ordersRes.data?.orders || []) as DriverIssueOrder[];
+      let mergedRows: DriverIssueOrder[] = rows;
       setOrders((prev) => {
         const merged = append ? [...prev, ...rows] : rows;
-        const dedupMap = new Map<string, any>();
+        const dedupMap = new Map<string, DriverIssueOrder>();
         for (const row of merged) {
           dedupMap.set(String(row?.id || ''), row);
         }
@@ -98,7 +126,7 @@ export default function WarehouseDriverIssuesPage() {
       setHasMore(rows.length >= PAGE_SIZE);
 
       setForms((prev) => {
-        const dedupMap = new Map<string, any>();
+        const dedupMap = new Map<string, DriverIssueOrder>();
         for (const row of mergedRows) {
           dedupMap.set(String(row?.id || ''), row);
         }
@@ -207,9 +235,10 @@ export default function WarehouseDriverIssuesPage() {
       });
       setOrderForm(orderId, { feedback: 'Follow-up berhasil. Order dikirim ulang ke driver.' });
       await loadData(search.trim());
-    } catch (error: any) {
-      const message = error?.response?.data?.message || 'Gagal submit follow-up.';
-      setOrderForm(orderId, { feedback: message });
+    } catch (error: unknown) {
+      const apiError = error as ApiErrorWithMessage;
+      const safeMessage = apiError?.response?.data?.message || 'Gagal submit follow-up.';
+      setOrderForm(orderId, { feedback: safeMessage });
     } finally {
       setOrderForm(orderId, { submitting: false });
     }
@@ -320,9 +349,12 @@ export default function WarehouseDriverIssuesPage() {
                 {evidenceUrl && (
                   <div className="mt-3">
                     <p className="text-[11px] font-bold text-slate-500 uppercase mb-1">Foto Bukti</p>
-                    <img
+                    <Image
                       src={evidenceUrl}
                       alt="Bukti laporan driver"
+                      width={1024}
+                      height={512}
+                      unoptimized
                       className="w-full max-h-64 object-contain rounded-xl border border-slate-200 bg-slate-50"
                     />
                   </div>

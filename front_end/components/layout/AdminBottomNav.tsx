@@ -28,7 +28,7 @@ export default function AdminBottomNav() {
     enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessChat,
     userId: user?.id
   });
-  const { orderBadgeCount } = useAdminActionBadges({
+  const { orderBadgeCount, financeCardBadges } = useAdminActionBadges({
     enabled: !!pathname?.startsWith('/admin') && isAuthenticated && canAccessAdminNav,
     role: user?.role
   });
@@ -41,6 +41,12 @@ export default function AdminBottomNav() {
   });
 
   const displayOrderBadgeCount = Math.max(0, Math.max(orderNotificationCount, orderBadgeCount));
+  const displayFinanceBadgeCount = Math.max(
+    0,
+    Number(financeCardBadges.verifyPayment || 0) +
+      Number(financeCardBadges.codSettlement || 0) +
+      Number(financeCardBadges.refundRetur || 0)
+  );
 
   if (!pathname?.startsWith('/admin') || !canAccessAdminNav) {
     return null;
@@ -78,6 +84,7 @@ export default function AdminBottomNav() {
         const active = isActive(item.href);
         const isChatItem = item.href === '/admin/chat';
         const isOrderItem = item.href === '/admin/orders';
+        const isFinanceItem = item.href === '/admin/finance';
 
         return (
           <Link
@@ -101,6 +108,14 @@ export default function AdminBottomNav() {
                   aria-hidden="true"
                 >
                   {displayOrderBadgeCount > 99 ? '99+' : displayOrderBadgeCount}
+                </span>
+              )}
+              {isFinanceItem && displayFinanceBadgeCount > 0 && (
+                <span
+                  className="absolute -top-2 -right-3 bg-amber-500 text-white text-[8px] font-black rounded-full min-w-[16px] h-4 px-1 inline-flex items-center justify-center leading-none"
+                  aria-hidden="true"
+                >
+                  {displayFinanceBadgeCount > 99 ? '99+' : displayFinanceBadgeCount}
                 </span>
               )}
             </div>

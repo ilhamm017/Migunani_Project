@@ -28,6 +28,38 @@ interface KanbanColumn {
     dotColor: string;
 }
 
+interface OrderApiRow {
+    id: string;
+    order_number?: string;
+    customer_name?: string;
+    total_amount?: number;
+    item_count?: number;
+    status?: string;
+    createdAt?: string;
+    created_at?: string;
+    payment_method?: string;
+    courier_id?: string | null;
+    Courier?: {
+        id?: string;
+        name?: string;
+    } | null;
+    User?: {
+        name?: string;
+    } | null;
+    OrderItems?: Array<unknown> | null;
+}
+
+interface CourierApiRow {
+    id: string;
+    name?: string;
+    display_name?: string;
+}
+
+type UpdateStatusPayload = {
+    status: string;
+    courier_id?: string;
+};
+
 const KANBAN_COLUMNS: KanbanColumn[] = [
     {
         key: 'ready_to_ship',
@@ -74,22 +106,23 @@ export default function WarehouseKanbanPage() {
             const results = await Promise.all(
                 statuses.map(status =>
                     api.admin.orderManagement.getAll({ status, limit: 50 })
-                        .then(res => res.data?.orders || [])
+                        .then((res) => (Array.isArray(res.data?.orders) ? res.data.orders : []))
                         .catch(() => [])
                 )
             );
 
-            const allOrders: OrderCard[] = results.flat().map((o: any) => ({
-                id: o.id,
-                order_number: o.order_number || o.id?.slice(0, 8),
-                customer_name: o.User?.name || o.customer_name || 'Customer',
-                total_amount: Number(o.total_amount || 0),
-                item_count: o.OrderItems?.length || o.item_count || 0,
-                status: o.status === 'waiting_payment' ? 'ready_to_ship' : o.status,
-                created_at: o.createdAt || o.created_at,
-                payment_method: o.payment_method,
-                courier_id: o.courier_id || o.Courier?.id || null,
-                courier_name: o.Courier?.name || null,
+            const flattened = results.flat() as OrderApiRow[];
+            const allOrders: OrderCard[] = flattened.map((order) => ({
+                id: String(order.id ?? ''),
+                order_number: order.order_number || String(order.id ?? '').slice(0, 8),
+                customer_name: order.User?.name || order.customer_name || 'Customer',
+                total_amount: Number(order.total_amount || 0),
+                item_count: order.OrderItems?.length || order.item_count || 0,
+                status: order.status === 'waiting_payment' ? 'ready_to_ship' : String(order.status || ''),
+                created_at: String(order.createdAt || order.created_at || ''),
+                payment_method: order.payment_method,
+                courier_id: order.courier_id || order.Courier?.id || null,
+                courier_name: order.Courier?.name || null,
             }));
 
             setOrders(allOrders);
@@ -108,8 +141,8 @@ export default function WarehouseKanbanPage() {
     const loadCouriers = useCallback(async () => {
         try {
             const res = await api.admin.orderManagement.getCouriers();
-            const rows = Array.isArray(res.data?.employees) ? res.data.employees : [];
-            const mapped = rows.map((row: any) => ({
+            const rows: CourierApiRow[] = Array.isArray(res.data?.employees) ? res.data.employees : [];
+            const mapped = rows.map((row) => ({
                 id: String(row.id),
                 name: String(row.name || row.display_name || 'Driver'),
             }));
@@ -177,7 +210,7 @@ export default function WarehouseKanbanPage() {
         setUpdating(orderId);
         try {
             const apiStatus = STATUS_MAP_TO_API[targetColumn] || targetColumn;
-            const payload: any = { status: apiStatus };
+            const payload: UpdateStatusPayload = { status: apiStatus };
             if (targetColumn === 'shipped' && order.courier_id) {
                 payload.courier_id = order.courier_id;
             }
@@ -185,7 +218,7 @@ export default function WarehouseKanbanPage() {
             setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: targetColumn } : o));
             alert(`Status berhasil diupdate ke: ${targetColumn === 'shipped' ? 'Dikirim' : 'Siap Dikirim'}`);
             void loadOrders();
-        } catch (error) {
+        } catch {
             alert('Gagal update status.');
         } finally {
             setUpdating(null);

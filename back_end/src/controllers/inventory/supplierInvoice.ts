@@ -8,7 +8,10 @@ import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
-export const createSupplierInvoice = async (req: Request, res: Response) => {
+import { asyncWrapper } from '../../utils/asyncWrapper';
+import { CustomError } from '../../utils/CustomError';
+
+export const createSupplierInvoice = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { purchase_order_id, invoice_number, total, due_date, subtotal, tax_amount, tax_percent } = req.body;
@@ -17,7 +20,7 @@ export const createSupplierInvoice = async (req: Request, res: Response) => {
         const po = await PurchaseOrder.findByPk(purchase_order_id, { transaction: t });
         if (!po) {
             await t.rollback();
-            return res.status(404).json({ message: 'Purchase Order not found' });
+            throw new CustomError('Purchase Order not found', 404);
         }
 
         const subtotalNum = Number.isFinite(Number(subtotal)) ? Number(subtotal) : Number(total || 0);
@@ -66,11 +69,12 @@ export const createSupplierInvoice = async (req: Request, res: Response) => {
         res.status(201).json(supplierInvoice);
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error creating supplier invoice', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error creating supplier invoice', 500);
     }
-};
+});
 
-export const paySupplierInvoice = async (req: Request, res: Response) => {
+export const paySupplierInvoice = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const { invoice_id, amount, account_id, note } = req.body;
@@ -79,17 +83,26 @@ export const paySupplierInvoice = async (req: Request, res: Response) => {
         const invoice = await SupplierInvoice.findByPk(invoice_id, { transaction: t, lock: t.LOCK.UPDATE });
         if (!invoice) {
             await t.rollback();
-            return res.status(404).json({ message: 'Invoice not found' });
+            throw new CustomError('Invoice not found', 404);
+        }
+        if (invoice.status === 'paid') {
+            await t.rollback();
+            throw new CustomError('Invoice supplier sudah lunas', 409);
         }
 
         const paymentAmount = Number(amount);
         if (paymentAmount <= 0) {
             await t.rollback();
-            return res.status(400).json({ message: 'Jumlah pembayaran tidak valid' });
+            throw new CustomError('Jumlah pembayaran tidak valid', 400);
         }
 
         const payments = await SupplierPayment.findAll({ where: { supplier_invoice_id: invoice_id }, transaction: t });
         const paidTotal = payments.reduce((sum, p) => sum + Number(p.amount), 0);
+        const remainingBalance = Math.max(0, Number(invoice.total || 0) - paidTotal);
+        if (paymentAmount > remainingBalance) {
+            await t.rollback();
+            throw new CustomError(`Jumlah pembayaran melebihi sisa tagihan (${remainingBalance})`, 400);
+        }
 
         const payment = await SupplierPayment.create({
             supplier_invoice_id: invoice.id,
@@ -108,6 +121,10 @@ export const paySupplierInvoice = async (req: Request, res: Response) => {
         // --- Journal: Hutang Supplier (D) vs Kas/Bank (K) ---
         const apAcc = await Account.findOne({ where: { code: '2100' }, transaction: t });
         const paymentAcc = await Account.findByPk(account_id, { transaction: t }); // 1101 or 1102
+        if (!paymentAcc) {
+            await t.rollback();
+            throw new CustomError('Payment account not found', 404);
+        }
 
         if (apAcc && paymentAcc) {
             await JournalService.createEntry({
@@ -115,6 +132,7 @@ export const paySupplierInvoice = async (req: Request, res: Response) => {
                 reference_type: 'supplier_payment',
                 reference_id: payment.id.toString(),
                 created_by: userId,
+                idempotency_key: `supplier_payment_${payment.id}`,
                 lines: [
                     { account_id: apAcc.id, debit: paymentAmount, credit: 0 },
                     { account_id: paymentAcc.id, debit: 0, credit: paymentAmount }
@@ -127,6 +145,7 @@ export const paySupplierInvoice = async (req: Request, res: Response) => {
 
     } catch (error) {
         try { await t.rollback(); } catch { }
-        res.status(500).json({ message: 'Error paying supplier invoice', error });
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error paying supplier invoice', 500);
     }
-};
+});
