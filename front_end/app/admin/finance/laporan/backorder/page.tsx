@@ -176,7 +176,9 @@ export default function BackorderReportPage() {
                                         </div>
                                         <div className="mt-2 pt-2 border-t border-slate-50 flex justify-between items-center text-[10px]">
                                             <span className="text-slate-400 font-mono">Order: {item.order_id?.slice(-8) || '-'}</span>
-                                            <span className="text-slate-400">{new Date(item.date).toLocaleDateString()}</span>
+                                            <span className="text-slate-400">
+                                                {item.date ? new Date(item.date).toLocaleDateString() : '-'}
+                                            </span>
                                         </div>
                                     </div>
                                 ))}
