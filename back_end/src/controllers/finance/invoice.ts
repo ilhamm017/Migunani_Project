@@ -46,6 +46,59 @@ const buildIssueInvoiceItemsScope = (
     return `finance_issue_invoice_items:${String(userId || '').trim()}:${normalized.join(',')}`;
 };
 
+const VALID_COMBINED_INVOICE_PAYMENT_METHODS = new Set([
+    'transfer_manual',
+    'cod',
+    'cash_store'
+]);
+
+const normalizeCombinedInvoicePaymentMethod = (value: unknown): string => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(normalized) ? normalized : '';
+};
+
+const resolveCombinedInvoicePaymentMethod = (orders: any[]): string => {
+    const candidates = orders
+        .map((order) => ({
+            payment_method: normalizeCombinedInvoicePaymentMethod(order?.payment_method),
+            updatedAt: new Date(order?.updatedAt || 0).getTime(),
+            createdAt: new Date(order?.createdAt || 0).getTime()
+        }))
+        .filter((order) => Boolean(order.payment_method))
+        .sort((a, b) => {
+            if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+            return b.createdAt - a.createdAt;
+        });
+
+    return String(candidates[0]?.payment_method || '');
+};
+
+const syncCombinedInvoiceOrderPaymentMethod = async (
+    orders: any[],
+    paymentMethod: string,
+    transaction: any
+) => {
+    const orderIdsToSync = orders
+        .filter((order) => normalizeCombinedInvoicePaymentMethod(order?.payment_method) !== paymentMethod)
+        .map((order) => String(order?.id || '').trim())
+        .filter(Boolean);
+
+    if (orderIdsToSync.length === 0) return;
+
+    await Order.update(
+        { payment_method: paymentMethod as any },
+        {
+            where: { id: { [Op.in]: orderIdsToSync } },
+            transaction
+        }
+    );
+
+    orders.forEach((order) => {
+        if (!orderIdsToSync.includes(String(order?.id || '').trim())) return;
+        order.payment_method = paymentMethod;
+    });
+};
+
 const syncBackordersFromInvoicedQty = async (
     orderItems: any[],
     transaction: any
@@ -153,9 +206,9 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
 
         const primaryOrder = orders[0] as any;
         const customerId = String(primaryOrder.customer_id || '');
-        const paymentMethod = String(primaryOrder.payment_method || '');
+        const paymentMethod = resolveCombinedInvoicePaymentMethod(orders as any[]);
 
-        if (!['transfer_manual', 'cod', 'cash_store'].includes(paymentMethod)) {
+        if (!VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
             await t.rollback();
             throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
         }
@@ -169,11 +222,9 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
                 await t.rollback();
                 throw new CustomError('Order harus dari customer yang sama.', 400);
             }
-            if (String(order.payment_method || '') !== paymentMethod) {
-                await t.rollback();
-                throw new CustomError('Metode pembayaran harus sama untuk invoice gabungan.', 400);
-            }
         }
+
+        await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
 
         const orderItemIds = orders
             .flatMap((order: any) => Array.isArray(order.OrderItems) ? order.OrderItems : [])
@@ -520,7 +571,6 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
         const orderItemById = new Map<string, any>();
         const orderIds = new Set<string>();
         let customerId = '';
-        let paymentMethod = '';
 
         for (const item of orderItems as any[]) {
             const order = item.Order;
@@ -535,13 +585,6 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
                 throw new CustomError('Semua item harus berasal dari customer yang sama.', 400);
             }
 
-            const nextPaymentMethod = String(order.payment_method || '');
-            if (!paymentMethod) paymentMethod = nextPaymentMethod;
-            if (nextPaymentMethod !== paymentMethod) {
-                await t.rollback();
-                throw new CustomError('Metode pembayaran harus sama untuk invoice gabungan.', 400);
-            }
-
             if (['canceled', 'expired', 'completed'].includes(String(order.status || ''))) {
                 await t.rollback();
                 throw new CustomError(`Order ${order.id} sudah selesai atau dibatalkan.`, 400);
@@ -549,11 +592,6 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
 
             orderItemById.set(String(item.id), item);
             orderIds.add(String(order.id));
-        }
-
-        if (!['transfer_manual', 'cod', 'cash_store'].includes(paymentMethod)) {
-            await t.rollback();
-            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
         }
 
         const orders = await Order.findAll({
@@ -565,6 +603,13 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
             transaction: t,
             lock: t.LOCK.UPDATE
         });
+
+        const paymentMethod = resolveCombinedInvoicePaymentMethod(orders as any[]);
+        if (!VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
+            await t.rollback();
+            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
+        }
+        await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
 
         const priorInvoiceItems = await InvoiceItem.findAll({
             where: { order_item_id: { [Op.in]: orderItemIds } },

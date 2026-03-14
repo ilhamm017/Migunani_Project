@@ -23,7 +23,8 @@ type CustomerOrderCard = {
 
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
-const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'processing', 'shipped', 'hold', 'waiting_payment']);
+// `waiting_invoice` means the order already passed "new order" stage and is waiting to be invoiced/handled.
+const WAREHOUSE_STATUSES = new Set(['allocated', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'hold', 'waiting_payment']);
 const BACKORDER_FALLBACK_STATUSES = new Set(['partially_fulfilled', 'hold']);
 
 const normalizeOrderStatus = (raw: unknown) => {
@@ -54,6 +55,7 @@ const classifyOrderSection = (order: unknown): OrderSection => {
   if (hasExplicitBackorderFlag(order) || BACKORDER_FALLBACK_STATUSES.has(rawStatus)) return 'backorder';
   if (COMPLETED_STATUSES.has(rawStatus)) return 'selesai';
   if (normalizedStatus === 'shipped') return 'pengiriman';
+  if (normalizedStatus === 'delivered') return 'pembayaran';
   if (PAYMENT_STATUSES.has(rawStatus)) return 'pembayaran';
   if (WAREHOUSE_STATUSES.has(normalizedStatus)) return 'gudang';
   return 'baru';

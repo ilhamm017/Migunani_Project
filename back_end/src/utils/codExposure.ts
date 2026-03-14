@@ -1,0 +1,76 @@
+import { Transaction } from 'sequelize';
+import { CodCollection, Invoice, InvoiceItem, Order, OrderItem } from '../models';
+
+type DriverCodExposure = {
+    exposure: number;
+    pendingInvoiceTotal: number;
+    collectedTotal: number;
+};
+
+export const calculateDriverCodExposure = async (
+    driverId: string,
+    options?: { transaction?: Transaction }
+): Promise<DriverCodExposure> => {
+    const invoiceItems = await InvoiceItem.findAll({
+        include: [{
+            model: Invoice,
+            required: true
+        }, {
+            model: OrderItem,
+            required: true,
+            include: [{
+                model: Order,
+                where: { courier_id: driverId },
+                required: true,
+                attributes: ['id']
+            }]
+        }],
+        transaction: options?.transaction
+    });
+
+    const latestInvoiceByOrderId = new Map<string, any>();
+    invoiceItems.forEach((item: any) => {
+        const invoice = item?.Invoice;
+        const orderId = item?.OrderItem?.order_id ? String(item.OrderItem.order_id) : '';
+        if (!invoice || !orderId) return;
+
+        const existing = latestInvoiceByOrderId.get(orderId);
+        const invoiceTime = new Date(String(invoice.createdAt || 0)).getTime();
+        const existingTime = existing ? new Date(String(existing.createdAt || 0)).getTime() : -1;
+        if (!existing || invoiceTime > existingTime) {
+            latestInvoiceByOrderId.set(orderId, invoice);
+        }
+    });
+
+    const pendingInvoiceTotals = new Map<string, number>();
+    latestInvoiceByOrderId.forEach((invoice) => {
+        if (String(invoice.payment_method || '') !== 'cod' || String(invoice.payment_status || '') !== 'cod_pending') {
+            return;
+        }
+
+        const invoiceId = String(invoice.id || '');
+        if (!invoiceId || pendingInvoiceTotals.has(invoiceId)) return;
+
+        const total = Number(invoice.total || 0);
+        pendingInvoiceTotals.set(invoiceId, Number.isFinite(total) ? total : 0);
+    });
+
+    const pendingInvoiceTotal = Array.from(pendingInvoiceTotals.values())
+        .reduce((sum, amount) => sum + Number(amount || 0), 0);
+
+    const collections = await CodCollection.findAll({
+        where: {
+            driver_id: driverId,
+            status: 'collected'
+        },
+        transaction: options?.transaction
+    });
+    const collectedTotal = collections
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+    return {
+        exposure: Math.max(pendingInvoiceTotal, collectedTotal),
+        pendingInvoiceTotal,
+        collectedTotal
+    };
+};

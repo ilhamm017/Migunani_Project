@@ -17,6 +17,7 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+import { calculateDriverCodExposure } from '../../utils/codExposure';
 
 // --- Driver COD Deposit ---
 
@@ -374,9 +375,6 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
         }
 
         const previousDebt = Number(driver.debt || 0);
-        const newDebt = Math.max(0, previousDebt - received);
-
-        await driver.update({ debt: newDebt }, { transaction: t });
 
         if (invoices.length > 0) {
             // New logic: Find pending CodCollections for these invoices
@@ -504,6 +502,10 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 }
             }
         }
+
+        const exposure = await calculateDriverCodExposure(String(driver_id), { transaction: t });
+        const newDebt = exposure.exposure;
+        await driver.update({ debt: newDebt }, { transaction: t });
 
         if (finalizedOrderResults.length > 0) {
             for (const result of finalizedOrderResults) {

@@ -107,7 +107,7 @@ export default function AdminInvoicesPage() {
                       <p className="text-sm font-black text-rose-700">{formatCurrency(Number(row.amount_due || 0))}</p>
                     </div>
                     <Link
-                      href={`/invoices/${row.id}/print`}
+                      href={`/invoices/${row.id}/print?back=/admin/invoices`}
                       className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-100"
                     >
                       Cetak

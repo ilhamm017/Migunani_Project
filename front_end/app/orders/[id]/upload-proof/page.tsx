@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
+import NotifyPopup, { NotifyPopupVariant } from '@/components/ui/NotifyPopup';
 
 export default function UploadProofPage() {
   const params = useParams();
@@ -12,10 +13,21 @@ export default function UploadProofPage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [popup, setPopup] = useState<{ open: boolean; title: string; message?: string; variant: NotifyPopupVariant; onPrimary?: () => void }>({
+    open: false,
+    title: '',
+    message: '',
+    variant: 'info',
+  });
 
   const handleSubmit = async () => {
     if (!file) {
-      alert('Pilih file bukti transfer dulu.');
+      setPopup({
+        open: true,
+        title: 'Pilih bukti transfer dulu',
+        message: 'Silakan pilih foto bukti transfer (JPG/PNG) sebelum mengirim.',
+        variant: 'warning',
+      });
       return;
     }
 
@@ -24,11 +36,21 @@ export default function UploadProofPage() {
       const form = new FormData();
       form.append('proof', file);
       await api.orders.uploadPaymentProof(orderId, form);
-      alert('Bukti transfer berhasil dikirim. Menunggu verifikasi admin finance.');
-      router.push(`/orders/${orderId}`);
+      setPopup({
+        open: true,
+        title: 'Bukti transfer berhasil dikirim',
+        message: 'Menunggu verifikasi admin finance. Status invoice akan diperbarui setelah disetujui.',
+        variant: 'success',
+        onPrimary: () => router.push(`/orders/${orderId}`),
+      });
     } catch (error) {
       console.error('Upload failed:', error);
-      alert('Upload bukti gagal.');
+      setPopup({
+        open: true,
+        title: 'Upload bukti transfer gagal',
+        message: 'Coba ulang beberapa saat lagi. Jika masih gagal, pastikan ukuran file tidak terlalu besar.',
+        variant: 'error',
+      });
     } finally {
       setLoading(false);
     }
@@ -36,6 +58,14 @@ export default function UploadProofPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <NotifyPopup
+        open={popup.open}
+        title={popup.title}
+        message={popup.message}
+        variant={popup.variant}
+        onPrimary={popup.onPrimary}
+        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+      />
       <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>

@@ -108,7 +108,7 @@ type InvoiceStatusSnapshot = {
 type AllocationConfirmState = {
   orderId: string;
   step: 1 | 2;
-  action: 'allocation' | 'cancel_order' | 'cancel_backorder' | 'issue_invoice';
+  action: 'allocation' | 'backorder_allocation' | 'cancel_order' | 'cancel_backorder' | 'issue_invoice';
 };
 
 type WarehouseAssignConfirmCard = {
@@ -176,11 +176,21 @@ const getSectionLabel = (section: OrderSection) => {
   return 'Selesai';
 };
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
+const resolveInvoiceRefForOrder = (order: any, detail?: any) => {
+  const attachedInvoice = detail?.Invoice || order?.Invoice || null;
+  const invoiceId = normalizeInvoiceRef(
+    attachedInvoice?.id || detail?.invoice_id || order?.invoice_id
+  );
+  const invoiceNumber = normalizeInvoiceRef(
+    attachedInvoice?.invoice_number || detail?.invoice_number || order?.invoice_number
+  );
+  return { invoiceId, invoiceNumber };
+};
 const invoiceGroupKeyForOrder = (order: unknown) => {
-  const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
+  const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any);
   if (invoiceId) return `id:${invoiceId}`;
-  const invoiceNumber = normalizeInvoiceRef(order?.invoice_number || order?.Invoice?.invoice_number).toLowerCase();
-  if (invoiceNumber) return `num:${invoiceNumber}`;
+  const invoiceNumberKey = invoiceNumber.toLowerCase();
+  if (invoiceNumberKey) return `num:${invoiceNumberKey}`;
   return '';
 };
 const normalizeOrderStatus = (raw: unknown) => {
@@ -566,14 +576,14 @@ export default function AdminOrdersWorkspace({
         const orderId = String(order?.id || '');
         if (!orderId) return;
         const prevOrder = previousById.get(orderId);
-        const nextInvoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
+        const nextInvoiceId = resolveInvoiceRefForOrder(order as any).invoiceId;
         if (!prevOrder) {
           changedOrderIds.add(orderId);
           if (nextInvoiceId) touchedInvoiceIds.add(nextInvoiceId);
           return;
         }
 
-        const prevInvoiceId = normalizeInvoiceRef(prevOrder?.invoice_id || prevOrder?.Invoice?.id);
+        const prevInvoiceId = resolveInvoiceRefForOrder(prevOrder as any).invoiceId;
         const statusChanged = String(prevOrder?.status || '') !== String(order?.status || '');
         const updatedChanged = String(prevOrder?.updatedAt || '') !== String(order?.updatedAt || '');
         const invoiceChanged = prevInvoiceId !== nextInvoiceId;
@@ -588,7 +598,7 @@ export default function AdminOrdersWorkspace({
         const orderId = String(order?.id || '');
         if (!orderId || nextById.has(orderId)) return;
         changedOrderIds.add(orderId);
-        const prevInvoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
+        const prevInvoiceId = resolveInvoiceRefForOrder(order as any).invoiceId;
         if (prevInvoiceId) touchedInvoiceIds.add(prevInvoiceId);
       });
 
@@ -884,7 +894,7 @@ export default function AdminOrdersWorkspace({
       targetOrders
         .map((order) => {
           const detail = orderDetails[String(order.id)];
-          return normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
+          return resolveInvoiceRefForOrder(order as any, detail as any).invoiceId;
         })
         .filter(Boolean)
     ));
@@ -970,10 +980,7 @@ export default function AdminOrdersWorkspace({
       const rowId = String(order?.id || '').trim();
       if (!rowId) return;
       const detail = orderDetails[rowId];
-      const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
-      const invoiceNumber = normalizeInvoiceRef(
-        order?.invoice_number || order?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
-      );
+      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
       const groupKey = invoiceId
         ? `id:${invoiceId}`
         : invoiceNumber
@@ -1456,6 +1463,10 @@ export default function AdminOrdersWorkspace({
     setAllocationConfirm({ orderId, step: 1, action: 'allocation' });
   };
 
+  const handleSaveBackorderAllocationWithConfirm = async (orderId: string) => {
+    setAllocationConfirm({ orderId, step: 1, action: 'backorder_allocation' });
+  };
+
   const handleConfirmAllocationStep = async () => {
     if (!allocationConfirm) return;
     if (allocationConfirm.step === 1) {
@@ -1538,6 +1549,48 @@ export default function AdminOrdersWorkspace({
       }
       return;
     }
+    if (allocationConfirm.action === 'backorder_allocation') {
+      const orderId = allocationConfirm.orderId;
+      const groupedItems = groupedItemsByOrderId[orderId] || [];
+      const persistedAlloc = persistedAllocByOrderId[orderId] || {};
+      const allocationDraft = allocationDrafts[orderId] || {};
+      const backorderEditorItems = groupedItems
+        .map((item) => {
+          const productId = String(item?.product_id || '');
+          if (!productId) return null;
+          const orderedQty = Number(item?.qty || 0);
+          const allocatedQty = Number(
+            allocationDraft[productId] !== undefined
+              ? allocationDraft[productId]
+              : persistedAlloc[productId] || 0
+          );
+          const shortageQty = Math.max(0, orderedQty - allocatedQty);
+          if (shortageQty <= 0) return null;
+          const stockQty = Number(item?.Product?.stock_quantity);
+          const persistedQty = Number(persistedAlloc[productId] || 0);
+          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+          const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
+          const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
+          return {
+            product_id: productId,
+            name: String(item?.Product?.name || 'Produk'),
+            sku: String(item?.Product?.sku || '-'),
+            orderedQty,
+            allocatedQty,
+            shortageQty,
+            allocatableQty,
+          };
+        })
+        .filter(Boolean) as BackorderEditableItem[];
+
+      const saved = await handleSaveBackorderAllocation(orderId, backorderEditorItems);
+      if (saved) {
+        setAllocationConfirm(null);
+      } else {
+        alert('Tidak ada top up backorder yang valid untuk disimpan.');
+      }
+      return;
+    }
     const draft = allocationDrafts[allocationConfirm.orderId] || {};
     const success = await saveAllocationDraft(allocationConfirm.orderId, draft);
     if (success) {
@@ -1557,7 +1610,7 @@ export default function AdminOrdersWorkspace({
   };
 
   const handleSaveBackorderAllocation = async (orderId: string, backorderItems: BackorderEditableItem[]) => {
-    if (allocationSaving[orderId]) return;
+    if (allocationSaving[orderId]) return false;
     const groupedItems = groupedItemsByOrderId[orderId] || [];
     const persisted = persistedAllocByOrderId[orderId] || {};
     const currentDraft = allocationDrafts[orderId] || {};
@@ -1580,14 +1633,15 @@ export default function AdminOrdersWorkspace({
       totalTopup += topupQty;
     });
 
-    if (totalTopup <= 0) return;
+    if (totalTopup <= 0) return false;
 
     const saved = await saveAllocationDraft(orderId, nextDraft);
-    if (!saved) return;
+    if (!saved) return false;
     setBackorderTopupDrafts((prev) => ({
       ...prev,
       [orderId]: {}
     }));
+    return true;
   };
 
   const handleCancelBackorder = async (orderId: string) => {
@@ -1754,6 +1808,57 @@ export default function AdminOrdersWorkspace({
       remainingQty: Math.max(0, orderedQty - allocQty),
       allocPct: orderedQty > 0 ? Math.round((allocQty / orderedQty) * 100) : 0,
     };
+    if (allocationConfirm.action === 'backorder_allocation') {
+      const topupDraft = backorderTopupDrafts[orderId] || {};
+      const changedItems = groupedItems
+        .map((item) => {
+          const productId = String(item?.product_id || '');
+          if (!productId) return null;
+          const orderedQtyItem = Number(item?.qty || 0);
+          const allocatedQtyItem = Number(draft[productId] !== undefined ? draft[productId] : persisted[productId] || 0);
+          const shortageQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
+          if (shortageQty <= 0) return null;
+          const stockQty = Number(item?.Product?.stock_quantity);
+          const persistedQty = Number(persisted[productId] || 0);
+          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQtyItem;
+          const maxAlloc = Math.min(orderedQtyItem, Math.max(0, maxAvailable));
+          const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQtyItem));
+          const requestedTopup = Number(topupDraft[productId] || 0);
+          const topupQty = Math.max(0, Math.min(allocatableQty, requestedTopup));
+          if (topupQty <= 0) return null;
+          return {
+            productId,
+            name: String(item?.Product?.name || 'Produk'),
+            sku: String(item?.Product?.sku || '-'),
+            orderedQty: orderedQtyItem,
+            beforeQty: allocatedQtyItem,
+            afterQty: allocatedQtyItem + topupQty,
+          };
+        })
+        .filter(Boolean) as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number }>;
+
+      const topupQty = changedItems.reduce((sum, item) => sum + Math.max(0, Number(item.afterQty) - Number(item.beforeQty)), 0);
+      const allocQtyAfter = allocQty + topupQty;
+      return {
+        orderId,
+        totals: {
+          ...totals,
+          topupQty,
+          allocQty: allocQtyAfter,
+          remainingQty: Math.max(0, orderedQty - allocQtyAfter),
+          allocPct: orderedQty > 0 ? Math.round((allocQtyAfter / orderedQty) * 100) : 0,
+        },
+        changedItems,
+        ordersToInvoice: [] as Array<{
+          orderId: string;
+          customerName: string;
+          orderedQty: number;
+          allocQty: number;
+          amount: number;
+          items: Array<{ productId: string; name: string; sku: string; orderedQty: number; allocatedQty: number }>;
+        }>,
+      };
+    }
     if (allocationConfirm.action === 'cancel_backorder') {
       const detail = orderDetails[orderId];
       const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
@@ -1876,6 +1981,8 @@ export default function AdminOrdersWorkspace({
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">
                 {allocationConfirm.action === 'cancel_order'
                   ? 'Verifikasi Pembatalan'
+                  : allocationConfirm.action === 'backorder_allocation'
+                    ? 'Verifikasi Alokasi Backorder'
                   : allocationConfirm.action === 'cancel_backorder'
                     ? 'Verifikasi Cancel Backorder'
                   : allocationConfirm.action === 'issue_invoice'
@@ -1887,6 +1994,10 @@ export default function AdminOrdersWorkspace({
                   ? allocationConfirm.step === 1
                     ? 'Periksa order sebelum dibatalkan'
                     : 'Konfirmasi batalkan order'
+                  : allocationConfirm.action === 'backorder_allocation'
+                    ? allocationConfirm.step === 1
+                      ? 'Periksa top up backorder sebelum disimpan'
+                      : 'Konfirmasi simpan top up backorder'
                   : allocationConfirm.action === 'cancel_backorder'
                     ? allocationConfirm.step === 1
                       ? 'Periksa backorder sebelum dibatalkan'
@@ -1998,9 +2109,14 @@ export default function AdminOrdersWorkspace({
                       dialokasikan <span className="font-black">{allocationConfirmMeta.totals.allocQty}</span> •
                       sisa <span className="font-black">{allocationConfirmMeta.totals.remainingQty}</span>
                     </p>
+                    {allocationConfirm.action === 'backorder_allocation' && Number((allocationConfirmMeta.totals as Record<string, unknown>).topupQty || 0) > 0 && (
+                      <p className="mt-2 text-[10px] text-slate-600">
+                        Top up backorder <span className="font-black text-amber-700">{Number((allocationConfirmMeta.totals as Record<string, unknown>).topupQty || 0)}</span> qty akan ditambahkan.
+                      </p>
+                    )}
                   </>
                 )}
-                {allocationConfirm.action === 'allocation' && allocationConfirmMeta.changedItems.length > 0 && (
+                {(allocationConfirm.action === 'allocation' || allocationConfirm.action === 'backorder_allocation') && allocationConfirmMeta.changedItems.length > 0 && (
                   <div className="mt-3 space-y-2">
                     {allocationConfirmMeta.changedItems.slice(0, 5).map((item) => (
                       <div key={item.productId} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
@@ -2030,6 +2146,10 @@ export default function AdminOrdersWorkspace({
                   ? allocationConfirm.step === 1
                     ? 'Pastikan order ini memang harus dibatalkan. Setelah dibatalkan, customer akan melihat status order sebagai dibatalkan.'
                     : 'Ini adalah konfirmasi akhir. Batalkan order sekarang?'
+                  : allocationConfirm.action === 'backorder_allocation'
+                    ? allocationConfirm.step === 1
+                      ? 'Periksa qty tambahan backorder yang akan dialokasikan. Pastikan stok tambahan sudah benar sebelum disimpan.'
+                      : 'Ini adalah konfirmasi akhir. Simpan top up backorder sekarang?'
                   : allocationConfirm.action === 'cancel_backorder'
                     ? allocationConfirm.step === 1
                       ? 'Pastikan sisa qty ini memang tidak akan ditunggu lagi oleh customer. Qty yang sudah tersuplai tetap dipertahankan.'
@@ -2072,6 +2192,8 @@ export default function AdminOrdersWorkspace({
                     ? 'Lanjut Verifikasi'
                     : allocationConfirm.action === 'cancel_order'
                       ? 'Ya, Batalkan Order'
+                      : allocationConfirm.action === 'backorder_allocation'
+                        ? 'Ya, Simpan Backorder'
                       : allocationConfirm.action === 'cancel_backorder'
                         ? 'Ya, Batalkan Backorder'
                       : allocationConfirm.action === 'issue_invoice'
@@ -2386,16 +2508,13 @@ export default function AdminOrdersWorkspace({
                       <div className="space-y-3">
                         {backorderActiveOrders.map((order: unknown) => {
                           const orderId = String(order?.id || '');
-                          const detail = orderDetails[orderId];
-                          const rawOrderStatus = String(order?.status || '');
-                          const orderStatus = normalizeOrderStatus(rawOrderStatus);
-                          const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
-                          const invoiceNumber = normalizeInvoiceRef(
-                            order?.invoice_number || order?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
-                          );
-                          const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
-                          const canCancelBackorderEarly = canAllocate;
-                          const allocationBusy = Boolean(allocationSaving[orderId]);
+                      const detail = orderDetails[orderId];
+                      const rawOrderStatus = String(order?.status || '');
+                      const orderStatus = normalizeOrderStatus(rawOrderStatus);
+                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
+                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
+                      const canCancelBackorderEarly = canAllocate;
+                      const allocationBusy = Boolean(allocationSaving[orderId]);
                           const groupedItems = groupedItemsByOrderId[orderId] || [];
                           const persistedAlloc = persistedAllocByOrderId[orderId] || {};
                           const allocationDraft = allocationDrafts[orderId] || {};
@@ -2489,7 +2608,7 @@ export default function AdminOrdersWorkspace({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => void handleSaveBackorderAllocation(orderId, backorderEditorItems)}
+                                  onClick={() => void handleSaveBackorderAllocationWithConfirm(orderId)}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
                                   className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
                                 >
@@ -2987,10 +3106,7 @@ export default function AdminOrdersWorkspace({
                         canManageWarehouseFlow &&
                         WAREHOUSE_STATUSES.has(orderStatus) &&
                         (orderStatus !== 'ready_to_ship' || isInvoicePrimaryOrder);
-                      const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
-                      const invoiceNumber = normalizeInvoiceRef(
-                        order?.invoice_number || order?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
-                      );
+                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
                       const invoiceRefLabel = formatInvoiceReference(invoiceId, invoiceNumber);
                       const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
                       const invoicePaymentStatus = String(
@@ -3140,7 +3256,7 @@ export default function AdminOrdersWorkspace({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => void handleSaveBackorderAllocation(String(order.id), backorderItems)}
+                                  onClick={() => void handleSaveBackorderAllocationWithConfirm(String(order.id))}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
                                   className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
                                 >

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -82,6 +82,7 @@ const paymentInstructionLabel = (method?: string) => {
 
 export default function InvoicePrintPage() {
   const { invoiceId } = useParams();
+  const searchParams = useSearchParams();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const [detail, setDetail] = useState<InvoiceDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,6 +138,13 @@ export default function InvoicePrintPage() {
     });
     return Array.from(ids);
   }, [detail, items]);
+
+  const backHref = useMemo(() => {
+    const raw = String(searchParams.get('back') || '').trim();
+    if (raw.startsWith('/admin/')) return raw;
+    if (raw.startsWith('/invoices/')) return raw;
+    return `/invoices/${String(invoiceId || '')}`;
+  }, [invoiceId, searchParams]);
 
   if (!isAuthenticated) {
     return (
@@ -199,7 +207,7 @@ export default function InvoicePrintPage() {
 
       <div className="max-w-5xl mx-auto px-4 print:px-0 print:max-w-none">
         <div className="flex flex-wrap items-center gap-3 mb-4 print:hidden">
-          <Link href={`/invoices/${String(invoiceId || '')}`} className="inline-flex items-center gap-2 text-xs font-bold text-slate-600">
+          <Link href={backHref} className="inline-flex items-center gap-2 text-xs font-bold text-slate-600">
             <ChevronLeft size={16} />
             Kembali ke detail
           </Link>

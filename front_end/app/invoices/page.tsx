@@ -120,6 +120,12 @@ export default function CustomerInvoicesPage() {
       setLoading(true);
       const res = await api.orders.getMyOrders({ page: 1, limit: 200 });
       const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
+      const latestInvoiceIds = new Set<string>();
+      orders.forEach((order) => {
+        const id = String(order?.Invoice?.id || '').trim();
+        if (id) latestInvoiceIds.add(id);
+      });
+
       const invoiceMap = new Map<string, InvoiceRow>();
       orders.forEach((order) => {
         const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
@@ -148,6 +154,7 @@ export default function CustomerInvoicesPage() {
       });
       const unpaid = Array.from(invoiceMap.values()).filter((inv) => {
         const status = String(inv.payment_status || '');
+        if (!latestInvoiceIds.has(String(inv.id || '').trim())) return false;
         return status !== 'paid' && status !== 'cod_pending';
       });
       setRows(unpaid.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));

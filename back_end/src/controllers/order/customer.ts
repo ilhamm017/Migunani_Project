@@ -258,6 +258,22 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
             throw new CustomError('Invoice not found', 404);
         }
 
+        if (String(order.payment_method || '').trim().toLowerCase() !== 'transfer_manual') {
+            await t.rollback();
+            throw new CustomError('Metode pembayaran order sudah berubah. Bukti transfer tidak dapat diunggah.', 409);
+        }
+
+        if (String(invoice.payment_method || '').trim().toLowerCase() !== 'transfer_manual') {
+            await t.rollback();
+            throw new CustomError('Bukti transfer hanya berlaku untuk invoice transfer manual.', 400);
+        }
+
+        const latestInvoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+        if (latestInvoice && String(latestInvoice.id) !== String(invoice.id)) {
+            await t.rollback();
+            throw new CustomError('Invoice ini sudah digantikan oleh invoice yang lebih baru. Bukti transfer tidak dapat diunggah.', 409);
+        }
+
         if (invoice.payment_status === 'paid') {
             await t.rollback();
             throw new CustomError('Pesanan sudah dibayar.', 400);

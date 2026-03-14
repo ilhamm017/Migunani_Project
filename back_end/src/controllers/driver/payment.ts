@@ -9,6 +9,7 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+import { calculateDriverCodExposure } from '../../utils/codExposure';
 
 export const recordPayment = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -23,186 +24,197 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
         }
     }
 
-    const t = await sequelize.transaction();
-    try {
-        const { id } = req.params;
-        const userId = req.user!.id;
-        const file = req.file;
-        const rawAmount = req.body?.amount_received ?? req.body?.amount;
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const t = await sequelize.transaction();
+        try {
+            const { id } = req.params;
+            const userId = req.user!.id;
+            const file = req.file;
+            const rawAmount = req.body?.amount_received ?? req.body?.amount;
 
-        const order = await findOrderByIdOrInvoiceId(String(id), userId, { transaction: t });
-        if (!order) {
-            await t.rollback();
-            throw new CustomError('Order atau invoice tidak ditemukan atau tidak ditugaskan ke driver ini.', 404);
-        }
-
-        const allInvoices = await findInvoicesByOrderId(String(order.id), { transaction: t });
-        const unpaidCodInvoices = allInvoices.filter((inv: any) => {
-            const paymentMethod = String(inv.payment_method || '').trim().toLowerCase();
-            const paymentStatus = String(inv.payment_status || '').trim().toLowerCase();
-            return paymentMethod === 'cod' && ['unpaid', 'draft'].includes(paymentStatus);
-        });
-
-        if (unpaidCodInvoices.length === 0) {
-            // Check if already paid/pending
-            const alreadyPending = allInvoices.some((inv: any) => inv.payment_method === 'cod' && inv.payment_status === 'cod_pending');
-            if (alreadyPending) {
+            const order = await findOrderByIdOrInvoiceId(String(id), userId, { transaction: t });
+            if (!order) {
                 await t.rollback();
-                throw new CustomError('Pembayaran COD sudah dicatat sebelumnya.', 409);
+                throw new CustomError('Order atau invoice tidak ditemukan atau tidak ditugaskan ke driver ini.', 404);
             }
-            await t.rollback();
-            throw new CustomError('Tidak ada invoice COD yang perlu dibayar untuk order ini.', 400);
-        }
 
-        const totalToPay = unpaidCodInvoices.reduce((sum: number, inv: any) => sum + Number(inv.total || 0), 0);
-        const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
-            ? totalToPay
-            : Number(rawAmount);
-
-        if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
-            await t.rollback();
-            throw new CustomError('Jumlah pembayaran tidak valid.', 400);
-        }
-
-        const amountReceived = parsedAmount;
-        // In COD, we expect the exact amount for all pending invoices
-        if (Math.abs(amountReceived - totalToPay) > 0.01) {
-            await t.rollback();
-            throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD (${totalToPay.toLocaleString()}).`, 400);
-        }
-
-        let totalDelta = 0;
-        for (const invoice of unpaidCodInvoices) {
-            const invoiceAmount = Number(invoice.total || 0);
-
-            const existingCollection = await CodCollection.findOne({
-                where: { invoice_id: invoice.id, driver_id: userId, status: 'collected' },
-                transaction: t,
-                lock: t.LOCK.UPDATE
+            const allInvoices = await findInvoicesByOrderId(String(order.id), { transaction: t });
+            const unpaidCodInvoices = allInvoices.filter((inv: any) => {
+                const paymentMethod = String(inv.payment_method || '').trim().toLowerCase();
+                const paymentStatus = String(inv.payment_status || '').trim().toLowerCase();
+                return paymentMethod === 'cod' && ['unpaid', 'draft'].includes(paymentStatus);
             });
-            const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
-            const delta = invoiceAmount - previousAmount;
-            totalDelta += delta;
 
-            if (existingCollection) {
-                await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
-            } else {
-                await CodCollection.create({
-                    invoice_id: invoice.id,
-                    driver_id: userId,
-                    amount: invoiceAmount,
-                    status: 'collected'
-                }, { transaction: t });
+            if (unpaidCodInvoices.length === 0) {
+                const alreadyPending = allInvoices.some((inv: any) => inv.payment_method === 'cod' && inv.payment_status === 'cod_pending');
+                if (alreadyPending) {
+                    await t.rollback();
+                    throw new CustomError('Pembayaran COD sudah dicatat sebelumnya.', 409);
+                }
+                await t.rollback();
+                throw new CustomError('Tidak ada invoice COD yang perlu dibayar untuk order ini.', 400);
             }
 
-            const invoiceUpdate: any = {
-                payment_status: 'cod_pending',
-                amount_paid: invoiceAmount,
-                courier_id: userId
+            const totalToPay = unpaidCodInvoices.reduce((sum: number, inv: any) => sum + Number(inv.total || 0), 0);
+            const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
+                ? totalToPay
+                : Number(rawAmount);
+
+            if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+                await t.rollback();
+                throw new CustomError('Jumlah pembayaran tidak valid.', 400);
+            }
+
+            const amountReceived = parsedAmount;
+            if (Math.abs(amountReceived - totalToPay) > 0.01) {
+                await t.rollback();
+                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD (${totalToPay.toLocaleString()}).`, 400);
+            }
+
+            let totalDelta = 0;
+            for (const invoice of unpaidCodInvoices) {
+                const invoiceAmount = Number(invoice.total || 0);
+
+                const existingCollection = await CodCollection.findOne({
+                    where: { invoice_id: invoice.id, driver_id: userId, status: 'collected' },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
+                const delta = invoiceAmount - previousAmount;
+                totalDelta += delta;
+
+                if (existingCollection) {
+                    await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
+                } else {
+                    await CodCollection.create({
+                        invoice_id: invoice.id,
+                        driver_id: userId,
+                        amount: invoiceAmount,
+                        status: 'collected'
+                    }, { transaction: t });
+                }
+
+                const invoiceUpdate: any = {
+                    payment_status: 'cod_pending',
+                    amount_paid: invoiceAmount,
+                    courier_id: userId
+                };
+                if (file) {
+                    invoiceUpdate.payment_proof_url = file.path;
+                }
+                await invoice.update(invoiceUpdate, { transaction: t });
+            }
+
+            if (totalDelta !== 0) {
+                const driver = await User.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
+                if (!driver) {
+                    await t.rollback();
+                    throw new CustomError('Driver tidak ditemukan.', 404);
+                }
+                const exposure = await calculateDriverCodExposure(String(userId), { transaction: t });
+                await driver.update({ debt: exposure.exposure }, { transaction: t });
+            }
+
+            const relatedOrderIds = Array.from(new Set(
+                (await Promise.all(unpaidCodInvoices.map((inv: any) => findOrderIdsByInvoiceId(String(inv.id), { transaction: t }))))
+                    .flat()
+            )) as string[];
+            const currentOrderId = String(order.id || '');
+            if (currentOrderId && !relatedOrderIds.includes(currentOrderId)) {
+                relatedOrderIds.push(currentOrderId);
+            }
+
+            const uniqueOrderIds = Array.from(new Set(relatedOrderIds.filter(Boolean)));
+            const relatedOrders = uniqueOrderIds.length > 0
+                ? await Order.findAll({
+                    where: { id: { [Op.in]: uniqueOrderIds } },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                })
+                : [order];
+
+            const previousStatusByOrderId: Record<string, string> = {};
+            relatedOrders.forEach((row: any) => {
+                previousStatusByOrderId[String(row.id)] = String(row.status || '');
+            });
+
+            const deliveredOrderIds = relatedOrders
+                .filter((row: any) => String(row.status || '') === 'delivered')
+                .map((row: any) => String(row.id));
+            for (const orderId of deliveredOrderIds) {
+                const previousStatus = String(previousStatusByOrderId[orderId] || '').toLowerCase();
+                if (!isOrderTransitionAllowed(previousStatus, 'completed')) {
+                    await t.rollback();
+                    throw new CustomError(`Transisi status tidak diizinkan: '${previousStatus}' -> 'completed'`, 409);
+                }
+            }
+            if (deliveredOrderIds.length > 0) {
+                await Order.update(
+                    { status: 'completed' },
+                    { where: { id: { [Op.in]: deliveredOrderIds } }, transaction: t }
+                );
+            }
+
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'driver_record_payment_refresh_badges'
+            });
+            for (const orderId of deliveredOrderIds) {
+                const prevStatus = previousStatusByOrderId[orderId] || '';
+                if (prevStatus === 'completed') continue;
+                const mainInvoice = unpaidCodInvoices[0];
+                await emitOrderStatusChanged({
+                    order_id: orderId,
+                    from_status: prevStatus || null,
+                    to_status: 'completed',
+                    source: String(order.source || ''),
+                    payment_method: String(mainInvoice?.payment_method || 'cod'),
+                    courier_id: String(order.courier_id || userId),
+                    triggered_by_role: String(req.user?.role || 'driver'),
+                    target_roles: ['admin_finance', 'customer', 'driver'],
+                    target_user_ids: [String(userId)],
+                }, {
+                    transaction: t,
+                    requestContext: 'driver_record_payment_status_changed'
+                });
+            }
+
+            await t.commit();
+
+            const responsePayload = {
+                message: 'Pembayaran COD berhasil dicatat.',
+                invoice_ids: unpaidCodInvoices.map((inv: any) => inv.id),
+                amount_received: amountReceived
             };
-            if (file) {
-                invoiceUpdate.payment_proof_url = file.path;
+            if (idempotencyKey) {
+                await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
             }
-            await invoice.update(invoiceUpdate, { transaction: t });
-        }
+            return res.json(responsePayload);
+        } catch (error) {
+            try { await t.rollback(); } catch { }
 
-        if (totalDelta !== 0) {
-            const driver = await User.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
-            if (!driver) {
-                await t.rollback();
-                throw new CustomError('Driver tidak ditemukan.', 404);
+            if (isDeadlockError(error) && attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, 75 * attempt));
+                continue;
             }
-            const previousDebt = Number(driver.debt || 0);
-            const nextDebt = Math.max(0, previousDebt + totalDelta);
-            await driver.update({ debt: nextDebt }, { transaction: t });
-        }
 
-        // For notification and status update, we use the "last" order status context
-        const relatedOrderIds = Array.from(new Set(
-            (await Promise.all(unpaidCodInvoices.map((inv: any) => findOrderIdsByInvoiceId(String(inv.id), { transaction: t }))))
-                .flat()
-        )) as string[];
-        const currentOrderId = String(order.id || '');
-        if (currentOrderId && !relatedOrderIds.includes(currentOrderId)) {
-            relatedOrderIds.push(currentOrderId);
-        }
-
-        const uniqueOrderIds = Array.from(new Set(relatedOrderIds.filter(Boolean)));
-        const relatedOrders = uniqueOrderIds.length > 0
-            ? await Order.findAll({
-                where: { id: { [Op.in]: uniqueOrderIds } },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            })
-            : [order];
-
-        const previousStatusByOrderId: Record<string, string> = {};
-        relatedOrders.forEach((row: any) => {
-            previousStatusByOrderId[String(row.id)] = String(row.status || '');
-        });
-
-        const deliveredOrderIds = relatedOrders
-            .filter((row: any) => String(row.status || '') === 'delivered')
-            .map((row: any) => String(row.id));
-        for (const orderId of deliveredOrderIds) {
-            const previousStatus = String(previousStatusByOrderId[orderId] || '').toLowerCase();
-            if (!isOrderTransitionAllowed(previousStatus, 'completed')) {
-                await t.rollback();
-                throw new CustomError(`Transisi status tidak diizinkan: '${previousStatus}' -> 'completed'`, 409);
+            if (idempotencyKey) {
+                await clearIdempotentRequest(idempotencyKey, idempotencyScope);
             }
+            if (error instanceof CustomError) {
+                throw error;
+            }
+            if (isDeadlockError(error)) {
+                throw new CustomError('Terjadi konflik transaksi saat catat pembayaran. Silakan coba lagi.', 409);
+            }
+            console.error('[driver.recordPayment] unexpected error', error);
+            throw new CustomError('Gagal mencatat pembayaran.', 500);
         }
-        if (deliveredOrderIds.length > 0) {
-            await Order.update(
-                { status: 'completed' },
-                { where: { id: { [Op.in]: deliveredOrderIds } }, transaction: t }
-            );
-        }
-
-        await emitAdminRefreshBadges({
-            transaction: t,
-            requestContext: 'driver_record_payment_refresh_badges'
-        });
-        for (const orderId of deliveredOrderIds) {
-            const prevStatus = previousStatusByOrderId[orderId] || '';
-            if (prevStatus === 'completed') continue;
-            const mainInvoice = unpaidCodInvoices[0];
-            await emitOrderStatusChanged({
-                order_id: orderId,
-                from_status: prevStatus || null,
-                to_status: 'completed',
-                source: String(order.source || ''),
-                payment_method: String(mainInvoice?.payment_method || 'cod'),
-                courier_id: String(order.courier_id || userId),
-                triggered_by_role: String(req.user?.role || 'driver'),
-                target_roles: ['admin_finance', 'customer', 'driver'],
-                target_user_ids: [String(userId)],
-            }, {
-                transaction: t,
-                requestContext: 'driver_record_payment_status_changed'
-            });
-        }
-
-        await t.commit();
-
-        const responsePayload = {
-            message: 'Pembayaran COD berhasil dicatat.',
-            invoice_ids: unpaidCodInvoices.map((inv: any) => inv.id),
-            amount_received: amountReceived
-        };
-        if (idempotencyKey) {
-            await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
-        }
-        return res.json(responsePayload);
-    } catch (error) {
-        try { await t.rollback(); } catch { }
-        if (idempotencyKey) {
-            await clearIdempotentRequest(idempotencyKey, idempotencyScope);
-        }
-        if (error instanceof CustomError) {
-            throw error;
-        }
-        throw new CustomError('Gagal mencatat pembayaran.', 500);
     }
+
+    throw new CustomError('Gagal mencatat pembayaran.', 500);
 });
 
 export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Response) => {

@@ -3,7 +3,7 @@ import { Invoice, InvoiceItem, OrderItem, Product, User, Order, sequelize } from
 import { Op } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
-import { findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
+import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 import { enqueueWhatsappNotification } from '../services/TransactionNotificationOutboxService';
 import { AccountingPostingService } from '../services/AccountingPostingService';
@@ -191,6 +191,16 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
         });
         if (relatedOrders.length === 0) {
             throw new CustomError('Invoice tidak memiliki order terkait.', 404);
+        }
+        for (const order of relatedOrders as any[]) {
+            const orderPaymentMethod = String(order?.payment_method || '').trim().toLowerCase();
+            if (orderPaymentMethod && orderPaymentMethod !== 'transfer_manual') {
+                throw new CustomError('Metode pembayaran order sudah berubah. Bukti transfer tidak dapat diunggah untuk invoice ini.', 409);
+            }
+            const latestInvoice = await findLatestInvoiceByOrderId(String(order.id), { transaction: t });
+            if (latestInvoice && String(latestInvoice.id) !== invoiceId) {
+                throw new CustomError('Invoice ini sudah digantikan oleh invoice yang lebih baru. Bukti transfer tidak dapat diunggah untuk invoice ini.', 409);
+            }
         }
 
         const previousStatuses = new Map<string, string>();

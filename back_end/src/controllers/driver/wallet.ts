@@ -7,6 +7,7 @@ import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoi
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { calculateDriverCodExposure } from '../../utils/codExposure';
 
 export const getDriverWallet = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -79,13 +80,8 @@ export const getDriverWallet = asyncWrapper(async (req: Request, res: Response) 
         });
 
         // Current source of truth for UI display
-        const driverUser = await User.findByPk(userId, {
-            attributes: ['id', 'name', 'debt']
-        });
-
-        const debtFromFinance = Number(driverUser?.debt || 0);
-        // Use the calculated total for UI if it's more accurate (e.g. recent deliveries)
-        const displayDebt = Math.max(debtFromFinance, totalCash);
+        const exposure = await calculateDriverCodExposure(String(userId));
+        const displayDebt = exposure.exposure > 0 ? exposure.exposure : totalCash;
 
         res.json({
             driver_id: userId,

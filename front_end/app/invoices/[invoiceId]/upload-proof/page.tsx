@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Receipt, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
+import NotifyPopup, { NotifyPopupVariant } from '@/components/ui/NotifyPopup';
 
 type InvoiceDetail = {
   id: string;
@@ -25,6 +26,12 @@ export default function InvoiceUploadProofPage() {
   const [loading, setLoading] = useState(false);
   const [loadingInvoice, setLoadingInvoice] = useState(true);
   const [submitError, setSubmitError] = useState('');
+  const [popup, setPopup] = useState<{ open: boolean; title: string; message?: string; variant: NotifyPopupVariant; onPrimary?: () => void }>({
+    open: false,
+    title: '',
+    message: '',
+    variant: 'info',
+  });
 
   const loadInvoice = useCallback(async () => {
     if (!invoiceId) {
@@ -66,7 +73,12 @@ export default function InvoiceUploadProofPage() {
   const handleSubmit = async () => {
     setSubmitError('');
     if (!file) {
-      alert('Pilih file bukti transfer dulu.');
+      setPopup({
+        open: true,
+        title: 'Pilih bukti transfer dulu',
+        message: 'Silakan pilih foto bukti transfer (JPG/PNG) sebelum mengirim.',
+        variant: 'warning',
+      });
       return;
     }
     if (uploadLocked) {
@@ -94,14 +106,25 @@ export default function InvoiceUploadProofPage() {
         payment_proof_url: 'uploaded',
       } : prev);
       setFile(null);
-      alert('Bukti transfer berhasil dikirim. Menunggu verifikasi admin finance.');
-      router.push(`/invoices/${invoiceId}`);
+      setPopup({
+        open: true,
+        title: 'Bukti transfer berhasil dikirim',
+        message: 'Menunggu verifikasi admin finance. Kamu bisa cek status verifikasi di halaman invoice.',
+        variant: 'success',
+        onPrimary: () => router.push(`/invoices/${invoiceId}`),
+      });
     } catch (error: unknown) {
       const message = String(
         (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
         'Upload bukti transfer gagal.'
       );
       setSubmitError(message);
+      setPopup({
+        open: true,
+        title: 'Upload bukti transfer gagal',
+        message,
+        variant: 'error',
+      });
     } finally {
       setLoading(false);
     }
@@ -109,6 +132,14 @@ export default function InvoiceUploadProofPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 pb-24">
+      <NotifyPopup
+        open={popup.open}
+        title={popup.title}
+        message={popup.message}
+        variant={popup.variant}
+        onPrimary={popup.onPrimary}
+        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+      />
       <div className="p-6 space-y-5">
         <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali

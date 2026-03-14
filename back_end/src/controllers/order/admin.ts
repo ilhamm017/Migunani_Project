@@ -17,6 +17,9 @@ export const getAllOrders = asyncWrapper(async (req: Request, res: Response) => 
     const offset = (Number(page) - 1) * Number(limit);
 
     const whereClause: any = {};
+    // Used later to annotate each order with `is_backorder` for UI classification.
+    // We only compute against the current page to keep this endpoint fast.
+    let backorderOrderIdSetForPage: Set<string> | null = null;
     let prioritizeRecentIssueUpdates = false;
     if (status && status !== 'all') {
         const statusStr = String(status);
@@ -170,7 +173,39 @@ export const getAllOrders = asyncWrapper(async (req: Request, res: Response) => 
         });
         return { ...plain, allocated_amount: allocatedAmount };
     });
-    const rowsWithInvoices = await attachInvoicesToOrders(plainRows);
+
+    // Attach `is_backorder` boolean per order so the frontend can classify correctly
+    // even when the order status is not `partially_fulfilled/hold`.
+    const orderIdsForPage = plainRows.map((row: any) => String(row?.id || '')).filter(Boolean);
+    if (orderIdsForPage.length > 0) {
+        const pageBackorders = await Backorder.findAll({
+            where: {
+                qty_pending: { [Op.gt]: 0 },
+                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+            },
+            include: [{
+                model: OrderItem,
+                attributes: ['order_id'],
+                where: { order_id: { [Op.in]: orderIdsForPage } },
+                required: true,
+            }],
+            attributes: ['id']
+        });
+        backorderOrderIdSetForPage = new Set(
+            pageBackorders
+                .map((row: any) => row?.OrderItem?.order_id)
+                .filter(Boolean)
+                .map((id: any) => String(id))
+        );
+    } else {
+        backorderOrderIdSetForPage = new Set();
+    }
+
+    const annotatedRows = plainRows.map((row: any) => ({
+        ...row,
+        is_backorder: backorderOrderIdSetForPage ? backorderOrderIdSetForPage.has(String(row?.id || '')) : false,
+    }));
+    const rowsWithInvoices = await attachInvoicesToOrders(annotatedRows);
     const rows = rowsWithInvoices.map((row) => withOrderTrackingFields(row as any));
 
     res.json({

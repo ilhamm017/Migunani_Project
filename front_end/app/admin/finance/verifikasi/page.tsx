@@ -10,6 +10,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import NotifyPopup, { type NotifyPopupVariant } from '@/components/ui/NotifyPopup';
 
 type OrderInvoiceSummary = {
   id: string;
@@ -76,6 +77,12 @@ export default function FinanceVerifyPage() {
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [popup, setPopup] = useState<{
+    open: boolean;
+    title: string;
+    message?: string;
+    variant: NotifyPopupVariant;
+  }>({ open: false, title: '', message: '', variant: 'info' });
 
   const load = useCallback(async () => {
     try {
@@ -153,7 +160,7 @@ export default function FinanceVerifyPage() {
   // Client-side filtering for tabs
   const tabOrders = useMemo(() => {
       const filtered = orders.filter(o => {
-        if (activeTab === 'verify') return o.status === 'waiting_admin_verification';
+        if (activeTab === 'verify') return o.status === 'waiting_admin_verification' && o.Invoice?.payment_method === 'transfer_manual';
         if (activeTab === 'cod') {
         const paymentMethod = o.Invoice?.payment_method || '';
         const isCod = ['cod', 'cash_store'].includes(paymentMethod);
@@ -226,9 +233,22 @@ export default function FinanceVerifyPage() {
       setBusyId(id);
       await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
       await load();
+      if ((verifyAction || 'approve') === 'approve') {
+        setPopup({
+          open: true,
+          title: 'Approve berhasil',
+          message: 'Pembayaran transfer sudah diverifikasi. Status invoice dan order terkait akan ikut ter-update.',
+          variant: 'success',
+        });
+      }
     } catch (error: unknown) {
       console.error('Action failed:', error);
-      alert(getErrorMessage(error, 'Gagal memproses.'));
+      setPopup({
+        open: true,
+        title: 'Gagal memproses',
+        message: getErrorMessage(error, 'Gagal memproses.'),
+        variant: 'error',
+      });
     } finally {
       setBusyId(null);
     }
@@ -236,6 +256,13 @@ export default function FinanceVerifyPage() {
 
   return (
     <div className="bg-slate-50 min-h-screen pb-24">
+      <NotifyPopup
+        open={popup.open}
+        title={popup.title}
+        message={popup.message}
+        variant={popup.variant}
+        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+      />
       <div className="bg-white px-6 pb-4 pt-2 shadow-sm sticky top-0 z-40">
         <FinanceHeader title="Verifikasi Command" />
 

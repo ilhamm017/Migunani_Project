@@ -219,6 +219,7 @@ export const mapAccountsReceivableRows = (
         ordersById: Map<string, any>;
     }
 ) => {
+    const normalizeMethod = (value: unknown) => String(value || '').trim().toLowerCase();
     const nowMs = Date.now();
     return invoices.map((invoice) => {
         const plainInvoice = invoice.get({ plain: true }) as any;
@@ -238,6 +239,23 @@ export const mapAccountsReceivableRows = (
             });
             if (!hasActiveOrder) {
                 return null;
+            }
+
+            // Exclude invoices that are no longer relevant because all related orders have
+            // moved to a different payment method (common when invoice got superseded).
+            const invoiceMethod = normalizeMethod(plainInvoice.payment_method);
+            if (['transfer_manual', 'cod', 'cash_store'].includes(invoiceMethod)) {
+                const relatedOrders = Array.from(relatedOrderIds)
+                    .map((id) => context.ordersById.get(id))
+                    .filter(Boolean);
+                const orderMethods = relatedOrders
+                    .map((row) => normalizeMethod(row?.payment_method))
+                    .filter(Boolean);
+                const hasMethodInfo = orderMethods.length > 0;
+                const hasMatch = orderMethods.some((m) => m === invoiceMethod);
+                if (hasMethodInfo && !hasMatch) {
+                    return null;
+                }
             }
         }
 
@@ -293,4 +311,3 @@ export const mapAccountsReceivableRows = (
         };
     }).filter(Boolean);
 };
-
