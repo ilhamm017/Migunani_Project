@@ -31,8 +31,13 @@ const normalizeOrderStatus = (raw: unknown) => {
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> => {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+};
+
 const hasExplicitBackorderFlag = (order: unknown): boolean => {
-  const raw = order?.is_backorder ?? order?.isBackorder;
+  const row = asRecord(order);
+  const raw = row.is_backorder ?? row.isBackorder;
   if (typeof raw === 'boolean') return raw;
   if (typeof raw === 'number') return raw === 1;
   if (typeof raw === 'string') {
@@ -43,7 +48,8 @@ const hasExplicitBackorderFlag = (order: unknown): boolean => {
 };
 
 const classifyOrderSection = (order: unknown): OrderSection => {
-  const rawStatus = String(order?.status || '');
+  const row = asRecord(order);
+  const rawStatus = String(row.status || '');
   const normalizedStatus = normalizeOrderStatus(rawStatus);
   if (hasExplicitBackorderFlag(order) || BACKORDER_FALLBACK_STATUSES.has(rawStatus)) return 'backorder';
   if (COMPLETED_STATUSES.has(rawStatus)) return 'selesai';
@@ -62,7 +68,7 @@ const getCustomerCardPriority = (card: CustomerOrderCard) => {
 };
 
 export default function AdminOrdersPage() {
-  const { allowed } = useRequireRoles(['super_admin', 'kasir', 'admin_gudang', 'admin_finance']);
+  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_gudang', 'admin_finance']);
   const { isAuthenticated, user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [customerQuery, setCustomerQuery] = useState('');
@@ -97,16 +103,18 @@ export default function AdminOrdersPage() {
     const grouped = new Map<string, CustomerOrderCard>();
 
     orders.forEach((order: unknown) => {
-      const customerId = order?.customer_id ? String(order.customer_id) : null;
-      const customerName = String(order?.customer_name || order?.Customer?.name || 'Customer');
+      const row = asRecord(order);
+      const customer = asRecord(row.Customer);
+      const customerId = row.customer_id ? String(row.customer_id) : null;
+      const customerName = String(row.customer_name || customer.name || 'Customer');
       const key = customerId || `guest:${customerName}`;
       const section = classifyOrderSection(order);
       const existing = grouped.get(key) || {
         key,
         customerId,
         customerName,
-        latestOrderAt: String(order?.createdAt || ''),
-        latestOrderId: String(order?.id || ''),
+        latestOrderAt: String(row.createdAt || ''),
+        latestOrderId: String(row.id || ''),
         totalOrders: 0,
         counts: {
           baru: 0,
@@ -118,11 +126,11 @@ export default function AdminOrdersPage() {
         },
       };
 
-      const currentTs = Date.parse(String(order?.createdAt || order?.updatedAt || ''));
+      const currentTs = Date.parse(String(row.createdAt || row.updatedAt || ''));
       const latestTs = Date.parse(existing.latestOrderAt || '');
       if (!Number.isFinite(latestTs) || (Number.isFinite(currentTs) && currentTs > latestTs)) {
-        existing.latestOrderAt = String(order?.createdAt || order?.updatedAt || '');
-        existing.latestOrderId = String(order?.id || '');
+        existing.latestOrderAt = String(row.createdAt || row.updatedAt || '');
+        existing.latestOrderId = String(row.id || '');
       }
 
       existing.totalOrders += 1;

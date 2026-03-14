@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
@@ -80,7 +80,7 @@ const formatInvoiceReference = (invoiceId: string, invoiceNumber: string) => {
   return 'Invoice tanpa nomor';
 };
 
-export default function AdminCompletedInvoiceHistoryPage() {
+function AdminCompletedInvoiceHistoryPageContent() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<HistoryRow[]>([]);
@@ -281,5 +281,13 @@ export default function AdminCompletedInvoiceHistoryPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AdminCompletedInvoiceHistoryPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Memuat riwayat invoice...</div>}>
+      <AdminCompletedInvoiceHistoryPageContent />
+    </Suspense>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Search } from 'lucide-react';
@@ -15,7 +15,7 @@ type CustomerSearchRow = {
   email?: string | null;
 };
 
-export default function AdminCustomerPurchasesPage() {
+function AdminCustomerPurchasesPageContent() {
   const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_finance', 'admin_gudang']);
   const searchParams = useSearchParams();
   const queryCustomerId = String(searchParams.get('customerId') || '').trim();
@@ -116,5 +116,13 @@ export default function AdminCustomerPurchasesPage() {
         customerName={selectedCustomer?.name}
       />
     </div>
+  );
+}
+
+export default function AdminCustomerPurchasesPage() {
+  return (
+    <Suspense fallback={<div className="p-4 sm:p-6 pb-24 text-sm text-slate-500">Memuat data customer...</div>}>
+      <AdminCustomerPurchasesPageContent />
+    </Suspense>
   );
 }

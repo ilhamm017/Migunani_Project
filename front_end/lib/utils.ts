@@ -22,8 +22,10 @@ export function formatCurrency(amount: number): string {
 /**
  * Format date to Indonesian locale
  */
-export function formatDate(date: Date | string): string {
+export function formatDate(date: Date | string | null | undefined): string {
+    if (!date) return '-';
     const d = typeof date === 'string' ? new Date(date) : date;
+    if (Number.isNaN(d.getTime())) return '-';
     return new Intl.DateTimeFormat('id-ID', {
         year: 'numeric',
         month: 'long',
@@ -34,8 +36,10 @@ export function formatDate(date: Date | string): string {
 /**
  * Format date with time
  */
-export function formatDateTime(date: Date | string): string {
+export function formatDateTime(date: Date | string | null | undefined): string {
+    if (!date) return '-';
     const d = typeof date === 'string' ? new Date(date) : date;
+    if (Number.isNaN(d.getTime())) return '-';
     return new Intl.DateTimeFormat('id-ID', {
         year: 'numeric',
         month: 'short',

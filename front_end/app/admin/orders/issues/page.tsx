@@ -55,8 +55,8 @@ export default function AdminIssueOrdersPage() {
         search: searchValue || undefined,
       });
 
-      const rowsRaw = Array.isArray(res.data?.orders) ? res.data.orders : [];
-      const rows: IssueOrderRow[] = rowsRaw.map((item) => {
+      const rowsRaw: unknown[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
+      const rows: IssueOrderRow[] = rowsRaw.map((item: unknown) => {
         const row = item as Record<string, unknown>;
         return {
           id: String(row.id ?? ''),
@@ -211,7 +211,7 @@ export default function AdminIssueOrdersPage() {
                     Courier: <span className="font-semibold text-slate-800">{order.courier_display_name || order.Courier?.name || '-'}</span>
                   </p>
                   <p className="text-xs text-slate-500 mt-1">
-                    Dibuat: {formatDateTime(order.createdAt)}
+                    Dibuat: {order.createdAt ? formatDateTime(order.createdAt) : '-'}
                   </p>
                   {order.active_issue?.note && (
                     <p className="text-xs text-slate-700 mt-2">

@@ -1,9 +1,10 @@
 'use client';
 
+import { Suspense } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import AdminOrdersWorkspace from '@/components/orders/AdminOrdersWorkspace';
 
-export default function CustomerOrderDetailPage() {
+function CustomerOrderDetailPageContent() {
   const params = useParams<{ customerId: string }>();
   const searchParams = useSearchParams();
   const decodedCustomerId = decodeURIComponent(params.customerId);
@@ -29,5 +30,13 @@ export default function CustomerOrderDetailPage() {
       initialSection={initialSection}
       initialFocusOrderId={requestedOrderId ? decodeURIComponent(requestedOrderId) : undefined}
     />
+  );
+}
+
+export default function CustomerOrderDetailPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Memuat detail customer...</div>}>
+      <CustomerOrderDetailPageContent />
+    </Suspense>
   );
 }

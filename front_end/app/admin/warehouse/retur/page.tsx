@@ -43,6 +43,7 @@ type ReturRow = {
     refund_amount?: number | string | null;
     Product?: { name?: string; sku?: string } | null;
     Creator?: { name?: string; whatsapp_number?: string } | null;
+    Courier?: { name?: string } | null;
     Order?: ReturOrder | null;
 };
 

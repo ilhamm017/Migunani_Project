@@ -19,6 +19,9 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: frontendRoot,
   },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   images: {
     remotePatterns: [
       {

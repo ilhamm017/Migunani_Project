@@ -26,7 +26,7 @@ interface ImportErrorRow {
   reason: string;
 }
 
-interface PreviewRow {
+interface PreviewRow extends Record<string, unknown> {
   row: number;
   sku: string;
   name: string;
