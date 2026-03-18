@@ -28,15 +28,15 @@ export const resolveLegacyOrderStatusAlias = (statusRaw: unknown, context = 'ord
 };
 
 const ALLOWED_ORDER_TRANSITIONS: Record<string, Set<string>> = {
-    pending: new Set(['waiting_invoice', 'hold', 'canceled']),
-    waiting_invoice: new Set(['ready_to_ship', 'hold', 'canceled']),
-    ready_to_ship: new Set(['shipped', 'completed', 'partially_fulfilled', 'hold', 'canceled']),
-    hold: new Set(['waiting_invoice', 'ready_to_ship', 'shipped', 'canceled']),
+    pending: new Set(['waiting_invoice', 'waiting_admin_verification', 'hold', 'canceled']),
+    waiting_invoice: new Set(['ready_to_ship', 'waiting_admin_verification', 'hold', 'canceled']),
+    ready_to_ship: new Set(['shipped', 'completed', 'partially_fulfilled', 'waiting_admin_verification', 'hold', 'canceled']),
+    hold: new Set(['waiting_invoice', 'ready_to_ship', 'waiting_admin_verification', 'shipped', 'canceled']),
     shipped: new Set(['delivered', 'completed', 'partially_fulfilled', 'hold', 'canceled']),
     delivered: new Set(['completed', 'hold', 'canceled']),
     partially_fulfilled: new Set(['waiting_invoice', 'completed', 'hold', 'canceled']),
     waiting_admin_verification: new Set(['ready_to_ship', 'completed', 'hold', 'canceled']),
-    allocated: new Set(['waiting_invoice', 'hold', 'canceled']),
+    allocated: new Set(['waiting_invoice', 'waiting_admin_verification', 'hold', 'canceled']),
     debt_pending: new Set(['waiting_invoice', 'hold', 'canceled']),
     completed: new Set(['waiting_invoice']),
     canceled: new Set([]),

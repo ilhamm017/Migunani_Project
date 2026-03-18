@@ -732,7 +732,7 @@ export default function CustomerChatPage() {
                               aria-label="Perbesar gambar lampiran"
                             >
                               <Image
-                                src={message.attachmentUrl}
+                                src={message.attachmentUrl || ''}
                                 alt="Lampiran chat"
                                 width={220}
                                 height={176}
@@ -742,7 +742,7 @@ export default function CustomerChatPage() {
                             </button>
                           ) : (
                             <a
-                              href={message.attachmentUrl}
+                              href={message.attachmentUrl || ''}
                               target="_blank"
                               rel="noopener noreferrer"
                               className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 border text-xs font-semibold ${isCustomer ? 'border-emerald-300/70 bg-emerald-500/30 text-white' : 'border-slate-300 bg-white text-slate-700'}`}

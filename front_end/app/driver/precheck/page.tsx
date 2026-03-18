@@ -1,12 +1,16 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ClipboardCheck, Package, User, MapPin, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 
 type ChecklistIndicator = 'not_checked' | 'mismatch' | 'ready';
+type MergedItem = { name: string; qty: number };
 
 type ChecklistMeta = {
   status: ChecklistIndicator;
@@ -33,9 +37,9 @@ type SavedChecklist = {
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
 const legacyChecklistStorageKey = (orderId: string) => `driver-checklist-${orderId}`;
-const getInvoiceItems = (invoiceData: unknown) => {
-  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
-  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
+const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
+  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems as any[];
+  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items as any[];
   return [];
 };
 
@@ -50,7 +54,7 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
       const parsed = JSON.parse(scopeRaw);
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
       if (rows.length === 0) return { status: 'not_checked' };
-      const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+      const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
       return {
         status: mismatchCount > 0 ? 'mismatch' : 'ready',
         savedAt: parsed?.savedAt,
@@ -71,7 +75,7 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
     try {
       const parsed = JSON.parse(raw);
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-      mismatchTotal += rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+      mismatchTotal += rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
       if (parsed?.savedAt) {
         const savedAtText = String(parsed.savedAt);
         if (!latestSavedAt || savedAtText > latestSavedAt) latestSavedAt = savedAtText;
@@ -95,9 +99,9 @@ const getChecklistMeta = (scopeId: string, orderIds: string[]): ChecklistMeta =>
 
 export default function DriverPrecheckPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
-  const [orders, setOrders] = useState<unknown[]>([]);
+  const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, unknown>>({});
+  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
   const [checklistByScope, setChecklistByScope] = useState<Record<string, ChecklistMeta>>({});
   const [bulkChecklistOpen, setBulkChecklistOpen] = useState(false);
   const [bulkChecklistStep, setBulkChecklistStep] = useState<1 | 2>(1);
@@ -127,7 +131,7 @@ export default function DriverPrecheckPage() {
     const invoiceIds = Array.from(
       new Set(
         orders
-          .map((row: unknown) => normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id))
+          .map((row) => normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id))
           .filter(Boolean)
       )
     );
@@ -143,7 +147,7 @@ export default function DriverPrecheckPage() {
           invoiceIds.map((invoiceId) => api.invoices.getById(invoiceId))
         );
         if (isCancelled) return;
-        const nextMap: Record<string, unknown> = {};
+        const nextMap: Record<string, InvoiceDetailResponse | null> = {};
         responses.forEach((result, index) => {
           if (result.status !== 'fulfilled') return;
           const data = result.value?.data || null;
@@ -165,7 +169,7 @@ export default function DriverPrecheckPage() {
   }, [allowed, orders]);
 
   const invoiceCards = useMemo(() => {
-    const buckets = orders.reduce((acc, order: unknown) => {
+    const buckets = orders.reduce((acc, order) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return acc;
       const invoiceId = normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
@@ -175,22 +179,22 @@ export default function DriverPrecheckPage() {
         key,
         invoiceId,
         invoiceNumber,
-        orders: [] as unknown[],
+        orders: [] as DriverAssignedOrderRow[],
       };
       bucket.orders.push(order);
       acc.set(key, bucket);
       return acc;
-    }, new Map<string, { key: string; invoiceId: string; invoiceNumber: string; orders: unknown[] }>());
+    }, new Map<string, { key: string; invoiceId: string; invoiceNumber: string; orders: DriverAssignedOrderRow[] }>());
 
     const bucketValues = Array.from(buckets.values()) as Array<{
       key: string;
       invoiceId: string;
       invoiceNumber: string;
-      orders: unknown[];
+      orders: DriverAssignedOrderRow[];
     }>;
 
     return bucketValues.map((bucket) => {
-      const sortedOrders = [...bucket.orders].sort((a: unknown, b: unknown) => {
+      const sortedOrders = [...bucket.orders].sort((a, b) => {
         const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
         const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -201,19 +205,19 @@ export default function DriverPrecheckPage() {
       const primaryOrder = sortedOrders[0] || null;
       const primaryOrderId = String(primaryOrder?.id || '').trim();
       const scopeId = bucket.invoiceId || primaryOrderId;
-      const orderIds = sortedOrders.map((row: unknown) => String(row?.id || '').trim()).filter(Boolean);
+      const orderIds = sortedOrders.map((row) => String(row?.id || '').trim()).filter(Boolean);
       const invoiceDetail = bucket.invoiceId ? invoiceDetailsById[bucket.invoiceId] : null;
 
       const customer = primaryOrder?.Customer || {};
       const profile = customer.CustomerProfile || {};
       const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-      const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
+      const addressObj = addresses.find((a: any) => Boolean(a?.isPrimary)) || addresses[0];
       const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
 
-      const itemMap = new Map<string, { name: string; qty: number }>();
+      const itemMap = new Map<string, MergedItem>();
       const invoiceItems = getInvoiceItems(invoiceDetail);
       if (invoiceItems.length > 0) {
-        invoiceItems.forEach((item: unknown) => {
+        invoiceItems.forEach((item: any) => {
           const orderItem = item?.OrderItem || {};
           const product = orderItem?.Product || {};
           const productKey = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -223,9 +227,9 @@ export default function DriverPrecheckPage() {
           itemMap.set(productKey, entry);
         });
       } else {
-        sortedOrders.forEach((order: unknown) => {
+        sortedOrders.forEach((order) => {
           const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-          items.forEach((item: unknown) => {
+          items.forEach((item: any) => {
             const productKey = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
             if (!productKey) return;
             const entry = itemMap.get(productKey) || { name: item?.Product?.name || 'Produk', qty: 0 };
@@ -247,7 +251,7 @@ export default function DriverPrecheckPage() {
         scopeId,
         invoiceLabel,
         orderIds,
-        customerName: primaryOrder?.customer_name || customer?.name || 'Customer',
+        customerName: String(primaryOrder?.customer_name || customer?.name || 'Customer'),
         address,
         mergedItems,
       };
@@ -307,7 +311,7 @@ export default function DriverPrecheckPage() {
             <div className="flex-1">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">Barang Invoice</p>
               <div className="text-xs font-medium text-slate-800 space-y-0.5">
-                {card.mergedItems.slice(0, 3).map((item: unknown, idx: number) => (
+                {card.mergedItems.slice(0, 3).map((item, idx: number) => (
                   <p key={`${item.name}-${idx}`}>{item.qty}x {item.name}</p>
                 ))}
                 {card.mergedItems.length > 3 && (
@@ -341,13 +345,13 @@ export default function DriverPrecheckPage() {
   }), [invoiceCards, checklistByScope]);
 
   const bulkChecklistSummary = useMemo(() => {
-    const itemMap = new Map<string, { name: string; qty: number }>();
+    const itemMap = new Map<string, MergedItem>();
     invoiceCards.forEach((card) => {
-      card.mergedItems.forEach((item: unknown) => {
-        const key = String(item?.name || '').trim().toLowerCase();
+      card.mergedItems.forEach((item) => {
+        const key = String(item.name || '').trim().toLowerCase();
         if (!key) return;
-        const existing = itemMap.get(key) || { name: String(item?.name || 'Produk'), qty: 0 };
-        existing.qty += Number(item?.qty || 0);
+        const existing = itemMap.get(key) || { name: String(item.name || 'Produk'), qty: 0 };
+        existing.qty += Number(item.qty || 0);
         itemMap.set(key, existing);
       });
     });
@@ -367,11 +371,11 @@ export default function DriverPrecheckPage() {
     const savedAt = new Date().toISOString();
     invoiceCards.forEach((card) => {
       if (!card.scopeId) return;
-      const rows = card.mergedItems.map((item: unknown) => ({
-        key: String(item?.name || '').trim().toLowerCase(),
-        productName: String(item?.name || 'Produk'),
-        expectedQty: Number(item?.qty || 0),
-        actualQty: Number(item?.qty || 0),
+      const rows = card.mergedItems.map((item) => ({
+        key: String(item.name || '').trim().toLowerCase(),
+        productName: String(item.name || 'Produk'),
+        expectedQty: Number(item.qty || 0),
+        actualQty: Number(item.qty || 0),
         note: '',
         quickState: 'match' as const,
         orderIds: card.orderIds,

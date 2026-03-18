@@ -1,11 +1,15 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Camera, ClipboardCheck, MessageCircle, Send, Upload, Coins, CreditCard } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import axios from 'axios';
+import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 
 type StoredChecklistRow = {
   orderId?: string;
@@ -34,7 +38,7 @@ const isOrderDoneStatus = (raw: unknown) =>
   ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
 const legacyChecklistStorageKey = (orderId: string) => `driver-checklist-${orderId}`;
-const getOrderInvoicePayload = (order: unknown) => {
+const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
     id: normalizeInvoiceRef(order?.invoice_id || latestInvoice?.id),
@@ -44,15 +48,15 @@ const getOrderInvoicePayload = (order: unknown) => {
     paymentStatus: String(latestInvoice?.payment_status || '').toLowerCase(),
   };
 };
-const getInvoiceItems = (invoiceData: unknown) => {
-  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
-  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
+const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
+  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems as any[];
+  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items as any[];
   return [];
 };
 
-const getDriverInvoiceStatusLabel = (orders: unknown[]) => {
+const getDriverInvoiceStatusLabel = (orders: DriverAssignedOrderRow[]) => {
   const statuses = orders
-    .map((row: unknown) => String(row?.status || '').trim().toLowerCase())
+    .map((row) => String(row?.status || '').trim().toLowerCase())
     .filter(Boolean);
 
   if (statuses.length === 0) return '-';
@@ -84,11 +88,11 @@ export default function DriverOrderDetailPage() {
   const router = useRouter();
   const orderId = String(params?.id || '');
 
-  const [order, setOrder] = useState<unknown>(null);
-  const [groupedOrders, setGroupedOrders] = useState<unknown[]>([]);
+  const [order, setOrder] = useState<DriverAssignedOrderRow | null>(null);
+  const [groupedOrders, setGroupedOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
-  const [invoiceDetail, setInvoiceDetail] = useState<unknown>(null);
+  const [invoiceDetail, setInvoiceDetail] = useState<InvoiceDetailResponse | null>(null);
   const [proof, setProof] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
@@ -116,8 +120,8 @@ export default function DriverOrderDetailPage() {
     try {
       const res = await api.driver.getOrders({ status: 'shipped,delivered,completed,partially_fulfilled' });
       const rows = Array.isArray(res.data) ? res.data : [];
-      const selectedByOrderId = rows.find((x: unknown) => String(x?.id || '') === orderId) || null;
-      let invoiceScopedRows: unknown[] = [];
+      const selectedByOrderId = rows.find((x) => String(x?.id || '') === orderId) || null;
+      let invoiceScopedRows: DriverAssignedOrderRow[] = [];
       let resolvedInvoice = '';
       let resolvedOrder = '';
 
@@ -126,14 +130,14 @@ export default function DriverOrderDetailPage() {
         const invoiceIdFromOrder = normalizeInvoiceRef(selectedByOrderId?.invoice_id || selectedByOrderId?.Invoice?.id);
         if (invoiceIdFromOrder) {
           resolvedInvoice = invoiceIdFromOrder;
-          invoiceScopedRows = rows.filter((row: unknown) =>
+          invoiceScopedRows = rows.filter((row) =>
             normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === invoiceIdFromOrder
           );
         } else {
           invoiceScopedRows = [selectedByOrderId];
         }
       } else {
-        const matchedByInvoice = rows.filter((row: unknown) =>
+        const matchedByInvoice = rows.filter((row) =>
           normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id) === orderId
         );
         if (matchedByInvoice.length > 0) {
@@ -142,7 +146,7 @@ export default function DriverOrderDetailPage() {
         }
       }
 
-      const sortedScopedRows = [...invoiceScopedRows].sort((a: unknown, b: unknown) => {
+      const sortedScopedRows = [...invoiceScopedRows].sort((a, b) => {
         const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
         const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
         const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -150,21 +154,21 @@ export default function DriverOrderDetailPage() {
         return bVal - aVal;
       });
       const selected =
-        sortedScopedRows.find((x: unknown) => !isOrderDoneStatus(x?.status)) ||
+        sortedScopedRows.find((x) => !isOrderDoneStatus(x?.status)) ||
         sortedScopedRows[0] ||
         null;
       const invoiceTotalFromRows = sortedScopedRows
-        .map((row: unknown) => getOrderInvoicePayload(row).total)
+        .map((row) => getOrderInvoicePayload(row).total)
         .find((value: number) => Number.isFinite(value) && value > 0);
       const fallbackInvoiceTotal = sortedScopedRows.reduce(
-        (sum: number, row: unknown) => sum + Number(row?.total_amount || 0),
+        (sum: number, row) => sum + Number(row?.total_amount || 0),
         0
       );
       const resolvedInvoiceTotal = Number.isFinite(invoiceTotalFromRows)
         ? Number(invoiceTotalFromRows)
         : fallbackInvoiceTotal;
       const resolvedPaymentMethod = sortedScopedRows
-        .map((row: unknown) => getOrderInvoicePayload(row).paymentMethod)
+        .map((row) => getOrderInvoicePayload(row).paymentMethod)
         .find((method: string) => method === 'cod' || method === 'transfer_manual') || '';
       setOrder(selected);
       setGroupedOrders(sortedScopedRows);
@@ -215,13 +219,13 @@ export default function DriverOrderDetailPage() {
   }, [invoiceDetail?.id, invoiceDetail?.total]);
 
   const groupedOrderIds = useMemo(
-    () => groupedOrders.map((row: unknown) => String(row?.id || '').trim()).filter(Boolean),
+    () => groupedOrders.map((row) => String(row?.id || '').trim()).filter(Boolean),
     [groupedOrders]
   );
   const actionableOrderIds = useMemo(() => {
     const ids = groupedOrders
-      .filter((row: unknown) => !isOrderDoneStatus(row?.status))
-      .map((row: unknown) => String(row?.id || '').trim())
+      .filter((row) => !isOrderDoneStatus(row?.status))
+      .map((row) => String(row?.id || '').trim())
       .filter(Boolean);
     return ids.length > 0 ? ids : groupedOrderIds;
   }, [groupedOrderIds, groupedOrders]);
@@ -245,7 +249,7 @@ export default function DriverOrderDetailPage() {
         try {
           const scopedParsed = JSON.parse(scopedRaw);
           const rows = Array.isArray(scopedParsed?.rows) ? scopedParsed.rows : [];
-          const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+          const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
           setChecklistRows(rows);
           setChecklistState({
             exists: rows.length > 0,
@@ -270,10 +274,10 @@ export default function DriverOrderDetailPage() {
       try {
         const parsed = JSON.parse(raw);
         const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-        const mismatchCount = rows.filter((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
-        rows.forEach((row: unknown) => {
+        const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
+        rows.forEach((row: any) => {
           mergedRows.push({
-            ...row,
+            ...(row as any),
             orderId: currentOrderId,
           });
         });
@@ -301,7 +305,7 @@ export default function DriverOrderDetailPage() {
     [checklistRows]
   );
   const invoiceContext = useMemo(() => {
-    const invoiceRows = groupedOrders.map((row: unknown) => getOrderInvoicePayload(row));
+    const invoiceRows = groupedOrders.map((row) => getOrderInvoicePayload(row));
     const invoiceId = normalizeInvoiceRef(invoiceDetail?.id) || resolvedInvoiceId
       || invoiceRows.find((row) => row.id)?.id
       || normalizeInvoiceRef(order?.invoice_id || order?.Invoice?.id);
@@ -310,7 +314,7 @@ export default function DriverOrderDetailPage() {
     const invoiceTotalFromDetail = Number(invoiceDetail?.total || 0);
     const invoiceTotalFromRows = invoiceRows.find((row) => Number.isFinite(row.total) && row.total > 0)?.total;
     const invoiceTotalFallback = groupedOrders.reduce(
-      (sum: number, row: unknown) => sum + Number(row?.total_amount || 0),
+      (sum: number, row) => sum + Number(row?.total_amount || 0),
       0
     );
     const invoiceTotal = Number.isFinite(invoiceTotalFromDetail) && invoiceTotalFromDetail > 0
@@ -337,7 +341,7 @@ export default function DriverOrderDetailPage() {
     const itemMap = new Map<string, { key: string; name: string; qty: number; orderIds: Set<string> }>();
     const invoiceItems = getInvoiceItems(invoiceDetail);
     if (invoiceItems.length > 0) {
-      invoiceItems.forEach((item: unknown) => {
+      invoiceItems.forEach((item: any) => {
         const orderItem = item?.OrderItem || {};
         const product = orderItem?.Product || {};
         const key = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -354,10 +358,10 @@ export default function DriverOrderDetailPage() {
         itemMap.set(key, entry);
       });
     } else {
-      groupedOrders.forEach((row: unknown) => {
+      groupedOrders.forEach((row) => {
         const currentOrderId = String(row?.id || '').trim();
         const items = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
-        items.forEach((item: unknown) => {
+        items.forEach((item: any) => {
           const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
           if (!key) return;
           const entry = itemMap.get(key) || {
@@ -567,7 +571,9 @@ export default function DriverOrderDetailPage() {
       setPaymentMethodConfirm(null);
     } catch (error: unknown) {
       console.error('Update payment method failed:', error);
-      const message = error?.response?.data?.message || 'Gagal memperbarui metode pembayaran.';
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal memperbarui metode pembayaran.')
+        : 'Gagal memperbarui metode pembayaran.';
       setPaymentMethodMessage(message);
     } finally {
       setPaymentMethodLoading(false);
@@ -780,7 +786,7 @@ export default function DriverOrderDetailPage() {
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500 font-bold uppercase">Customer</span>
             <span className="text-xs font-black text-slate-900 uppercase">
-              {order?.customer_name || customer?.name || '-'}
+              {String((order as any)?.customer_name || customer?.name || '-')}
             </span>
           </div>
           <div className="flex justify-between items-center">

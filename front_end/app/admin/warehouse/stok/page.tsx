@@ -22,7 +22,7 @@ const PRODUCTS_PER_PAGE = 50;
 type InventoryQuery = {
     page: number;
     limit: number;
-    status: string;
+    status: 'all' | 'active' | 'inactive';
     search?: string;
     category_id?: number;
 };

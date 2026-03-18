@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { User, Wallet, MapPin, Phone, Package, ChevronRight, RotateCcw, HandCoins, MessageCircle, ClipboardList, Truck, ClipboardCheck, Search } from 'lucide-react';
@@ -9,10 +11,11 @@ import { useAuthStore } from '@/store/authStore';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
-const getOrderInvoicePayload = (order: unknown) => {
+const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
     id: normalizeInvoiceRef(order?.invoice_id || latestInvoice?.id),
@@ -20,9 +23,9 @@ const getOrderInvoicePayload = (order: unknown) => {
     total: Number(latestInvoice?.total || 0),
   };
 };
-const getInvoiceItems = (invoiceData: unknown) => {
-  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems;
-  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items;
+const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
+  if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems as any[];
+  if (Array.isArray(invoiceData?.Items)) return invoiceData.Items as any[];
   return [];
 };
 
@@ -35,7 +38,7 @@ const getChecklistStatus = (scopeId: string): 'not_checked' | 'mismatch' | 'read
     const parsed = JSON.parse(raw);
     const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
     if (rows.length === 0) return 'not_checked';
-    const hasMismatch = rows.some((row: unknown) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0));
+    const hasMismatch = rows.some((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0));
     return hasMismatch ? 'mismatch' : 'ready';
   } catch {
     return 'not_checked';
@@ -44,10 +47,10 @@ const getChecklistStatus = (scopeId: string): 'not_checked' | 'mismatch' | 'read
 
 export default function DriverTaskPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang']);
-  const [wallet, setWallet] = useState<unknown>(null);
-  const [orders, setOrders] = useState<unknown[]>([]);
-  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, unknown>>({});
-  const [returs, setReturs] = useState<unknown[]>([]);
+  const [wallet, setWallet] = useState<any>(null);
+  const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
+  const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
+  const [returs, setReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
@@ -67,7 +70,7 @@ export default function DriverTaskPage() {
     const invoiceIds = Array.from(
       new Set(
         orders
-          .map((row: unknown) => getOrderInvoicePayload(row).id)
+          .map((row) => getOrderInvoicePayload(row).id)
           .filter(Boolean)
       )
     );
@@ -82,7 +85,7 @@ export default function DriverTaskPage() {
           invoiceIds.map((invoiceId) => api.invoices.getById(invoiceId))
         );
         if (isCancelled) return;
-        const nextMap: Record<string, unknown> = {};
+        const nextMap: Record<string, InvoiceDetailResponse | null> = {};
         responses.forEach((result, index) => {
           if (result.status !== 'fulfilled') return;
           const data = result.value?.data || null;
@@ -103,7 +106,7 @@ export default function DriverTaskPage() {
   }, [allowed, orders]);
 
   const deliveryCards = useMemo(() => {
-    const buckets = orders.reduce((acc, order: unknown) => {
+    const buckets = orders.reduce((acc, order) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return acc;
       const invoiceData = getOrderInvoicePayload(order);
@@ -114,23 +117,23 @@ export default function DriverTaskPage() {
         groupKey,
         invoiceId,
         invoiceNumber,
-        orders: [] as unknown[],
+        orders: [] as DriverAssignedOrderRow[],
       };
       bucket.orders.push(order);
       acc.set(groupKey, bucket);
       return acc;
-    }, new Map<string, { groupKey: string; invoiceId: string; invoiceNumber: string; orders: unknown[] }>());
+    }, new Map<string, { groupKey: string; invoiceId: string; invoiceNumber: string; orders: DriverAssignedOrderRow[] }>());
 
     const bucketValues = Array.from(buckets.values()) as Array<{
       groupKey: string;
       invoiceId: string;
       invoiceNumber: string;
-      orders: unknown[];
+      orders: DriverAssignedOrderRow[];
     }>;
 
     return bucketValues
       .map((bucket) => {
-        const sortedOrders = [...bucket.orders].sort((a: unknown, b: unknown) => {
+        const sortedOrders = [...bucket.orders].sort((a, b) => {
           const bTs = Date.parse(String(b?.updatedAt || b?.createdAt || ''));
           const aTs = Date.parse(String(a?.updatedAt || a?.createdAt || ''));
           const bVal = Number.isFinite(bTs) ? bTs : 0;
@@ -145,14 +148,14 @@ export default function DriverTaskPage() {
         const customer = primaryOrder?.Customer || {};
         const profile = customer.CustomerProfile || {};
         const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-        const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
+        const addressObj = addresses.find((a: any) => a?.isPrimary) || addresses[0];
         const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
         const whatsapp = customer.whatsapp_number || '-';
 
         const itemMap = new Map<string, { name: string; qty: number }>();
         const invoiceItems = getInvoiceItems(invoiceDetail);
         if (invoiceItems.length > 0) {
-          invoiceItems.forEach((item: unknown) => {
+          invoiceItems.forEach((item: any) => {
             const orderItem = item?.OrderItem || {};
             const product = orderItem?.Product || {};
             const key = String(orderItem?.product_id || product?.sku || product?.name || item?.id || '').trim();
@@ -162,9 +165,9 @@ export default function DriverTaskPage() {
             itemMap.set(key, prev);
           });
         } else {
-          sortedOrders.forEach((order: unknown) => {
+          sortedOrders.forEach((order) => {
             const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
-            items.forEach((item: unknown) => {
+            items.forEach((item: any) => {
               const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
               if (!key) return;
               const prev = itemMap.get(key) || { name: item?.Product?.name || 'Produk', qty: 0 };
@@ -175,17 +178,17 @@ export default function DriverTaskPage() {
         }
 
         const mergedItems = Array.from(itemMap.values()).sort((a, b) => b.qty - a.qty);
-        const activeOrderCount = sortedOrders.filter((order: unknown) => !isDoneOrderStatus(order?.status)).length;
+        const activeOrderCount = sortedOrders.filter((order) => !isDoneOrderStatus(order?.status)).length;
         const invoiceTotalFromOrders = sortedOrders
-          .map((row: unknown) => getOrderInvoicePayload(row).total)
+          .map((row) => getOrderInvoicePayload(row).total)
           .find((value: number) => Number.isFinite(value) && value > 0);
         const invoiceTotalFromSnapshot = Number(invoiceDetail?.total || 0);
         const totalAmount = Number.isFinite(invoiceTotalFromSnapshot) && invoiceTotalFromSnapshot > 0
           ? invoiceTotalFromSnapshot
           : Number.isFinite(invoiceTotalFromOrders)
             ? Number(invoiceTotalFromOrders)
-            : sortedOrders.reduce((sum: number, row: unknown) => sum + Number(row?.total_amount || 0), 0);
-        const statusValues = Array.from(new Set(sortedOrders.map((order: unknown) => String(order?.status || '').trim()).filter(Boolean)));
+            : sortedOrders.reduce((sum: number, row) => sum + Number(row?.total_amount || 0), 0);
+        const statusValues = Array.from(new Set(sortedOrders.map((order) => String(order?.status || '').trim()).filter(Boolean)));
         const statusLabel = statusValues.length <= 1 ? (statusValues[0] || '-') : `${statusValues.length} status`;
         const invoiceLabel = normalizeInvoiceRef(invoiceDetail?.invoice_number) || (bucket.invoiceNumber
           ? bucket.invoiceNumber
@@ -201,7 +204,7 @@ export default function DriverTaskPage() {
           orders: sortedOrders,
           primaryOrder,
           primaryOrderId,
-          customerName: primaryOrder?.customer_name || customer?.name || 'Customer Umum',
+          customerName: String((primaryOrder as any)?.customer_name || customer?.name || 'Customer Umum'),
           address,
           whatsapp,
           mergedItems,
@@ -224,8 +227,8 @@ export default function DriverTaskPage() {
     const keyword = search.trim().toLowerCase();
     if (!keyword) return deliveryCards;
     return deliveryCards.filter((card) => {
-      const orderIds = card.orders.map((order: unknown) => String(order?.id || '').toLowerCase());
-      const itemNames = card.mergedItems.map((item: unknown) => String(item?.name || '').toLowerCase());
+      const orderIds = card.orders.map((order) => String(order?.id || '').toLowerCase());
+      const itemNames = card.mergedItems.map((item) => String((item as any)?.name || '').toLowerCase());
       return [
         card.customerName,
         card.invoiceLabel,
@@ -439,7 +442,7 @@ export default function DriverTaskPage() {
                     <p className="text-base font-black text-slate-900 leading-none">{card.invoiceLabel}</p>
                     <p className="text-[10px] text-slate-500">
                       {card.orders.length} order
-                      {card.orders.length > 1 ? ` (${card.orders.map((row: unknown) => `#${String(row?.id || '').slice(-6)}`).join(', ')})` : ''}
+                      {card.orders.length > 1 ? ` (${card.orders.map((row) => `#${String(row?.id || '').slice(-6)}`).join(', ')})` : ''}
                     </p>
                   </div>
                   <div className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black uppercase">
@@ -499,7 +502,7 @@ export default function DriverTaskPage() {
               const customer = r.Creator || {};
               const profile = customer.CustomerProfile || {};
               const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
-              const addressObj = addresses.find((a: unknown) => a.isPrimary) || addresses[0];
+              const addressObj = addresses.find((a: any) => a?.isPrimary) || addresses[0];
               const address = addressObj ? (addressObj.fullAddress || addressObj.address || 'Alamat tersimpan') : 'Alamat tidak tersedia';
               const whatsapp = customer.whatsapp_number || '-';
 

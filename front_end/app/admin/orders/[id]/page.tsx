@@ -10,7 +10,7 @@ import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
-type LooseRecord = Record<string, any>;
+type LooseRecord = Record<string, unknown>;
 
 const normalizeStatus = (raw: unknown) => {
   const status = String(raw || '').trim();
@@ -197,7 +197,7 @@ export default function AdminInvoiceDetailPage() {
         Array.from(orderIds).map((id) => api.orders.getOrderById(id))
       );
       const fetchedOrders: LooseRecord[] = orderDetailsResults
-        .map((result) => (result.status === 'fulfilled' ? result.value.data : null))
+        .map((result) => (result.status === 'fulfilled' ? (result.value.data as LooseRecord) : null))
         .filter((row): row is LooseRecord => Boolean(row && typeof row === 'object'));
       if (fallbackOrderData && !fetchedOrders.some((row) => String(row.id || '') === String(asRecord(fallbackOrderData).id || ''))) {
         fetchedOrders.push(fallbackOrderData);
@@ -491,6 +491,9 @@ export default function AdminInvoiceDetailPage() {
   const paymentMethod = String(invoiceRow.payment_method || '-');
   const paymentStatus = String(invoiceRow.payment_status || '-');
   const amountPaid = Number(invoiceRow.amount_paid || 0);
+  const invoiceCreatedAt = (typeof invoiceRow.createdAt === 'string' || invoiceRow.createdAt instanceof Date)
+    ? invoiceRow.createdAt
+    : null;
 
   // If we have an actual invoice, prioritize its total field.
   // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
@@ -514,7 +517,9 @@ export default function AdminInvoiceDetailPage() {
   const customerWorkspaceHref = customerWorkspaceKey
     ? `/admin/orders/customer/${encodeURIComponent(customerWorkspaceKey)}?customerName=${encodeURIComponent(customerName)}`
     : '';
-  const proofImageUrl = normalizeProofImageUrl(invoiceRow.payment_proof_url);
+  const proofImageUrl = normalizeProofImageUrl(
+    typeof invoiceRow.payment_proof_url === 'string' ? invoiceRow.payment_proof_url : null
+  );
 
   const handleAssignDriver = async () => {
     if (!selectedCourierId) {
@@ -610,8 +615,13 @@ export default function AdminInvoiceDetailPage() {
             {orders.filter((o) => asRecord(o).active_issue).map((order) => {
               const orderRow = asRecord(order);
               const activeIssue = asRecord(orderRow.active_issue);
+              const issueStatus = typeof orderRow.status === 'string' ? orderRow.status : String(orderRow.status || '');
+              const issueNote = typeof activeIssue.note === 'string' ? activeIssue.note : String(activeIssue.note || '');
+              const evidenceUrl = typeof activeIssue.evidence_url === 'string' ? activeIssue.evidence_url : null;
+              const updatedAt = (typeof orderRow.updatedAt === 'string' || orderRow.updatedAt instanceof Date) ? orderRow.updatedAt : null;
+              const dueAt = (typeof activeIssue.due_at === 'string' || activeIssue.due_at instanceof Date) ? activeIssue.due_at : null;
               return (
-              <div key={`issue-${order.id}`} className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm space-y-3">
+              <div key={`issue-${String(orderRow.id || '')}`} className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm space-y-3">
                 <div className="flex items-center gap-3 text-amber-700">
                   <div className="bg-amber-200 p-2 rounded-xl">
                     <AlertCircle size={20} />
@@ -621,20 +631,20 @@ export default function AdminInvoiceDetailPage() {
                     <p className="text-sm font-black text-slate-900 mt-1">Order #{String(orderRow.id).slice(-8).toUpperCase()}</p>
                   </div>
                   <div className="ml-auto px-3 py-1 bg-amber-600 text-white rounded-lg text-[10px] font-black uppercase">
-                    Status: {orderRow.status}
+                    Status: {issueStatus}
                   </div>
                 </div>
                 <div className="bg-white/60 rounded-2xl p-4 border border-amber-100">
                   <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Catatan Driver:</p>
                   <p className="text-sm font-semibold text-slate-800 italic whitespace-pre-wrap">
-                    {activeIssue.note}
+                    {issueNote}
                   </p>
                 </div>
-                {activeIssue.evidence_url && (
+                {evidenceUrl && (
                   <div className="space-y-1">
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">Lampiran Bukti:</p>
                     <Image
-                      src={normalizeProofImageUrl(activeIssue.evidence_url) || ''}
+                      src={normalizeProofImageUrl(evidenceUrl) || ''}
                       alt="Bukti Masalah"
                       width={640}
                       height={360}
@@ -643,7 +653,7 @@ export default function AdminInvoiceDetailPage() {
                   </div>
                 )}
                 <p className="text-[10px] text-amber-600 font-medium italic">
-                  Dilaporkan pada: {orderRow.updatedAt ? formatDateTime(orderRow.updatedAt) : '-'} • Batas waktu tindak lanjut: {activeIssue.due_at ? formatDateTime(activeIssue.due_at) : '-'}
+                  Dilaporkan pada: {updatedAt ? formatDateTime(updatedAt) : '-'} • Batas waktu tindak lanjut: {dueAt ? formatDateTime(dueAt) : '-'}
                 </p>
               </div>
             );})}
@@ -672,7 +682,7 @@ export default function AdminInvoiceDetailPage() {
             <p className="text-xs text-slate-600">Payment Method: <span className="font-bold text-slate-900">{paymentMethod}</span></p>
             <p className="text-xs text-slate-600">Payment Status: <span className="font-bold text-slate-900">{paymentStatus}</span></p>
             <p className="text-xs text-slate-600">Amount Paid: <span className="font-bold text-slate-900">{formatCurrency(amountPaid)}</span></p>
-            <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoiceRow.createdAt ? formatDateTime(invoiceRow.createdAt) : '-'}</span></p>
+            <p className="text-xs text-slate-600">Dibuat: <span className="font-bold text-slate-900">{invoiceCreatedAt ? formatDateTime(invoiceCreatedAt) : '-'}</span></p>
             {proofImageUrl && !proofLoadError && (
               <div className="pt-1">
                 <Image
@@ -701,7 +711,12 @@ export default function AdminInvoiceDetailPage() {
                   <div className="flex-1">
                     <p className="text-sm font-black text-slate-900">#{row.id}</p>
                     <p className="text-[11px] text-slate-500">
-                      {row.createdAt ? formatDateTime(row.createdAt) : '-'} • Source {row.source}
+                      {(() => {
+                        const createdAt = row.createdAt as unknown;
+                        return (typeof createdAt === 'string' || createdAt instanceof Date)
+                          ? formatDateTime(createdAt)
+                          : '-';
+                      })()} • Source {row.source}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
                       <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
@@ -710,9 +725,15 @@ export default function AdminInvoiceDetailPage() {
                       <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
                       <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
                     </div>
-                    {Array.isArray(asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id)).OrderItems) && (
-                      <div className="mt-3 space-y-2">
-                        {(asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id)).OrderItems || []).map((item: LooseRecord) => {
+                    {(() => {
+                      const targetOrder = orders.find((order) => String(asRecord(order).id || '') === row.id);
+                      const orderItems = Array.isArray(asRecord(targetOrder).OrderItems)
+                        ? (asRecord(targetOrder).OrderItems as LooseRecord[])
+                        : [];
+                      if (orderItems.length === 0) return null;
+                      return (
+                        <div className="mt-3 space-y-2">
+                          {orderItems.map((item: LooseRecord) => {
                           const itemRow = asRecord(item);
                           const itemId = String(itemRow.id || '');
                           const product = asRecord(itemRow.Product);
@@ -720,13 +741,13 @@ export default function AdminInvoiceDetailPage() {
                           const sku = String(product.sku || '-');
                           const orderedQty = Number(itemRow.qty || 0);
                           const suppliedQty = getOrderItemSuppliedQty(
-                            orders.find((order) => String(asRecord(order).id || '') === row.id),
+                            targetOrder,
                             invoice,
                             itemId
                           );
-                          const targetOrder = asRecord(orders.find((order) => String(asRecord(order).id || '') === row.id));
-                          const summaryRow = Array.isArray(targetOrder.item_summaries)
-                            ? targetOrder.item_summaries.find((summary: LooseRecord) => String(asRecord(summary).order_item_id || '') === itemId)
+                          const targetOrderRow = asRecord(targetOrder);
+                          const summaryRow = Array.isArray(targetOrderRow.item_summaries)
+                            ? (targetOrderRow.item_summaries as LooseRecord[]).find((summary: LooseRecord) => String(asRecord(summary).order_item_id || '') === itemId)
                             : null;
                           const backorderQty = summaryRow
                             ? Number(asRecord(summaryRow).backorder_open_qty || 0)
@@ -747,8 +768,9 @@ export default function AdminInvoiceDetailPage() {
                             </div>
                           );
                         })}
-                      </div>
-                    )}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="text-left sm:text-right">
                     <p className={`inline-flex px-2 py-1 rounded-full text-[10px] font-bold ${statusBadgeClass(row.status)}`}>

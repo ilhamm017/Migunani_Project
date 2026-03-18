@@ -8,7 +8,7 @@ import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoi
 import { withOrderTrackingFields } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
-import { resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
+import { isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 import { enqueueWhatsappNotification } from '../../services/TransactionNotificationOutboxService';
 
 export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
@@ -297,6 +297,23 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
         const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
         if (relatedOrderIds.length === 0) {
             relatedOrderIds.push(String(order.id));
+        }
+
+        const ordersToUpdate = await Order.findAll({
+            where: { id: { [Op.in]: relatedOrderIds } },
+            attributes: ['id', 'status'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        for (const row of ordersToUpdate as any[]) {
+            const currentStatus = String(row?.status || '').toLowerCase();
+            if (!isOrderTransitionAllowed(currentStatus, 'waiting_admin_verification')) {
+                await t.rollback();
+                throw new CustomError(
+                    `Order ${String(row?.id || '')} tidak bisa masuk status waiting_admin_verification dari status '${currentStatus}'.`,
+                    409
+                );
+            }
         }
 
         await Order.update(

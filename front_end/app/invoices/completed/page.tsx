@@ -95,16 +95,16 @@ export default function CustomerCompletedInvoicesPage() {
         invoices.forEach((invoice) => {
           const id = String(invoice?.id || '');
           if (!id) return;
-          const existing: InvoiceRow = invoiceMap.get(id) || {
-            id,
-            invoice_number: String(invoice?.invoice_number || id),
-            payment_status: String(invoice?.payment_status || ''),
-            payment_method: String(invoice?.payment_method || ''),
-            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
-            total: Number(invoice?.total || 0),
-            createdAt: invoice?.createdAt || invoice?.created_at,
-            orderIds: [],
-          };
+	          const existing: InvoiceRow = invoiceMap.get(id) || {
+	            id,
+	            invoice_number: String(invoice?.invoice_number || id),
+	            payment_status: String(invoice?.payment_status || ''),
+	            payment_method: String(invoice?.payment_method || ''),
+	            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
+	            total: Number(invoice?.total || 0),
+	            createdAt: invoice?.createdAt || invoice?.created_at || undefined,
+	            orderIds: [],
+	          };
           if (!existing.orderIds.includes(String(order.id))) {
             existing.orderIds.push(String(order.id));
           }

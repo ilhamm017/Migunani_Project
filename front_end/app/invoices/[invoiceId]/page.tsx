@@ -10,18 +10,18 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 type InvoiceItem = {
-  id: string;
-  qty: number;
+  id?: string;
+  qty?: number;
   ordered_qty?: number;
   invoice_qty?: number;
   allocated_qty?: number;
   remaining_qty?: number;
   previously_allocated_qty?: number;
-  unit_price: number;
-  line_total: number;
+  unit_price?: number;
+  line_total?: number;
   OrderItem?: {
-    id: string;
-    order_id: string;
+    id?: string;
+    order_id?: string;
     ordered_qty_original?: number;
     qty?: number;
     qty_canceled_backorder?: number;
@@ -371,7 +371,7 @@ export default function CustomerInvoiceDetailPage() {
                             </td>
                           </tr>
                         )}
-                        {items.map((item) => {
+                        {items.map((item, idx: number) => {
                           const product = item.OrderItem?.Product || {};
                           const orderId = String(item.OrderItem?.order_id || '-');
                           const orderedQty = Number(
@@ -389,7 +389,7 @@ export default function CustomerInvoiceDetailPage() {
                             ?? Math.max(0, orderedQty - allocatedQty - canceledBackorderQty)
                           );
                           return (
-                            <tr key={item.id} className="border-t border-slate-100">
+                            <tr key={String(item.id || item.OrderItem?.id || idx)} className="border-t border-slate-100">
                               <td className="px-4 py-3">
                                 <p className="font-semibold text-slate-900">{product.name || 'Produk'}</p>
                                 <p className="text-[10px] text-slate-500">SKU: {product.sku || '-'}</p>
@@ -503,7 +503,7 @@ export default function CustomerInvoiceDetailPage() {
                 {items.length === 0 && (
                   <p className="text-[11px] text-slate-500">Tidak ada item di invoice ini.</p>
                 )}
-                {items.map((item) => {
+                {items.map((item, idx: number) => {
                   const product = item.OrderItem?.Product || {};
                   const orderId = String(item.OrderItem?.order_id || '-');
                   const orderedQty = Number(
@@ -521,7 +521,7 @@ export default function CustomerInvoiceDetailPage() {
                     ?? Math.max(0, orderedQty - allocatedQty - canceledBackorderQty)
                   );
                   return (
-                    <div key={item.id} className="space-y-1">
+                    <div key={String(item.id || item.OrderItem?.id || idx)} className="space-y-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="text-[11px] font-bold text-slate-900 truncate">{product.name || 'Produk'}</p>

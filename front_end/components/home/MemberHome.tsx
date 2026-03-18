@@ -103,14 +103,14 @@ export default function MemberHome() {
     const product = products.find((item) => String(item.id) === String(productId));
     if (!product) return;
 
-    addItem({
-      id: String(product.id),
-      productId: String(product.id),
-      productName: product.name,
-      price: Number(product.price),
-      quantity: 1,
-      imageUrl: product.image_url,
-    });
+	    addItem({
+	      id: String(product.id),
+	      productId: String(product.id),
+	      productName: product.name,
+	      price: Number(product.price),
+	      quantity: 1,
+	      imageUrl: product.image_url ?? undefined,
+	    });
 
     try {
       await api.cart.addToCart({ productId: String(product.id), quantity: 1 });
@@ -181,15 +181,15 @@ export default function MemberHome() {
         ) : (
           <ProductGrid>
             {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                id={String(product.id)}
-                name={product.name}
-                price={Number(product.price)}
-                imageUrl={product.image_url}
-                stock={Number(product.stock_quantity)}
-                onAddToCart={handleAddToCart}
-              />
+	              <ProductCard
+	                key={product.id}
+	                id={String(product.id)}
+	                name={product.name}
+	                price={Number(product.price)}
+	                imageUrl={product.image_url ?? undefined}
+	                stock={Number(product.stock_quantity)}
+	                onAddToCart={handleAddToCart}
+	              />
             ))}
           </ProductGrid>
         )}

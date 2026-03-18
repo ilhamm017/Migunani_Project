@@ -68,14 +68,14 @@ type DriverHistoryOrder = {
     payment_method?: string;
     payment_status?: string;
     total?: number | string;
-  };
+  } | null;
   Customer?: {
     name?: string;
   };
   OrderItems?: Array<{
     Product?: {
-      name?: string;
-    };
+      name?: string | null;
+    } | null;
   }>;
 };
 

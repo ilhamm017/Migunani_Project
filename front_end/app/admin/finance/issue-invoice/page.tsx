@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
@@ -58,7 +60,14 @@ export default function FinanceIssueInvoicePage() {
         limit: 200,
         status: 'waiting_invoice'
       });
-      setOrders(res.data?.orders || []);
+      const rawOrders = Array.isArray(res.data?.orders) ? res.data.orders : [];
+      const normalized: InvoiceCandidateOrder[] = rawOrders
+        .filter((row: any) => Boolean(row?.id))
+        .map((row: any) => ({
+          ...row,
+          id: String(row.id),
+        }));
+      setOrders(normalized);
       setSelectedOrderIds([]);
       setSelectionError('');
     } catch (error) {

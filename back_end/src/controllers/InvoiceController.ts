@@ -7,6 +7,7 @@ import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/in
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 import { enqueueWhatsappNotification } from '../services/TransactionNotificationOutboxService';
 import { AccountingPostingService } from '../services/AccountingPostingService';
+import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 
 export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response) => {
     const invoiceId = String(req.params.id || '').trim();
@@ -191,6 +192,15 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
         });
         if (relatedOrders.length === 0) {
             throw new CustomError('Invoice tidak memiliki order terkait.', 404);
+        }
+        for (const row of relatedOrders as any[]) {
+            const currentStatus = String(row?.status || '').trim().toLowerCase();
+            if (!isOrderTransitionAllowed(currentStatus, 'waiting_admin_verification')) {
+                throw new CustomError(
+                    `Order ${String(row?.id || '')} tidak bisa masuk status waiting_admin_verification dari status '${currentStatus}'.`,
+                    409
+                );
+            }
         }
         for (const order of relatedOrders as any[]) {
             const orderPaymentMethod = String(order?.payment_method || '').trim().toLowerCase();

@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AlertCircle, Package, Search, Users } from 'lucide-react';
@@ -8,6 +10,8 @@ import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { useAuthStore } from '@/store/authStore';
+import axios from 'axios';
+import type { AdminOrderListRow, InvoiceDetailResponse, OrderDetailResponse, ProductLite } from '@/lib/apiTypes';
 
 type AdminOrdersWorkspaceProps = {
   forcedCustomerId?: string;
@@ -21,7 +25,7 @@ type CustomerGroup = {
   key: string;
   customer_id: string | null;
   customer_name: string;
-  orders: unknown[];
+  orders: AdminOrderListRow[];
   counts: {
     baru: number;
     allocated: number;
@@ -83,7 +87,7 @@ type WarehouseInvoiceBucket = {
   groupKey: string;
   invoiceId: string;
   invoiceNumber: string;
-  orders: unknown[];
+  orders: AdminOrderListRow[];
 };
 type InvoiceItemSummary = {
   totalQty: number;
@@ -176,7 +180,7 @@ const getSectionLabel = (section: OrderSection) => {
   return 'Selesai';
 };
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
-const resolveInvoiceRefForOrder = (order: any, detail?: any) => {
+const resolveInvoiceRefForOrder = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const attachedInvoice = detail?.Invoice || order?.Invoice || null;
   const invoiceId = normalizeInvoiceRef(
     attachedInvoice?.id || detail?.invoice_id || order?.invoice_id
@@ -186,8 +190,8 @@ const resolveInvoiceRefForOrder = (order: any, detail?: any) => {
   );
   return { invoiceId, invoiceNumber };
 };
-const invoiceGroupKeyForOrder = (order: unknown) => {
-  const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any);
+const invoiceGroupKeyForOrder = (order: AdminOrderListRow) => {
+  const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order);
   if (invoiceId) return `id:${invoiceId}`;
   const invoiceNumberKey = invoiceNumber.toLowerCase();
   if (invoiceNumberKey) return `num:${invoiceNumberKey}`;
@@ -198,7 +202,7 @@ const normalizeOrderStatus = (raw: unknown) => {
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
 
-const resolveWorkspaceShipmentStatus = (order: unknown, detail?: unknown) => {
+const resolveWorkspaceShipmentStatus = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoiceShipmentStatus = String(
     detail?.Invoice?.shipment_status ||
     order?.Invoice?.shipment_status ||
@@ -209,7 +213,7 @@ const resolveWorkspaceShipmentStatus = (order: unknown, detail?: unknown) => {
   }
   return normalizeOrderStatus(order?.status);
 };
-const isSettlementCompleted = (order: unknown, detail: unknown) => {
+const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
   const paymentMethod = String(invoice?.payment_method || order?.payment_method || '').trim().toLowerCase();
   const paymentStatus = String(invoice?.payment_status || '').trim().toLowerCase();
@@ -262,7 +266,7 @@ const formatInvoiceReference = (invoiceId: string, invoiceNumber: string) => {
   return 'Belum Terbit Invoice';
 };
 
-const buildInvoiceItemSummary = (invoiceData: unknown): InvoiceItemSummary => {
+const buildInvoiceItemSummary = (invoiceData?: InvoiceDetailResponse | null): InvoiceItemSummary => {
   const items = Array.isArray(invoiceData?.InvoiceItems)
     ? invoiceData.InvoiceItems
     : Array.isArray(invoiceData?.Items)
@@ -274,7 +278,7 @@ const buildInvoiceItemSummary = (invoiceData: unknown): InvoiceItemSummary => {
   const skuSetGlobal = new Set<string>();
   let totalQty = 0;
 
-  items.forEach((item: unknown) => {
+  items.forEach((item: any) => {
     const orderId = String(item?.OrderItem?.order_id || item?.order_id || '').trim();
     const productId = String(item?.OrderItem?.product_id || item?.product_id || '').trim();
     const qty = Number(item?.qty || 0);
@@ -302,51 +306,23 @@ const buildInvoiceItemSummary = (invoiceData: unknown): InvoiceItemSummary => {
   };
 };
 
-const hasAllocationShortage = (detail: unknown): boolean => {
-  if (!detail) return false;
-  const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
-  const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-  if (items.length === 0) return false;
-  const hasAnyAllocatedQty = allocations.some((allocation: unknown) => Number(allocation?.allocated_qty || 0) > 0);
-  if (!hasAnyAllocatedQty) return false;
-
-  const orderedByProduct = new Map<string, number>();
-  items.forEach((item: unknown) => {
-    const key = String(item?.product_id || '');
-    if (!key) return;
-    orderedByProduct.set(key, Number(orderedByProduct.get(key) || 0) + Number(item?.qty || 0));
-  });
-
-  const allocatedByProduct = new Map<string, number>();
-  allocations.forEach((allocation: unknown) => {
-    const key = String(allocation?.product_id || '');
-    if (!key) return;
-    allocatedByProduct.set(key, Number(allocatedByProduct.get(key) || 0) + Number(allocation?.allocated_qty || 0));
-  });
-
-  for (const [productId, orderedQty] of orderedByProduct.entries()) {
-    if (Number(allocatedByProduct.get(productId) || 0) < Number(orderedQty || 0)) return true;
-  }
-  return false;
-};
-
-const hasActiveBackorderRows = (detail: unknown): boolean => {
+const hasActiveBackorderRows = (detail?: OrderDetailResponse): boolean => {
   if (!Array.isArray(detail?.Backorders)) return false;
-  return detail.Backorders.some((row: unknown) => {
+  return detail.Backorders.some((row: any) => {
     const qtyPending = Number(row?.qty_pending || 0);
     const status = String(row?.status || '').trim().toLowerCase();
     return qtyPending > 0 && !['fulfilled', 'canceled', 'cancelled'].includes(status);
   });
 };
 
-const isOrderBackorder = (order: unknown, detail: unknown, backorderIds: Set<string>): boolean => {
+const isOrderBackorder = (order: AdminOrderListRow, detail: OrderDetailResponse | undefined, backorderIds: Set<string>): boolean => {
   const orderId = String(order?.id || '');
   if (backorderIds.has(orderId)) return true;
   if (hasActiveBackorderRows(detail)) return true;
   return false;
 };
 
-const buildBackorderSnapshotFromDetail = (detail: unknown): BackorderSnapshot | null => {
+const buildBackorderSnapshotFromDetail = (detail: OrderDetailResponse): BackorderSnapshot | null => {
   const orderId = String(detail?.id || '');
   if (!orderId) return null;
   const orderItems = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
@@ -354,7 +330,7 @@ const buildBackorderSnapshotFromDetail = (detail: unknown): BackorderSnapshot | 
   if (orderItems.length === 0) return null;
 
   const orderedByProduct = new Map<string, { qty: number; name: string; sku: string; stockQty: number }>();
-  orderItems.forEach((item: unknown) => {
+  orderItems.forEach((item: any) => {
     const productId = String(item?.product_id || '');
     if (!productId) return;
     const product = item?.Product || {};
@@ -373,7 +349,7 @@ const buildBackorderSnapshotFromDetail = (detail: unknown): BackorderSnapshot | 
   });
 
   const allocatedByProduct = new Map<string, number>();
-  allocations.forEach((allocation: unknown) => {
+  allocations.forEach((allocation: any) => {
     const productId = String(allocation?.product_id || '');
     if (!productId) return;
     allocatedByProduct.set(productId, Number(allocatedByProduct.get(productId) || 0) + Number(allocation?.allocated_qty || 0));
@@ -419,13 +395,14 @@ const buildBackorderSnapshotFromDetail = (detail: unknown): BackorderSnapshot | 
   };
 };
 
-const buildBackorderHistoryFromTimeline = (detail: unknown): BackorderSnapshot[] => {
+const buildBackorderHistoryFromTimeline = (detail?: OrderDetailResponse): BackorderSnapshot[] => {
+  if (!detail) return [];
   const timeline = Array.isArray(detail?.timeline) ? detail.timeline as BackorderTimelineEvent[] : [];
   const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
   if (timeline.length === 0 || orderItems.length === 0) return [];
 
-  const itemById = new Map<string, unknown>();
-  orderItems.forEach((item: unknown) => {
+  const itemById = new Map<string, any>();
+  orderItems.forEach((item: any) => {
     const itemId = String(item?.id || '').trim();
     if (!itemId) return;
     itemById.set(itemId, item);
@@ -520,20 +497,23 @@ export default function AdminOrdersWorkspace({
   const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(user?.role || ''), [user?.role]);
   const isFinanceRole = useMemo(() => user?.role === 'admin_finance', [user?.role]);
   const isWarehouseRole = useMemo(() => user?.role === 'admin_gudang', [user?.role]);
-  const [orders, setOrders] = useState<unknown[]>([]);
+  type OrderDetailsMap = Record<string, OrderDetailResponse | undefined>;
+  type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
+
+  const [orders, setOrders] = useState<AdminOrderListRow[]>([]);
   const [backorderIds, setBackorderIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [customerQuery, setCustomerQuery] = useState('');
   const [orderQuery, setOrderQuery] = useState('');
   const [orderSectionFilter, setOrderSectionFilter] = useState<OrderSectionFilter>(initialSection || 'baru');
-  const [orderDetails, setOrderDetails] = useState<Record<string, unknown>>({});
+  const [orderDetails, setOrderDetails] = useState<OrderDetailsMap>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [allocationDrafts, setAllocationDrafts] = useState<Record<string, Record<string, number>>>({});
   const [backorderHistoryByOrderId, setBackorderHistoryByOrderId] = useState<Record<string, BackorderSnapshot[]>>({});
   const [backorderTopupDrafts, setBackorderTopupDrafts] = useState<Record<string, Record<string, number>>>({});
   const [allocationSaving, setAllocationSaving] = useState<Record<string, boolean>>({});
   const [invoiceItemSummaryByInvoiceId, setInvoiceItemSummaryByInvoiceId] = useState<Record<string, InvoiceItemSummary | null>>({});
-  const [invoiceDetailByInvoiceId, setInvoiceDetailByInvoiceId] = useState<Record<string, unknown | null>>({});
+  const [invoiceDetailByInvoiceId, setInvoiceDetailByInvoiceId] = useState<InvoiceDetailsMap>({});
   const [busyInvoice, setBusyInvoice] = useState(false);
   const [allocationConfirm, setAllocationConfirm] = useState<AllocationConfirmState | null>(null);
   const [backorderCancelReason, setBackorderCancelReason] = useState('');
@@ -542,7 +522,7 @@ export default function AdminOrdersWorkspace({
   const [selectedWarehouseInvoiceGroups, setSelectedWarehouseInvoiceGroups] = useState<string[]>([]);
   const [warehouseBatchAssigning, setWarehouseBatchAssigning] = useState(false);
   const [warehouseAssignConfirm, setWarehouseAssignConfirm] = useState<WarehouseAssignConfirmState | null>(null);
-  const ordersRef = useRef<unknown[]>([]);
+  const ordersRef = useRef<AdminOrderListRow[]>([]);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
   const sectionFilterOptions = useMemo<OrderSectionFilter[]>(
@@ -562,28 +542,28 @@ export default function AdminOrdersWorkspace({
         api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all' }),
         api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all', is_backorder: 'true' })
       ]);
-      const allOrders = allRes.data?.orders || [];
+      const allOrders = Array.isArray(allRes.data?.orders) ? allRes.data.orders : [];
       const backorderSet = new Set<string>(
-        (backorderRes.data?.orders || []).map((o: unknown) => String(o.id))
+        (Array.isArray(backorderRes.data?.orders) ? backorderRes.data.orders : []).map((o) => String(o?.id || ''))
       );
       const previousOrders = Array.isArray(ordersRef.current) ? ordersRef.current : [];
-      const previousById = new Map(previousOrders.map((row: unknown) => [String(row?.id || ''), row]));
-      const nextById = new Map(allOrders.map((row: unknown) => [String(row?.id || ''), row]));
+      const previousById = new Map(previousOrders.map((row) => [String(row?.id || ''), row]));
+      const nextById = new Map(allOrders.map((row) => [String(row?.id || ''), row]));
       const changedOrderIds = new Set<string>();
       const touchedInvoiceIds = new Set<string>();
 
-      allOrders.forEach((order: unknown) => {
+      allOrders.forEach((order) => {
         const orderId = String(order?.id || '');
         if (!orderId) return;
         const prevOrder = previousById.get(orderId);
-        const nextInvoiceId = resolveInvoiceRefForOrder(order as any).invoiceId;
+        const nextInvoiceId = resolveInvoiceRefForOrder(order).invoiceId;
         if (!prevOrder) {
           changedOrderIds.add(orderId);
           if (nextInvoiceId) touchedInvoiceIds.add(nextInvoiceId);
           return;
         }
 
-        const prevInvoiceId = resolveInvoiceRefForOrder(prevOrder as any).invoiceId;
+        const prevInvoiceId = resolveInvoiceRefForOrder(prevOrder).invoiceId;
         const statusChanged = String(prevOrder?.status || '') !== String(order?.status || '');
         const updatedChanged = String(prevOrder?.updatedAt || '') !== String(order?.updatedAt || '');
         const invoiceChanged = prevInvoiceId !== nextInvoiceId;
@@ -594,11 +574,11 @@ export default function AdminOrdersWorkspace({
         }
       });
 
-      previousOrders.forEach((order: unknown) => {
+      previousOrders.forEach((order) => {
         const orderId = String(order?.id || '');
         if (!orderId || nextById.has(orderId)) return;
         changedOrderIds.add(orderId);
-        const prevInvoiceId = resolveInvoiceRefForOrder(order as any).invoiceId;
+        const prevInvoiceId = resolveInvoiceRefForOrder(order).invoiceId;
         if (prevInvoiceId) touchedInvoiceIds.add(prevInvoiceId);
       });
 
@@ -606,7 +586,7 @@ export default function AdminOrdersWorkspace({
       setBackorderIds(backorderSet);
       if (changedOrderIds.size > 0 || previousOrders.length !== allOrders.length) {
         setOrderDetails((prev) => {
-          const next: Record<string, unknown> = {};
+          const next: Record<string, OrderDetailResponse | undefined> = {};
           Object.entries(prev).forEach(([orderId, detail]) => {
             if (!nextById.has(orderId)) return;
             if (changedOrderIds.has(orderId)) return;
@@ -647,17 +627,17 @@ export default function AdminOrdersWorkspace({
       const res = await api.admin.orderManagement.getCouriers();
       const rows = Array.isArray(res.data?.employees) ? res.data.employees : [];
       setCouriers(
-        rows.map((item: unknown) => ({
+        rows.map((item: any) => ({
           id: String(item?.id || ''),
           name: String(item?.display_name || item?.name || 'Driver'),
-        })).filter((item) => item.id)
+        })).filter((item: CourierOption) => Boolean(item.id))
       );
     } catch (error) {
       console.error('Failed to load couriers:', error);
     }
   }, [canManageWarehouseFlow]);
 
-  const classifyOrderSections = useCallback((order: unknown, detail: unknown): OrderSection[] => {
+  const classifyOrderSections = useCallback((order: AdminOrderListRow, detail?: OrderDetailResponse): OrderSection[] => {
     const rawStatus = String(order?.status || '');
     const normalizedStatus = resolveWorkspaceShipmentStatus(order, detail);
     const isCompleted = COMPLETED_STATUSES.has(rawStatus);
@@ -704,7 +684,7 @@ export default function AdminOrdersWorkspace({
 
   const customerGroups = useMemo<CustomerGroup[]>(() => {
     const map = new Map<string, CustomerGroup>();
-    orders.forEach((order: unknown) => {
+    orders.forEach((order) => {
       const customerId = order.customer_id ? String(order.customer_id) : null;
       const name = String(order.customer_name || order.Customer?.name || 'Customer');
       const key = customerId || `guest:${name}`;
@@ -780,8 +760,8 @@ export default function AdminOrdersWorkspace({
   const groupedOrders = useMemo(() => {
     const group = selectedGroup;
     if (!group) return { baru: [], allocated: [], backorder: [], pembayaran: [], gudang: [], pengiriman: [], selesai: [] };
-    const result = { baru: [] as unknown[], allocated: [] as unknown[], backorder: [] as unknown[], pembayaran: [] as unknown[], gudang: [] as unknown[], pengiriman: [] as unknown[], selesai: [] as unknown[] };
-    const getRecencyTs = (order: unknown) => {
+    const result = { baru: [] as AdminOrderListRow[], allocated: [] as AdminOrderListRow[], backorder: [] as AdminOrderListRow[], pembayaran: [] as AdminOrderListRow[], gudang: [] as AdminOrderListRow[], pengiriman: [] as AdminOrderListRow[], selesai: [] as AdminOrderListRow[] };
+    const getRecencyTs = (order: AdminOrderListRow) => {
       const updatedTs = Date.parse(String(order?.updatedAt || ''));
       if (Number.isFinite(updatedTs)) return updatedTs;
       const createdTs = Date.parse(String(order?.createdAt || ''));
@@ -789,7 +769,7 @@ export default function AdminOrdersWorkspace({
       return 0;
     };
 
-    group.orders.forEach((order: unknown) => {
+    group.orders.forEach((order) => {
       const detail = orderDetails[String(order.id)];
       const sections = classifyOrderSections(order, detail);
       sections.forEach((section) => {
@@ -798,7 +778,7 @@ export default function AdminOrdersWorkspace({
     });
 
     // Prioritaskan backorder terbaru di urutan teratas setelah alokasi berubah.
-    result.backorder.sort((a: unknown, b: unknown) => {
+    result.backorder.sort((a: AdminOrderListRow, b: AdminOrderListRow) => {
       const diff = getRecencyTs(b) - getRecencyTs(a);
       if (diff !== 0) return diff;
       const aId = Number(a?.id);
@@ -813,14 +793,14 @@ export default function AdminOrdersWorkspace({
   const filteredGroupedOrders = useMemo(() => {
     const query = orderQuery.trim().toLowerCase();
     if (!query) return groupedOrders;
-    const matchOrder = (order: unknown) => {
+    const matchOrder = (order: AdminOrderListRow) => {
       const id = String(order.id || '').toLowerCase();
       const status = String(order.status || '').toLowerCase();
       if (id.includes(query) || status.includes(query)) return true;
       const detail = orderDetails[String(order.id)];
       if (!detail) return false;
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
-      return items.some((item: unknown) => {
+      return items.some((item: any) => {
         const name = String(item?.Product?.name || '').toLowerCase();
         const sku = String(item?.Product?.sku || '').toLowerCase();
         return name.includes(query) || sku.includes(query);
@@ -837,14 +817,15 @@ export default function AdminOrdersWorkspace({
     };
   }, [groupedOrders, orderDetails, orderQuery]);
 
-  const loadOrderDetails = useCallback(async (ordersToLoad: unknown[]) => {
-    if (ordersToLoad.length === 0) return;
+  const loadOrderDetails = useCallback(async (ordersToLoad: AdminOrderListRow[]) => {
+    const validOrders = ordersToLoad.filter((order) => String(order?.id || '').trim());
+    if (validOrders.length === 0) return;
     setDetailsLoading(true);
     try {
       const responses = await Promise.all(
-        ordersToLoad.map((order) => api.orders.getOrderById(order.id))
+        validOrders.map((order) => api.orders.getOrderById(String(order.id)))
       );
-      const nextMap: Record<string, unknown> = {};
+      const nextMap: Record<string, OrderDetailResponse> = {};
       responses.forEach((res) => {
         const order = res.data;
         if (order?.id) nextMap[String(order.id)] = order;
@@ -860,7 +841,11 @@ export default function AdminOrdersWorkspace({
   useEffect(() => {
     if (!selectedGroup) return;
     const targetOrders = [...groupedOrders.baru, ...groupedOrders.allocated, ...groupedOrders.backorder, ...groupedOrders.pembayaran, ...groupedOrders.gudang, ...groupedOrders.selesai];
-    const missingDetails = targetOrders.filter((order) => !orderDetails[String(order.id)]);
+    const missingDetails = targetOrders.filter((order) => {
+      const orderId = String(order?.id || '').trim();
+      if (!orderId) return false;
+      return !orderDetails[orderId];
+    });
     void loadOrderDetails(missingDetails);
   }, [groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, selectedGroup, orderDetails, loadOrderDetails]);
 
@@ -873,6 +858,7 @@ export default function AdminOrdersWorkspace({
       const next = { ...prev };
 
       detailEntries.forEach(([orderId, detail]) => {
+        if (!detail) return;
         const currentSnapshot = buildBackorderSnapshotFromDetail(detail);
         const timelineSnapshots = buildBackorderHistoryFromTimeline(detail);
         const merged = currentSnapshot ? [currentSnapshot, ...timelineSnapshots] : timelineSnapshots;
@@ -893,8 +879,9 @@ export default function AdminOrdersWorkspace({
     const invoiceIds = Array.from(new Set(
       targetOrders
         .map((order) => {
-          const detail = orderDetails[String(order.id)];
-          return resolveInvoiceRefForOrder(order as any, detail as any).invoiceId;
+          const orderId = String(order?.id || '').trim();
+          const detail = orderId ? orderDetails[orderId] : undefined;
+          return resolveInvoiceRefForOrder(order, detail).invoiceId;
         })
         .filter(Boolean)
     ));
@@ -909,7 +896,7 @@ export default function AdminOrdersWorkspace({
       try {
         const responses = await Promise.allSettled(toLoad.map((invoiceId) => api.invoices.getById(invoiceId)));
         const summaryNext: Record<string, InvoiceItemSummary | null> = {};
-        const detailNext: Record<string, unknown | null> = {};
+        const detailNext: Record<string, InvoiceDetailResponse | null> = {};
         responses.forEach((result, idx) => {
           const invoiceId = toLoad[idx];
           if (result.status === 'fulfilled') {
@@ -929,7 +916,7 @@ export default function AdminOrdersWorkspace({
     })();
   }, [selectedGroup, groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, orderDetails, invoiceDetailByInvoiceId, invoiceItemSummaryByInvoiceId]);
 
-  const visibleOrdersForInvoiceBoard = useMemo(() => {
+  const visibleOrdersForInvoiceBoard = useMemo<AdminOrderListRow[]>(() => {
     if (orderSectionFilter === 'all') {
       return sectionOptions
         .filter((section) => section !== 'selesai')
@@ -940,8 +927,8 @@ export default function AdminOrdersWorkspace({
     return filteredGroupedOrders[orderSectionFilter] || [];
   }, [filteredGroupedOrders, isWarehouseRole, orderSectionFilter, sectionOptions]);
 
-  const backorderActiveOrders = useMemo(() => {
-    if (!forcedCustomerId) return [] as unknown[];
+  const backorderActiveOrders = useMemo<AdminOrderListRow[]>(() => {
+    if (!forcedCustomerId) return [];
     return filteredGroupedOrders.backorder;
   }, [filteredGroupedOrders.backorder, forcedCustomerId]);
 
@@ -976,11 +963,11 @@ export default function AdminOrdersWorkspace({
       }
     >();
 
-    visibleOrdersForInvoiceBoard.forEach((order: unknown) => {
+    visibleOrdersForInvoiceBoard.forEach((order) => {
       const rowId = String(order?.id || '').trim();
       if (!rowId) return;
       const detail = orderDetails[rowId];
-      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
+      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order, detail);
       const groupKey = invoiceId
         ? `id:${invoiceId}`
         : invoiceNumber
@@ -1111,19 +1098,20 @@ export default function AdminOrdersWorkspace({
 
   const availabilityByOrderId = useMemo(() => {
     const result: Record<string, Record<string, { allocQty: number; maxInvoice: number }>> = {};
-    Object.values(orderDetails).forEach((detail: unknown) => {
+    Object.values(orderDetails).forEach((detail) => {
+      if (!detail) return;
       const orderId = String(detail.id);
       const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
       const itemSummaries = Array.isArray(detail.item_summaries) ? detail.item_summaries : [];
       const allocatedByProduct = new Map<string, number>();
-      allocations.forEach((alloc: unknown) => {
+      allocations.forEach((alloc: any) => {
         const key = String(alloc?.product_id || '');
         if (!key) return;
         allocatedByProduct.set(key, Number(allocatedByProduct.get(key) || 0) + Number(alloc?.allocated_qty || 0));
       });
-      const itemsByProduct = new Map<string, unknown[]>();
-      items.forEach((item: unknown) => {
+      const itemsByProduct = new Map<string, any[]>();
+      items.forEach((item: any) => {
         const key = String(item?.product_id || '');
         if (!key) return;
         const list = itemsByProduct.get(key) || [];
@@ -1145,7 +1133,7 @@ export default function AdminOrdersWorkspace({
           const allocQty = Math.min(remainingAlloc, orderedQty);
           remainingAlloc -= allocQty;
           const itemId = String(item.id || '');
-          const summaryRow = itemSummaries.find((row: unknown) => String(row?.order_item_id || '') === itemId);
+          const summaryRow = itemSummaries.find((row: any) => String(row?.order_item_id || '') === itemId);
           const invoicedQty = Number(summaryRow?.invoiced_qty_total || 0);
           availability[String(item.id)] = {
             allocQty,
@@ -1159,12 +1147,13 @@ export default function AdminOrdersWorkspace({
   }, [orderDetails]);
 
   const groupedItemsByOrderId = useMemo(() => {
-    const result: Record<string, Array<{ product_id: string; qty: number; Product?: unknown }>> = {};
-    Object.values(orderDetails).forEach((detail: unknown) => {
+    const result: Record<string, Array<{ product_id: string; qty: number; Product?: ProductLite | null }>> = {};
+    Object.values(orderDetails).forEach((detail) => {
+      if (!detail) return;
       const orderId = String(detail.id);
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
-      const byProduct = new Map<string, { product_id: string; qty: number; Product?: unknown }>();
-      items.forEach((item: unknown) => {
+      const byProduct = new Map<string, { product_id: string; qty: number; Product?: ProductLite | null }>();
+      items.forEach((item: any) => {
         const productId = String(item?.product_id || '');
         if (!productId) return;
         const prev = byProduct.get(productId);
@@ -1174,7 +1163,7 @@ export default function AdminOrdersWorkspace({
           byProduct.set(productId, {
             product_id: productId,
             qty: Number(item?.qty || 0),
-            Product: item?.Product || null,
+            Product: (item?.Product as ProductLite | null) || null,
           });
         }
       });
@@ -1185,11 +1174,12 @@ export default function AdminOrdersWorkspace({
 
   const persistedAllocByOrderId = useMemo(() => {
     const result: Record<string, Record<string, number>> = {};
-    Object.values(orderDetails).forEach((detail: unknown) => {
+    Object.values(orderDetails).forEach((detail) => {
+      if (!detail) return;
       const orderId = String(detail.id);
       const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
       const map: Record<string, number> = {};
-      allocations.forEach((allocation: unknown) => {
+      allocations.forEach((allocation: any) => {
         const key = String(allocation?.product_id || '');
         if (!key) return;
         map[key] = Number(map[key] || 0) + Number(allocation?.allocated_qty || 0);
@@ -1219,12 +1209,13 @@ export default function AdminOrdersWorkspace({
 
   const shortageSummaryByOrderId = useMemo(() => {
     const result: Record<string, { orderedTotal: number; allocatedTotal: number; shortageTotal: number }> = {};
-    Object.values(orderDetails).forEach((detail: unknown) => {
+    Object.values(orderDetails).forEach((detail) => {
+      if (!detail) return;
       const orderId = String(detail.id);
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
       const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
       const orderedByProduct = new Map<string, number>();
-      items.forEach((item: unknown) => {
+      items.forEach((item: any) => {
         const key = String(item?.product_id || '');
         if (!key) return;
         orderedByProduct.set(
@@ -1233,7 +1224,7 @@ export default function AdminOrdersWorkspace({
         );
       });
       const allocatedByProduct = new Map<string, number>();
-      allocations.forEach((alloc: unknown) => {
+      allocations.forEach((alloc: any) => {
         const key = String(alloc?.product_id || '');
         if (!key) return;
         allocatedByProduct.set(key, Number(allocatedByProduct.get(key) || 0) + Number(alloc?.allocated_qty || 0));
@@ -1254,15 +1245,16 @@ export default function AdminOrdersWorkspace({
 
   const orderTotalsById = useMemo(() => {
     const result: Record<string, { orderedQty: number; allocQty: number; remainingQty: number; allocPct: number }> = {};
-    Object.values(orderDetails).forEach((detail: unknown) => {
+    Object.values(orderDetails).forEach((detail) => {
+      if (!detail) return;
       const orderId = String(detail.id);
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
       const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
       const orderedQty = items.reduce(
-        (sum: number, item: unknown) => sum + Math.max(0, Number(item?.ordered_qty_original || item?.qty || 0)),
+        (sum: number, item: any) => sum + Math.max(0, Number(item?.ordered_qty_original || item?.qty || 0)),
         0
       );
-      const allocQty = allocations.reduce((sum: number, alloc: unknown) => sum + Number(alloc?.allocated_qty || 0), 0);
+      const allocQty = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
       const remainingQty = Math.max(0, orderedQty - allocQty);
       const allocPct = orderedQty > 0 ? Math.round((allocQty / orderedQty) * 100) : 0;
       result[orderId] = { orderedQty, allocQty, remainingQty, allocPct };
@@ -1305,7 +1297,7 @@ export default function AdminOrdersWorkspace({
     Object.entries(orderDetails).forEach(([orderId, detail]) => {
       const availability = availabilityByOrderId[orderId] || {};
       const items = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
-      const amount = items.reduce((sum: number, item: unknown) => {
+      const amount = items.reduce((sum: number, item: any) => {
         const qty = Number(availability[String(item?.id || '')]?.maxInvoice || 0);
         if (qty <= 0) return sum;
         return sum + Number(item?.price_at_purchase || 0) * qty;
@@ -1322,8 +1314,8 @@ export default function AdminOrdersWorkspace({
       if (!detail) return;
       const availability = availabilityByOrderId[orderId] || {};
       const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
-      items.forEach((item: unknown) => {
-        const qty = Number(availability[String(item.id)]?.maxInvoice || 0);
+      items.forEach((item: any) => {
+        const qty = Number(availability[String(item?.id || '')]?.maxInvoice || 0);
         if (qty <= 0) return;
         itemCount += 1;
       });
@@ -1424,12 +1416,12 @@ export default function AdminOrdersWorkspace({
         const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
         const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
         const allocByProduct: Record<string, number> = {};
-        allocations.forEach((allocation: unknown) => {
+        allocations.forEach((allocation: any) => {
           const key = String(allocation?.product_id || '');
           if (!key) return;
           allocByProduct[key] = Number(allocByProduct[key] || 0) + Number(allocation?.allocated_qty || 0);
         });
-        items.forEach((item: unknown) => {
+        items.forEach((item: any) => {
           const key = String(item?.product_id || '');
           if (!key) return;
           if (draft[key] === undefined) draft[key] = Number(allocByProduct[key] || 0);
@@ -1452,7 +1444,10 @@ export default function AdminOrdersWorkspace({
       return true;
     } catch (error: unknown) {
       console.error('Allocation save failed:', error);
-      alert(error?.response?.data?.message || 'Gagal menyimpan alokasi.');
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan alokasi.')
+        : 'Gagal menyimpan alokasi.';
+      alert(message);
       return false;
     } finally {
       setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
@@ -1484,7 +1479,10 @@ export default function AdminOrdersWorkspace({
         setAllocationConfirm(null);
       } catch (error: unknown) {
         console.error('Cancel order failed:', error);
-        alert(error?.response?.data?.message || 'Gagal membatalkan order.');
+        const message = axios.isAxiosError(error)
+          ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan order.')
+          : 'Gagal membatalkan order.';
+        alert(message);
       } finally {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
       }
@@ -1506,7 +1504,7 @@ export default function AdminOrdersWorkspace({
               suppliedTotal: Number(meta.totals.allocQty || 0),
               shortageTotal: 0,
               allocatableTotal: 0,
-              reducedValue: Number(meta.totals.reducedValue || 0),
+              reducedValue: Number((meta.totals as any)?.reducedValue || 0),
             },
             items: meta.changedItems.map((item) => ({
               product_id: String(item.productId || ''),
@@ -1516,7 +1514,7 @@ export default function AdminOrdersWorkspace({
               allocatedQty: Math.max(0, Number(item.orderedQty || 0) - Number(item.beforeQty || 0)),
               shortageQty: 0,
               allocatableQty: 0,
-              canceledValue: Number(item.canceledValue || 0),
+              canceledValue: Number((item as any)?.canceledValue || 0),
             })),
           };
           setBackorderHistoryByOrderId((prev) => ({
@@ -1529,7 +1527,10 @@ export default function AdminOrdersWorkspace({
         setAllocationConfirm(null);
       } catch (error: unknown) {
         console.error('Batal backorder gagal:', error);
-        alert(error?.response?.data?.message || 'Gagal membatalkan backorder.');
+        const message = axios.isAxiosError(error)
+          ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan backorder.')
+          : 'Gagal membatalkan backorder.';
+        alert(message);
       } finally {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
       }
@@ -1543,7 +1544,10 @@ export default function AdminOrdersWorkspace({
         setAllocationConfirm(null);
       } catch (error: unknown) {
         console.error('Issue invoice failed:', error);
-        alert(error?.response?.data?.message || 'Gagal menerbitkan invoice.');
+        const message = axios.isAxiosError(error)
+          ? String((error.response?.data as any)?.message || error.message || 'Gagal menerbitkan invoice.')
+          : 'Gagal menerbitkan invoice.';
+        alert(message);
       } finally {
         setBusyInvoice(false);
       }
@@ -1738,7 +1742,10 @@ export default function AdminOrdersWorkspace({
         // no-op
       }
     } catch (error: unknown) {
-      alert(error?.response?.data?.message || 'Gagal assign driver batch.');
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal assign driver batch.')
+        : 'Gagal assign driver batch.';
+      alert(message);
     } finally {
       setWarehouseBatchAssigning(false);
     }
@@ -1863,7 +1870,7 @@ export default function AdminOrdersWorkspace({
       const detail = orderDetails[orderId];
       const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
       const allocations = Array.isArray(detail?.Allocations) ? detail.Allocations : [];
-      const allocatedByProductId = allocations.reduce<Record<string, number>>((acc, allocation: unknown) => {
+      const allocatedByProductId = allocations.reduce<Record<string, number>>((acc, allocation: any) => {
         const productId = String(allocation?.product_id || '');
         if (!productId) return acc;
         acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
@@ -1874,8 +1881,8 @@ export default function AdminOrdersWorkspace({
           const productId = String(item.product_id || '');
           if (!productId) return null;
           const orderedQtyItem = orderItems
-            .filter((row: unknown) => String(row?.product_id || '') === productId)
-            .reduce((sum: number, row: unknown) => sum + Number(row?.qty || 0), 0);
+            .filter((row: any) => String(row?.product_id || '') === productId)
+            .reduce((sum: number, row: any) => sum + Number(row?.qty || 0), 0);
           const allocatedQtyItem = Number(allocatedByProductId[productId] || 0);
           const backorderQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
           if (backorderQty <= 0) return null;
@@ -1886,11 +1893,11 @@ export default function AdminOrdersWorkspace({
             orderedQty: orderedQtyItem,
             beforeQty: backorderQty,
             afterQty: 0,
-            canceledValue: backorderQty * Number((orderItems.find((row: unknown) => String(row?.product_id || '') === productId)?.price_at_purchase) || 0),
+            canceledValue: backorderQty * Number((orderItems.find((row: any) => String(row?.product_id || '') === productId)?.price_at_purchase) || 0),
           };
         })
         .filter(Boolean) as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number; canceledValue: number }>;
-      const reducedValue = orderItems.reduce((sum: number, row: unknown) => {
+      const reducedValue = orderItems.reduce((sum: number, row: any) => {
         const orderedQtyItem = Number(row?.qty || 0);
         const allocatedQtyItem = Number(allocatedByProductId[String(row?.product_id || '')] || 0);
         const canceledQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
@@ -1951,7 +1958,7 @@ export default function AdminOrdersWorkspace({
         items: Array<{ productId: string; name: string; sku: string; orderedQty: number; allocatedQty: number }>;
       }>,
     };
-  }, [allocationConfirm, allocationDrafts, groupedItemsByOrderId, persistedAllocByOrderId, readyOrderIds, orderDetails, availabilityByOrderId, selectedGroup?.customer_name, invoiceableAmountByOrderId]);
+  }, [allocationConfirm, allocationDrafts, groupedItemsByOrderId, persistedAllocByOrderId, readyOrderIds, orderDetails, availabilityByOrderId, selectedGroup?.customer_name, invoiceableAmountByOrderId, backorderTopupDrafts]);
 
   if (!allowed && !hasRenderableAccess) {
     return (
@@ -2068,8 +2075,8 @@ export default function AdminOrdersWorkspace({
                 ) : allocationConfirm.action === 'cancel_backorder' ? (
                   <div className="space-y-3">
                     <p>
-                      Qty backorder yang dibatalkan <span className="font-black">{Number(allocationConfirmMeta.totals.canceledQty || 0)}</span> •
-                      Nilai dikurangi <span className="font-black">{formatCurrency(Number(allocationConfirmMeta.totals.reducedValue || 0))}</span> •
+                      Qty backorder yang dibatalkan <span className="font-black">{Number((allocationConfirmMeta.totals as any)?.canceledQty || 0)}</span> •
+                      Nilai dikurangi <span className="font-black">{formatCurrency(Number((allocationConfirmMeta.totals as any)?.reducedValue || 0))}</span> •
                       Status berikutnya <span className="font-black">{String(allocationConfirmMeta.projectedStatus || '-')}</span>
                     </p>
                     <div className="space-y-2">
@@ -2083,7 +2090,7 @@ export default function AdminOrdersWorkspace({
                             <div className="text-right text-[10px] text-slate-600">
                               <p>Pesan <span className="font-black text-slate-900">{item.orderedQty}</span></p>
                               <p>Backorder dibatalkan <span className="font-black text-rose-700">{item.beforeQty}</span></p>
-                              <p>Nilai <span className="font-black text-rose-700">{formatCurrency(Number(item.canceledValue || 0))}</span></p>
+                              <p>Nilai <span className="font-black text-rose-700">{formatCurrency(Number((item as any)?.canceledValue || 0))}</span></p>
                             </div>
                           </div>
                         </div>
@@ -2506,14 +2513,14 @@ export default function AdminOrdersWorkspace({
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {backorderActiveOrders.map((order: unknown) => {
-                          const orderId = String(order?.id || '');
-                      const detail = orderDetails[orderId];
-                      const rawOrderStatus = String(order?.status || '');
-                      const orderStatus = normalizeOrderStatus(rawOrderStatus);
-                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
-                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
-                      const canCancelBackorderEarly = canAllocate;
+	                        {backorderActiveOrders.map((order) => {
+	                          const orderId = String(order?.id || '');
+	                      const detail = orderDetails[orderId];
+	                      const rawOrderStatus = String(order?.status || '');
+	                      const orderStatus = normalizeOrderStatus(rawOrderStatus);
+	                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order, detail);
+	                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
+	                      const canCancelBackorderEarly = canAllocate;
                       const allocationBusy = Boolean(allocationSaving[orderId]);
                           const groupedItems = groupedItemsByOrderId[orderId] || [];
                           const persistedAlloc = persistedAllocByOrderId[orderId] || {};
@@ -2719,14 +2726,14 @@ export default function AdminOrdersWorkspace({
                 if (forcedCustomerId && section === 'backorder') return null;
                 if (orderSectionFilter !== 'all' && orderSectionFilter !== section) return null;
                 const label = getSectionLabel(section);
-                const list = filteredGroupedOrders[section];
+                const list = filteredGroupedOrders[section] as AdminOrderListRow[];
                 if (list.length === 0) return null;
                 const isWarehouseCompactView = isWarehouseRole || (canManageWarehouseFlow && ['gudang', 'pengiriman'].includes(section));
                 const canUseWarehouseChecklist = canManageWarehouseFlow;
                 const isFinanceCompactView = isFinanceRole && ['pembayaran', 'gudang', 'pengiriman', 'selesai'].includes(section);
                 const isInvoiceCompactView = isWarehouseCompactView || isFinanceCompactView;
                 if (isInvoiceCompactView) {
-                  const invoiceBuckets = list.reduce<Map<string, WarehouseInvoiceBucket>>((acc, row: unknown) => {
+                  const invoiceBuckets = list.reduce<Map<string, WarehouseInvoiceBucket>>((acc, row) => {
                     const rowId = String(row?.id || '');
                     if (!rowId) return acc;
                     const detail = orderDetails[rowId];
@@ -2748,7 +2755,7 @@ export default function AdminOrdersWorkspace({
                     };
 
                     // Only add if not already present (shouldn't happen in reduce but safe)
-                    if (!bucket.orders.some((bucketOrder: unknown) => String(bucketOrder?.id || '') === rowId)) {
+                    if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
                       bucket.orders.push(row);
                     }
 
@@ -2760,9 +2767,9 @@ export default function AdminOrdersWorkspace({
                   if (selectedGroup) {
                     invoiceBuckets.forEach((bucket) => {
                       if (!bucket.invoiceId && !bucket.invoiceNumber) return;
-                      selectedGroup.orders.forEach((otherOrder: unknown) => {
+                      selectedGroup.orders.forEach((otherOrder) => {
                         const otherOrderId = String(otherOrder?.id || '');
-                        if (bucket.orders.some((bucketOrder: unknown) => String(bucketOrder?.id || '') === otherOrderId)) return;
+                        if (bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === otherOrderId)) return;
 
                         const otherDetail = orderDetails[otherOrderId];
                         const otherInvoiceId = normalizeInvoiceRef(otherOrder?.invoice_id || otherOrder?.Invoice?.id || otherDetail?.invoice_id || otherDetail?.Invoice?.id);
@@ -2794,7 +2801,7 @@ export default function AdminOrdersWorkspace({
                       const paymentMethodSet = new Set<string>();
                       const paymentStatusSet = new Set<string>();
 
-                      bucket.orders.forEach((row: unknown) => {
+                      bucket.orders.forEach((row) => {
                         const rowId = String(row?.id || '');
                         if (!rowId) return;
 
@@ -2835,14 +2842,14 @@ export default function AdminOrdersWorkspace({
                                 hasMissingDetails = true;
                               } else {
                                 const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-                                const rowAllocated = allocations.reduce((sum: number, alloc: unknown) => sum + Number(alloc?.allocated_qty || 0), 0);
+                                const rowAllocated = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
                                 allocatedQty += Math.max(0, rowAllocated);
                               }
                             }
                             const detail = orderDetails[rowId];
                             if (!detail) return;
                             const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-                            allocations.forEach((alloc: unknown) => {
+                            allocations.forEach((alloc: any) => {
                               const productId = String(alloc?.product_id || '');
                               const allocQty = Number(alloc?.allocated_qty || 0);
                               if (productId && allocQty > 0) allocatedSkuSet.add(productId);
@@ -2854,27 +2861,27 @@ export default function AdminOrdersWorkspace({
                         allocatedQty = Number(invoiceSummary.totalQty || 0);
                       }
                       const orderIds = bucket.orders
-                        .map((row: unknown) => String(row?.id || ''))
+                        .map((row) => String(row?.id || ''))
                         .filter(Boolean);
                       const previewIds = orderIds.slice(0, 3).map((id: string) => `#${id.slice(-8).toUpperCase()}`);
                       const extraOrderCount = Math.max(0, orderIds.length - previewIds.length);
-                      const hasReadyToShip = bucket.orders.some((row: unknown) => {
+                      const hasReadyToShip = bucket.orders.some((row) => {
                         const rowId = String(row?.id || '');
                         return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
                       });
                       const readyToShipOrderIds = bucket.orders
-                        .filter((row: unknown) => {
+                        .filter((row) => {
                           const rowId = String(row?.id || '');
                           return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
                         })
-                        .map((row: unknown) => String(row?.id || ''))
+                        .map((row) => String(row?.id || ''))
                         .filter(Boolean);
-                      const hasShipped = bucket.orders.some((row: unknown) => {
+                      const hasShipped = bucket.orders.some((row) => {
                         const rowId = String(row?.id || '');
                         return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'shipped';
                       });
                       const primaryOrder =
-                        bucket.orders.find((row: unknown) => {
+                        bucket.orders.find((row) => {
                           const rowId = String(row?.id || '');
                           return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
                         }) ||
@@ -2905,7 +2912,7 @@ export default function AdminOrdersWorkspace({
                       const customerLabel = Array.from(
                         new Set(
                           bucket.orders
-                            .map((row: unknown) => String(row?.customer_name || row?.Customer?.name || selectedGroup?.customer_name || 'Customer'))
+                            .map((row) => String((row as any)?.customer_name || row?.Customer?.name || selectedGroup?.customer_name || 'Customer'))
                             .filter(Boolean)
                         )
                       ).join(', ');
@@ -3457,7 +3464,7 @@ export default function AdminOrdersWorkspace({
                                 Backorder {backorderSummary.shortageTotal || totals.remainingQty}
                               </span>
                             )}
-                            {order.active_issue && (
+                            {Boolean((order as any)?.active_issue) && (
                               <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-700">
                                 Ada issue driver
                               </span>
@@ -3506,18 +3513,18 @@ export default function AdminOrdersWorkspace({
 
                           {showInlineOrderDetailPanel && backorderCard}
 
-                          {showInlineOrderDetailPanel && order.active_issue && (
+                          {showInlineOrderDetailPanel && Boolean((order as any)?.active_issue) && (
                             <div className="mt-3 bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2">
                               <div className="flex items-center gap-2 text-amber-700">
                                 <AlertCircle size={16} />
                                 <p className="text-[10px] font-black uppercase tracking-widest">Laporan Masalah Driver</p>
                               </div>
                               <p className="text-xs font-semibold text-slate-800 bg-white/50 p-2 rounded-xl border border-amber-100 italic">
-                                {order.active_issue.note}
+                                {String((order as any)?.active_issue?.note || '')}
                               </p>
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-[10px] text-amber-600">
-                                  Tipe: <span className="font-bold">{order.active_issue.issue_type}</span> • Batas: {formatDateTime(order.active_issue.due_at)}
+                                  Tipe: <span className="font-bold">{String((order as any)?.active_issue?.issue_type || '-')}</span> • Batas: {formatDateTime((order as any)?.active_issue?.due_at ? String((order as any)?.active_issue?.due_at) : null)}
                                 </p>
                                 <Link
                                   href={`/admin/orders/${order.id}`}

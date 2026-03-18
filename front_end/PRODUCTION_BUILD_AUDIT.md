@@ -15,7 +15,7 @@ Build Docker saat ini bisa lolos karena:
 
 - beberapa error lokal yang langsung memblokir build sudah dibetulkan
 - beberapa halaman `useSearchParams()` sudah dibungkus `Suspense`
-- `typescript.ignoreBuildErrors` diaktifkan di [next.config.ts](/home/ubuntu/Migunani_Project/front_end/next.config.ts)
+- `typescript.ignoreBuildErrors` diaktifkan di [next.config.ts](./next.config.ts)
 
 Artinya: image bisa dibangun, tetapi technical debt frontend untuk production build strict masih besar.
 
@@ -23,26 +23,29 @@ Artinya: image bisa dibangun, tetapi technical debt frontend untuk production bu
 
 - `docker compose build`: lolos
 - `back_end` build: normal
+- `front_end` build via `next build --webpack`: lolos
+- `front_end` build via Turbopack (`next build` tanpa `--webpack` di environment ini): gagal (`Operation not permitted` saat PostCSS mencoba membuat proses & bind port)
 - `front_end` build strict TypeScript: belum bersih
 - `front_end` production build strict tanpa bypass TypeScript: belum aman
 
 ## Raw Evidence
 
-- Log penuh hasil `npx tsc --noEmit --pretty false` ada di [tsc-production-errors.log](/home/ubuntu/Migunani_Project/front_end/tsc-production-errors.log)
+- Log penuh hasil `npx tsc --noEmit --pretty false` bisa disimpan ke `./tsc-production-errors.log`.
 
 Perintah audit yang dipakai:
 
 ```bash
-sudo docker run --rm -v /home/ubuntu/Migunani_Project/front_end:/app -w /app node:20-bookworm-slim bash -lc "npm install --no-audit >/dev/null && npx tsc --noEmit --pretty false"
+cd front_end
+docker run --rm -v "$PWD:/app" -w /app node:20-bookworm-slim bash -lc "npm install --no-audit >/dev/null && npx tsc --noEmit --pretty false"
 ```
 
 ## Skala Masalah TypeScript
 
-Hasil audit menunjukkan sekitar `704` error TypeScript terdeteksi, tersebar di `19` file utama.
+Hasil audit menunjukkan sekitar `672` error TypeScript terdeteksi, tersebar di `19` file utama.
 
 Distribusi berdasarkan kode error:
 
-- `TS2339`: 538 kasus
+- `TS2339`: 506 kasus
 - `TS18046`: 143 kasus
 - `TS7006`: 9 kasus
 - `TS2322`: 8 kasus
@@ -60,14 +63,15 @@ Makna praktis:
 
 Top file berdasarkan jumlah error:
 
-1. [AdminOrdersWorkspace.tsx](/home/ubuntu/Migunani_Project/front_end/components/orders/AdminOrdersWorkspace.tsx): 348 error
-2. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/orders/[id]/page.tsx): 95 error
-3. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/page.tsx): 72 error
-4. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/page.tsx): 57 error
-5. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/precheck/page.tsx): 50 error
-6. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/checklist/page.tsx): 39 error
-7. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/verifikasi-dana/page.tsx): 18 error
-8. [warehouse-columns.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/warehouse-columns.tsx): 10 error
+1. [AdminOrdersWorkspace.tsx](./components/orders/AdminOrdersWorkspace.tsx): 316 error
+2. [page.tsx](./app/orders/[id]/page.tsx): 95 error
+3. [page.tsx](./app/driver/orders/[id]/page.tsx): 72 error
+4. [page.tsx](./app/driver/page.tsx): 57 error
+5. [page.tsx](./app/driver/precheck/page.tsx): 50 error
+6. [page.tsx](./app/driver/orders/[id]/checklist/page.tsx): 39 error
+7. [page.tsx](./app/driver/verifikasi-dana/page.tsx): 18 error
+8. [warehouse-columns.tsx](./app/admin/warehouse/warehouse-columns.tsx): 10 error
+
 
 Kesimpulan: mayoritas debt menumpuk di area:
 
@@ -92,11 +96,11 @@ Gejala umum:
 
 Ini yang paling banyak memicu error di:
 
-- [AdminOrdersWorkspace.tsx](/home/ubuntu/Migunani_Project/front_end/components/orders/AdminOrdersWorkspace.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/checklist/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/precheck/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/page.tsx)
+- [AdminOrdersWorkspace.tsx](./components/orders/AdminOrdersWorkspace.tsx)
+- [page.tsx](./app/driver/orders/[id]/page.tsx)
+- [page.tsx](./app/driver/orders/[id]/checklist/page.tsx)
+- [page.tsx](./app/driver/precheck/page.tsx)
+- [page.tsx](./app/driver/page.tsx)
 
 ### 2. Helper / callback lokal masih implicit-any atau unknown-heavy
 
@@ -108,9 +112,9 @@ Contoh:
 
 Terlihat di:
 
-- [warehouse-columns.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/warehouse-columns.tsx)
-- [warehouse-detail.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/warehouse-detail.tsx)
-- [AdminOrdersWorkspace.tsx](/home/ubuntu/Migunani_Project/front_end/components/orders/AdminOrdersWorkspace.tsx)
+- [warehouse-columns.tsx](./app/admin/warehouse/warehouse-columns.tsx)
+- [warehouse-detail.tsx](./app/admin/warehouse/warehouse-detail.tsx)
+- [AdminOrdersWorkspace.tsx](./components/orders/AdminOrdersWorkspace.tsx)
 
 ### 3. Kontrak tipe frontend dan helper API tidak sinkron
 
@@ -121,28 +125,30 @@ Contoh:
 
 Contoh file:
 
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/stok/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/checkout/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/retur/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/chat/page.tsx)
+- [page.tsx](./app/admin/warehouse/stok/page.tsx)
+- [page.tsx](./app/checkout/page.tsx)
+- [page.tsx](./app/admin/warehouse/retur/page.tsx)
+- [page.tsx](./app/chat/page.tsx)
 
 ### 4. `useSearchParams()` pada halaman App Router rawan gagal saat prerender
 
 Halaman yang memakai `useSearchParams()`:
 
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/invoice-history/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/create/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/customer/[customerId]/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/sales/customer-purchases/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/catalog/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/chat/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/chat/page.tsx)
+- [page.tsx](./app/admin/orders/invoice-history/page.tsx)
+- [page.tsx](./app/admin/orders/create/page.tsx)
+- [page.tsx](./app/admin/orders/customer/[customerId]/page.tsx)
+- [page.tsx](./app/admin/sales/customer-purchases/page.tsx)
+- [page.tsx](./app/catalog/page.tsx)
+- [page.tsx](./app/admin/chat/page.tsx)
+- [page.tsx](./app/driver/chat/page.tsx)
+- [page.tsx](./app/invoices/[invoiceId]/print/page.tsx)
 
 Yang sudah dipatch di sesi ini:
 
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/invoice-history/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/sales/customer-purchases/page.tsx)
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/customer/[customerId]/page.tsx)
+- [page.tsx](./app/admin/orders/invoice-history/page.tsx)
+- [page.tsx](./app/admin/sales/customer-purchases/page.tsx)
+- [page.tsx](./app/admin/orders/customer/[customerId]/page.tsx)
+- [page.tsx](./app/invoices/[invoiceId]/print/page.tsx)
 
 Catatan:
 
@@ -153,17 +159,17 @@ Catatan:
 
 Perubahan yang dibuat agar build Docker lolos:
 
-- [next.config.ts](/home/ubuntu/Migunani_Project/front_end/next.config.ts)
+- [next.config.ts](./next.config.ts)
   - menambahkan `typescript.ignoreBuildErrors`
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/issues/page.tsx)
+- [page.tsx](./app/admin/orders/issues/page.tsx)
   - merapikan `implicit any` dan pemanggilan tanggal opsional
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/orders/page.tsx)
+- [page.tsx](./app/admin/orders/page.tsx)
   - merapikan akses objek `unknown`
-- [utils.ts](/home/ubuntu/Migunani_Project/front_end/lib/utils.ts)
+- [utils.ts](./lib/utils.ts)
   - membuat formatter tanggal lebih toleran pada `null` / `undefined`
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/import/page.tsx)
+- [page.tsx](./app/admin/warehouse/import/page.tsx)
   - menyelaraskan tipe payload import
-- [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/admin/warehouse/retur/page.tsx)
+- [page.tsx](./app/admin/warehouse/retur/page.tsx)
   - menambahkan shape `Courier`
 - halaman `useSearchParams()` yang memblokir prerender dibungkus `Suspense`
 
@@ -173,7 +179,7 @@ Perubahan yang dibuat agar build Docker lolos:
 
 Target akhir:
 
-- hapus `typescript.ignoreBuildErrors` dari [next.config.ts](/home/ubuntu/Migunani_Project/front_end/next.config.ts)
+- hapus `typescript.ignoreBuildErrors` dari [next.config.ts](./next.config.ts)
 
 Namun ini baru aman setelah error utama dibersihkan.
 
@@ -181,12 +187,12 @@ Namun ini baru aman setelah error utama dibersihkan.
 
 Urutan paling ekonomis:
 
-1. [AdminOrdersWorkspace.tsx](/home/ubuntu/Migunani_Project/front_end/components/orders/AdminOrdersWorkspace.tsx)
-2. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/orders/[id]/page.tsx)
-3. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/page.tsx)
-4. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/precheck/page.tsx)
-5. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/orders/[id]/checklist/page.tsx)
-6. [page.tsx](/home/ubuntu/Migunani_Project/front_end/app/driver/page.tsx)
+1. [AdminOrdersWorkspace.tsx](./components/orders/AdminOrdersWorkspace.tsx)
+2. [page.tsx](./app/orders/[id]/page.tsx)
+3. [page.tsx](./app/driver/orders/[id]/page.tsx)
+4. [page.tsx](./app/driver/precheck/page.tsx)
+5. [page.tsx](./app/driver/orders/[id]/checklist/page.tsx)
+6. [page.tsx](./app/driver/page.tsx)
 
 Alasan:
 

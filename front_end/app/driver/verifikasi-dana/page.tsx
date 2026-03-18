@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CreditCard, HandCoins, MapPin, Search, Truck, User, Wallet } from 'lucide-react';
@@ -7,6 +9,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import type { DriverAssignedOrderRow } from '@/lib/apiTypes';
 
 const formatCurrency = (value: number) =>
   `Rp ${Number.isFinite(value) ? value.toLocaleString('id-ID') : '0'}`;
@@ -14,8 +17,8 @@ const formatCurrency = (value: number) =>
 export default function DriverVerifikasiDanaPage() {
   const allowed = useRequireRoles(['driver', 'super_admin']);
   const { user } = useAuthStore();
-  const [wallet, setWallet] = useState<unknown>(null);
-  const [orders, setOrders] = useState<unknown[]>([]);
+  const [wallet, setWallet] = useState<Record<string, any> | null>(null);
+  const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
@@ -54,7 +57,7 @@ export default function DriverVerifikasiDanaPage() {
       key: string;
       invoiceNumber: string;
       amount: number;
-      orders: unknown[];
+      orders: DriverAssignedOrderRow[];
       customerName: string;
       address: string;
       status: string;
@@ -81,7 +84,7 @@ export default function DriverVerifikasiDanaPage() {
       if (!bucket.address) {
         const profile = order?.Customer?.CustomerProfile || {};
         const addresses = Array.isArray(profile?.saved_addresses) ? profile.saved_addresses : [];
-        const addressObj = addresses.find((row: unknown) => row?.isPrimary) || addresses[0] || null;
+        const addressObj = addresses.find((row: any) => Boolean(row?.isPrimary)) || addresses[0] || null;
         bucket.address = String(addressObj?.fullAddress || addressObj?.address || '').trim();
       }
       buckets.set(invoiceId, bucket);

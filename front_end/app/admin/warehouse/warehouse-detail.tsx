@@ -308,7 +308,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                     note: row.note ? String(row.note) : null,
                     reference_id: row.reference_id ? String(row.reference_id) : null,
                     createdAt: String(row.createdAt ?? ''),
-                })).filter((row) => Boolean(row.id));
+                })).filter((row: MutationRow) => Boolean(row.id));
                 setMutations(mapped.slice(0, 10));
             })
             .catch(() => setMutations([]))
@@ -485,7 +485,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                         note: row.note ? String(row.note) : null,
                         reference_id: row.reference_id ? String(row.reference_id) : null,
                         createdAt: String(row.createdAt ?? ''),
-                    })).filter((row) => Boolean(row.id));
+                    })).filter((row: MutationRow) => Boolean(row.id));
                     setMutations(mapped.slice(0, 10));
                 })
                 .catch(() => undefined);
@@ -801,7 +801,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                             <td className={`px-3 py-2 text-right font-mono font-bold ${mut.type === 'in' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                                 {mut.type === 'in' ? '+' : '-'}{Math.abs(Number(mut.qty || 0))}
                                             </td>
-                                            <td className="px-3 py-2 text-slate-500 truncate max-w-[90px]" title={mut.note || mut.reference_id}>
+                                            <td className="px-3 py-2 text-slate-500 truncate max-w-[90px]" title={mut.note || mut.reference_id || undefined}>
                                                 {mut.reference_id || '—'}
                                             </td>
                                         </tr>

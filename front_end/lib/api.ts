@@ -1,4 +1,10 @@
 import axios from 'axios';
+import type {
+    AdminOrderListResponse,
+    DriverAssignedOrderRow,
+    InvoiceDetailResponse,
+    OrderDetailResponse,
+} from './apiTypes';
 
 // Use Next.js rewrite proxy to avoid browser->backend connectivity/cors issues in local dev.
 export const API_BASE_URL = '/api';
@@ -26,6 +32,7 @@ apiClient.interceptors.request.use(
 );
 
 type JsonRecord = Record<string, unknown>;
+type SavedAddressesPayload = unknown[];
 
 // Response interceptor - handle errors
 apiClient.interceptors.response.use(
@@ -114,7 +121,7 @@ export const api = {
         }) => apiClient.post('/orders/checkout', data),
         getMyOrders: (params?: { page?: number; limit?: number; status?: string }) =>
             apiClient.get('/orders/my-orders', { params }),
-        getOrderById: (id: string) => apiClient.get(`/orders/${id}`),
+        getOrderById: (id: string) => apiClient.get<OrderDetailResponse>(`/orders/${id}`),
         uploadPaymentProof: (orderId: string, formData: FormData) =>
             apiClient.post(`/orders/${orderId}/proof`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
@@ -126,7 +133,7 @@ export const api = {
     // Profile (Customer)
     profile: {
         getMe: () => apiClient.get('/profile/me'),
-        updateAddresses: (addresses: JsonRecord[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+        updateAddresses: (addresses: SavedAddressesPayload) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
     },
 
     // Promos
@@ -135,7 +142,7 @@ export const api = {
     },
 
     invoices: {
-        getById: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}`),
+        getById: (invoiceId: string) => apiClient.get<InvoiceDetailResponse>(`/invoices/${invoiceId}`),
         uploadPaymentProof: (invoiceId: string, formData: FormData) =>
             apiClient.post(`/invoices/${invoiceId}/proof`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
@@ -267,7 +274,7 @@ export const api = {
                 exclude_backorder?: string;
                 updatedAfter?: string;
             }) =>
-                apiClient.get('/orders/admin/list', { params }),
+                apiClient.get<AdminOrderListResponse>('/orders/admin/list', { params }),
             getStats: () => apiClient.get('/orders/admin/stats'),
             getCouriers: () => apiClient.get('/orders/admin/couriers'),
             updateStatus: (id: string, data: {
@@ -457,7 +464,7 @@ export const api = {
         // Profile
         profile: {
             getMe: () => apiClient.get('/profile/me'),
-            updateAddresses: (addresses: JsonRecord[]) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
+            updateAddresses: (addresses: SavedAddressesPayload) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
         },
         // Promos
         promos: {
@@ -584,7 +591,8 @@ export const api = {
 
     // Driver
     driver: {
-        getOrders: (params?: { status?: string; startDate?: string; endDate?: string }) => apiClient.get('/driver/orders', { params }),
+        getOrders: (params?: { status?: string; startDate?: string; endDate?: string }) =>
+            apiClient.get<DriverAssignedOrderRow[]>('/driver/orders', { params }),
         completeOrder: (orderId: string, formData: FormData) =>
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },

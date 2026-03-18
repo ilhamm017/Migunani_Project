@@ -366,23 +366,23 @@ export default function WebChatWidget() {
                             className="block rounded-lg overflow-hidden"
                             aria-label="Perbesar gambar lampiran"
                           >
-                            <Image
-                              src={message.attachmentUrl}
-                              alt="Lampiran chat"
-                              width={190}
-                              height={160}
-                              unoptimized
-                              className="max-h-40 max-w-[190px] rounded-lg border border-black/10 object-cover"
-                            />
+	                            <Image
+	                              src={message.attachmentUrl || ''}
+	                              alt="Lampiran chat"
+	                              width={190}
+	                              height={160}
+	                              unoptimized
+	                              className="max-h-40 max-w-[190px] rounded-lg border border-black/10 object-cover"
+	                            />
                           </button>
                         ) : (
-                          <a
-                            href={message.attachmentUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${isCustomer ? 'bg-emerald-500/40 text-white' : 'bg-slate-100 text-slate-700'
-                              }`}
-                          >
+	                          <a
+	                            href={message.attachmentUrl || ''}
+	                            target="_blank"
+	                            rel="noopener noreferrer"
+	                            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${isCustomer ? 'bg-emerald-500/40 text-white' : 'bg-slate-100 text-slate-700'
+	                              }`}
+	                          >
                             <FileText size={12} />
                             Lihat lampiran
                           </a>

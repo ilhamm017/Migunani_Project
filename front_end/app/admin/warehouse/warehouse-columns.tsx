@@ -1,6 +1,6 @@
 'use client';
 
-import { ColumnDef } from '@tanstack/react-table';
+import type { ColumnDef, Row, Table } from '@tanstack/react-table';
 import { ProductRow } from '../inventory/types';
 import { ArrowUpDown, Check, Copy, PencilLine } from 'lucide-react';
 import { MouseEvent, useCallback, useEffect, useState } from 'react';
@@ -14,9 +14,8 @@ export interface WarehouseTableMeta {
     onExpandEdit?: (product: ProductRow) => void;
 }
 
-const getMeta = (table: unknown): WarehouseTableMeta => {
-    return (table.options.meta || {}) as WarehouseTableMeta;
-};
+const getMeta = (table: Table<ProductRow>): WarehouseTableMeta =>
+    (table.options.meta || {}) as WarehouseTableMeta;
 
 const currency = (value: number) =>
     new Intl.NumberFormat('id-ID', {
@@ -25,8 +24,8 @@ const currency = (value: number) =>
         maximumFractionDigits: 0,
     }).format(Number(value || 0));
 
-const CopySKUCell = ({ row }: { row: unknown }) => {
-    const sku: string = row.original.sku || '';
+const CopySKUCell = ({ row }: { row: Row<ProductRow> }) => {
+    const sku: string = String(row.original.sku || '');
     const [copied, setCopied] = useState(false);
 
     const copy = useCallback((event: MouseEvent<HTMLButtonElement>) => {
@@ -61,9 +60,9 @@ const EditableTextCell = ({
     transform,
     className,
 }: {
-    row: unknown;
+    row: Row<ProductRow>;
     getValue: () => unknown;
-    table: unknown;
+    table: Table<ProductRow>;
     field: InlineField;
     placeholder?: string;
     transform?: (value: string) => string;
@@ -125,9 +124,9 @@ const EditableNumberCell = ({
     displayAsCurrency = false,
     alignRight = false,
 }: {
-    row: unknown;
+    row: Row<ProductRow>;
     getValue: () => unknown;
-    table: unknown;
+    table: Table<ProductRow>;
     field: InlineField;
     integer?: boolean;
     displayAsCurrency?: boolean;
@@ -191,7 +190,7 @@ const EditableNumberCell = ({
     );
 };
 
-const EditableStockCell = ({ row, getValue, table }: { row: unknown; getValue: () => unknown; table: unknown }) => {
+const EditableStockCell = ({ row, getValue, table }: { row: Row<ProductRow>; getValue: () => unknown; table: Table<ProductRow> }) => {
     const meta = getMeta(table);
     const initialStock = Number(getValue() || 0);
     const minStock = Number(row.original.min_stock || 0);
@@ -252,7 +251,7 @@ const EditableStockCell = ({ row, getValue, table }: { row: unknown; getValue: (
     );
 };
 
-const EditableStatusCell = ({ row, table }: { row: unknown; table: unknown }) => {
+const EditableStatusCell = ({ row, table }: { row: Row<ProductRow>; table: Table<ProductRow> }) => {
     const meta = getMeta(table);
     const initialValue = String(row.original.status || 'inactive').toLowerCase() === 'active' ? 'active' : 'inactive';
     const [value, setValue] = useState<'active' | 'inactive'>(initialValue);
@@ -301,7 +300,7 @@ const EditableStatusCell = ({ row, table }: { row: unknown; table: unknown }) =>
     );
 };
 
-const StatusCell = ({ row }: { row: unknown }) => {
+const StatusCell = ({ row }: { row: Row<ProductRow> }) => {
     const stock = Number(row.original.stock_quantity || 0);
     const minStock = Number(row.original.min_stock || 0);
 

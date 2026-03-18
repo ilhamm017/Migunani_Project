@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -7,13 +9,15 @@ import { ArrowLeft, ArrowRight, Truck, Clock3, CheckCircle2, AlertCircle, PauseC
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import axios from 'axios';
+import type { OrderDetailResponse } from '@/lib/apiTypes';
 
 export default function OrderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const orderId = String(params?.id || '');
 
-  const [order, setOrder] = useState<unknown>(null);
+  const [order, setOrder] = useState<OrderDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadOrder = useCallback(async () => {
@@ -45,9 +49,9 @@ export default function OrderDetailPage() {
     const rawStatus = order?.status || 'pending';
     const status = rawStatus === 'waiting_payment' ? 'ready_to_ship' : rawStatus;
     const summaryRows = Array.isArray(order?.item_summaries) ? order.item_summaries : [];
-    const activeBackorderQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.backorder_open_qty || 0), 0);
-    const canceledBackorderQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.backorder_canceled_qty || 0), 0);
-    const allocatedTotalQty = summaryRows.reduce((sum: number, row: unknown) => sum + Number(row?.allocated_qty_total || 0), 0);
+    const activeBackorderQty = summaryRows.reduce((sum: number, row: any) => sum + Number(row?.backorder_open_qty || 0), 0);
+    const canceledBackorderQty = summaryRows.reduce((sum: number, row: any) => sum + Number(row?.backorder_canceled_qty || 0), 0);
+    const allocatedTotalQty = summaryRows.reduce((sum: number, row: any) => sum + Number(row?.allocated_qty_total || 0), 0);
     if (status === 'canceled') {
       if (allocatedTotalQty > 0 || canceledBackorderQty > 0) {
         return {
@@ -150,12 +154,13 @@ export default function OrderDetailPage() {
   const openMissingModal = () => {
     if (!order) return;
     // Pre-fill eligible items (qty > 0)
-    const items = (order.OrderItems || []).map((item: unknown) => ({
-      product_id: item.product_id,
+    const rows = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+    const items = rows.map((item: any) => ({
+      product_id: String(item?.product_id || ''),
       qty_missing: 0,
-      max_qty: Number(item.qty),
-      name: item.Product?.name || 'Produk'
-    }));
+      max_qty: Number(item?.qty || 0),
+      name: String(item?.Product?.name || 'Produk')
+    })).filter((row: { product_id: string }) => Boolean(row.product_id));
     setMissingItems(items);
     setMissingNote('');
     setShowMissingModal(true);
@@ -193,7 +198,10 @@ export default function OrderDetailPage() {
       loadOrder(); // Refresh status/issues
     } catch (error: unknown) {
       console.error('Failed to report missing item:', error);
-      alert(error.response?.data?.message || 'Gagal mengirim laporan.');
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal mengirim laporan.')
+        : 'Gagal mengirim laporan.';
+      alert(message);
     } finally {
       setSubmittingMissing(false);
     }
@@ -219,7 +227,7 @@ export default function OrderDetailPage() {
   const timeline = Array.isArray(order?.timeline) ? order.timeline : [];
   const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
   const hasAnyAllocationData = allocations.length > 0;
-  const allocatedQtyByProduct = allocations.reduce((acc: Record<string, number>, allocation: unknown) => {
+  const allocatedQtyByProduct = allocations.reduce((acc: Record<string, number>, allocation: any) => {
     const productId = String(allocation?.product_id || '');
     if (!productId) return acc;
     acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
@@ -227,8 +235,8 @@ export default function OrderDetailPage() {
   }, {});
   const allocatedQtyByItemId = (() => {
     const result: Record<string, number> = {};
-    const itemsByProduct = new Map<string, unknown[]>();
-    orderItems.forEach((item: unknown) => {
+    const itemsByProduct = new Map<string, any[]>();
+    orderItems.forEach((item: any) => {
       const productId = String(item?.product_id || '');
       if (!productId) return;
       const rows = itemsByProduct.get(productId) || [];
@@ -237,8 +245,8 @@ export default function OrderDetailPage() {
     });
     itemsByProduct.forEach((rows, productId) => {
       let remaining = Number(allocatedQtyByProduct[productId] || 0);
-      const sortedRows = [...rows].sort((a: unknown, b: unknown) => String(a?.id || '').localeCompare(String(b?.id || '')));
-      sortedRows.forEach((row: unknown) => {
+      const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+      sortedRows.forEach((row: any) => {
         const qty = Number(row?.qty || 0);
         const allocated = Math.max(0, Math.min(remaining, qty));
         result[String(row?.id || '')] = allocated;
@@ -247,7 +255,7 @@ export default function OrderDetailPage() {
     });
     return result;
   })();
-  const summaryByOrderItemId = itemSummaries.reduce((acc: Record<string, unknown>, row: unknown) => {
+  const summaryByOrderItemId = itemSummaries.reduce((acc: Record<string, any>, row: any) => {
     const key = String(row?.order_item_id || '');
     if (!key) return acc;
     acc[key] = row;
@@ -263,7 +271,7 @@ export default function OrderDetailPage() {
     if (eventType === 'order_status_changed') return 'Status order berubah';
     return eventType || 'Event';
   };
-  const itemNameById = orderItems.reduce((acc: Record<string, string>, item: unknown) => {
+  const itemNameById = orderItems.reduce((acc: Record<string, string>, item: any) => {
     const key = String(item?.id || '');
     if (!key) return acc;
     acc[key] = String(item?.Product?.name || 'Produk');
@@ -431,18 +439,18 @@ export default function OrderDetailPage() {
           </div>
         )}
 
-        {order.Returs && order.Returs.length > 0 && (
+        {Array.isArray(order.Returs) && order.Returs.length > 0 && (
           <div className="bg-amber-50 border border-amber-100 rounded-[24px] p-5 space-y-3">
             <div className="flex items-center gap-2">
               <RotateCcw size={16} className="text-amber-600" />
               <h3 className="text-xs font-black uppercase tracking-widest text-amber-700">Informasi Retur</h3>
             </div>
-            {order.Returs.map((retur: unknown) => (
-              <div key={retur.id} className="bg-white/50 rounded-xl p-3 border border-amber-200">
+            {order.Returs.map((retur: any, idx: number) => (
+              <div key={String(retur?.id || idx)} className="bg-white/50 rounded-xl p-3 border border-amber-200">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-[11px] font-black text-slate-800">
-                      Retur {retur.qty} unit
+                      Retur {Number(retur?.qty || 0)} unit
                     </p>
                     <p className="text-[10px] text-slate-500 mt-0.5">Diajukan: {formatDateTime(retur.createdAt)}</p>
                   </div>
@@ -477,26 +485,29 @@ export default function OrderDetailPage() {
           </div>
         )}
 
-        {order.Children && order.Children.length > 0 && (
+        {Array.isArray(order.Children) && order.Children.length > 0 && (
           <div className="bg-indigo-50 border border-indigo-100 rounded-[24px] p-5 space-y-3">
             <div className="flex items-center gap-2">
               <Clock3 size={16} className="text-indigo-600" />
               <h3 className="text-xs font-black uppercase tracking-widest text-indigo-700">Backorder / Pesanan Lanjutan</h3>
             </div>
             <p className="text-xs text-slate-600">Sebagian barang dikirim kemudian karena stok habis. Sisa barang ada di pesanan berikut:</p>
-            {order.Children.map((child: unknown) => (
+            {order.Children.map((child: any, idx: number) => {
+              const childId = String(child?.id || '');
+              const hrefId = childId || orderId;
+              return (
               <Link
-                key={child.id}
-                href={`/orders/${child.id}`}
+                key={childId || idx}
+                href={`/orders/${hrefId}`}
                 className="flex items-center justify-between bg-white/80 border border-indigo-200 p-3 rounded-2xl hover:bg-white transition-colors group"
               >
                 <div>
-                  <p className="text-[11px] font-black text-slate-800 uppercase">Order #{child.id.slice(0, 8)}...</p>
-                  <p className="text-[10px] text-slate-500">Status: <span className="font-bold">{child.status}</span></p>
+                  <p className="text-[11px] font-black text-slate-800 uppercase">Order #{childId ? `${childId.slice(0, 8)}...` : '-'}</p>
+                  <p className="text-[10px] text-slate-500">Status: <span className="font-bold">{String(child?.status || '-')}</span></p>
                 </div>
                 <ArrowRight size={16} className="text-indigo-400 group-hover:text-indigo-600 transition-colors" />
               </Link>
-            ))}
+            );})}
           </div>
         )}
         {/* End: Split Order Info */}
@@ -504,7 +515,7 @@ export default function OrderDetailPage() {
         <div className="space-y-2">
 
           <h2 className="text-sm font-bold text-slate-900">Item Pesanan</h2>
-          {orderItems.map((item: unknown) => {
+          {orderItems.map((item: any) => {
             const summary = summaryByOrderItemId[String(item?.id || '')] || null;
             const orderStatus = String(order.status || '').toLowerCase();
             const sentQtyRaw = Number(allocatedQtyByItemId[String(item?.id || '')] || 0);
@@ -518,9 +529,10 @@ export default function OrderDetailPage() {
               : sentQtyRaw;
             const progressLabel = isDeliveredStatus ? 'Diterima' : isShippingStatus ? 'Dikirim' : 'Dialokasikan';
 
-            const isPartial = isAllocatedStatus && sentQty < item.qty;
-            const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * Number(item.qty || 0));
-            const orderedOriginal = Number(summary?.ordered_qty_original ?? item.qty ?? 0);
+            const itemQty = Number(item?.qty || 0);
+            const isPartial = isAllocatedStatus && sentQty < itemQty;
+            const effectivePrice = isAllocatedStatus ? (Number(item.price_at_purchase || 0) * sentQty) : (Number(item.price_at_purchase || 0) * itemQty);
+            const orderedOriginal = Number(summary?.ordered_qty_original ?? itemQty ?? 0);
             const allocatedTotal = Number(summary?.allocated_qty_total ?? sentQty ?? 0);
             const invoicedTotal = Number(summary?.invoiced_qty_total ?? 0);
             const backorderOpen = Number(summary?.backorder_open_qty ?? Math.max(0, orderedOriginal - allocatedTotal));
@@ -532,7 +544,7 @@ export default function OrderDetailPage() {
                   <div>
                     <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
                     <div className="flex gap-4 mt-1">
-                      <p className="text-xs text-slate-500">Qty Aktif: <span className="font-bold text-slate-700">{item.qty}</span></p>
+                      <p className="text-xs text-slate-500">Qty Aktif: <span className="font-bold text-slate-700">{itemQty}</span></p>
                       {isAllocatedStatus ? (
                         <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
                           {progressLabel}: {sentQty}
@@ -544,7 +556,7 @@ export default function OrderDetailPage() {
                     <p className="text-sm font-bold text-slate-900">{formatCurrency(effectivePrice)}</p>
                     {isPartial && isAllocatedStatus && (
                       <p className="text-[10px] text-amber-600 font-bold">
-                        {item.qty - sentQty} {isDeliveredStatus ? 'Belum Diterima' : isShippingStatus ? 'Belum Dikirim' : 'Belum Tersedia (Backorder)'}
+                        {Math.max(0, itemQty - sentQty)} {isDeliveredStatus ? 'Belum Diterima' : isShippingStatus ? 'Belum Dikirim' : 'Belum Tersedia (Backorder)'}
                       </p>
                     )}
                   </div>
@@ -583,7 +595,7 @@ export default function OrderDetailPage() {
               Belum ada histori tindakan yang tercatat.
             </div>
           )}
-          {timeline.map((evt: unknown) => {
+          {timeline.map((evt: any) => {
             const eventType = String(evt?.event_type || '');
             const orderItemId = String(evt?.order_item_id || '');
             const payload = evt?.payload || {};
@@ -615,7 +627,7 @@ export default function OrderDetailPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <button onClick={loadOrder} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm">Refresh Status</button>
-          {['delivered', 'completed'].includes(order.status) && (
+          {['delivered', 'completed'].includes(String(order.status || '')) && (
             <>
               <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">
                 <AlertCircle size={14} /> Ajukan Retur

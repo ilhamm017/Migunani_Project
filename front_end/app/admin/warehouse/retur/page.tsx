@@ -425,7 +425,7 @@ export default function WarehouseReturPage() {
                                                         </div>
                                                         <div className="pl-7 space-y-1">
                                                             <p className="text-[10px] text-indigo-600">Kurir: <span className="font-black underline">{selectedRetur.Courier?.name || 'Loading...'}</span></p>
-                                                            <p className="text-[10px] text-indigo-600">Refund: <span className="font-black">{formatCurrency(selectedRetur.refund_amount || 0)}</span></p>
+                                                            <p className="text-[10px] text-indigo-600">Refund: <span className="font-black">{formatCurrency(Number(selectedRetur.refund_amount || 0))}</span></p>
                                                         </div>
                                                     </div>
                                                 </div>
