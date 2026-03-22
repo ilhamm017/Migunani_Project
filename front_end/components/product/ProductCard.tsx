@@ -20,11 +20,9 @@ export default function ProductCard({
     name,
     price,
     imageUrl,
-    stock,
+    stock: _stock,
     onAddToCart,
 }: ProductCardProps) {
-    const stockValue = Number.isFinite(Number(stock)) ? Number(stock) : null;
-    const isOutOfStock = stockValue !== null && stockValue <= 0;
     const normalizedImageUrl = normalizeProductImageUrl(imageUrl);
 
     return (
@@ -45,13 +43,6 @@ export default function ProductCard({
                             <ShoppingCart size={32} />
                         </div>
                     )}
-
-                    {/* Stock Badges */}
-                    {isOutOfStock && (
-                        <div className="absolute top-2 right-2 bg-amber-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">
-                            Preorder
-                        </div>
-                    )}
                 </div>
 
                 <div className="p-3">
@@ -67,10 +58,7 @@ export default function ProductCard({
 
                     {/* Add to Cart Button */}
                     <button
-                        className={`w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 ${isOutOfStock
-                            ? 'bg-amber-500 text-white shadow-sm shadow-amber-200'
-                            : 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
-                            }`}
+                        className="w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 bg-emerald-600 text-white shadow-sm shadow-emerald-200"
                         onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
@@ -80,7 +68,7 @@ export default function ProductCard({
                         }}
                     >
                         <ShoppingCart size={12} className="inline mr-1" />
-                        {isOutOfStock ? 'Preorder' : 'Tambah'}
+                        Tambah
                     </button>
                 </div>
             </div>

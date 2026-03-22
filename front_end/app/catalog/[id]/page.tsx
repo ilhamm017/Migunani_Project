@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ShoppingCart, Package, ShieldCheck, Minus, Plus } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, Package, Minus, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
@@ -129,8 +129,6 @@ export default function ProductDetailPage() {
     );
   }
 
-  const outOfStock = (product.stock_quantity || 0) <= 0;
-
   return (
     <div className="p-6 space-y-5">
       <button
@@ -156,18 +154,9 @@ export default function ProductDetailPage() {
             <p className="text-sm font-black text-emerald-700">{tierPriceText}</p>
           </div>
           <div className="bg-slate-50 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
-            <p className="text-[11px] text-slate-500">Status Stok</p>
-            <p className={`text-sm font-black ${outOfStock ? 'text-rose-600' : 'text-emerald-700'}`}>
-              {outOfStock ? 'Preorder (Backorder)' : 'Ready Stock'}
-            </p>
+            <p className="text-[11px] text-slate-500">Ketersediaan</p>
+            <p className="text-sm font-black text-emerald-700">Tersedia</p>
           </div>
-        </div>
-
-        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 flex items-start gap-2">
-          <ShieldCheck size={16} className="text-emerald-600 mt-0.5" />
-          <p className="text-xs text-emerald-700">
-            Jika stok habis, pesanan tetap bisa dibuat dan otomatis masuk backorder sampai stok tersedia.
-          </p>
         </div>
 
         <div>
@@ -206,7 +195,7 @@ export default function ProductDetailPage() {
           className="w-full py-4 rounded-2xl text-sm font-black uppercase transition-all bg-emerald-600 text-white shadow-lg shadow-emerald-200 disabled:opacity-60"
         >
           <ShoppingCart size={16} className="inline mr-2" />
-          {adding ? 'Menambahkan...' : outOfStock ? 'Preorder ke Keranjang' : 'Tambah ke Keranjang'}
+          {adding ? 'Menambahkan...' : 'Tambah ke Keranjang'}
         </button>
       </div>
     </div>

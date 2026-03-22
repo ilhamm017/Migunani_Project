@@ -565,27 +565,65 @@ export const parseProductsExportRows = (
     return rows;
 };
 
-export const splitCategoryNames = (rawCategoryName: string): string[] => {
-    const source = rawCategoryName.trim() || 'Uncategorized';
-    const normalized = source
+const normalizeCategoryToken = (value: string): string => {
+    return value
+        .replace(/\u00A0/g, ' ')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/:\s*$/, '')
+        .trim();
+};
+
+const splitCategoryTokensLoose = (rawValue: string): string[] => {
+    const normalized = rawValue
         .replace(/\s+(dan|and)\s+/gi, ',')
+        .replace(/[\r\n\t]+/g, ',')
         .replace(/[&;/+|]/g, ',');
 
-    const names = normalized
+    const tokens = normalized
         .split(',')
-        .map((item) => item.trim())
+        .map((item) => normalizeCategoryToken(item))
         .filter(Boolean);
 
-    if (names.length === 0) return ['Uncategorized'];
+    if (tokens.length === 0) return [];
 
     const uniqueNames = new Map<string, string>();
-    names.forEach((name) => {
+    tokens.forEach((name) => {
         const key = name.toLowerCase();
         if (!uniqueNames.has(key)) {
             uniqueNames.set(key, name);
         }
     });
     return [...uniqueNames.values()];
+};
+
+export const splitCategoryNames = (rawCategoryName: string): string[] => {
+    const source = normalizeCategoryToken(rawCategoryName);
+    if (!source) return ['Uncategorized'];
+
+    // Support hierarchical-like inputs such as:
+    // - "BAN LUAR: IRC"
+    // - "BAN LUAR:\nIRC"
+    // - "BAN LUAR: IRC, ASPIRA"
+    // We treat the left side as primary category, and the right side as additional tags.
+    const hierarchicalMatch = source.match(/^(.+?)\s*:\s*(.+)$/s);
+    if (hierarchicalMatch) {
+        const primary = normalizeCategoryToken(hierarchicalMatch[1]);
+        const rest = normalizeCategoryToken(hierarchicalMatch[2]);
+        const secondary = splitCategoryTokensLoose(rest);
+        const combined = [primary, ...secondary].map((name) => normalizeCategoryToken(name)).filter(Boolean);
+        if (combined.length === 0) return ['Uncategorized'];
+
+        const uniqueNames = new Map<string, string>();
+        combined.forEach((name) => {
+            const key = name.toLowerCase();
+            if (!uniqueNames.has(key)) uniqueNames.set(key, name);
+        });
+        return [...uniqueNames.values()];
+    }
+
+    const tokens = splitCategoryTokensLoose(source);
+    return tokens.length > 0 ? tokens : ['Uncategorized'];
 };
 
 export const getOrCreateCategoryIds = async (rawCategoryName: string, transaction: Transaction): Promise<number[]> => {
@@ -1225,7 +1263,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
 
 
 

@@ -396,10 +396,20 @@ export const warehouseColumns: ColumnDef<ProductRow>[] = [
         id: 'category_name',
         header: () => <span className="font-bold text-slate-600 text-[11px] uppercase tracking-wider">Kategori</span>,
         cell: ({ row }) => {
-            const fallback = row.original.Category?.name;
-            const primary = row.original.Categories?.[0]?.name;
+            const primary = row.original.Category?.name?.trim();
+            const extraNames = (row.original.Categories || [])
+                .map((item) => item?.name?.trim())
+                .filter((name): name is string => Boolean(name) && name !== primary);
+            const fallback = extraNames[0];
             return (
-                <span className="text-xs font-semibold text-slate-700">{primary || fallback || '—'}</span>
+                <div className="min-w-0">
+                    <div className="text-xs font-semibold text-slate-700 truncate">{primary || fallback || '—'}</div>
+                    {primary && extraNames.length > 0 ? (
+                        <div className="text-[10px] font-bold text-slate-400 truncate" title={extraNames.join(', ')}>
+                            {extraNames.join(', ')}
+                        </div>
+                    ) : null}
+                </div>
             );
         },
         size: 130,

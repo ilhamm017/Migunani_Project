@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
-import { Product, Category, StockMutation } from '../models';
+import { Product, StockMutation } from '../models';
 import sequelize from '../config/database';
+import { getOrCreateCategoryIds, syncProductCategories } from '../controllers/inventory/utils';
 
 async function importExcel(filePath: string) {
     const workbook = new ExcelJS.Workbook();
@@ -42,15 +43,9 @@ async function importExcel(filePath: string) {
             const name = varian ? `${namaBarang} ${varian}` : namaBarang;
             if (!name) continue; // Skip empty rows
 
-            // Logic: Category
-            let categoryId: number = 0;
-            if (kategori) {
-                let category = await Category.findOne({ where: { name: kategori }, transaction });
-                if (!category) {
-                    category = await Category.create({ name: kategori }, { transaction });
-                }
-                categoryId = category.id;
-            }
+            // Logic: Category (supports multi-category strings e.g. "BAN LUAR: IRC")
+            const categoryIds = await getOrCreateCategoryIds(kategori || 'Uncategorized', transaction);
+            const categoryId = categoryIds[0];
 
             // Logic: Prices (Clean currency)
             const base_price = typeof hargaBeliRaw === 'number' ? hargaBeliRaw : parseFloat(String(hargaBeliRaw).replace(/[^0-9.-]+/g, "")) || 0;
@@ -84,6 +79,7 @@ async function importExcel(filePath: string) {
                     category_id: categoryId,
                     status: (statusRaw?.toLowerCase() === 'active') ? 'active' : 'inactive'
                 }, { transaction });
+                await syncProductCategories(product.id, categoryIds, transaction);
 
                 // Initial Stock Mutation
                 if (stock > 0) {
