@@ -20,10 +20,11 @@ export default function ProductCard({
     name,
     price,
     imageUrl,
-    stock = 0,
+    stock,
     onAddToCart,
 }: ProductCardProps) {
-    const isOutOfStock = stock <= 0;
+    const stockValue = Number.isFinite(Number(stock)) ? Number(stock) : null;
+    const isOutOfStock = stockValue !== null && stockValue <= 0;
     const normalizedImageUrl = normalizeProductImageUrl(imageUrl);
 
     return (
@@ -47,8 +48,8 @@ export default function ProductCard({
 
                     {/* Stock Badges */}
                     {isOutOfStock && (
-                        <div className="absolute top-2 right-2 bg-rose-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">
-                            Habis
+                        <div className="absolute top-2 right-2 bg-amber-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">
+                            Preorder
                         </div>
                     )}
                 </div>
@@ -67,20 +68,19 @@ export default function ProductCard({
                     {/* Add to Cart Button */}
                     <button
                         className={`w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 ${isOutOfStock
-                            ? 'bg-slate-100 text-slate-500'
+                            ? 'bg-amber-500 text-white shadow-sm shadow-amber-200'
                             : 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
                             }`}
-                        disabled={isOutOfStock}
                         onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            if (onAddToCart && !isOutOfStock) {
+                            if (onAddToCart) {
                                 onAddToCart(id);
                             }
                         }}
                     >
                         <ShoppingCart size={12} className="inline mr-1" />
-                        {isOutOfStock ? 'Habis' : 'Tambah'}
+                        {isOutOfStock ? 'Preorder' : 'Tambah'}
                     </button>
                 </div>
             </div>

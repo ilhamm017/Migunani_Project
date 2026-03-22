@@ -283,7 +283,7 @@ export default function CheckoutPage() {
       const backendMessage = typeof (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message === 'string'
         ? String((error as { response?: { data?: { message?: unknown } } }).response?.data?.message)
         : null;
-      setCheckoutError(backendMessage || 'Checkout gagal. Pastikan produk valid dan stok tersedia.');
+      setCheckoutError(backendMessage || 'Checkout gagal. Pastikan produk valid.');
     } finally {
       setLoading(false);
     }

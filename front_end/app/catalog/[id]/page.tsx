@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ShoppingCart, Package, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, Package, ShieldCheck, Minus, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
@@ -46,6 +46,7 @@ export default function ProductDetailPage() {
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [qty, setQty] = useState(1);
 
   useEffect(() => {
     const load = async () => {
@@ -91,14 +92,15 @@ export default function ProductDetailPage() {
 
     try {
       setAdding(true);
+      const normalizedQty = Math.max(1, Math.trunc(Number(qty) || 1));
       addItem({
         id: product.id,
         productId: product.id,
         productName: product.name,
         price: product.price,
-        quantity: 1,
+        quantity: normalizedQty,
       });
-      await api.cart.addToCart({ productId: product.id, quantity: 1 });
+      await api.cart.addToCart({ productId: product.id, quantity: normalizedQty });
       router.push('/cart');
     } catch (error) {
       console.error('Add to cart failed:', error);
@@ -156,14 +158,16 @@ export default function ProductDetailPage() {
           <div className="bg-slate-50 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
             <p className="text-[11px] text-slate-500">Status Stok</p>
             <p className={`text-sm font-black ${outOfStock ? 'text-rose-600' : 'text-emerald-700'}`}>
-              {outOfStock ? 'Stok Habis' : 'Tersedia'}
+              {outOfStock ? 'Preorder (Backorder)' : 'Ready Stock'}
             </p>
           </div>
         </div>
 
         <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 flex items-start gap-2">
           <ShieldCheck size={16} className="text-emerald-600 mt-0.5" />
-          <p className="text-xs text-emerald-700">Harga akan otomatis menyesuaikan tier pelanggan saat login (regular/gold/platinum).</p>
+          <p className="text-xs text-emerald-700">
+            Jika stok habis, pesanan tetap bisa dibuat dan otomatis masuk backorder sampai stok tersedia.
+          </p>
         </div>
 
         <div>
@@ -171,13 +175,38 @@ export default function ProductDetailPage() {
           <p className="text-sm text-slate-600 leading-relaxed">{product.description || 'Belum ada deskripsi teknis produk.'}</p>
         </div>
 
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
+          <div>
+            <p className="text-[11px] text-slate-500">Jumlah</p>
+            <p className="text-sm font-black text-slate-900">{qty}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setQty((prev) => Math.max(1, Number(prev || 1) - 1))}
+              className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 active:scale-95 transition-all"
+              aria-label="Kurangi jumlah"
+            >
+              <Minus size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setQty((prev) => Math.max(1, Number(prev || 1) + 1))}
+              className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 active:scale-95 transition-all"
+              aria-label="Tambah jumlah"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+        </div>
+
         <button
           onClick={handleAddToCart}
-          disabled={outOfStock || adding}
-          className={`w-full py-4 rounded-2xl text-sm font-black uppercase transition-all ${outOfStock ? 'bg-slate-100 text-slate-500' : 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'}`}
+          disabled={adding}
+          className="w-full py-4 rounded-2xl text-sm font-black uppercase transition-all bg-emerald-600 text-white shadow-lg shadow-emerald-200 disabled:opacity-60"
         >
           <ShoppingCart size={16} className="inline mr-2" />
-          {outOfStock ? 'Stok Habis' : adding ? 'Menambahkan...' : 'Tambah ke Keranjang'}
+          {adding ? 'Menambahkan...' : outOfStock ? 'Preorder ke Keranjang' : 'Tambah ke Keranjang'}
         </button>
       </div>
     </div>
