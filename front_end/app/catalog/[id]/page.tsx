@@ -4,16 +4,19 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, ShoppingCart, Package, Minus, Plus } from 'lucide-react';
+import Image from 'next/image';
 import { api } from '@/lib/api';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency } from '@/lib/utils';
+import { normalizeProductImageUrl } from '@/lib/image';
 
 interface ProductDetail {
   id: string;
   name: string;
   sku?: string;
   price: number;
+  imageUrl?: string;
   stock_quantity?: number;
   description?: string;
   unit?: string;
@@ -29,6 +32,7 @@ type ProductApiDetail = {
   name: string;
   sku?: string;
   price?: number;
+  image_url?: string | null;
   stock_quantity?: number;
   description?: string;
   unit?: string;
@@ -47,6 +51,7 @@ export default function ProductDetailPage() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [qty, setQty] = useState(1);
+  const normalizedImageUrl = useMemo(() => normalizeProductImageUrl(product?.imageUrl), [product?.imageUrl]);
 
   useEffect(() => {
     const load = async () => {
@@ -59,6 +64,7 @@ export default function ProductDetailPage() {
           name: p.name,
           sku: p.sku,
           price: Number(p.price || 0),
+          imageUrl: p.image_url ? String(p.image_url) : undefined,
           stock_quantity: Number(p.stock_quantity || 0),
           description: p.description,
           unit: p.unit,
@@ -139,8 +145,19 @@ export default function ProductDetailPage() {
       </button>
 
       <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm space-y-5">
-        <div className="w-full h-52 rounded-3xl bg-slate-100 flex items-center justify-center">
-          <Package size={42} className="text-slate-400" />
+        <div className="relative w-full h-52 rounded-3xl bg-slate-100 overflow-hidden flex items-center justify-center">
+          {normalizedImageUrl ? (
+            <Image
+              src={normalizedImageUrl}
+              alt={product.name}
+              fill
+              className="object-contain"
+              sizes="(max-width: 768px) 100vw, 640px"
+              priority
+            />
+          ) : (
+            <Package size={42} className="text-slate-400" />
+          )}
         </div>
 
         <div>
