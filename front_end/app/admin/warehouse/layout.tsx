@@ -39,7 +39,7 @@ export default function WarehouseDashboardLayout({ children }: { children: React
     return (
         <div className="warehouse-theme h-[calc(100dvh-var(--admin-header-height,72px)-var(--admin-bottom-nav-height,5rem)-0.5rem)] flex flex-col overflow-hidden">
             {/* Top Header Bar */}
-            <header className="z-20 bg-slate-900/95 text-white shadow-lg backdrop-blur">
+            <header className="relative z-30 bg-slate-900/95 text-white shadow-lg backdrop-blur">
                 <div className="flex items-center justify-between px-4 md:px-6 py-3">
                     <div className="flex items-center gap-3">
                         <Link
@@ -64,11 +64,10 @@ export default function WarehouseDashboardLayout({ children }: { children: React
                 </div>
             </header>
 
-            {/* Spacing under header */}
-            <div className="h-2 md:h-3 flex-shrink-0" />
-
             {/* Main Content */}
-            <main className={`flex-1 min-h-0 ${hasInternalPageScroll ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+            <main
+                className={`relative z-0 flex-1 min-h-0 ${hasInternalPageScroll ? 'overflow-hidden' : 'overflow-y-auto'}`}
+            >
                 {children}
             </main>
         </div>
