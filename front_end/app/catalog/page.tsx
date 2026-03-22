@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense, useRef, useCallback } from 'react';
+import { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Search, X, SlidersHorizontal } from 'lucide-react';
 import ProductCard from '@/components/product/ProductCard';
@@ -26,6 +26,9 @@ type ApiCatalogRow = {
 };
 
 const CATALOG_PAGE_SIZE = 20;
+const CATALOG_STATE_PREFIX = 'catalog_state_v1:';
+const CATALOG_SCROLL_PREFIX = 'catalog_scroll_v1:';
+const CATALOG_STATE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 
 // Filter categories
 const filterCategories: ChipItem[] = [
@@ -37,6 +40,20 @@ const filterCategories: ChipItem[] = [
     { id: 'lampu', label: 'Lampu' },
     { id: 'aksesoris', label: 'Aksesoris' },
 ];
+
+type CatalogPersistedState = {
+    savedAt: number;
+    products: Product[];
+    loading: boolean;
+    loadingMore: boolean;
+    searchQuery: string;
+    appliedSearch: string;
+    showFilters: boolean;
+    activeCategory: string;
+    currentPage: number;
+    totalPages: number;
+    hasMore: boolean;
+};
 
 function CatalogContent() {
     const searchParams = useSearchParams();
@@ -53,6 +70,18 @@ function CatalogContent() {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [hasMore, setHasMore] = useState(false);
+
+    const cacheKey = useMemo(() => {
+        const raw = searchParams?.toString() || '';
+        return raw.trim() ? raw.trim() : '__noquery__';
+    }, [searchParams]);
+
+    const stateKey = `${CATALOG_STATE_PREFIX}${cacheKey}`;
+    const scrollKey = `${CATALOG_SCROLL_PREFIX}${cacheKey}`;
+
+    const skipInitialLoadRef = useRef(false);
+    const pendingScrollRestoreRef = useRef<number | null>(null);
+    const snapshotRef = useRef<CatalogPersistedState | null>(null);
 
     const mapApiProduct = (item: ApiCatalogRow): Product => ({
         id: String(item.id),
@@ -103,15 +132,106 @@ function CatalogContent() {
         }
     }, [appliedSearch]);
 
+    const persistSnapshot = useCallback(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const snapshot = snapshotRef.current;
+            if (!snapshot) return;
+            sessionStorage.setItem(stateKey, JSON.stringify(snapshot));
+            sessionStorage.setItem(scrollKey, JSON.stringify({ y: window.scrollY, savedAt: Date.now() }));
+        } catch (error) {
+            console.warn('Failed to persist catalog state:', error);
+        }
+    }, [scrollKey, stateKey]);
+
     useEffect(() => {
+        snapshotRef.current = {
+            savedAt: Date.now(),
+            products,
+            loading,
+            loadingMore,
+            searchQuery,
+            appliedSearch,
+            showFilters,
+            activeCategory,
+            currentPage,
+            totalPages,
+            hasMore,
+        };
+    }, [products, loading, loadingMore, searchQuery, appliedSearch, showFilters, activeCategory, currentPage, totalPages, hasMore]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const rawState = sessionStorage.getItem(stateKey);
+            if (rawState) {
+                const parsed = JSON.parse(rawState) as Partial<CatalogPersistedState>;
+                const savedAt = Number(parsed?.savedAt || 0);
+                const stillValid = savedAt > 0 && Date.now() - savedAt <= CATALOG_STATE_TTL_MS;
+                if (stillValid && Array.isArray(parsed.products) && parsed.products.length > 0) {
+                    setProducts(parsed.products);
+                    setLoading(false);
+                    setLoadingMore(false);
+                    setSearchQuery(String(parsed.searchQuery ?? ''));
+                    setAppliedSearch(String(parsed.appliedSearch ?? ''));
+                    setShowFilters(Boolean(parsed.showFilters === true));
+                    setActiveCategory(String(parsed.activeCategory ?? 'all'));
+                    setCurrentPage(Number(parsed.currentPage || 1));
+                    setTotalPages(Number(parsed.totalPages || 1));
+                    setHasMore(Boolean(parsed.hasMore === true));
+                    skipInitialLoadRef.current = true;
+                }
+            }
+
+            const rawScroll = sessionStorage.getItem(scrollKey);
+            if (rawScroll) {
+                const parsed = JSON.parse(rawScroll) as { y?: unknown; savedAt?: unknown };
+                const y = Number(parsed?.y);
+                const savedAt = Number(parsed?.savedAt || 0);
+                const stillValid = savedAt > 0 && Date.now() - savedAt <= CATALOG_STATE_TTL_MS;
+                if (stillValid && Number.isFinite(y) && y > 0) {
+                    pendingScrollRestoreRef.current = y;
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to restore catalog state:', error);
+        }
+
+        const onPageHide = () => persistSnapshot();
+        window.addEventListener('pagehide', onPageHide);
+        return () => {
+            window.removeEventListener('pagehide', onPageHide);
+            persistSnapshot();
+        };
+    }, [persistSnapshot, scrollKey, stateKey]);
+
+    useEffect(() => {
+        if (skipInitialLoadRef.current) {
+            skipInitialLoadRef.current = false;
+            return;
+        }
         loadProducts(1, false);
     }, [appliedSearch, loadProducts]);
 
     useEffect(() => {
         const fromUrl = searchParams?.get('search') || '';
-        setSearchQuery(fromUrl);
-        setAppliedSearch(fromUrl);
-    }, [searchParams]);
+        const hasSearchParam = Boolean(searchParams?.has('search'));
+        if (hasSearchParam && fromUrl !== appliedSearch) {
+            setSearchQuery(fromUrl);
+            setAppliedSearch(fromUrl);
+        }
+    }, [appliedSearch, searchParams]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const y = pendingScrollRestoreRef.current;
+        if (!Number.isFinite(Number(y)) || !y) return;
+        if (loading) return;
+        pendingScrollRestoreRef.current = null;
+        requestAnimationFrame(() => {
+            window.scrollTo(0, Number(y));
+        });
+    }, [loading, products.length]);
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
