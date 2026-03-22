@@ -86,7 +86,8 @@ export const updateCartItem = asyncWrapper(async (req: Request, res: Response) =
     const item = await CartItem.findByPk(String(id), { include: [Cart] });
 
     // Verify ownership
-    if (!item || (item as any).Cart.user_id !== userId) {
+    const ownerUserId = String((item as any)?.Cart?.user_id || '');
+    if (!item || !ownerUserId || ownerUserId !== userId) {
         throw new CustomError('Item not found', 404);
     }
 
@@ -104,7 +105,8 @@ export const removeCartItem = asyncWrapper(async (req: Request, res: Response) =
     const userId = req.user!.id;
 
     const item = await CartItem.findByPk(String(id), { include: [Cart] });
-    if (!item || (item as any).Cart.user_id !== userId) {
+    const ownerUserId = String((item as any)?.Cart?.user_id || '');
+    if (!item || !ownerUserId || ownerUserId !== userId) {
         throw new CustomError('Item not found', 404);
     }
 

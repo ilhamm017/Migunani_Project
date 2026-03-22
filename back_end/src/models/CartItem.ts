@@ -2,7 +2,8 @@ import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
 
 interface CartItemAttributes {
-    id: bigint;
+    // Stored as BIGINT in DB; represent as string in JS to avoid JSON BigInt serialization issues.
+    id: string;
     cart_id: string; // UUID
     product_id: string; // UUID
     qty: number;
@@ -13,7 +14,7 @@ interface CartItemAttributes {
 interface CartItemCreationAttributes extends Optional<CartItemAttributes, 'id'> { }
 
 class CartItem extends Model<CartItemAttributes, CartItemCreationAttributes> implements CartItemAttributes {
-    declare id: bigint;
+    declare id: string;
     declare cart_id: string;
     declare product_id: string;
     declare qty: number;
@@ -28,6 +29,11 @@ CartItem.init(
             type: DataTypes.BIGINT,
             autoIncrement: true,
             primaryKey: true,
+            get() {
+                const value = this.getDataValue('id') as unknown;
+                if (value === null || value === undefined) return value as any;
+                return typeof value === 'bigint' ? value.toString() : String(value);
+            },
         },
         cart_id: {
             type: DataTypes.UUID,
