@@ -51,7 +51,25 @@ export default function ProductDetailPage() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [qty, setQty] = useState(1);
+  const [isZoomOpen, setIsZoomOpen] = useState(false);
   const normalizedImageUrl = useMemo(() => normalizeProductImageUrl(product?.imageUrl), [product?.imageUrl]);
+
+  useEffect(() => {
+    if (!isZoomOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsZoomOpen(false);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isZoomOpen]);
 
   useEffect(() => {
     const load = async () => {
@@ -145,7 +163,19 @@ export default function ProductDetailPage() {
       </button>
 
       <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm space-y-5">
-        <div className="relative w-full h-52 rounded-3xl bg-slate-100 overflow-hidden flex items-center justify-center">
+        <button
+          type="button"
+          onClick={() => {
+            if (!normalizedImageUrl) return;
+            setIsZoomOpen(true);
+          }}
+          className={[
+            "relative w-full h-52 rounded-3xl bg-slate-100 overflow-hidden flex items-center justify-center",
+            normalizedImageUrl ? "cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-emerald-600/60" : "cursor-default",
+          ].join(' ')}
+          aria-label={normalizedImageUrl ? "Perbesar gambar produk" : "Gambar produk tidak tersedia"}
+          disabled={!normalizedImageUrl}
+        >
           {normalizedImageUrl ? (
             <Image
               src={normalizedImageUrl}
@@ -158,7 +188,40 @@ export default function ProductDetailPage() {
           ) : (
             <Package size={42} className="text-slate-400" />
           )}
-        </div>
+        </button>
+
+        {isZoomOpen && normalizedImageUrl ? (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Zoom gambar produk"
+            onClick={() => setIsZoomOpen(false)}
+          >
+            <div
+              className="relative w-full max-w-4xl h-[70vh] sm:h-[80vh] rounded-2xl bg-black overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setIsZoomOpen(false)}
+                className="absolute top-3 right-3 z-10 rounded-xl bg-white/90 px-3 py-2 text-xs font-black text-slate-900 hover:bg-white focus:outline-none focus:ring-2 focus:ring-white/60"
+              >
+                Tutup
+              </button>
+
+              <div className="absolute inset-0 cursor-zoom-out">
+                <Image
+                  src={normalizedImageUrl}
+                  alt={product.name}
+                  fill
+                  className="object-contain"
+                  sizes="100vw"
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <h1 className="text-xl font-black text-slate-900">{product.name}</h1>
