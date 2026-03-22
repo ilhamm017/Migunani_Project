@@ -94,6 +94,28 @@ export default function PurchaseOrderPage() {
   const [result, setResult] = useState<CreatePOResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
 
+  const loadRestockSuggestions = useCallback(async () => {
+    try {
+      setLoadingSuggestions(true);
+      const res = await api.admin.inventory.getRestockSuggestions({
+        page: restockPage,
+        limit: restockLimit,
+        search: debouncedRestockSearch || undefined,
+        status: 'active'
+      });
+      setRestockSuggestions(res.data?.products || []);
+      setRestockTotal(Number(res.data?.total || 0));
+      setRestockTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
+    } catch (error) {
+      console.error('Failed to load restock suggestions', error);
+      setRestockSuggestions([]);
+      setRestockTotal(0);
+      setRestockTotalPages(1);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  }, [debouncedRestockSearch, restockLimit, restockPage]);
+
   // Initial Load
   useEffect(() => {
     if (allowed) {
@@ -141,28 +163,6 @@ export default function PurchaseOrderPage() {
       setLoadingSuppliers(false);
     }
   };
-
-  const loadRestockSuggestions = useCallback(async () => {
-    try {
-      setLoadingSuggestions(true);
-      const res = await api.admin.inventory.getRestockSuggestions({
-        page: restockPage,
-        limit: restockLimit,
-        search: debouncedRestockSearch || undefined,
-        status: 'active'
-      });
-      setRestockSuggestions(res.data?.products || []);
-      setRestockTotal(Number(res.data?.total || 0));
-      setRestockTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
-    } catch (error) {
-      console.error('Failed to load restock suggestions', error);
-      setRestockSuggestions([]);
-      setRestockTotal(0);
-      setRestockTotalPages(1);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  }, [debouncedRestockSearch, restockLimit, restockPage]);
 
   const loadBackorderSuggestions = async () => {
     try {
