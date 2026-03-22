@@ -790,7 +790,7 @@ export default function AdminOverviewPage() {
       { href: '/admin/warehouse/categories', title: 'Kategori', desc: 'Kelola kategori', icon: Layers, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/suppliers', title: 'Supplier', desc: 'Data vendor', icon: Truck, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor daftar PO', icon: Clock, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white', badge: 0 },
-      { href: '/admin/warehouse/import', title: 'Import CSV', desc: 'Update massal data', icon: FileSpreadsheet, tone: 'bg-lime-100 text-lime-700 group-hover:bg-lime-700 group-hover:text-white', badge: 0 },
+      { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data', icon: FileSpreadsheet, tone: 'bg-lime-100 text-lime-700 group-hover:bg-lime-700 group-hover:text-white', badge: 0 },
     ];
 
     return (
@@ -935,7 +935,7 @@ export default function AdminOverviewPage() {
         { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
         { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Input stok masuk.', icon: ShoppingCart },
         { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor pengadaan.', icon: Clock },
-        { href: '/admin/warehouse/import', title: 'Import CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
+        { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
       ]
     },
     {

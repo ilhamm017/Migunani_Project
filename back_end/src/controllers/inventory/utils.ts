@@ -26,9 +26,33 @@ export const REQUIRED_IMPORT_HEADERS = [
     'STOK',
     'TOTAL MODAL'
 ] as const;
+// Supports importing from a DB export-like worksheet (e.g. "Products") with snake_case headers.
+export const PRODUCT_EXPORT_IMPORT_HEADERS = [
+    'sku',
+    'barcode',
+    'name',
+    'description',
+    'image_url',
+    'base_price',
+    'price',
+    'unit',
+    'stock_quantity',
+    'allocated_quantity',
+    'min_stock',
+    'category_id',
+    'status',
+    'keterangan',
+    'tipe_modal',
+    'varian_harga',
+    'grosir',
+    'total_modal',
+    'bin_location',
+    'vehicle_compatibility'
+] as const;
 export const IMPORT_ERROR_RESPONSE_LIMIT = 200;
 
 export type ImportHeader = typeof REQUIRED_IMPORT_HEADERS[number];
+export type ProductExportImportHeader = typeof PRODUCT_EXPORT_IMPORT_HEADERS[number];
 
 export interface ImportFileRow {
     rowNumber: number;
@@ -73,12 +97,19 @@ export interface ImportPreviewRow {
     sku: string;
     name: string;
     category_name: string;
+    category_id?: number | null;
     unit: string;
     barcode: string;
     base_price: number | null;
     price: number | null;
     stock_quantity: number | null;
     status: 'active' | 'inactive';
+    description?: string | null;
+    image_url?: string | null;
+    allocated_quantity?: number | null;
+    min_stock?: number | null;
+    bin_location?: string | null;
+    vehicle_compatibility?: string | null;
     keterangan: string;
     tipe_modal: string;
     varian_harga_text: string;
@@ -107,12 +138,19 @@ export interface ImportNormalizedRow {
     skuKey: string;
     name: string;
     categoryName: string;
+    categoryId: number | null;
     unit: string;
     barcode: string | null;
     basePrice: number;
     price: number;
     stockQuantity: number;
     status: 'active' | 'inactive';
+    description?: string | null;
+    imageUrl?: string | null;
+    allocatedQuantity?: number | null;
+    minStock?: number | null;
+    binLocation?: string | null;
+    vehicleCompatibility?: string | null;
     keterangan: string | null;
     tipeModal: string | null;
     varianHarga: unknown | null;
@@ -222,6 +260,9 @@ export const resolveSkuAndNameFromLegacyRow = (namaBarangRaw: string, varianRaw:
 
 export const normalizeHeader = (value: string): string =>
     value.trim().replace(/\s+/g, ' ').toUpperCase();
+
+export const normalizeHeaderLoose = (value: string): string =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase();
 
 export const readCellText = (value: unknown): string => {
     if (value === null || value === undefined) return '';
@@ -372,7 +413,7 @@ export const loadWorkbookFromPath = async (filePath: string): Promise<ExcelJS.Wo
 };
 
 export const getImportWorksheet = (workbook: ExcelJS.Workbook): ExcelJS.Worksheet => {
-    const worksheet = workbook.getWorksheet('Barang') ?? workbook.worksheets[0];
+    const worksheet = workbook.getWorksheet('Barang') ?? workbook.getWorksheet('Products') ?? workbook.worksheets[0];
     if (!worksheet) {
         throw new Error('Worksheet tidak ditemukan pada file import');
     }
@@ -401,6 +442,21 @@ export const resolveHeaderMap = (worksheet: ExcelJS.Worksheet): Record<ImportHea
         acc[header] = colNumber;
         return acc;
     }, {} as Record<ImportHeader, number>);
+};
+
+export const resolveHeaderMapLoose = (worksheet: ExcelJS.Worksheet): Record<string, number> => {
+    const headerRow = worksheet.getRow(1);
+    const map = new Map<string, number>();
+
+    headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const headerName = normalizeHeaderLoose(readCellText(cell.value));
+        if (headerName) map.set(headerName, colNumber);
+    });
+
+    return [...map.entries()].reduce((acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+    }, {} as Record<string, number>);
 };
 
 export const parseImportRows = (worksheet: ExcelJS.Worksheet, headerMap: Record<ImportHeader, number>): ImportFileRow[] => {
@@ -434,6 +490,75 @@ export const parseImportRows = (worksheet: ExcelJS.Worksheet, headerMap: Record<
             totalModalRaw: row.getCell(headerMap['TOTAL MODAL']).value,
             varianHargaRaw: row.getCell(headerMap['VARIAN HARGA']).value,
             grosirRaw: row.getCell(headerMap['GROSIR']).value
+        });
+    });
+
+    return rows;
+};
+
+export interface ImportFileRowExtras {
+    categoryId?: number | null;
+    descriptionRaw?: unknown;
+    imageUrlRaw?: unknown;
+    allocatedQuantityRaw?: unknown;
+    minStockRaw?: unknown;
+    binLocationRaw?: unknown;
+    vehicleCompatibilityRaw?: unknown;
+}
+
+export const parseProductsExportRows = (
+    worksheet: ExcelJS.Worksheet,
+    headerMap: Record<string, number>
+): Array<ImportFileRow & ImportFileRowExtras> => {
+    const rows: Array<ImportFileRow & ImportFileRowExtras> = [];
+
+    const getCellValueByHeader = (row: ExcelJS.Row, header: string): unknown => {
+        const col = headerMap[header];
+        if (!col) return null;
+        return row.getCell(col).value;
+    };
+
+    worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+
+        const skuRaw = readCellText(getCellValueByHeader(row, 'sku'));
+        const nameRaw = readCellText(getCellValueByHeader(row, 'name'));
+        const priceValue = getCellValueByHeader(row, 'price');
+        const stockValue = getCellValueByHeader(row, 'stock_quantity');
+
+        const isCompletelyEmpty = [skuRaw, nameRaw, readCellText(priceValue), readCellText(stockValue)]
+            .every((value) => value === '');
+        if (isCompletelyEmpty) return;
+
+        const sku = skuRaw.trim();
+        const name = nameRaw.trim();
+        const categoryIdParsed = parseFlexibleNumber(getCellValueByHeader(row, 'category_id'));
+        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
+
+        rows.push({
+            rowNumber,
+            sku,
+            skuKey: sku.toUpperCase(),
+            name,
+            categoryName: 'Uncategorized',
+            unit: readCellText(getCellValueByHeader(row, 'unit')) || 'Pcs',
+            barcode: readCellText(getCellValueByHeader(row, 'barcode')),
+            keterangan: readCellText(getCellValueByHeader(row, 'keterangan')),
+            tipeModal: readCellText(getCellValueByHeader(row, 'tipe_modal')),
+            statusRaw: readCellText(getCellValueByHeader(row, 'status')),
+            basePriceRaw: getCellValueByHeader(row, 'base_price'),
+            priceRaw: priceValue,
+            stockRaw: stockValue,
+            totalModalRaw: getCellValueByHeader(row, 'total_modal'),
+            varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
+            grosirRaw: getCellValueByHeader(row, 'grosir'),
+            categoryId,
+            descriptionRaw: getCellValueByHeader(row, 'description'),
+            imageUrlRaw: getCellValueByHeader(row, 'image_url'),
+            allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
+            minStockRaw: getCellValueByHeader(row, 'min_stock'),
+            binLocationRaw: getCellValueByHeader(row, 'bin_location'),
+            vehicleCompatibilityRaw: getCellValueByHeader(row, 'vehicle_compatibility')
         });
     });
 
@@ -515,8 +640,22 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
 
     if (!sku && !name) reasons.push('SKU atau Nama produk minimal salah satu wajib diisi');
 
-    const basePrice = parseFlexibleNumber(row.basePriceRaw);
-    if (basePrice === null) reasons.push('HARGA BELI harus berupa angka');
+    let totalModal: number | null = null;
+    if (!isBlankValue(row.totalModalRaw)) {
+        totalModal = parseFlexibleNumber(row.totalModalRaw);
+        if (totalModal === null) reasons.push('TOTAL MODAL harus berupa angka');
+        else totalModal = Math.max(0, totalModal);
+    }
+
+    let basePrice = parseFlexibleNumber(row.basePriceRaw);
+    if (basePrice === null) {
+        // Compatibility: some exports store purchase cost in TOTAL MODAL (or base_price is empty).
+        if (totalModal !== null) {
+            basePrice = totalModal;
+        } else {
+            reasons.push('HARGA BELI harus berupa angka');
+        }
+    }
 
     const price = parseFlexibleNumber(row.priceRaw);
     if (price === null) reasons.push('HARGA JUAL harus berupa angka');
@@ -533,16 +672,18 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
         }
     }
 
-    let totalModal: number | null = null;
-    if (!isBlankValue(row.totalModalRaw)) {
-        totalModal = parseFlexibleNumber(row.totalModalRaw);
-        if (totalModal === null) reasons.push('TOTAL MODAL harus berupa angka');
-        else totalModal = Math.max(0, totalModal);
-    }
     const varianHargaText = readCellText(row.varianHargaRaw);
     const grosirText = readCellText(row.grosirRaw);
 
-    return {
+    const extras = row as ImportFileRow & ImportFileRowExtras;
+    const allocatedQuantityNumber = extras.allocatedQuantityRaw !== undefined
+        ? parseFlexibleNumber(extras.allocatedQuantityRaw)
+        : null;
+    const minStockNumber = extras.minStockRaw !== undefined
+        ? parseFlexibleNumber(extras.minStockRaw)
+        : null;
+
+    const preview: ImportPreviewRow = {
         row: row.rowNumber,
         sku,
         name,
@@ -561,13 +702,70 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
         is_valid: reasons.length === 0,
         reasons
     };
+
+    if (extras.categoryId !== undefined) preview.category_id = extras.categoryId;
+    if (extras.descriptionRaw !== undefined) preview.description = readCellText(extras.descriptionRaw) || null;
+    if (extras.imageUrlRaw !== undefined) preview.image_url = readCellText(extras.imageUrlRaw) || null;
+    if (extras.allocatedQuantityRaw !== undefined) {
+        preview.allocated_quantity = allocatedQuantityNumber === null ? null : Math.max(0, Math.trunc(allocatedQuantityNumber));
+    }
+    if (extras.minStockRaw !== undefined) {
+        preview.min_stock = minStockNumber === null ? null : Math.max(0, Math.trunc(minStockNumber));
+    }
+    if (extras.binLocationRaw !== undefined) preview.bin_location = readCellText(extras.binLocationRaw) || null;
+    if (extras.vehicleCompatibilityRaw !== undefined) preview.vehicle_compatibility = readCellText(extras.vehicleCompatibilityRaw) || null;
+
+    return preview;
 };
 
-export const buildPreviewFromWorkbook = (workbook: ExcelJS.Workbook): ImportPreviewResult => {
+export const buildPreviewFromWorkbook = async (workbook: ExcelJS.Workbook): Promise<ImportPreviewResult> => {
     const worksheet = getImportWorksheet(workbook);
-    const headerMap = resolveHeaderMap(worksheet);
-    const fileRows = parseImportRows(worksheet, headerMap);
-    const rows = fileRows.map((row) => buildPreviewRow(row));
+    const legacyHeadersPresent = (() => {
+        const headerRow = worksheet.getRow(1);
+        const headerSet = new Set<string>();
+        headerRow.eachCell({ includeEmpty: false }, (cell) => {
+            const headerName = normalizeHeader(readCellText(cell.value));
+            if (headerName) headerSet.add(headerName);
+        });
+        return REQUIRED_IMPORT_HEADERS.every((header) => headerSet.has(header));
+    })();
+
+    let rows: ImportPreviewRow[] = [];
+    if (legacyHeadersPresent) {
+        const headerMap = resolveHeaderMap(worksheet);
+        const fileRows = parseImportRows(worksheet, headerMap);
+        rows = fileRows.map((row) => buildPreviewRow(row));
+    } else {
+        const headerMapLoose = resolveHeaderMapLoose(worksheet);
+        const hasSku = Boolean(headerMapLoose.sku);
+        const hasName = Boolean(headerMapLoose.name);
+        const hasPrice = Boolean(headerMapLoose.price);
+        const hasStock = Boolean(headerMapLoose.stock_quantity);
+
+        if (!hasSku || !hasName || !hasPrice || !hasStock) {
+            throw new Error(
+                'Header file import tidak dikenali. Gunakan template import (sheet "Barang") atau export produk (sheet "Products" dengan header sku, name, price, stock_quantity).'
+            );
+        }
+
+        const fileRows = parseProductsExportRows(worksheet, headerMapLoose);
+
+        // Resolve category_name from category_id (best-effort).
+        const categoryIds = [...new Set(fileRows.map((row) => row.categoryId).filter((id): id is number => typeof id === 'number' && id > 0))];
+        const categoryNameById = new Map<number, string>();
+        if (categoryIds.length > 0) {
+            const categories = await Category.findAll({ where: { id: categoryIds } });
+            categories.forEach((category) => {
+                categoryNameById.set(category.id, category.name);
+            });
+        }
+
+        rows = fileRows.map((row) => {
+            const resolvedCategoryName = row.categoryId ? (categoryNameById.get(row.categoryId) ?? 'Uncategorized') : 'Uncategorized';
+            const hydratedRow = { ...row, categoryName: resolvedCategoryName };
+            return buildPreviewRow(hydratedRow);
+        });
+    }
 
     const errors: ImportErrorItem[] = [];
     rows.forEach((row) => {
@@ -626,8 +824,23 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
         const sku = rawSku || rawName;
         const name = rawName || rawSku;
         const categoryName = readCellText(data.category_name) || 'Uncategorized';
+        const categoryIdParsed = parseFlexibleNumber((data as any).category_id);
+        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
         const unit = readCellText(data.unit) || 'Pcs';
         const barcodeText = readCellText(data.barcode);
+        const hasDescription = Object.prototype.hasOwnProperty.call(data, 'description');
+        const hasImageUrl = Object.prototype.hasOwnProperty.call(data, 'image_url');
+        const hasAllocatedQty = Object.prototype.hasOwnProperty.call(data, 'allocated_quantity');
+        const hasMinStock = Object.prototype.hasOwnProperty.call(data, 'min_stock');
+        const hasBinLocation = Object.prototype.hasOwnProperty.call(data, 'bin_location');
+        const hasVehicleCompatibility = Object.prototype.hasOwnProperty.call(data, 'vehicle_compatibility');
+
+        const descriptionText = hasDescription ? readCellText((data as any).description) : '';
+        const imageUrlText = hasImageUrl ? readCellText((data as any).image_url) : '';
+        const allocatedQuantityParsed = hasAllocatedQty ? parseFlexibleNumber((data as any).allocated_quantity) : null;
+        const minStockParsed = hasMinStock ? parseFlexibleNumber((data as any).min_stock) : null;
+        const binLocationText = hasBinLocation ? readCellText((data as any).bin_location) : '';
+        const vehicleCompatibilityText = hasVehicleCompatibility ? readCellText((data as any).vehicle_compatibility) : '';
         const keteranganText = readCellText(data.keterangan);
         const tipeModalText = readCellText(data.tipe_modal);
         const varianHargaText = readCellText(data.varian_harga_text);
@@ -639,7 +852,16 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
         try {
             basePrice = parseRequiredNumber(data.base_price, 'HARGA BELI');
         } catch (error) {
-            reasons.push(error instanceof Error ? error.message : 'HARGA BELI tidak valid');
+            // Compatibility: allow base_price to be derived from total_modal when present.
+            try {
+                if (!isBlankValue(data.total_modal)) {
+                    basePrice = parseRequiredNumber(data.total_modal, 'HARGA BELI');
+                } else {
+                    throw error;
+                }
+            } catch (fallbackError) {
+                reasons.push(fallbackError instanceof Error ? fallbackError.message : 'HARGA BELI tidak valid');
+            }
         }
 
         let price: number | null = null;
@@ -693,12 +915,19 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
             skuKey: sku.toUpperCase(),
             name,
             categoryName,
+            categoryId,
             unit,
             barcode: barcodeText || null,
             basePrice,
             price,
             stockQuantity,
             status: parseImportStatus(readCellText(data.status)),
+            description: hasDescription ? (descriptionText || null) : undefined,
+            imageUrl: hasImageUrl ? (imageUrlText || null) : undefined,
+            allocatedQuantity: hasAllocatedQty ? (allocatedQuantityParsed === null ? null : Math.max(0, Math.trunc(allocatedQuantityParsed))) : undefined,
+            minStock: hasMinStock ? (minStockParsed === null ? null : Math.max(0, Math.trunc(minStockParsed))) : undefined,
+            binLocation: hasBinLocation ? (binLocationText || null) : undefined,
+            vehicleCompatibility: hasVehicleCompatibility ? (vehicleCompatibilityText || null) : undefined,
             keterangan: keteranganText || null,
             tipeModal: tipeModalText || null,
             varianHarga,
@@ -782,7 +1011,14 @@ export const commitNormalizedRows = async (
     for (const row of rows) {
         const transaction = await sequelize.transaction();
         try {
-            const categoryIds = await getOrCreateCategoryIds(row.categoryName, transaction);
+            let categoryIds: number[] = [];
+            if (row.categoryId) {
+                const existingCategory = await Category.findByPk(row.categoryId, { transaction });
+                if (existingCategory) categoryIds = [existingCategory.id];
+            }
+            if (categoryIds.length === 0) {
+                categoryIds = await getOrCreateCategoryIds(row.categoryName, transaction);
+            }
             const primaryCategoryId = categoryIds[0];
             const importPayload = {
                 sku: row.sku,
@@ -790,8 +1026,6 @@ export const commitNormalizedRows = async (
                 category_id: primaryCategoryId,
                 unit: row.unit,
                 barcode: row.barcode,
-                description: null,
-                image_url: null,
                 base_price: row.basePrice,
                 price: row.price,
                 status: row.status,
@@ -800,7 +1034,13 @@ export const commitNormalizedRows = async (
                 varian_harga: row.varianHarga,
                 grosir: row.grosir,
                 total_modal: row.totalModal
-            };
+            } as any;
+            if (row.description !== undefined) importPayload.description = row.description;
+            if (row.imageUrl !== undefined) importPayload.image_url = row.imageUrl;
+            if (row.allocatedQuantity !== undefined) importPayload.allocated_quantity = row.allocatedQuantity;
+            if (row.minStock !== undefined) importPayload.min_stock = row.minStock;
+            if (row.binLocation !== undefined) importPayload.bin_location = row.binLocation;
+            if (row.vehicleCompatibility !== undefined) importPayload.vehicle_compatibility = row.vehicleCompatibility;
 
             const existingProduct = await Product.findOne({
                 where: { sku: row.sku },
@@ -985,10 +1225,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
-
-
-
 
 
 

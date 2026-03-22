@@ -146,7 +146,7 @@ export default function WarehouseLandingPage() {
         },
         {
             href: '/admin/warehouse/import',
-            label: 'Import CSV',
+            label: 'Import Excel/CSV',
             desc: 'Update data massal via Excel',
             icon: FileSpreadsheet,
             color: 'text-cyan-600',
