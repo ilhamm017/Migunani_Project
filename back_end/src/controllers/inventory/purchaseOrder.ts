@@ -68,12 +68,15 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
 
 export const getPurchaseOrders = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        const { page = 1, limit = 10, status, supplier_id } = req.query;
+        const { page = 1, limit = 10, status, supplier_id, startDate, endDate } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
         if (status) where.status = status;
         if (supplier_id) where.supplier_id = supplier_id;
+        if (startDate && endDate) {
+            where.createdAt = { [Op.between]: [new Date(String(startDate)), new Date(String(endDate))] };
+        }
 
         const { count, rows } = await PurchaseOrder.findAndCountAll({
             where,

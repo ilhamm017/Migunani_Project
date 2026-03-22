@@ -16,7 +16,7 @@ type PnlSummary = {
 };
 
 export default function PnLPage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
+    const allowed = useRequireRoles(['super_admin']);
 
     // Default to current month
     const now = new Date();

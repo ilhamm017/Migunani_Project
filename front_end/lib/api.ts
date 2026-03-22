@@ -328,7 +328,7 @@ export const api = {
                 }),
             createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
             createPO: (data: JsonRecord) => apiClient.post('/admin/inventory/po', data),
-            getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number }) =>
+            getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/inventory/po', { params }),
             getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
             receivePO: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>
@@ -460,6 +460,36 @@ export const api = {
             getTaxSettings: () => apiClient.get('/admin/finance/settings/tax'),
             updateTaxSettings: (data: { company_tax_mode: 'pkp' | 'non_pkp'; vat_percent: number; pph_final_percent: number }) =>
                 apiClient.put('/admin/finance/settings/tax', data),
+            getSupplierInvoices: (params?: {
+                page?: number;
+                limit?: number;
+                status?: 'all' | 'unpaid' | 'paid' | 'overdue' | string;
+                supplier_id?: number;
+                q?: string;
+                startDate?: string;
+                endDate?: string;
+                dueBefore?: string;
+                dueAfter?: string;
+            }) => apiClient.get('/admin/finance/supplier-invoices', { params }),
+            getSupplierInvoiceById: (id: number | string) =>
+                apiClient.get(`/admin/finance/supplier-invoices/${id}`),
+            createSupplierInvoice: (data: {
+                purchase_order_id: string;
+                invoice_number: string;
+                subtotal?: number;
+                tax_amount?: number;
+                tax_percent?: number;
+                total: number;
+                due_date: string;
+            }) => apiClient.post('/admin/finance/supplier-invoice', data),
+            paySupplierInvoice: (data: {
+                invoice_id: number;
+                amount: number;
+                account_id: number;
+                note?: string;
+            }) => apiClient.post('/admin/finance/supplier-invoice/pay', data),
+            getProductsSoldReport: (params: { startDate: string; endDate: string; limit?: number }) =>
+                apiClient.get('/admin/finance/reports/products-sold', { params }),
         },
         // Profile
         profile: {

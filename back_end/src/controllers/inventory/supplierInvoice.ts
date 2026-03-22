@@ -149,3 +149,126 @@ export const paySupplierInvoice = asyncWrapper(async (req: Request, res: Respons
         throw new CustomError('Error paying supplier invoice', 500);
     }
 });
+
+export const listSupplierInvoices = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const {
+            page = 1,
+            limit = 20,
+            status,
+            supplier_id,
+            q,
+            startDate,
+            endDate,
+            dueBefore,
+            dueAfter,
+        } = req.query;
+
+        const pageNum = Math.max(1, Number(page) || 1);
+        const limitNum = Math.min(200, Math.max(1, Number(limit) || 20));
+        const offset = (pageNum - 1) * limitNum;
+
+        const where: any = {};
+        const statusStr = String(status || '').trim();
+        if (statusStr && statusStr !== 'all') where.status = statusStr;
+        if (supplier_id) where.supplier_id = Number(supplier_id);
+
+        const queryTerm = String(q || '').trim();
+        if (queryTerm) {
+            where[Op.or] = [
+                { invoice_number: { [Op.like]: `%${queryTerm}%` } },
+            ];
+        }
+
+        if (startDate && endDate) {
+            where.createdAt = { [Op.between]: [new Date(String(startDate)), new Date(String(endDate))] };
+        }
+
+        if (dueAfter && dueBefore) {
+            where.due_date = { [Op.between]: [String(dueAfter), String(dueBefore)] };
+        } else if (dueAfter) {
+            where.due_date = { [Op.gte]: String(dueAfter) };
+        } else if (dueBefore) {
+            where.due_date = { [Op.lte]: String(dueBefore) };
+        }
+
+        const { count, rows } = await SupplierInvoice.findAndCountAll({
+            where,
+            include: [
+                { model: Supplier, as: 'Supplier', attributes: ['id', 'name'] },
+                { model: PurchaseOrder, as: 'PurchaseOrder', attributes: ['id', 'total_cost', 'status', 'createdAt'] },
+                { model: SupplierPayment, as: 'Payments', attributes: ['id', 'amount', 'paid_at', 'account_id', 'note', 'createdAt'] },
+            ],
+            limit: limitNum,
+            offset,
+            order: [['due_date', 'ASC'], ['createdAt', 'DESC']],
+        });
+
+        const invoices = rows.map((row) => {
+            const plain = row.toJSON() as any;
+            const payments = Array.isArray(plain.Payments) ? plain.Payments : [];
+            const paidTotal = payments.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+            const total = Number(plain.total || 0);
+            const amountDue = Math.max(0, total - paidTotal);
+            return {
+                ...plain,
+                paid_total: paidTotal,
+                amount_due: amountDue,
+            };
+        });
+
+        res.json({
+            total: count,
+            totalPages: Math.ceil(count / limitNum),
+            currentPage: pageNum,
+            invoices,
+        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching supplier invoices', 500);
+    }
+});
+
+export const getSupplierInvoiceDetail = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            throw new CustomError('Invoice id tidak valid', 400);
+        }
+
+        const invoice = await SupplierInvoice.findByPk(id, {
+            include: [
+                { model: Supplier, as: 'Supplier', attributes: ['id', 'name', 'contact', 'address'] },
+                {
+                    model: PurchaseOrder,
+                    as: 'PurchaseOrder',
+                    attributes: ['id', 'total_cost', 'status', 'createdAt', 'updatedAt'],
+                    include: [
+                        { model: PurchaseOrderItem, as: 'Items', include: [{ model: Product, attributes: ['id', 'sku', 'name', 'unit'] }] },
+                    ]
+                },
+                { model: SupplierPayment, as: 'Payments', attributes: ['id', 'amount', 'paid_at', 'account_id', 'note', 'createdAt'] },
+            ],
+            order: [[{ model: SupplierPayment, as: 'Payments' }, 'paid_at', 'DESC']],
+        });
+
+        if (!invoice) {
+            throw new CustomError('Invoice not found', 404);
+        }
+
+        const plain = invoice.toJSON() as any;
+        const payments = Array.isArray(plain.Payments) ? plain.Payments : [];
+        const paidTotal = payments.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+        const total = Number(plain.total || 0);
+        const amountDue = Math.max(0, total - paidTotal);
+
+        res.json({
+            ...plain,
+            paid_total: paidTotal,
+            amount_due: amountDue,
+        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error fetching supplier invoice detail', 500);
+    }
+});

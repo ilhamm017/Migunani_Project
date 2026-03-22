@@ -23,7 +23,7 @@ type InventoryValueSummary = {
 };
 
 export default function InventoryValuePage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
+    const allowed = useRequireRoles(['super_admin']);
     const [data, setData] = useState<InventoryValueSummary | null>(null);
     const [loading, setLoading] = useState(false);
 

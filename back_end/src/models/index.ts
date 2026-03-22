@@ -211,6 +211,24 @@ PurchaseOrder.belongsTo(User, { foreignKey: 'created_by' });
 PurchaseOrder.hasMany(PurchaseOrderItem, { foreignKey: 'purchase_order_id', as: 'Items' });
 PurchaseOrderItem.belongsTo(PurchaseOrder, { foreignKey: 'purchase_order_id' });
 
+// Supplier Invoices & Payments (AP)
+Supplier.hasMany(SupplierInvoice, { foreignKey: 'supplier_id', as: 'SupplierInvoices' });
+SupplierInvoice.belongsTo(Supplier, { foreignKey: 'supplier_id', as: 'Supplier' });
+
+PurchaseOrder.hasOne(SupplierInvoice, { foreignKey: 'purchase_order_id', as: 'SupplierInvoice' });
+SupplierInvoice.belongsTo(PurchaseOrder, { foreignKey: 'purchase_order_id', as: 'PurchaseOrder' });
+
+SupplierInvoice.hasMany(SupplierPayment, { foreignKey: 'supplier_invoice_id', as: 'Payments' });
+SupplierPayment.belongsTo(SupplierInvoice, { foreignKey: 'supplier_invoice_id', as: 'Invoice' });
+
+SupplierPayment.belongsTo(Account, { foreignKey: 'account_id', as: 'Account' });
+
+User.hasMany(SupplierInvoice, { foreignKey: 'created_by', as: 'CreatedSupplierInvoices' });
+SupplierInvoice.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+
+User.hasMany(SupplierPayment, { foreignKey: 'created_by', as: 'CreatedSupplierPayments' });
+SupplierPayment.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+
 // Accounts
 Account.belongsTo(Account, { foreignKey: 'parent_id', as: 'Parent' });
 Account.hasMany(Account, { foreignKey: 'parent_id', as: 'Children' });

@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
+import { Op } from 'sequelize';
 import { ReportService } from '../services/ReportService';
+import { Invoice, InvoiceItem, OrderItem, Product, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
@@ -223,5 +225,71 @@ export const exportStockReductionReportExcel = asyncWrapper(async (req: Request,
             throw error;
         }
         throw new CustomError('Error exporting stock reduction report', 500);
+    }
+});
+
+export const getProductsSoldReport = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate, limit } = req.query;
+        if (!startDate || !endDate) {
+            throw new CustomError('StartDate dan EndDate wajib diisi', 400);
+        }
+
+        const start = new Date(String(startDate));
+        const end = new Date(String(endDate));
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new CustomError('StartDate/EndDate tidak valid', 400);
+        }
+
+        const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+
+        const rows = await InvoiceItem.findAll({
+            attributes: [
+                [sequelize.col('OrderItem.product_id'), 'product_id'],
+                [sequelize.col('OrderItem.Product.sku'), 'sku'],
+                [sequelize.col('OrderItem.Product.name'), 'product_name'],
+                [sequelize.col('OrderItem.Product.unit'), 'unit'],
+                [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
+                [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
+                [sequelize.fn('SUM', sequelize.literal('InvoiceItem.qty * InvoiceItem.unit_cost')), 'cogs'],
+            ],
+            include: [
+                {
+                    model: Invoice,
+                    attributes: [],
+                    where: {
+                        payment_status: 'paid',
+                        verified_at: { [Op.between]: [start, end] }
+                    }
+                },
+                {
+                    model: OrderItem,
+                    attributes: [],
+                    include: [
+                        { model: Product, attributes: [] }
+                    ]
+                }
+            ],
+            group: [
+                sequelize.col('OrderItem.product_id'),
+                sequelize.col('OrderItem.Product.id'),
+                sequelize.col('OrderItem.Product.sku'),
+                sequelize.col('OrderItem.Product.name'),
+                sequelize.col('OrderItem.Product.unit'),
+            ],
+            order: [[sequelize.literal('qty_sold'), 'DESC']],
+            limit: limitNum,
+            raw: true,
+        });
+
+        res.json({
+            period: { startDate: String(startDate), endDate: String(endDate) },
+            rows,
+        });
+    } catch (error) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error generating products sold report', 500);
     }
 });

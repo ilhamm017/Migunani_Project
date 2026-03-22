@@ -46,7 +46,7 @@ interface BackorderReportData {
 }
 
 export default function BackorderReportPage() {
-    const allowed = useRequireRoles(['super_admin', 'kasir']);
+    const allowed = useRequireRoles(['super_admin']);
     const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
 

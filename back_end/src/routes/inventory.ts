@@ -65,6 +65,8 @@ router.get('/admin/inventory/scan', authenticateToken, authorizeRoles('super_adm
 router.get('/admin/inventory/scan/:sku', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.scanProduct);
 
 // Supplier Invoices
+router.get('/admin/finance/supplier-invoices', authenticateToken, authorizeRoles('super_admin'), InventoryController.listSupplierInvoices);
+router.get('/admin/finance/supplier-invoices/:id', authenticateToken, authorizeRoles('super_admin'), InventoryController.getSupplierInvoiceDetail);
 router.post('/admin/finance/supplier-invoice', authenticateToken, authorizeRoles('super_admin', 'admin_finance'), InventoryController.createSupplierInvoice);
 router.post('/admin/finance/supplier-invoice/pay', authenticateToken, authorizeRoles('super_admin', 'admin_finance'), InventoryController.paySupplierInvoice);
 

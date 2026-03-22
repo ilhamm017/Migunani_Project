@@ -4,11 +4,32 @@ import Link from 'next/link';
 import { useRequireRoles } from '@/lib/guards';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
-import { BarChart3, PieChart, TrendingUp, DollarSign, Calendar, FileText, ClipboardList, ReceiptText, Landmark, SlidersHorizontal } from 'lucide-react';
+import {
+    AlarmClock,
+    BadgeCheck,
+    BarChart3,
+    Calendar,
+    Boxes,
+    ClipboardList,
+    DollarSign,
+    FileText,
+    HandCoins,
+    Landmark,
+    LineChart,
+    Package,
+    PieChart,
+    Receipt,
+    ReceiptText,
+    RefreshCw,
+    ShoppingCart,
+    SlidersHorizontal,
+    TrendingUp,
+    Layers,
+} from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 
 export default function FinanceReportsPage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
+    const allowed = useRequireRoles(['super_admin']);
     const { user } = useAuthStore();
 
     if (!allowed) return null;
@@ -93,7 +114,119 @@ export default function FinanceReportsPage() {
             href: '/admin/finance/settings/tax',
             color: 'bg-cyan-50',
             roles: ['super_admin', 'admin_finance']
-        }
+        },
+        {
+            title: 'Pembelian',
+            desc: 'Rekap PO & pembelian supplier per periode',
+            icon: <ShoppingCart size={24} className="text-teal-600" />,
+            href: '/admin/finance/laporan/pembelian',
+            color: 'bg-teal-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Penjualan',
+            desc: 'Rekap order & omzet per periode',
+            icon: <LineChart size={24} className="text-emerald-600" />,
+            href: '/admin/finance/laporan/penjualan',
+            color: 'bg-emerald-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Pembayaran Pelanggan',
+            desc: 'Pantau verifikasi pembayaran & COD',
+            icon: <BadgeCheck size={24} className="text-blue-600" />,
+            href: '/admin/finance/laporan/pembayaran-pelanggan',
+            color: 'bg-blue-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Produk Terjual',
+            desc: 'Top produk terjual (invoice paid) per periode',
+            icon: <Package size={24} className="text-purple-600" />,
+            href: '/admin/finance/laporan/produk-terjual',
+            color: 'bg-purple-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Invoice Pelanggan',
+            desc: 'Ringkasan invoice customer & piutang berjalan',
+            icon: <FileText size={24} className="text-rose-600" />,
+            href: '/admin/finance/laporan/invoice-pelanggan',
+            color: 'bg-rose-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Piutang Pelanggan',
+            desc: 'Daftar invoice belum lunas + aging',
+            icon: <AlarmClock size={24} className="text-orange-600" />,
+            href: '/admin/finance/laporan/piutang-pelanggan',
+            color: 'bg-orange-50',
+            roles: ['super_admin', 'admin_finance']
+        },
+        {
+            title: 'Invoice Supplier',
+            desc: 'Daftar tagihan supplier & status pembayaran',
+            icon: <Receipt size={24} className="text-slate-700" />,
+            href: '/admin/finance/laporan/invoice-supplier',
+            color: 'bg-slate-50',
+            roles: ['super_admin', 'admin_finance']
+        },
+        {
+            title: 'Bayar Supplier',
+            desc: 'Bayar tagihan supplier & cek sisa hutang',
+            icon: <HandCoins size={24} className="text-amber-600" />,
+            href: '/admin/finance/laporan/bayar-supplier',
+            color: 'bg-amber-50',
+            roles: ['super_admin', 'admin_finance']
+        },
+        {
+            title: 'Jatuh Tempo',
+            desc: 'Invoice customer & supplier yang mendekati jatuh tempo',
+            icon: <AlarmClock size={24} className="text-fuchsia-600" />,
+            href: '/admin/finance/laporan/jatuh-tempo',
+            color: 'bg-fuchsia-50',
+            roles: ['super_admin', 'admin_finance']
+        },
+        {
+            title: 'Omset Sales',
+            desc: 'Ranking omzet per customer (order) per periode',
+            icon: <TrendingUp size={24} className="text-emerald-600" />,
+            href: '/admin/finance/laporan/omset-sales',
+            color: 'bg-emerald-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Persediaan',
+            desc: 'Nilai persediaan & akses cepat inventory',
+            icon: <Boxes size={24} className="text-indigo-600" />,
+            href: '/admin/finance/laporan/persediaan',
+            color: 'bg-indigo-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Koreksi Stok',
+            desc: 'Pengurangan stok + export IPO (stock reduction)',
+            icon: <RefreshCw size={24} className="text-cyan-600" />,
+            href: '/admin/finance/laporan/koreksi-stok',
+            color: 'bg-cyan-50',
+            roles: ['super_admin', 'kasir']
+        },
+        {
+            title: 'Biaya / Pendapatan Lain-lain',
+            desc: 'Rekap biaya operasional & jurnal penyesuaian',
+            icon: <DollarSign size={24} className="text-slate-700" />,
+            href: '/admin/finance/laporan/biaya-pendapatan-lain',
+            color: 'bg-slate-50',
+            roles: ['super_admin', 'admin_finance']
+        },
+        {
+            title: 'Gabungan Invoice Belum Lunas',
+            desc: 'Customer (AR) + supplier (AP) yang masih outstanding',
+            icon: <Layers size={24} className="text-slate-700" />,
+            href: '/admin/finance/laporan/invoice-belum-lunas',
+            color: 'bg-slate-50',
+            roles: ['super_admin', 'admin_finance']
+        },
     ];
 
     const reports = allReports.filter(report => {

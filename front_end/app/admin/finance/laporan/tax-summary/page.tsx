@@ -21,7 +21,7 @@ type TaxSummaryData = {
 };
 
 export default function TaxSummaryPage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
+    const allowed = useRequireRoles(['super_admin']);
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
     const nowDate = today.toISOString().slice(0, 10);
