@@ -146,6 +146,9 @@ export default function WarehouseInventoryPage() {
         return [...warehouseColumns, warehouseEditActionColumn];
     }, [isEditMode]);
 
+    const pageStart = totalProducts === 0 ? 0 : (currentPage - 1) * PRODUCTS_PER_PAGE + 1;
+    const pageEnd = totalProducts === 0 ? 0 : Math.min(currentPage * PRODUCTS_PER_PAGE, totalProducts);
+
     const table = useReactTable({
         data: products,
         columns,
@@ -156,6 +159,7 @@ export default function WarehouseInventoryPage() {
         meta: {
             refreshData: loadProducts,
             isEditMode,
+            pageStart,
             onInlineUpdate: handleInlineUpdate,
             onAdjustStock: handleAdjustStock,
             onExpandEdit: (product: ProductRow) => {
@@ -164,9 +168,6 @@ export default function WarehouseInventoryPage() {
             },
         },
     });
-
-    const pageStart = totalProducts === 0 ? 0 : (currentPage - 1) * PRODUCTS_PER_PAGE + 1;
-    const pageEnd = totalProducts === 0 ? 0 : Math.min(currentPage * PRODUCTS_PER_PAGE, totalProducts);
 
     return (
         <div className="warehouse-screen warehouse-screen-fill warehouse-screen-flush-bottom warehouse-screen-edge-to-edge flex min-h-0 flex-col overflow-hidden bg-slate-50">

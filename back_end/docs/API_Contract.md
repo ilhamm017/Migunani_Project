@@ -55,6 +55,7 @@ Format akses role:
 | `PATCH` | `/orders/admin/:id/status` | `super_admin`, `admin_gudang` | Update status order admin |
 
 Catatan pricing checkout:
+- Jika produk punya harga tier tersimpan (mis. `varian_harga.prices.<tier>`), harga per-produk dipakai (mengalahkan diskon kategori).
 - Jika kategori produk punya `discount_<tier>_pct`, diskon kategori dipakai.
 - Jika diskon kategori `null`, sistem fallback ke diskon tier global produk.
 

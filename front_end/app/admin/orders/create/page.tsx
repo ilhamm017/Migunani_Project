@@ -283,12 +283,22 @@ function ManualOrderContent() {
     };
 
     const getProductPrice = (product: ProductOption) => {
-        const tier = selectedCustomer?.CustomerProfile?.tier || 'regular';
-        const basePrice = Math.max(0, Number(product.price || 0));
-        if (tier === 'regular') return basePrice;
+        const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
+        const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
+            ? 'platinum'
+            : String(tierRaw || 'regular').trim().toLowerCase();
 
         const variant = toObjectOrEmpty(product.varian_harga);
         const prices = toObjectOrEmpty(variant.prices);
+
+        const basePriceRaw = Number(product.price || 0);
+        const basePrice = Number.isFinite(basePriceRaw) && basePriceRaw > 0
+            ? basePriceRaw
+            : Number(prices.regular || variant.regular || prices.base_price || variant.base_price || 0) || 0;
+
+        const normalizedBasePrice = Math.max(0, basePrice);
+        if (tier === 'regular') return normalizedBasePrice;
+
         const discounts = toObjectOrEmpty(variant.discounts_pct);
         const aliases = tier === 'platinum' ? ['premium'] : [];
 
@@ -319,10 +329,10 @@ function ManualOrderContent() {
         for (const discountRaw of discountCandidates) {
             const discountPct = toFiniteNumber(discountRaw);
             if (discountPct === null || discountPct < 0 || discountPct > 100) continue;
-            return Math.max(0, Math.round((basePrice * (1 - discountPct / 100)) * 100) / 100);
+            return Math.max(0, Math.round((normalizedBasePrice * (1 - discountPct / 100)) * 100) / 100);
         }
 
-        return basePrice;
+        return normalizedBasePrice;
     };
 
     const addToCart = (product: ProductOption) => {

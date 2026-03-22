@@ -467,10 +467,34 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
             throw new CustomError('gold_discount_pct dan premium_discount_pct/platinum_discount_pct wajib angka valid antara 0 sampai 100.', 400);
         }
 
+        const rawProductIds = req.body?.product_ids ?? req.body?.productIds;
+        const productIds = Array.isArray(rawProductIds)
+            ? rawProductIds.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+            : typeof rawProductIds === 'string'
+                ? rawProductIds.split(',').map((value) => value.trim()).filter(Boolean)
+                : [];
+        if (rawProductIds !== undefined && productIds.length === 0) {
+            await t.rollback();
+            throw new CustomError('product_ids tidak valid atau kosong.', 400);
+        }
+
         const statusRaw = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : 'active';
         const whereClause: Record<string, unknown> = {};
         if (statusRaw === 'active' || statusRaw === 'inactive') {
             whereClause.status = statusRaw;
+        }
+
+        const searchRaw = typeof req.body?.search === 'string' ? req.body.search.trim() : '';
+        if (searchRaw) {
+            whereClause[Op.or as unknown as string] = [
+                { name: { [Op.like]: `%${searchRaw}%` } },
+                { sku: { [Op.like]: `%${searchRaw}%` } },
+                { barcode: { [Op.like]: `%${searchRaw}%` } }
+            ];
+        }
+
+        if (productIds.length > 0) {
+            whereClause.id = { [Op.in]: productIds };
         }
 
         const products = await Product.findAll({
@@ -483,7 +507,26 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
         let updatedCount = 0;
 
         for (const product of products) {
-            const regularPrice = roundPrice(Number(product.price || 0));
+            let regularPrice = roundPrice(Number(product.price || 0));
+            if (regularPrice <= 0) {
+                const variant = toObjectOrEmpty(product.varian_harga);
+                const prices = toObjectOrEmpty(variant.prices);
+                const candidates: unknown[] = [
+                    prices.regular,
+                    variant.regular,
+                    prices.base_price,
+                    variant.base_price,
+                    prices.price,
+                    variant.price
+                ];
+                for (const candidate of candidates) {
+                    const parsed = Number(candidate);
+                    if (Number.isFinite(parsed) && parsed > 0) {
+                        regularPrice = roundPrice(parsed);
+                        break;
+                    }
+                }
+            }
             const goldPrice = roundPrice(regularPrice * (1 - (goldDiscount / 100)));
             const premiumPrice = roundPrice(regularPrice * (1 - (premiumDiscount / 100)));
 

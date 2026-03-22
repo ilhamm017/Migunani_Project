@@ -70,6 +70,18 @@ const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
 };
 
 const resolveRegularPrice = (product: ProductTierRow): number => {
+  const direct = Number(product.price || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const source = toObjectOrEmpty(product.varian_harga);
+  const prices = toObjectOrEmpty(source.prices);
+  const candidates: unknown[] = [prices.regular, source.regular, prices.base_price, source.base_price, prices.price, source.price];
+
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
   return Math.max(0, Number(product.price || 0));
 };
 
@@ -137,9 +149,15 @@ export default function SalesTierPricingPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
 
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [applyingDiscount, setApplyingDiscount] = useState(false);
   const [products, setProducts] = useState<ProductTierRow[]>([]);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [applyToAllMatching, setApplyToAllMatching] = useState(false);
   const [goldDiscount, setGoldDiscount] = useState('');
   const [premiumDiscount, setPremiumDiscount] = useState('');
   const [discountsInitialized, setDiscountsInitialized] = useState(false);
@@ -168,13 +186,15 @@ export default function SalesTierPricingPage() {
       setLoadingProducts(true);
       setError('');
       const res = await api.admin.inventory.getProducts({
-        page: 1,
-        limit: 100,
+        page,
+        limit,
         status: 'active',
         search: search.trim() || undefined,
       });
       const rows = Array.isArray(res.data?.products) ? (res.data.products as ProductTierRow[]) : [];
       setProducts(rows);
+      setTotalPages(Number(res.data?.totalPages || 1) || 1);
+      setTotalProducts(Number(res.data?.total || 0) || 0);
 
       if (!discountsInitialized && rows.length > 0) {
         const fallback = resolveStoredDiscounts(rows[0]);
@@ -189,7 +209,7 @@ export default function SalesTierPricingPage() {
     } finally {
       setLoadingProducts(false);
     }
-  }, [search, discountsInitialized]);
+  }, [page, limit, search, discountsInitialized]);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -220,7 +240,7 @@ export default function SalesTierPricingPage() {
   }, [allowed, loadCategories]);
 
   const sampleRows = useMemo(() => {
-    return products.slice(0, 8).map((item) => {
+    return products.map((item) => {
       const currentDiscount = resolveStoredDiscounts(item);
       const currentPrice = calculateTierPrice(item, currentDiscount);
       const previewPrice = calculateTierPrice(item, parsedDiscounts);
@@ -257,13 +277,21 @@ export default function SalesTierPricingPage() {
       setError('');
       setActionMessage('');
 
+      if (!applyToAllMatching && selectedProductIds.size === 0) {
+        setError('Checklist minimal 1 produk (atau pilih mode "Semua produk").');
+        return;
+      }
+
       const res = await api.admin.inventory.updateTierDiscountBulk({
         gold_discount_pct: gold,
         premium_discount_pct: premium,
         status: 'active',
-      });
+        ...(applyToAllMatching ? {} : { product_ids: Array.from(selectedProductIds) }),
+        ...(applyToAllMatching ? { search: search.trim() || undefined } : {}),
+      } as any);
 
       setActionMessage(res.data?.message || 'Diskon tier berhasil diterapkan.');
+      setSelectedProductIds(new Set());
       await loadProducts();
     } catch (e: unknown) {
       const err = e as ApiErrorWithMessage;
@@ -272,6 +300,31 @@ export default function SalesTierPricingPage() {
       setApplyingDiscount(false);
     }
   };
+
+  const toggleSelectAllOnPage = (checked: boolean) => {
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev);
+      for (const row of products) {
+        if (!row?.id) continue;
+        if (checked) next.add(String(row.id));
+        else next.delete(String(row.id));
+      }
+      return next;
+    });
+  };
+
+  const isAllSelectedOnPage = useMemo(() => {
+    if (products.length === 0) return false;
+    for (const row of products) {
+      if (!selectedProductIds.has(String(row.id))) return false;
+    }
+    return true;
+  }, [products, selectedProductIds]);
+
+  const selectedCountLabel = useMemo(() => {
+    if (applyToAllMatching) return `Semua produk aktif sesuai filter (${totalProducts} produk)`;
+    return `${selectedProductIds.size} produk dipilih`;
+  }, [applyToAllMatching, selectedProductIds.size, totalProducts]);
 
   const openCategoryEditor = (category: CategoryTierDiscount) => {
     setEditingCategoryId(category.id);
@@ -355,10 +408,39 @@ export default function SalesTierPricingPage() {
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+                setApplyToAllMatching(false);
+              }}
               placeholder="Cari nama produk atau SKU"
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-sm"
             />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+            <div className="font-semibold">{selectedCountLabel}</div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={loadingProducts || page <= 1}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-bold disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <span>
+                Page {page} / {Math.max(1, totalPages)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={loadingProducts || page >= totalPages}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-bold disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
 
           {loadingProducts ? (
@@ -370,6 +452,15 @@ export default function SalesTierPricingPage() {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
+                    <th className="px-3 py-2 font-black uppercase w-10">
+                      <input
+                        type="checkbox"
+                        checked={isAllSelectedOnPage}
+                        onChange={(e) => toggleSelectAllOnPage(e.target.checked)}
+                        disabled={applyToAllMatching}
+                        aria-label="Pilih semua produk di halaman ini"
+                      />
+                    </th>
                     <th className="px-3 py-2 font-black uppercase">Produk</th>
                     <th className="px-3 py-2 font-black uppercase">SKU</th>
                     <th className="px-3 py-2 font-black uppercase">Reguler</th>
@@ -380,6 +471,23 @@ export default function SalesTierPricingPage() {
                 <tbody>
                   {sampleRows.map((row) => (
                     <tr key={row.id} className="border-t border-slate-100">
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedProductIds.has(String(row.id))}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setSelectedProductIds((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(String(row.id));
+                              else next.delete(String(row.id));
+                              return next;
+                            });
+                            setApplyToAllMatching(false);
+                          }}
+                          aria-label={`Pilih produk ${row.name}`}
+                        />
+                      </td>
                       <td className="px-3 py-2 font-semibold text-slate-800">{row.name}</td>
                       <td className="px-3 py-2 text-slate-600">{row.sku}</td>
                       <td className="px-3 py-2 text-slate-700">{formatCurrency(row.previewRegular)}</td>
@@ -439,17 +547,33 @@ export default function SalesTierPricingPage() {
             </label>
           </div>
 
+          <label className="flex items-center gap-2 text-[11px] text-slate-700">
+            <input
+              type="checkbox"
+              checked={applyToAllMatching}
+              onChange={(e) => {
+                setApplyToAllMatching(e.target.checked);
+                setSelectedProductIds(new Set());
+              }}
+            />
+            Terapkan ke semua produk aktif sesuai filter (lintas halaman)
+          </label>
+
           <button
             type="button"
             onClick={() => void handleApplyBulkDiscount()}
             disabled={applyingDiscount}
             className="w-full inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-bold bg-emerald-600 text-white disabled:opacity-50"
           >
-            {applyingDiscount ? 'Menerapkan...' : 'Terapkan ke Semua Produk Aktif'}
+            {applyingDiscount
+              ? 'Menerapkan...'
+              : applyToAllMatching
+                ? 'Terapkan ke Semua Produk (Filter)'
+                : 'Terapkan ke Produk Dipilih'}
           </button>
 
           <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-[11px] text-emerald-700">
-            Diskon tier global adalah fallback default. Jika kategori punya diskon sendiri, checkout akan memakai diskon kategori.
+            Penetapan harga tier per-produk mengalahkan aturan diskon per-kategori saat checkout. Diskon kategori tetap dipakai jika produk tidak punya harga tier tersimpan.
           </div>
         </div>
       </div>

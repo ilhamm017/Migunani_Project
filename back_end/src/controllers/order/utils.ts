@@ -206,17 +206,51 @@ export const resolveShippingMethodForCheckout = async (codeRaw: unknown): Promis
 
 
 export const resolveTierPriceFromVariant = (basePrice: number, tier: string, variantRaw: unknown): number => {
-    if (tier === 'regular') return basePrice;
+    const normalizedTier = String(tier || 'regular').trim().toLowerCase() === 'premium'
+        ? 'platinum'
+        : String(tier || 'regular').trim().toLowerCase();
 
     const source = toObjectOrEmpty(variantRaw);
     const prices = toObjectOrEmpty(source.prices);
+
+    const toFiniteNumber = (value: unknown): number | null => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return null;
+        return parsed;
+    };
+
+    const resolveBasePriceFallback = (): number => {
+        const normalizedBase = toFiniteNumber(basePrice);
+        if (normalizedBase !== null && normalizedBase > 0) return normalizedBase;
+
+        const baseCandidates: unknown[] = [
+            prices.regular,
+            source.regular,
+            prices.base_price,
+            source.base_price,
+            prices.price,
+            source.price
+        ];
+
+        for (const candidate of baseCandidates) {
+            const parsed = toFiniteNumber(candidate);
+            if (parsed !== null && parsed > 0) return parsed;
+        }
+
+        return Math.max(0, Number(basePrice || 0));
+    };
+
+    const effectiveBasePrice = resolveBasePriceFallback();
+
+    if (normalizedTier === 'regular') return effectiveBasePrice;
+
     const discounts = toObjectOrEmpty(source.discounts_pct);
-    const aliases = tier === 'platinum' ? ['premium'] : [];
+    const aliases = normalizedTier === 'platinum' ? ['premium'] : [];
 
     const directCandidates: unknown[] = [
-        source[tier],
-        prices[tier],
-        toObjectOrEmpty(source[tier]).price
+        source[normalizedTier],
+        prices[normalizedTier],
+        toObjectOrEmpty(source[normalizedTier]).price
     ];
 
     for (const alias of aliases) {
@@ -229,9 +263,9 @@ export const resolveTierPriceFromVariant = (basePrice: number, tier: string, var
     }
 
     const discountCandidates: unknown[] = [
-        discounts[tier],
-        toObjectOrEmpty(source[tier]).discount_pct,
-        source[`${tier}_discount_pct`]
+        discounts[normalizedTier],
+        toObjectOrEmpty(source[normalizedTier]).discount_pct,
+        source[`${normalizedTier}_discount_pct`]
     ];
     for (const alias of aliases) {
         discountCandidates.push(discounts[alias], toObjectOrEmpty(source[alias]).discount_pct, source[`${alias}_discount_pct`]);
@@ -241,15 +275,46 @@ export const resolveTierPriceFromVariant = (basePrice: number, tier: string, var
         const discountPct = toFiniteNumber(discountRaw);
         if (discountPct === null) continue;
         if (discountPct < 0 || discountPct > 100) continue;
-        return Math.max(0, Math.round((basePrice * (1 - discountPct / 100)) * 100) / 100);
+        return Math.max(0, Math.round((effectiveBasePrice * (1 - discountPct / 100)) * 100) / 100);
     }
 
-    return basePrice;
+    return effectiveBasePrice;
+};
+
+const tryResolveTierPriceDirect = (variantRaw: unknown, tier: string): number | null => {
+    const normalizedTier = String(tier || 'regular').trim().toLowerCase() === 'premium'
+        ? 'platinum'
+        : String(tier || 'regular').trim().toLowerCase();
+    if (normalizedTier === 'regular') return null;
+
+    const source = toObjectOrEmpty(variantRaw);
+    const prices = toObjectOrEmpty(source.prices);
+    const aliases = normalizedTier === 'platinum' ? ['premium'] : [];
+
+    const directCandidates: unknown[] = [
+        source[normalizedTier],
+        prices[normalizedTier],
+        toObjectOrEmpty(source[normalizedTier]).price
+    ];
+    for (const alias of aliases) {
+        directCandidates.push(source[alias], prices[alias], toObjectOrEmpty(source[alias]).price);
+    }
+
+    for (const candidate of directCandidates) {
+        const parsed = Number(candidate);
+        if (!Number.isFinite(parsed)) continue;
+        return Math.max(0, parsed);
+    }
+
+    return null;
 };
 
 export const resolveCategoryDiscountPct = (categoryRaw: unknown, tier: string): number | null => {
     const category = toObjectOrEmpty(categoryRaw);
-    const key = tier === 'platinum' ? 'discount_premium_pct' : `discount_${tier}_pct`;
+    const normalizedTier = String(tier || 'regular').trim().toLowerCase() === 'premium'
+        ? 'platinum'
+        : String(tier || 'regular').trim().toLowerCase();
+    const key = normalizedTier === 'platinum' ? 'discount_premium_pct' : `discount_${normalizedTier}_pct`;
     const rawValue = category[key];
     const parsed = toFiniteNumber(rawValue);
     if (parsed === null) return null;
@@ -263,22 +328,33 @@ export const resolveEffectiveTierPricing = (
     variantRaw: unknown,
     categoryRaw: unknown
 ): { finalPrice: number; discountPct: number; discountSource: 'category' | 'tier_fallback' | 'none' } => {
-    const tier = String(tierRaw || 'regular').toLowerCase();
-    const categoryDiscountPct = resolveCategoryDiscountPct(categoryRaw, tier);
+    const tier = String(tierRaw || 'regular').trim().toLowerCase();
+    const normalizedTier = tier === 'premium' ? 'platinum' : tier;
+    const effectiveBasePrice = resolveTierPriceFromVariant(basePrice, 'regular', variantRaw);
+
+    const directTierPrice = tryResolveTierPriceDirect(variantRaw, normalizedTier);
+    if (directTierPrice !== null) {
+        const discountPct = effectiveBasePrice <= 0
+            ? 0
+            : Math.min(100, Math.max(0, Math.round((((effectiveBasePrice - directTierPrice) / effectiveBasePrice) * 100) * 100) / 100));
+        return { finalPrice: directTierPrice, discountPct, discountSource: 'tier_fallback' };
+    }
+
+    const categoryDiscountPct = resolveCategoryDiscountPct(categoryRaw, normalizedTier);
     if (categoryDiscountPct !== null) {
-        const finalPrice = Math.max(0, Math.round((basePrice * (1 - categoryDiscountPct / 100)) * 100) / 100);
+        const finalPrice = Math.max(0, Math.round((effectiveBasePrice * (1 - categoryDiscountPct / 100)) * 100) / 100);
         return { finalPrice, discountPct: categoryDiscountPct, discountSource: 'category' };
     }
 
-    if (tier === 'regular') {
-        return { finalPrice: basePrice, discountPct: 0, discountSource: 'none' };
+    if (normalizedTier === 'regular') {
+        return { finalPrice: effectiveBasePrice, discountPct: 0, discountSource: 'none' };
     }
 
-    const tierFallbackPrice = resolveTierPriceFromVariant(basePrice, tier, variantRaw);
+    const tierFallbackPrice = resolveTierPriceFromVariant(effectiveBasePrice, normalizedTier, variantRaw);
     const normalizedPrice = Math.max(0, tierFallbackPrice);
-    const discountPct = basePrice <= 0
+    const discountPct = effectiveBasePrice <= 0
         ? 0
-        : Math.min(100, Math.max(0, Math.round((((basePrice - normalizedPrice) / basePrice) * 100) * 100) / 100));
+        : Math.min(100, Math.max(0, Math.round((((effectiveBasePrice - normalizedPrice) / effectiveBasePrice) * 100) * 100) / 100));
     return { finalPrice: normalizedPrice, discountPct, discountSource: 'tier_fallback' };
 };
 
@@ -287,8 +363,6 @@ export const resolveEffectiveTierPricing = (
 
 
 // --- Admin Endpoints ---
-
-
 
 
 

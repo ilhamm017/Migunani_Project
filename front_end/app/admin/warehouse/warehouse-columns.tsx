@@ -9,6 +9,7 @@ type InlineField = 'barcode' | 'name' | 'bin_location' | 'min_stock' | 'base_pri
 
 export interface WarehouseTableMeta {
     isEditMode?: boolean;
+    pageStart?: number;
     onInlineUpdate?: (product: ProductRow, field: InlineField, value: string | number) => Promise<void> | void;
     onAdjustStock?: (product: ProductRow, nextStock: number) => Promise<void> | void;
     onExpandEdit?: (product: ProductRow) => void;
@@ -327,6 +328,16 @@ const StatusCell = ({ row }: { row: Row<ProductRow> }) => {
 };
 
 export const warehouseColumns: ColumnDef<ProductRow>[] = [
+    {
+        id: 'no',
+        header: () => <span className="font-bold text-slate-600 text-[11px] uppercase tracking-wider text-center w-full block">No.</span>,
+        cell: ({ row, table }) => {
+            const meta = getMeta(table);
+            const start = meta.pageStart ?? 1;
+            return <div className="text-center text-xs font-bold text-slate-400">{start + row.index}</div>;
+        },
+        size: 50,
+    },
     {
         accessorKey: 'sku',
         header: ({ column }) => (
