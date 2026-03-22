@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
+import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -919,25 +919,26 @@ export default function AdminOverviewPage() {
     { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
   ];
   const featureCategories = [
-    {
-      group: 'Logistics & Inventory',
-      tone: 'text-blue-600 bg-blue-50 border-blue-100',
-      menus: [
-        { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
-        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
+	    {
+	      group: 'Logistics & Inventory',
+	      tone: 'text-blue-600 bg-blue-50 border-blue-100',
+	      menus: [
+	        { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
+	        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
         { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
         { href: '/admin/warehouse/helper', title: 'Picker Helper', desc: 'Picking list gudang.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
         { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
         { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
         { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
-        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
-        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
-        { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
-        { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Input stok masuk.', icon: ShoppingCart },
-        { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor pengadaan.', icon: Clock },
-        { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
-      ]
-    },
+	        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
+	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
+	        { href: '/admin/warehouse/vehicle-types', title: 'Jenis Kendaraan', desc: 'Master aplikasi kendaraan.', icon: Car },
+	        { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
+	        { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Input stok masuk.', icon: ShoppingCart },
+	        { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor pengadaan.', icon: Clock },
+	        { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
+	      ]
+	    },
     {
       group: 'Sales & Customer',
       tone: 'text-emerald-600 bg-emerald-50 border-emerald-100',
