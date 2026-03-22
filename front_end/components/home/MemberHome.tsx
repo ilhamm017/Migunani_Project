@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { TrendingUp, Package, ShoppingCart, MessageSquare, ArrowRight, ScanLine, CreditCard, Search } from 'lucide-react';
+import { Package, ShoppingCart, MessageSquare, ArrowRight, ScanLine, CreditCard, Search, Boxes, ReceiptText } from 'lucide-react';
 import ProductCard from '@/components/product/ProductCard';
 import ProductGrid from '@/components/product/ProductGrid';
 import { useCartStore } from '@/store/cartStore';
@@ -29,26 +29,33 @@ type MyOrderSummary = {
   Invoice?: OrderInvoiceSummary | null;
 };
 
-const combinedStats = [
-  { label: 'Produk', value: '120+', color: 'bg-emerald-500', trend: 'Tersedia', icon: Package },
-  { label: 'Kategori', value: '8', color: 'bg-blue-500', trend: 'Lengkap', icon: TrendingUp },
-  { label: 'Promo', value: '5', color: 'bg-amber-500', trend: 'Aktif', icon: CreditCard },
-  { label: 'Chat', value: '24/7', color: 'bg-indigo-500', trend: 'Online', icon: MessageSquare },
-];
+type HomeMeta = {
+  productCount: number;
+  categoryCount: number;
+  orderCount: number;
+};
+
+const formatCount = (value: number) => {
+  if (!Number.isFinite(value)) return '0';
+  return Math.max(0, Math.trunc(value)).toLocaleString('id-ID');
+};
 
 export default function MemberHome() {
   const [products, setProducts] = useState<ProductPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
+  const cartCount = useCartStore((state) => state.totalItems);
   const [invoiceSummary, setInvoiceSummary] = useState({ count: 0, total: 0 });
+  const [meta, setMeta] = useState<HomeMeta>({ productCount: 0, categoryCount: 0, orderCount: 0 });
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const [productsRes, ordersRes] = await Promise.all([
-          api.catalog.getProducts({ limit: 4 }),
-          api.orders.getMyOrders({ page: 1, limit: 200 })
+        const [productsRes, categoriesRes, ordersRes] = await Promise.all([
+          api.catalog.getProducts({ page: 1, limit: 4 }),
+          api.catalog.getCategories({ limit: 20 }),
+          api.orders.getMyOrders({ page: 1, limit: 200 }),
         ]);
         const nextProducts: ProductPreview[] = Array.isArray(productsRes.data?.products)
           ? productsRes.data.products.map((product: Record<string, unknown>) => ({
@@ -90,6 +97,13 @@ export default function MemberHome() {
         });
         const total = unpaidInvoices.reduce((sum, inv) => sum + Number(inv?.total || 0), 0);
         setInvoiceSummary({ count: unpaidInvoices.length, total });
+
+        const categoryRows = Array.isArray(categoriesRes.data?.categories) ? categoriesRes.data.categories : [];
+        setMeta({
+          productCount: Number(productsRes.data?.total ?? nextProducts.length),
+          categoryCount: categoryRows.length,
+          orderCount: Number(ordersRes.data?.total ?? orders.length),
+        });
       } catch (error) {
         console.error('Failed to load home data:', error);
       } finally {
@@ -103,14 +117,14 @@ export default function MemberHome() {
     const product = products.find((item) => String(item.id) === String(productId));
     if (!product) return;
 
-	    addItem({
-	      id: String(product.id),
-	      productId: String(product.id),
-	      productName: product.name,
-	      price: Number(product.price),
-	      quantity: 1,
-	      imageUrl: product.image_url ?? undefined,
-	    });
+    addItem({
+      id: String(product.id),
+      productId: String(product.id),
+      productName: product.name,
+      price: Number(product.price),
+      quantity: 1,
+      imageUrl: product.image_url ?? undefined,
+    });
 
     try {
       await api.cart.addToCart({ productId: String(product.id), quantity: 1 });
@@ -118,6 +132,13 @@ export default function MemberHome() {
       console.error('Failed to add to cart:', error);
     }
   };
+
+  const combinedStats = [
+    { label: 'Produk', value: loading ? '...' : formatCount(meta.productCount), color: 'bg-emerald-500', trend: 'Aktif', icon: Boxes },
+    { label: 'Kategori', value: loading ? '...' : formatCount(meta.categoryCount), color: 'bg-blue-500', trend: 'Populer', icon: Package },
+    { label: 'Keranjang', value: formatCount(cartCount), color: 'bg-amber-500', trend: 'Item', icon: ShoppingCart },
+    { label: 'Pesanan', value: loading ? '...' : formatCount(meta.orderCount), color: 'bg-indigo-500', trend: 'Riwayat', icon: ReceiptText },
+  ] as const;
 
   return (
     <div className="p-6 space-y-8">
@@ -181,15 +202,15 @@ export default function MemberHome() {
         ) : (
           <ProductGrid>
             {products.map((product) => (
-	              <ProductCard
-	                key={product.id}
-	                id={String(product.id)}
-	                name={product.name}
-	                price={Number(product.price)}
-	                imageUrl={product.image_url ?? undefined}
-	                stock={Number(product.stock_quantity)}
-	                onAddToCart={handleAddToCart}
-	              />
+              <ProductCard
+                key={product.id}
+                id={String(product.id)}
+                name={product.name}
+                price={Number(product.price)}
+                imageUrl={product.image_url ?? undefined}
+                stock={Number(product.stock_quantity)}
+                onAddToCart={handleAddToCart}
+              />
             ))}
           </ProductGrid>
         )}

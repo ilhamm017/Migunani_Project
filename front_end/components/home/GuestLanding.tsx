@@ -57,18 +57,6 @@ const AUTO_GENERATED_CATEGORY_DESCRIPTIONS = new Set([
 
 type IconComponent = typeof Droplets;
 
-const fallbackProducts: CatalogProduct[] = [
-  { id: 'BAN-001', name: 'Ban Motor Tubeless 80/90-17', price: 250000, stock: 25, category: 'Ban Motor' },
-  { id: 'OLI-001', name: 'Oli Mesin Synthetic 1L - SHELL', price: 85000, stock: 50, category: 'Oli & Pelumas' },
-  { id: 'MSN-001', name: 'Piston Kit Honda Beat', price: 230000, stock: 8, category: 'Suku Cadang Mesin' },
-];
-
-const fallbackPopularCategories: PopularCategory[] = [
-  { id: 1, name: 'Oli & Pelumas', description: 'Pelumas mesin & cairan', icon: 'droplets' },
-  { id: 2, name: 'Suku Cadang Mesin', description: 'Komponen mesin harian', icon: 'settings' },
-  { id: 3, name: 'Ban Motor', description: 'Ban tubeless & harian', icon: 'circle-dot' },
-];
-
 const cardStyles = [
   { className: 'bg-emerald-50 text-emerald-700', bubbleClassName: 'bg-emerald-100' },
   { className: 'bg-blue-50 text-blue-700', bubbleClassName: 'bg-blue-100' },
@@ -87,30 +75,32 @@ const categoryIconMap: Record<string, IconComponent> = {
 };
 
 export default function GuestLanding() {
-  const [products, setProducts] = useState<CatalogProduct[]>(fallbackProducts);
-  const [popularCategories, setPopularCategories] = useState<PopularCategory[]>(fallbackPopularCategories);
+  const [products, setProducts] = useState<CatalogProduct[]>([]);
+  const [popularCategories, setPopularCategories] = useState<PopularCategory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [productTotal, setProductTotal] = useState<number | null>(null);
 
   useEffect(() => {
     const loadLandingData = async () => {
       try {
         const [productResponse, categoriesResponse] = await Promise.all([
           api.catalog.getProducts({ page: 1, limit: 6 }),
-          api.catalog.getCategories({ limit: 3 }),
+          api.catalog.getCategories({ limit: 6 }),
         ]);
 
         const rows: ProductApiRow[] = Array.isArray(productResponse.data?.products) ? productResponse.data.products : [];
         const categoryRows: CategoryApiRow[] = Array.isArray(categoriesResponse.data?.categories) ? categoriesResponse.data.categories : [];
 
-        const mapped: CatalogProduct[] = rows.slice(0, 3).map((item) => ({
+        const mapped: CatalogProduct[] = rows.slice(0, 6).map((item) => ({
           id: String(item.id),
           name: item.name,
           price: Number(item.price),
           stock: Number(item.stock_quantity || 0),
           category: item.Category?.name || 'Sparepart',
         }));
+        setProductTotal(Number.isFinite(Number(productResponse.data?.total)) ? Number(productResponse.data?.total) : null);
 
-        const mappedCategories: PopularCategory[] = categoryRows.slice(0, 3).map((item) => ({
+        const mappedCategories: PopularCategory[] = categoryRows.slice(0, 6).map((item) => ({
           id: Number(item.id),
           name: String(item.name || ''),
           description: (() => {
@@ -122,12 +112,8 @@ export default function GuestLanding() {
           icon: item.icon ? String(item.icon).toLowerCase() : null,
         }));
 
-        if (mapped.length > 0) {
-          setProducts(mapped);
-        }
-        if (mappedCategories.length > 0) {
-          setPopularCategories(mappedCategories);
-        }
+        setProducts(mapped);
+        setPopularCategories(mappedCategories);
       } catch (error) {
         console.error('Failed to load guest landing data:', error);
       } finally {
@@ -153,6 +139,7 @@ export default function GuestLanding() {
           </h1>
           <p className="text-sm text-slate-200 leading-relaxed max-w-[280px]">
             Belanja sparepart motor dengan harga transparan, stok real-time, dan dukungan admin via WhatsApp.
+            {productTotal !== null ? ` (${productTotal.toLocaleString('id-ID')} produk aktif)` : ''}
           </p>
           <div className="pt-3 flex gap-3">
             <Link href="/catalog" className="bg-emerald-600 px-5 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-emerald-900/30 active:scale-95 transition-all">
@@ -191,34 +178,51 @@ export default function GuestLanding() {
           </Link>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {popularCategories.map((category, index) => {
-            const style = cardStyles[index % cardStyles.length];
-            const iconKey = category.icon ? category.icon.toLowerCase().replace(/_/g, '-') : '';
-            const Icon = iconKey ? categoryIconMap[iconKey] : undefined;
-            return (
-              <Link
-                key={`${category.id}-${category.name}`}
-                href={`/catalog?search=${encodeURIComponent(category.name)}`}
-                className={`rounded-[28px] p-5 flex flex-col gap-3 relative overflow-hidden active:scale-95 transition-transform ${style.className}`}
-              >
-                {Icon ? <Icon size={30} /> : null}
-                <div>
-                  <h3 className="font-bold">{category.name}</h3>
-                  <p className="text-xs opacity-80">{category.description || 'Kategori sparepart'}</p>
-                </div>
-                <div className={`absolute -right-4 -bottom-4 w-16 h-16 rounded-full opacity-50 ${style.bubbleClassName}`}></div>
-              </Link>
-            );
-          })}
+          {loading ? (
+            Array.from({ length: 3 }).map((_, idx) => (
+              <div
+                key={idx}
+                className="rounded-[28px] p-5 bg-slate-100 border border-slate-200 animate-pulse h-[110px]"
+              />
+            ))
+          ) : popularCategories.length === 0 ? (
+            <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-sm">
+              <p className="text-sm text-slate-500">Kategori belum tersedia.</p>
+            </div>
+          ) : (
+            popularCategories.slice(0, 3).map((category, index) => {
+              const style = cardStyles[index % cardStyles.length];
+              const iconKey = category.icon ? category.icon.toLowerCase().replace(/_/g, '-') : '';
+              const Icon = iconKey ? categoryIconMap[iconKey] : undefined;
+              return (
+                <Link
+                  key={`${category.id}-${category.name}`}
+                  href={`/catalog?search=${encodeURIComponent(category.name)}`}
+                  className={`rounded-[28px] p-5 flex flex-col gap-3 relative overflow-hidden active:scale-95 transition-transform ${style.className}`}
+                >
+                  {Icon ? <Icon size={30} /> : null}
+                  <div>
+                    <h3 className="font-bold">{category.name}</h3>
+                    <p className="text-xs opacity-80">{category.description || 'Kategori sparepart'}</p>
+                  </div>
+                  <div className={`absolute -right-4 -bottom-4 w-16 h-16 rounded-full opacity-50 ${style.bubbleClassName}`}></div>
+                </Link>
+              );
+            })
+          )}
         </div>
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest leading-none">Produk Terlaris</h2>
+        <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest leading-none">Produk Pilihan</h2>
         <div className="space-y-3">
           {loading ? (
             <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-sm">
               <p className="text-sm text-slate-500">Memuat produk unggulan...</p>
+            </div>
+          ) : products.length === 0 ? (
+            <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-sm">
+              <p className="text-sm text-slate-500">Produk belum tersedia.</p>
             </div>
           ) : (
             products.map((product) => (
