@@ -3,11 +3,12 @@ import ExcelJS from 'exceljs';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
-import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
+import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine, Setting } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
+import { VEHICLE_TYPES_SETTING_KEY, buildCanonicalVehicleMap, canonicalizeVehicleList, dedupeCaseInsensitive, parseVehicleCompatibilityInput, toVehicleCompatibilityDbValue } from '../../utils/vehicleCompatibility';
 
 export const ALLOWED_IMPORT_EXTENSIONS = new Set(['.xlsx', '.xls', '.csv']);
 export const REQUIRED_IMPORT_HEADERS = [
@@ -90,6 +91,7 @@ export interface ImportSummary {
 export interface ImportResult {
     summary: ImportSummary;
     errors: ImportErrorItem[];
+    added_vehicle_types?: string[];
 }
 
 export interface ImportPreviewRow {
@@ -1030,6 +1032,69 @@ export const commitNormalizedRows = async (
     initialErrors: ImportErrorItem[] = []
 ): Promise<ImportResult> => {
     await ensureProductColumnsReady();
+
+    // Auto-add any new vehicle compatibility tokens into master list, then normalize rows into canonical JSON array format.
+    let addedVehicleTypes: string[] = [];
+    const allVehicleTokens: string[] = [];
+    const perRowTokens = new Map<number, string[]>();
+    for (const row of rows) {
+        if (row.vehicleCompatibility === undefined) continue;
+        const tokens = parseVehicleCompatibilityInput(row.vehicleCompatibility);
+        perRowTokens.set(row.row, tokens);
+        allVehicleTokens.push(...tokens);
+    }
+
+    const uniqueTokens = dedupeCaseInsensitive(allVehicleTokens);
+    let canonicalVehicleMap = new Map<string, string>();
+    if (uniqueTokens.length > 0) {
+        const t = await sequelize.transaction();
+        try {
+            const existingSetting = await Setting.findByPk(VEHICLE_TYPES_SETTING_KEY, { transaction: t, lock: t.LOCK.UPDATE });
+            const existingOptionsRaw = Array.isArray(existingSetting?.value) ? existingSetting?.value : [];
+            const existingOptions = dedupeCaseInsensitive(existingOptionsRaw.map((v: any) => String(v ?? '')));
+            const existingMap = buildCanonicalVehicleMap(existingOptions);
+
+            const nextOptions = dedupeCaseInsensitive([...existingOptions, ...uniqueTokens]);
+            const nextMap = buildCanonicalVehicleMap(nextOptions);
+
+            addedVehicleTypes = nextOptions.filter((opt) => !existingMap.has(opt.toLowerCase()));
+
+            await Setting.upsert(
+                {
+                    key: VEHICLE_TYPES_SETTING_KEY,
+                    value: nextOptions,
+                    description: 'Master list aplikasi/jenis kendaraan untuk field products.vehicle_compatibility'
+                },
+                { transaction: t }
+            );
+            await t.commit();
+
+            canonicalVehicleMap = nextMap;
+        } catch (error) {
+            try { await t.rollback(); } catch { }
+            throw error;
+        }
+
+        // Apply canonical normalization into row.vehicleCompatibility as JSON string (or null).
+        for (const row of rows) {
+            if (row.vehicleCompatibility === undefined) continue;
+            const tokens = perRowTokens.get(row.row) ?? parseVehicleCompatibilityInput(row.vehicleCompatibility);
+            if (tokens.length === 0) {
+                row.vehicleCompatibility = null;
+                continue;
+            }
+            const { canonical } = canonicalizeVehicleList(tokens, canonicalVehicleMap);
+            row.vehicleCompatibility = toVehicleCompatibilityDbValue(canonical);
+        }
+    } else {
+        // If no input tokens exist, still normalize any provided values to null/JSON array shape.
+        for (const row of rows) {
+            if (row.vehicleCompatibility === undefined) continue;
+            const tokens = perRowTokens.get(row.row) ?? parseVehicleCompatibilityInput(row.vehicleCompatibility);
+            row.vehicleCompatibility = tokens.length === 0 ? null : toVehicleCompatibilityDbValue(dedupeCaseInsensitive(tokens));
+        }
+    }
+
     const batchReference = `IMPORT-${Date.now()}`;
     const summary: ImportSummary = {
         total_rows: totalRows,
@@ -1141,7 +1206,7 @@ export const commitNormalizedRows = async (
         }
     }
 
-    return { summary, errors };
+    return { summary, errors, added_vehicle_types: addedVehicleTypes };
 };
 
 export const runInventoryImportFromBuffer = async (buffer: Buffer | Uint8Array, originalName: string): Promise<ImportResult> => {
@@ -1263,8 +1328,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
-
 
 
 

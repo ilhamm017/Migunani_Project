@@ -295,6 +295,11 @@ export const api = {
                 apiClient.get('/admin/products', { params }),
             getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>
                 apiClient.get('/admin/products/restock-suggestions', { params }),
+            getVehicleTypes: () => apiClient.get('/admin/vehicle-types'),
+            createVehicleType: (data: { name: string }) => apiClient.post('/admin/vehicle-types', data),
+            renameVehicleType: (data: { from: string; to: string }) => apiClient.patch('/admin/vehicle-types/rename', data),
+            deleteVehicleType: (data: { name: string; replacement?: string }) =>
+                apiClient.delete('/admin/vehicle-types', { data }),
             getCategories: () => apiClient.get('/admin/categories'),
             createCategory: (data: { name: string; description?: string; icon?: string }) =>
                 apiClient.post('/admin/categories', data),

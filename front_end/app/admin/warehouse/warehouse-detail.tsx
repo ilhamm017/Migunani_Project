@@ -40,7 +40,7 @@ interface EditFormState {
     grosir_price: string;
     total_modal: string;
     bin_location: string;
-    vehicle_compatibility: string;
+    vehicle_compatibility: string[];
 }
 
 interface ProductAllocationRow {
@@ -219,6 +219,38 @@ const parseGrosirConfig = (value: unknown, fallbackPrice: number): { minQty: num
     };
 };
 
+const parseVehicleCompatibilityToArray = (value: unknown): string[] => {
+    const raw = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+    if (!raw) return [];
+
+    let tokens: string[] = [];
+    if (raw.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                tokens = parsed.map((item) => String(item ?? '').trim()).filter(Boolean);
+            }
+        } catch {
+            // fallthrough
+        }
+    }
+    if (tokens.length === 0) {
+        tokens = raw.split(/[\n,;|]+/g).map((t) => t.trim()).filter(Boolean);
+    }
+
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const token of tokens) {
+        const normalized = token.replace(/\s+/g, ' ').trim();
+        if (!normalized) continue;
+        const key = normalized.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(normalized);
+    }
+    return result;
+};
+
 const toFormState = (product: ProductRow): EditFormState => {
     const sellingPrice = Math.max(0, Number(product.price || 0));
     const discounts = parseVarianDiscounts(product.varian_harga, sellingPrice);
@@ -247,7 +279,7 @@ const toFormState = (product: ProductRow): EditFormState => {
         grosir_price: String(grosir.price),
         total_modal: product.total_modal === null || product.total_modal === undefined ? '' : String(product.total_modal),
         bin_location: String(product.bin_location || ''),
-        vehicle_compatibility: String(product.vehicle_compatibility || ''),
+        vehicle_compatibility: parseVehicleCompatibilityToArray(product.vehicle_compatibility),
     };
 };
 
@@ -278,6 +310,8 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
     const [form, setForm] = useState<EditFormState | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const [vehicleOptions, setVehicleOptions] = useState<string[]>([]);
+    const [loadingVehicleOptions, setLoadingVehicleOptions] = useState(false);
 
     useEffect(() => {
         if (!product) {
@@ -291,6 +325,19 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
         setForm(toFormState(product));
         setFeedback(null);
     }, [product]);
+
+    useEffect(() => {
+        setLoadingVehicleOptions(true);
+        api.admin.inventory.getVehicleTypes()
+            .then((res) => {
+                const list = Array.isArray(res.data?.options) ? res.data.options : [];
+                setVehicleOptions(list.map((v: unknown) => String(v ?? '').trim()).filter(Boolean));
+            })
+            .catch(() => {
+                setVehicleOptions([]);
+            })
+            .finally(() => setLoadingVehicleOptions(false));
+    }, []);
 
     useEffect(() => {
         if (!product?.id) {
@@ -389,7 +436,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
         );
     }
 
-    const setField = (key: keyof EditFormState, value: string) => {
+    const setField = <K extends keyof EditFormState>(key: K, value: EditFormState[K]) => {
         setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
     };
 
@@ -439,7 +486,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                 grosir,
                 total_modal: totalModal,
                 bin_location: form.bin_location.trim() || null,
-                vehicle_compatibility: form.vehicle_compatibility.trim() || null,
+                vehicle_compatibility: form.vehicle_compatibility.length > 0 ? form.vehicle_compatibility : null,
             };
 
             const updateRes = await api.admin.inventory.updateProduct(product.id, updatePayload);
@@ -457,19 +504,19 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             }
 
             const updatedCategoryName = categories.find((item) => item.id === categoryId)?.name;
-            const mergedProduct: ProductRow = {
-                ...product,
-                ...(updateRes.data || {}),
+	            const mergedProduct: ProductRow = {
+	                ...product,
+	                ...(updateRes.data || {}),
                 stock_quantity: nextStock,
                 min_stock: minStock,
                 base_price: basePrice,
                 category_id: categoryId,
                 Category: updatedCategoryName ? { name: updatedCategoryName } : product.Category,
                 grosir,
-                total_modal: totalModal,
-                bin_location: form.bin_location.trim() || null,
-                vehicle_compatibility: form.vehicle_compatibility.trim() || null,
-            };
+	                total_modal: totalModal,
+	                bin_location: form.bin_location.trim() || null,
+	                vehicle_compatibility: form.vehicle_compatibility.length > 0 ? JSON.stringify(form.vehicle_compatibility) : null,
+	            };
 
             setForm(toFormState(mergedProduct));
             setFeedback({ type: 'success', message: 'Data produk berhasil diperbarui.' });
@@ -654,7 +701,40 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                 </label>
                                 <label className="col-span-2">
                                     <span className="text-[11px] text-slate-500 font-semibold">Vehicle Compatibility</span>
-                                    <textarea value={form.vehicle_compatibility} onChange={(e) => setField('vehicle_compatibility', e.target.value)} rows={2} className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500 resize-none" />
+                                    {loadingVehicleOptions ? (
+                                        <div className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-400">
+                                            Memuat master jenis kendaraan...
+                                        </div>
+                                    ) : vehicleOptions.length === 0 ? (
+                                        <div className="mt-1 w-full rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
+                                            Master jenis kendaraan belum ada. Tambahkan dulu di menu{' '}
+                                            <Link href="/admin/warehouse/vehicle-types" className="font-black underline underline-offset-2">
+                                                Jenis Kendaraan
+                                            </Link>
+                                            .
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <select
+                                                multiple
+                                                value={form.vehicle_compatibility}
+                                                onChange={(e) => {
+                                                    const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value);
+                                                    setField('vehicle_compatibility', selected);
+                                                }}
+                                                className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500 bg-white"
+                                            >
+                                                {vehicleOptions.map((opt) => (
+                                                    <option key={opt} value={opt}>
+                                                        {opt}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <p className="mt-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                                                Pilih 1+ item (Ctrl/⌘ untuk multi-select)
+                                            </p>
+                                        </>
+                                    )}
                                 </label>
                             </div>
                         </section>

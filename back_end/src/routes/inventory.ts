@@ -36,6 +36,10 @@ const uploadImportMiddleware = (req: Request, res: Response, next: NextFunction)
 // Protected Routes (Admin/Gudang + role operasional order intake)
 router.get('/admin/products', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProducts);
 router.get('/admin/products/restock-suggestions', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getRestockSuggestions);
+router.get('/admin/vehicle-types', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getVehicleTypes);
+router.post('/admin/vehicle-types', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createVehicleType);
+router.patch('/admin/vehicle-types/rename', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.renameVehicleType);
+router.delete('/admin/vehicle-types', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.deleteVehicleType);
 router.get('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getCategories);
 router.post('/admin/categories', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createCategory);
 router.put('/admin/categories/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.updateCategory);

@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
-import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
+import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine, Setting } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { Op, Transaction, UniqueConstraintError, ValidationError, col, where } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
@@ -11,6 +11,7 @@ import { TaxConfigService } from '../../services/TaxConfigService';
 import { syncProductCategories, toObjectOrEmpty, ensureProductColumnsReady, PRODUCT_IMAGE_MAX_SIZE_BYTES, toPercentageNumber, ALLOWED_PRODUCT_IMAGE_MIME_TYPES, toNonNegativeNumber, roundPrice, readCellText, resolveProductImageExtension } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { VEHICLE_TYPES_SETTING_KEY, buildCanonicalVehicleMap, canonicalizeVehicleList, parseVehicleCompatibilityInput, toVehicleCompatibilityDbValue } from '../../utils/vehicleCompatibility';
 
 export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -308,11 +309,19 @@ export const createProduct = asyncWrapper(async (req: Request, res: Response) =>
         const normalizedImageUrl = String(image_url ?? '').trim() || null;
         const normalizedDescription = String(description ?? '').trim() || null;
         const normalizedBinLocation = String(bin_location ?? '').trim() || null;
-        let normalizedVehicleCompatibility = vehicle_compatibility;
-        if (typeof vehicle_compatibility === 'object' && vehicle_compatibility !== null) {
-            normalizedVehicleCompatibility = JSON.stringify(vehicle_compatibility);
-        } else {
-            normalizedVehicleCompatibility = String(vehicle_compatibility ?? '').trim() || null;
+
+        const inputVehicleTokens = parseVehicleCompatibilityInput(vehicle_compatibility);
+        let normalizedVehicleCompatibility: string | null = null;
+        if (inputVehicleTokens.length > 0) {
+            const vehicleSetting = await Setting.findByPk(VEHICLE_TYPES_SETTING_KEY, { transaction: t, lock: t.LOCK.UPDATE });
+            const optionsRaw = Array.isArray(vehicleSetting?.value) ? vehicleSetting?.value : [];
+            const canonicalMap = buildCanonicalVehicleMap(optionsRaw.map((v: any) => String(v ?? '')));
+            const { canonical, unknown } = canonicalizeVehicleList(inputVehicleTokens, canonicalMap);
+            if (unknown.length > 0) {
+                await t.rollback();
+                throw new CustomError(`Jenis kendaraan belum terdaftar: ${unknown.join(', ')}. Tambah dulu di master.`, 400);
+            }
+            normalizedVehicleCompatibility = toVehicleCompatibilityDbValue(canonical);
         }
 
         const product = await Product.create({
@@ -418,12 +427,19 @@ export const updateProduct = asyncWrapper(async (req: Request, res: Response) =>
             updates.bin_location = String(updates.bin_location ?? '').trim() || null;
         }
         if (updates.vehicle_compatibility !== undefined) {
-            // vehicle_compatibility is TEXT, we might want to keep it as string or stringified JSON
-            const rawVal = updates.vehicle_compatibility;
-            if (typeof rawVal === 'object' && rawVal !== null) {
-                updates.vehicle_compatibility = JSON.stringify(rawVal);
+            const inputVehicleTokens = parseVehicleCompatibilityInput(updates.vehicle_compatibility);
+            if (inputVehicleTokens.length === 0) {
+                updates.vehicle_compatibility = null;
             } else {
-                updates.vehicle_compatibility = String(rawVal ?? '').trim() || null;
+                const vehicleSetting = await Setting.findByPk(VEHICLE_TYPES_SETTING_KEY, { transaction: t, lock: t.LOCK.UPDATE });
+                const optionsRaw = Array.isArray(vehicleSetting?.value) ? vehicleSetting?.value : [];
+                const canonicalMap = buildCanonicalVehicleMap(optionsRaw.map((v: any) => String(v ?? '')));
+                const { canonical, unknown } = canonicalizeVehicleList(inputVehicleTokens, canonicalMap);
+                if (unknown.length > 0) {
+                    await t.rollback();
+                    throw new CustomError(`Jenis kendaraan belum terdaftar: ${unknown.join(', ')}. Tambah dulu di master.`, 400);
+                }
+                updates.vehicle_compatibility = toVehicleCompatibilityDbValue(canonical);
             }
         }
 

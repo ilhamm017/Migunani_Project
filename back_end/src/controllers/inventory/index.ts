@@ -5,3 +5,4 @@ export * from './mutation';
 export * from './purchaseOrder';
 export * from './supplierInvoice';
 export * from './importLogic';
+export * from './vehicleTypes';

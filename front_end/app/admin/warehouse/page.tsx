@@ -8,7 +8,7 @@ import {
     Layers, Truck, ShoppingCart, ShieldCheck,
     ScanBarcode, FileSpreadsheet, ClipboardCheck,
     Package, TrendingDown, ChevronRight,
-    ArrowUpRight, Clock
+    ArrowUpRight, Clock, Car
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -132,6 +132,16 @@ export default function WarehouseLandingPage() {
             color: 'text-sky-600',
             bg: 'bg-sky-50',
             border: 'border-sky-100',
+            roles: ['super_admin', 'admin_gudang']
+        },
+        {
+            href: '/admin/warehouse/vehicle-types',
+            label: 'Jenis Kendaraan',
+            desc: 'Master aplikasi kendaraan produk',
+            icon: Car,
+            color: 'text-emerald-700',
+            bg: 'bg-emerald-50',
+            border: 'border-emerald-100',
             roles: ['super_admin', 'admin_gudang']
         },
         {
