@@ -5,7 +5,7 @@ import path from 'path';
 import { Readable } from 'stream';
 import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
 import { JournalService } from '../../services/JournalService';
-import { Op, Transaction, UniqueConstraintError, ValidationError } from 'sequelize';
+import { Op, Transaction, UniqueConstraintError, ValidationError, col, where } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
 import { syncProductCategories, toObjectOrEmpty, ensureProductColumnsReady, PRODUCT_IMAGE_MAX_SIZE_BYTES, toPercentageNumber, ALLOWED_PRODUCT_IMAGE_MIME_TYPES, toNonNegativeNumber, roundPrice, readCellText, resolveProductImageExtension } from './utils';
@@ -56,23 +56,52 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
             whereClause[Op.and] = [...(whereClause[Op.and] || []), categoryMatcher];
         }
 
-        const { count, rows } = await Product.findAndCountAll({
-            where: whereClause,
-            include: [
-                { model: Category, attributes: ['id', 'name'] },
-                { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
-            ],
-            limit: Number(limit),
-            offset: Number(offset),
-            order: [['name', 'ASC']],
-            distinct: true
-        });
+        const normalizedPage = Math.max(1, Number(page) || 1);
+        const normalizedLimit = Math.max(1, Number(limit) || 10);
+
+        const buildWhereWithAnd = (extras: any[]) => {
+            const next: any = { ...whereClause };
+            const existing = next[Op.and];
+            const andParts: any[] = [];
+            if (Array.isArray(existing)) andParts.push(...existing);
+            else if (existing) andParts.push(existing);
+            andParts.push(...extras);
+            next[Op.and] = andParts;
+            return next;
+        };
+
+        const [listResult, emptyStockCount, lowStockCount] = await Promise.all([
+            Product.findAndCountAll({
+                where: whereClause,
+                include: [
+                    { model: Category, attributes: ['id', 'name'] },
+                    { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
+                ],
+                limit: normalizedLimit,
+                offset: (normalizedPage - 1) * normalizedLimit,
+                order: [['name', 'ASC']],
+                distinct: true
+            }),
+            Product.count({
+                where: { ...whereClause, stock_quantity: 0 }
+            }),
+            Product.count({
+                where: buildWhereWithAnd([
+                    { stock_quantity: { [Op.gt]: 0 } },
+                    where(col('stock_quantity'), Op.lte, col('min_stock'))
+                ])
+            })
+        ]);
+
+        const { count, rows } = listResult;
 
         res.json({
             total: count,
-            totalPages: Math.ceil(count / Number(limit)),
-            currentPage: Number(page),
-            products: rows
+            totalPages: Math.ceil(count / normalizedLimit),
+            currentPage: normalizedPage,
+            emptyStockCount,
+            lowStockCount,
+            products: rows,
         });
     } catch (error) {
         if (error instanceof CustomError) throw error;

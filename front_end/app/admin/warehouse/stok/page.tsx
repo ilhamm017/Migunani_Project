@@ -36,6 +36,8 @@ export default function WarehouseInventoryPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalProducts, setTotalProducts] = useState(0);
+    const [emptyStockCount, setEmptyStockCount] = useState<number | null>(null);
+    const [lowStockCount, setLowStockCount] = useState<number | null>(null);
     const [selectedProduct, setSelectedProduct] = useState<ProductRow | null>(null);
     const [sorting, setSorting] = useState<SortingState>([]);
     const [isEditMode, setIsEditMode] = useState(false);
@@ -43,13 +45,17 @@ export default function WarehouseInventoryPage() {
 
     // Summary stats
     const stats = useMemo(() => {
-        const kosong = products.filter(p => Number(p.stock_quantity || 0) === 0).length;
-        const low = products.filter(p => {
+        const fallbackKosong = products.filter(p => Number(p.stock_quantity || 0) === 0).length;
+        const fallbackLow = products.filter(p => {
             const s = Number(p.stock_quantity || 0);
             return s > 0 && s <= Number(p.min_stock || 0);
         }).length;
-        return { total: totalProducts, kosong, low };
-    }, [products, totalProducts]);
+        return {
+            total: totalProducts,
+            kosong: emptyStockCount ?? fallbackKosong,
+            low: lowStockCount ?? fallbackLow,
+        };
+    }, [products, totalProducts, emptyStockCount, lowStockCount]);
 
     const loadProducts = useCallback(async () => {
         setLoading(true);
@@ -66,6 +72,10 @@ export default function WarehouseInventoryPage() {
             setProducts(res.data?.products || []);
             setTotalProducts(Number(res.data?.total || 0));
             setTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
+            const nextEmptyCount = Number(res.data?.emptyStockCount);
+            const nextLowCount = Number(res.data?.lowStockCount);
+            setEmptyStockCount(Number.isFinite(nextEmptyCount) ? nextEmptyCount : null);
+            setLowStockCount(Number.isFinite(nextLowCount) ? nextLowCount : null);
         } catch {
             // Silently handle errors
         } finally {
@@ -118,7 +128,21 @@ export default function WarehouseInventoryPage() {
         }
 
         if (field === 'min_stock' || field === 'base_price') {
-            patchProductState(product.id, { [field]: Number(value || 0) } as Partial<ProductRow>);
+            const nextNumber = Number(value || 0);
+            if (field === 'min_stock') {
+                const currentStock = Number(product.stock_quantity || 0);
+                const currentMin = Number(product.min_stock || 0);
+                const wasLow = currentStock > 0 && currentStock <= currentMin;
+                const nextLow = currentStock > 0 && currentStock <= nextNumber;
+                if (wasLow !== nextLow) {
+                    setLowStockCount((prev) => {
+                        if (prev === null) return prev;
+                        return prev + (nextLow ? 1 : 0) - (wasLow ? 1 : 0);
+                    });
+                }
+            }
+
+            patchProductState(product.id, { [field]: nextNumber } as Partial<ProductRow>);
             return;
         }
 
@@ -137,6 +161,22 @@ export default function WarehouseInventoryPage() {
             note: 'Penyesuaian stok dari inline mode edit Warehouse Command Center',
             reference_id: `WCC-INLINE-${Date.now()}`
         });
+
+        if (currentStock === 0 && nextStock > 0) {
+            setEmptyStockCount((prev) => (prev === null ? prev : Math.max(0, prev - 1)));
+        } else if (currentStock > 0 && nextStock === 0) {
+            setEmptyStockCount((prev) => (prev === null ? prev : prev + 1));
+        }
+
+        const minStock = Number(product.min_stock || 0);
+        const wasLow = currentStock > 0 && currentStock <= minStock;
+        const nextLow = nextStock > 0 && nextStock <= minStock;
+        if (wasLow !== nextLow) {
+            setLowStockCount((prev) => {
+                if (prev === null) return prev;
+                return prev + (nextLow ? 1 : 0) - (wasLow ? 1 : 0);
+            });
+        }
 
         patchProductState(product.id, { stock_quantity: nextStock });
     }, [patchProductState]);

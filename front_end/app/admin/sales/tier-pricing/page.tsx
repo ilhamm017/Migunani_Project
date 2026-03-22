@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, RefreshCw, Search } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
@@ -313,13 +313,31 @@ export default function SalesTierPricingPage() {
     });
   };
 
+  const selectedOnPageCount = useMemo(() => {
+    if (applyToAllMatching) return products.length;
+    let count = 0;
+    for (const row of products) {
+      if (selectedProductIds.has(String(row.id))) count += 1;
+    }
+    return count;
+  }, [applyToAllMatching, products, selectedProductIds]);
+
   const isAllSelectedOnPage = useMemo(() => {
     if (products.length === 0) return false;
+    if (applyToAllMatching) return true;
     for (const row of products) {
       if (!selectedProductIds.has(String(row.id))) return false;
     }
     return true;
-  }, [products, selectedProductIds]);
+  }, [applyToAllMatching, products, selectedProductIds]);
+
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const shouldIndeterminate = !applyToAllMatching && selectedOnPageCount > 0 && selectedOnPageCount < products.length;
+    selectAllRef.current.indeterminate = shouldIndeterminate;
+  }, [applyToAllMatching, products.length, selectedOnPageCount]);
 
   const selectedCountLabel = useMemo(() => {
     if (applyToAllMatching) return `Semua produk aktif sesuai filter (${totalProducts} produk)`;
@@ -412,6 +430,7 @@ export default function SalesTierPricingPage() {
                 setSearch(e.target.value);
                 setPage(1);
                 setApplyToAllMatching(false);
+                setSelectedProductIds(new Set());
               }}
               placeholder="Cari nama produk atau SKU"
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-sm"
@@ -421,6 +440,28 @@ export default function SalesTierPricingPage() {
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
             <div className="font-semibold">{selectedCountLabel}</div>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setApplyToAllMatching(false);
+                  toggleSelectAllOnPage(true);
+                }}
+                disabled={loadingProducts || products.length === 0 || applyToAllMatching}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-bold disabled:opacity-50"
+              >
+                Pilih Halaman Ini
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setApplyToAllMatching(false);
+                  setSelectedProductIds(new Set());
+                }}
+                disabled={loadingProducts || (selectedProductIds.size === 0 && !applyToAllMatching)}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-bold disabled:opacity-50"
+              >
+                Clear
+              </button>
               <button
                 type="button"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -455,10 +496,19 @@ export default function SalesTierPricingPage() {
                     <th className="px-3 py-2 font-black uppercase w-10">
                       <input
                         type="checkbox"
+                        ref={selectAllRef}
                         checked={isAllSelectedOnPage}
-                        onChange={(e) => toggleSelectAllOnPage(e.target.checked)}
-                        disabled={applyToAllMatching}
-                        aria-label="Pilih semua produk di halaman ini"
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          if (checked) {
+                            setApplyToAllMatching(true);
+                            setSelectedProductIds(new Set());
+                            return;
+                          }
+                          setApplyToAllMatching(false);
+                          setSelectedProductIds(new Set());
+                        }}
+                        aria-label="Pilih semua produk (lintas halaman) / Uncheck untuk clear"
                       />
                     </th>
                     <th className="px-3 py-2 font-black uppercase">Produk</th>
@@ -474,7 +524,7 @@ export default function SalesTierPricingPage() {
                       <td className="px-3 py-2">
                         <input
                           type="checkbox"
-                          checked={selectedProductIds.has(String(row.id))}
+                          checked={applyToAllMatching ? true : selectedProductIds.has(String(row.id))}
                           onChange={(e) => {
                             const checked = e.target.checked;
                             setSelectedProductIds((prev) => {
@@ -485,6 +535,7 @@ export default function SalesTierPricingPage() {
                             });
                             setApplyToAllMatching(false);
                           }}
+                          disabled={applyToAllMatching}
                           aria-label={`Pilih produk ${row.name}`}
                         />
                       </td>
