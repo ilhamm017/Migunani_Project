@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { Search, Plus, Trash2, Save, Package, AlertTriangle, ShoppingBag, RefreshCw, History as HistoryIcon } from 'lucide-react';
@@ -19,10 +19,6 @@ interface Product {
   stock_quantity: number;
   min_stock?: number;
   base_price: number;
-}
-
-interface ProductSuggestionRow extends Product {
-  min_stock: number;
 }
 
 interface POItem {
@@ -74,8 +70,19 @@ export default function PurchaseOrderPage() {
   const [loadingSuppliers, setLoadingSuppliers] = useState(true);
   const [restockSuggestions, setRestockSuggestions] = useState<Product[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
+  const [restockTotal, setRestockTotal] = useState(0);
+  const [restockTotalPages, setRestockTotalPages] = useState(1);
+  const [restockPage, setRestockPage] = useState(1);
+  const [restockLimit, setRestockLimit] = useState(50);
+  const [restockSearch, setRestockSearch] = useState('');
+  const [debouncedRestockSearch, setDebouncedRestockSearch] = useState('');
+  const [selectedRestockIds, setSelectedRestockIds] = useState<Set<string>>(new Set());
+  const restockMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [backorderSuggestions, setBackorderSuggestions] = useState<BackorderSuggestion[]>([]);
   const [loadingBackorderSuggestions, setLoadingBackorderSuggestions] = useState(true);
+  const [selectedBackorderIds, setSelectedBackorderIds] = useState<Set<string>>(new Set());
+  const [backorderSearch, setBackorderSearch] = useState('');
+  const backorderMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,10 +98,24 @@ export default function PurchaseOrderPage() {
   useEffect(() => {
     if (allowed) {
       loadSuppliers();
-      loadRestockSuggestions();
       loadBackorderSuggestions();
     }
   }, [allowed]);
+
+  // Restock suggestions: debounce + paging
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedRestockSearch(restockSearch.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [restockSearch]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    loadRestockSuggestions();
+    // keep checklist page-local to avoid hidden selections
+    setSelectedRestockIds(new Set());
+  }, [allowed, loadRestockSuggestions]);
 
   // Search Debounce
   useEffect(() => {
@@ -121,42 +142,27 @@ export default function PurchaseOrderPage() {
     }
   };
 
-  const loadRestockSuggestions = async () => {
+  const loadRestockSuggestions = useCallback(async () => {
     try {
       setLoadingSuggestions(true);
-      const res = await api.admin.inventory.getProducts({ limit: 500, status: 'active' });
-      const rows = Array.isArray(res.data?.products) ? res.data.products : [];
-
-      const suggested = (rows as ProductSuggestionRow[])
-        .filter((product) => {
-          const stock = Number(product?.stock_quantity || 0);
-          const minStock = Number(product?.min_stock || 0);
-          return stock <= 0 || stock <= minStock;
-        })
-        .sort((a, b) => {
-          const aStock = Number(a?.stock_quantity || 0);
-          const bStock = Number(b?.stock_quantity || 0);
-          const aMin = Number(a?.min_stock || 0);
-          const bMin = Number(b?.min_stock || 0);
-
-          const aCritical = aStock <= 0 ? 1 : 0;
-          const bCritical = bStock <= 0 ? 1 : 0;
-          if (aCritical !== bCritical) return bCritical - aCritical;
-
-          const aGap = aMin - aStock;
-          const bGap = bMin - bStock;
-          return bGap - aGap;
-        })
-        .slice(0, 8);
-
-      setRestockSuggestions(suggested);
+      const res = await api.admin.inventory.getRestockSuggestions({
+        page: restockPage,
+        limit: restockLimit,
+        search: debouncedRestockSearch || undefined,
+        status: 'active'
+      });
+      setRestockSuggestions(res.data?.products || []);
+      setRestockTotal(Number(res.data?.total || 0));
+      setRestockTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
     } catch (error) {
       console.error('Failed to load restock suggestions', error);
       setRestockSuggestions([]);
+      setRestockTotal(0);
+      setRestockTotalPages(1);
     } finally {
       setLoadingSuggestions(false);
     }
-  };
+  }, [debouncedRestockSearch, restockLimit, restockPage]);
 
   const loadBackorderSuggestions = async () => {
     try {
@@ -186,7 +192,14 @@ export default function PurchaseOrderPage() {
         });
       });
 
-      setBackorderSuggestions(Array.from(aggregated.values()));
+      setBackorderSuggestions(
+        Array.from(aggregated.values()).sort((a, b) => {
+          if (b.shortage !== a.shortage) return b.shortage - a.shortage;
+          if (a.stock !== b.stock) return a.stock - b.stock;
+          return a.name.localeCompare(b.name);
+        })
+      );
+      setSelectedBackorderIds(new Set());
     } catch (error) {
       console.error('Failed to load backorder suggestions', error);
       setBackorderSuggestions([]);
@@ -220,27 +233,48 @@ export default function PurchaseOrderPage() {
     setSearchResults([]);
   };
 
-  const addSuggestedItem = (product: Product) => {
+  const getSuggestedRestockQty = (product: Product) => {
     const stock = Number(product.stock_quantity || 0);
     const minStock = Number(product.min_stock || 0);
-    const defaultQty = Math.max(1, (Math.max(minStock, 1) * 2) - stock);
+    return Math.max(1, (Math.max(minStock, 1) * 2) - stock);
+  };
 
+  const upsertDraftItems = (
+    draftItems: Array<{ product: Product; qty: number; unit_cost: number; mode: 'max' | 'add' }>
+  ) => {
     setItems(prev => {
-      const existing = prev.find(item => item.product.id === product.id);
-      if (existing) {
-        return prev.map(item =>
-          item.product.id === product.id
-            ? { ...item, qty: Math.max(item.qty, defaultQty) }
-            : item
-        );
-      }
+      const next = [...prev];
 
-      return [...prev, {
-        product,
-        qty: defaultQty,
-        unit_cost: Number(product.base_price || 0)
-      }];
+      draftItems.forEach(({ product, qty, unit_cost, mode }) => {
+        const existingIndex = next.findIndex(p => p.product.id === product.id);
+        if (existingIndex >= 0) {
+          const existing = next[existingIndex];
+          next[existingIndex] = {
+            ...existing,
+            qty: mode === 'add' ? (existing.qty + qty) : Math.max(existing.qty, qty),
+          };
+          return;
+        }
+
+        next.push({
+          product,
+          qty,
+          unit_cost
+        });
+      });
+
+      return next;
     });
+  };
+
+  const addSuggestedItem = (product: Product) => {
+    const defaultQty = getSuggestedRestockQty(product);
+    upsertDraftItems([{
+      product,
+      qty: defaultQty,
+      unit_cost: Number(product.base_price || 0),
+      mode: 'max'
+    }]);
   };
 
   const updateItem = (index: number, field: 'qty' | 'unit_cost', value: number) => {
@@ -258,6 +292,42 @@ export default function PurchaseOrderPage() {
   const totalCost = useMemo(() => {
     return items.reduce((sum, item) => sum + (item.qty * item.unit_cost), 0);
   }, [items]);
+
+  const filteredBackorderSuggestions = useMemo(() => {
+    const q = backorderSearch.trim().toLowerCase();
+    if (!q) return backorderSuggestions;
+    return backorderSuggestions.filter(item =>
+      item.name.toLowerCase().includes(q) || item.sku.toLowerCase().includes(q)
+    );
+  }, [backorderSuggestions, backorderSearch]);
+
+  const isAllRestockSelectedOnPage = useMemo(() => {
+    if (restockSuggestions.length === 0) return false;
+    return restockSuggestions.every(p => selectedRestockIds.has(p.id));
+  }, [restockSuggestions, selectedRestockIds]);
+
+  const isSomeRestockSelectedOnPage = useMemo(() => {
+    return restockSuggestions.some(p => selectedRestockIds.has(p.id)) && !isAllRestockSelectedOnPage;
+  }, [restockSuggestions, selectedRestockIds, isAllRestockSelectedOnPage]);
+
+  useEffect(() => {
+    if (!restockMasterCheckboxRef.current) return;
+    restockMasterCheckboxRef.current.indeterminate = isSomeRestockSelectedOnPage;
+  }, [isSomeRestockSelectedOnPage]);
+
+  const isAllBackorderSelectedOnPage = useMemo(() => {
+    if (filteredBackorderSuggestions.length === 0) return false;
+    return filteredBackorderSuggestions.every(p => selectedBackorderIds.has(p.id));
+  }, [filteredBackorderSuggestions, selectedBackorderIds]);
+
+  const isSomeBackorderSelectedOnPage = useMemo(() => {
+    return filteredBackorderSuggestions.some(p => selectedBackorderIds.has(p.id)) && !isAllBackorderSelectedOnPage;
+  }, [filteredBackorderSuggestions, selectedBackorderIds, isAllBackorderSelectedOnPage]);
+
+  useEffect(() => {
+    if (!backorderMasterCheckboxRef.current) return;
+    backorderMasterCheckboxRef.current.indeterminate = isSomeBackorderSelectedOnPage;
+  }, [isSomeBackorderSelectedOnPage]);
 
   const createPO = async () => {
     if (!supplierId) {
@@ -451,9 +521,9 @@ export default function PurchaseOrderPage() {
           </div>
 
           {/* Suggestions Layer (Horizontal on desktop, vertical stack on mobile) */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-0 lg:overflow-y-auto lg:pr-2">
+          <div className="grid grid-cols-1 gap-4 flex-1 min-h-0 lg:overflow-y-auto lg:pr-2">
             {/* Restock Suggestions */}
-            <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm xl:col-span-1 xl:row-span-2 min-h-0 flex flex-col">
+            <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm min-h-0 flex flex-col">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h3 className="font-bold text-slate-900 flex items-center gap-2">
@@ -478,52 +548,178 @@ export default function PurchaseOrderPage() {
                   Semua stok produk saat ini dalam kondisi aman.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 max-h-[350px] overflow-y-auto pr-1">
-                  {restockSuggestions.map((product) => {
-                    const stock = Number(product.stock_quantity || 0);
-                    const minStock = Number(product.min_stock || 0);
-                    const critical = stock <= 0;
-                    const alreadyInDraft = items.some(item => item.product.id === product.id);
+                <div className="flex flex-col gap-3 flex-1 min-h-0">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <div className="md:col-span-2">
+                      <input
+                        value={restockSearch}
+                        onChange={(e) => {
+                          setRestockSearch(e.target.value);
+                          setRestockPage(1);
+                        }}
+                        placeholder="Filter nama / SKU / barcode..."
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div className="md:col-span-1 flex items-center gap-2">
+                      <select
+                        value={restockLimit}
+                        onChange={(e) => {
+                          setRestockLimit(Number(e.target.value) || 50);
+                          setRestockPage(1);
+                        }}
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value={25}>25 / halaman</option>
+                        <option value={50}>50 / halaman</option>
+                        <option value={100}>100 / halaman</option>
+                        <option value={200}>200 / halaman</option>
+                      </select>
+                    </div>
+                  </div>
 
-                    return (
-                      <div key={product.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-black text-slate-900 truncate">{product.name}</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">SKU: {product.sku}</p>
-                          </div>
-                          <span className={`text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider ${critical
-                            ? 'bg-rose-100 text-rose-700'
-                            : 'bg-amber-100 text-amber-700'
-                            }`}>
-                            {critical ? 'Habis' : 'Menipis'}
-                          </span>
-                        </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-slate-500">
+                      Total: <span className="font-bold text-slate-700">{restockTotal.toLocaleString()}</span> item
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const selected = restockSuggestions.filter(p => selectedRestockIds.has(p.id));
+                          selected.forEach(addSuggestedItem);
+                          setSelectedRestockIds(new Set());
+                        }}
+                        disabled={selectedRestockIds.size === 0}
+                        className="text-xs font-bold px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50 transition-colors"
+                      >
+                        Tambah Terpilih ({selectedRestockIds.size})
+                      </button>
+                    </div>
+                  </div>
 
-                        <div className="mt-2 text-xs text-slate-600">
-                          Stok: <span className="font-bold">{stock}</span> • Min stok: <span className="font-bold">{minStock}</span>
-                        </div>
+                  <div className="flex-1 min-h-0 border border-slate-100 rounded-2xl overflow-hidden">
+                    <div className="h-full overflow-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="sticky top-0 bg-white border-b border-slate-100">
+                          <tr className="text-xs text-slate-500">
+                            <th className="px-3 py-2 w-10">
+                              <input
+                                ref={restockMasterCheckboxRef}
+                                type="checkbox"
+                                checked={isAllRestockSelectedOnPage}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedRestockIds(new Set(restockSuggestions.map(p => p.id)));
+                                  } else {
+                                    setSelectedRestockIds(new Set());
+                                  }
+                                }}
+                                className="h-4 w-4 accent-emerald-600"
+                              />
+                            </th>
+                            <th className="px-3 py-2 text-left font-bold">Nama</th>
+                            <th className="px-3 py-2 text-left font-bold">SKU</th>
+                            <th className="px-3 py-2 text-right font-bold">Stok</th>
+                            <th className="px-3 py-2 text-right font-bold">Min</th>
+                            <th className="px-3 py-2 text-left font-bold">Status</th>
+                            <th className="px-3 py-2 text-right font-bold">Saran Qty</th>
+                            <th className="px-3 py-2 text-right font-bold">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {restockSuggestions.map((product) => {
+                            const stock = Number(product.stock_quantity || 0);
+                            const minStock = Number(product.min_stock || 0);
+                            const critical = stock <= 0;
+                            const alreadyInDraft = items.some(item => item.product.id === product.id);
+                            const suggestedQty = getSuggestedRestockQty(product);
+                            const checked = selectedRestockIds.has(product.id);
 
-                        <div className="mt-3 flex justify-end">
-                          <button
-                            onClick={() => addSuggestedItem(product)}
-                            className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
-                              ? 'bg-slate-200 text-slate-600 border-slate-300'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                              }`}
-                          >
-                            {alreadyInDraft ? 'Sudah di Draft' : 'Tambah ke Draft PO'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                            return (
+                              <tr key={product.id} className="hover:bg-slate-50">
+                                <td className="px-3 py-2 align-middle">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setSelectedRestockIds(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(product.id)) next.delete(product.id);
+                                        else next.add(product.id);
+                                        return next;
+                                      });
+                                    }}
+                                    className="h-4 w-4 accent-emerald-600"
+                                  />
+                                </td>
+                                <td className="px-3 py-2 font-bold text-slate-900 whitespace-nowrap">
+                                  <div className="max-w-[360px] truncate">{product.name}</div>
+                                </td>
+                                <td className="px-3 py-2 text-slate-600 font-mono text-xs whitespace-nowrap">{product.sku}</td>
+                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{stock}</td>
+                                <td className="px-3 py-2 text-right font-bold text-slate-700 whitespace-nowrap">{minStock}</td>
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  <span
+                                    className={`text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider ${critical
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'bg-amber-100 text-amber-700'
+                                      }`}
+                                  >
+                                    {critical ? 'Habis' : 'Menipis'}
+                                  </span>
+                                  {alreadyInDraft && (
+                                    <span className="ml-2 text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider bg-slate-100 text-slate-600">
+                                      Draft
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{suggestedQty}</td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <button
+                                    onClick={() => addSuggestedItem(product)}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
+                                      ? 'bg-slate-200 text-slate-600 border-slate-300'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                      }`}
+                                  >
+                                    {alreadyInDraft ? 'Sudah' : 'Tambah'}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                    <div>
+                      Halaman <span className="font-bold text-slate-700">{restockPage}</span> / <span className="font-bold text-slate-700">{restockTotalPages}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setRestockPage(p => Math.max(1, p - 1))}
+                        disabled={restockPage <= 1}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => setRestockPage(p => Math.min(restockTotalPages, p + 1))}
+                        disabled={restockPage >= restockTotalPages}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
 
             {/* Backorder Suggestions */}
-            <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm xl:col-span-1 xl:row-span-2 min-h-0 flex flex-col">
+            <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm min-h-0 flex flex-col">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h3 className="font-bold text-slate-900 flex items-center gap-2">
@@ -553,63 +749,133 @@ export default function PurchaseOrderPage() {
                   Tidak ada barang backorder saat ini.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 max-h-[350px] overflow-y-auto pr-1">
-                  {backorderSuggestions.map((item) => {
-                    const alreadyInDraft = items.some(draftItem => draftItem.product.id === item.id);
+                <div className="flex flex-col gap-3 flex-1 min-h-0">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <div className="md:col-span-2">
+                      <input
+                        value={backorderSearch}
+                        onChange={(e) => setBackorderSearch(e.target.value)}
+                        placeholder="Filter nama / SKU..."
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <div className="md:col-span-1 flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const selected = filteredBackorderSuggestions.filter(p => selectedBackorderIds.has(p.id));
+                          upsertDraftItems(
+                            selected.map((it) => ({
+                              product: {
+                                id: it.id,
+                                name: it.name,
+                                sku: it.sku,
+                                stock_quantity: it.stock,
+                                base_price: it.base_price
+                              },
+                              qty: it.shortage,
+                              unit_cost: it.base_price,
+                              mode: 'add'
+                            }))
+                          );
+                          setSelectedBackorderIds(new Set());
+                        }}
+                        disabled={selectedBackorderIds.size === 0}
+                        className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50 transition-colors"
+                      >
+                        Tambah Terpilih ({selectedBackorderIds.size})
+                      </button>
+                    </div>
+                  </div>
 
-                    return (
-                      <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-black text-slate-900 truncate">{item.name}</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">SKU: {item.sku}</p>
-                          </div>
-                          <span className="text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider bg-rose-100 text-rose-700">
-                            Butuh: {item.shortage}
-                          </span>
-                        </div>
+                  <div className="flex-1 min-h-0 border border-slate-100 rounded-2xl overflow-hidden">
+                    <div className="h-full overflow-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="sticky top-0 bg-white border-b border-slate-100">
+                          <tr className="text-xs text-slate-500">
+                            <th className="px-3 py-2 w-10">
+                              <input
+                                ref={backorderMasterCheckboxRef}
+                                type="checkbox"
+                                checked={isAllBackorderSelectedOnPage}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedBackorderIds(new Set(filteredBackorderSuggestions.map(p => p.id)));
+                                  } else {
+                                    setSelectedBackorderIds(new Set());
+                                  }
+                                }}
+                                className="h-4 w-4 accent-emerald-600"
+                              />
+                            </th>
+                            <th className="px-3 py-2 text-left font-bold">Nama</th>
+                            <th className="px-3 py-2 text-left font-bold">SKU</th>
+                            <th className="px-3 py-2 text-right font-bold">Stok</th>
+                            <th className="px-3 py-2 text-right font-bold">Butuh</th>
+                            <th className="px-3 py-2 text-right font-bold">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {filteredBackorderSuggestions.map((it) => {
+                            const alreadyInDraft = items.some(draftItem => draftItem.product.id === it.id);
+                            const checked = selectedBackorderIds.has(it.id);
 
-                        <div className="mt-2 text-xs text-slate-600">
-                          Stok Fisik Di Gudang: <span className="font-bold">{item.stock}</span>
-                        </div>
-
-                        <div className="mt-3 flex justify-end">
-                          <button
-                            onClick={() => {
-                              const product: Product = {
-                                id: item.id,
-                                name: item.name,
-                                sku: item.sku,
-                                stock_quantity: item.stock,
-                                base_price: item.base_price
-                              };
-                              setItems(prev => {
-                                const existing = prev.find(p => p.product.id === product.id);
-                                if (existing) {
-                                  return prev.map(p =>
-                                    p.product.id === product.id
-                                      ? { ...p, qty: p.qty + item.shortage }
-                                      : p
-                                  );
-                                }
-                                return [...prev, {
-                                  product,
-                                  qty: item.shortage,
-                                  unit_cost: item.base_price
-                                }];
-                              });
-                            }}
-                            className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
-                              ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                              }`}
-                          >
-                            {alreadyInDraft ? `Tambah (+${item.shortage})` : 'Tambah ke Draft PO'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                            return (
+                              <tr key={it.id} className="hover:bg-slate-50">
+                                <td className="px-3 py-2 align-middle">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setSelectedBackorderIds(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(it.id)) next.delete(it.id);
+                                        else next.add(it.id);
+                                        return next;
+                                      });
+                                    }}
+                                    className="h-4 w-4 accent-emerald-600"
+                                  />
+                                </td>
+                                <td className="px-3 py-2 font-bold text-slate-900 whitespace-nowrap">
+                                  <div className="max-w-[360px] truncate">{it.name}</div>
+                                  {alreadyInDraft && (
+                                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mt-0.5">Draft</div>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600 font-mono text-xs whitespace-nowrap">{it.sku}</td>
+                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{it.stock}</td>
+                                <td className="px-3 py-2 text-right font-black text-rose-700 whitespace-nowrap">{it.shortage}</td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <button
+                                    onClick={() => {
+                                      upsertDraftItems([{
+                                        product: {
+                                          id: it.id,
+                                          name: it.name,
+                                          sku: it.sku,
+                                          stock_quantity: it.stock,
+                                          base_price: it.base_price
+                                        },
+                                        qty: it.shortage,
+                                        unit_cost: it.base_price,
+                                        mode: 'add'
+                                      }]);
+                                    }}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
+                                      ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                      }`}
+                                  >
+                                    {alreadyInDraft ? `Tambah (+${it.shortage})` : 'Tambah'}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

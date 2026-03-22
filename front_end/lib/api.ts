@@ -288,6 +288,8 @@ export const api = {
         inventory: {
             getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive' }) =>
                 apiClient.get('/admin/products', { params }),
+            getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>
+                apiClient.get('/admin/products/restock-suggestions', { params }),
             getCategories: () => apiClient.get('/admin/categories'),
             createCategory: (data: { name: string; description?: string; icon?: string }) =>
                 apiClient.post('/admin/categories', data),

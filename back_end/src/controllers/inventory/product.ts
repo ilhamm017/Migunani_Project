@@ -114,6 +114,86 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     }
 });
 
+export const getRestockSuggestions = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        await ensureProductColumnsReady();
+
+        const { page = 1, limit = 50, search, status = 'active' } = req.query;
+        const normalizedPage = Math.max(1, Number(page) || 1);
+        const normalizedLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+
+        const whereClause: any = {};
+        const normalizedStatus = String(status).toLowerCase();
+        if (normalizedStatus === 'active' || normalizedStatus === 'inactive') {
+            whereClause.status = normalizedStatus;
+        }
+
+        if (search) {
+            whereClause[Op.or] = [
+                { name: { [Op.like]: `%${search}%` } },
+                { sku: { [Op.like]: `%${search}%` } },
+                { barcode: { [Op.like]: `%${search}%` } }
+            ];
+        }
+
+        const buildWhereWithAnd = (extras: any[]) => {
+            const next: any = { ...whereClause };
+            const existing = next[Op.and];
+            const andParts: any[] = [];
+            if (Array.isArray(existing)) andParts.push(...existing);
+            else if (existing) andParts.push(existing);
+            andParts.push(...extras);
+            next[Op.and] = andParts;
+            return next;
+        };
+
+        const restockWhere = buildWhereWithAnd([
+            {
+                [Op.or]: [
+                    { stock_quantity: { [Op.lte]: 0 } },
+                    {
+                        [Op.and]: [
+                            { min_stock: { [Op.not]: null } },
+                            where(col('stock_quantity'), Op.lte, col('min_stock'))
+                        ]
+                    }
+                ]
+            }
+        ]);
+
+        const result = await Product.findAndCountAll({
+            where: restockWhere,
+            include: [
+                { model: Category, attributes: ['id', 'name'] },
+                { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
+            ],
+            limit: normalizedLimit,
+            offset: (normalizedPage - 1) * normalizedLimit,
+            order: [
+                [sequelize.literal('CASE WHEN stock_quantity <= 0 THEN 1 ELSE 0 END'), 'DESC'],
+                [sequelize.literal('(COALESCE(min_stock, 0) - stock_quantity)'), 'DESC'],
+                ['name', 'ASC']
+            ],
+            distinct: true
+        });
+
+        res.json({
+            total: result.count,
+            totalPages: Math.ceil(Number(result.count) / normalizedLimit),
+            currentPage: normalizedPage,
+            products: result.rows
+        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        const message = error instanceof Error ? error.message : 'Error fetching restock suggestions';
+        console.error('Error fetching restock suggestions:', error);
+        if (message.includes('Kolom products belum lengkap')) {
+            throw new CustomError(message, 400);
+        }
+        throw new CustomError('Error fetching restock suggestions', 500);
+    }
+});
+
 export const getProductBySku = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const queryCode = readCellText(req.query.code);
