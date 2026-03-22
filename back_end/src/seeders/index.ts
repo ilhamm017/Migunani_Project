@@ -179,33 +179,36 @@ async function seedDatabase() {
         // Seed Categories
         console.log('📁 Seeding categories...');
         const categoryData = [
-            // Primary categories (to match import format "PRIMARY: TAG")
+            // Kategori utama (primary)
             { name: 'BAN LUAR', description: 'Kategori utama ban luar', icon: 'circle-dot' },
             { name: 'BAN DALAM', description: 'Kategori utama ban dalam', icon: 'circle-dot' },
             { name: 'PELUMAS MESIN', description: 'Kategori utama pelumas mesin', icon: 'droplets' },
             { name: 'SPAREPART', description: 'Kategori utama suku cadang', icon: 'settings' },
 
-            // Tags / brands (flat categories used as multi-category tags)
-            { name: 'IRC', description: null, icon: null },
-            { name: 'ASPIRA', description: null, icon: null },
-            { name: 'AHM', description: null, icon: null },
-            { name: 'MAXXIS', description: null, icon: null },
-            { name: 'PIRELLI', description: null, icon: null },
-            { name: 'KENDA', description: null, icon: null },
-            { name: 'SWALLOW', description: null, icon: null },
-            { name: 'ASPIRA SPORTIVO', description: null, icon: null },
-            { name: 'FEDERAL', description: null, icon: null },
-            { name: 'YAMALUBE', description: null, icon: null },
-            { name: 'EVALUBE', description: null, icon: null },
-            { name: 'CASTROL', description: null, icon: null },
-            { name: 'IDEMITSU', description: null, icon: null },
-            { name: 'MOTUL', description: null, icon: null },
-            { name: 'VENUS', description: null, icon: null },
-            { name: 'FEDERAL OIL', description: null, icon: null },
-            { name: 'SHELL', description: null, icon: null },
-            { name: 'YAMAHA', description: null, icon: null },
-            { name: 'SUZUKI', description: null, icon: null },
-            { name: 'NPP', description: null, icon: null },
+            // Tag / multi-kategori (merk)
+            { name: 'IRC', description: 'Tag merk', icon: null },
+            { name: 'ASPIRA', description: 'Tag merk', icon: null },
+            { name: 'AHM', description: 'Tag merk', icon: null },
+            { name: 'MAXXIS', description: 'Tag merk', icon: null },
+            { name: 'PIRELLI', description: 'Tag merk', icon: null },
+            { name: 'KENDA', description: 'Tag merk', icon: null },
+            { name: 'SWALLOW', description: 'Tag merk', icon: null },
+            { name: 'ASPIRA SPORTIVO', description: 'Tag merk', icon: null },
+            { name: 'FEDERAL', description: 'Tag merk', icon: null },
+            { name: 'YAMALUBE', description: 'Tag merk', icon: null },
+            { name: 'EVALUBE', description: 'Tag merk', icon: null },
+            { name: 'CASTROL', description: 'Tag merk', icon: null },
+            { name: 'IDEMITSU', description: 'Tag merk', icon: null },
+            { name: 'MOTUL', description: 'Tag merk', icon: null },
+            { name: 'VENUS', description: 'Tag merk', icon: null },
+            { name: 'FEDERAL OIL', description: 'Tag merk', icon: null },
+            { name: 'SHELL', description: 'Tag merk', icon: null },
+            { name: 'YAMAHA', description: 'Tag merk', icon: null },
+            { name: 'SUZUKI', description: 'Tag merk', icon: null },
+            { name: 'NPP', description: 'Tag merk', icon: null },
+
+            // Fallback (dipakai di import ketika kategori kosong/tidak ketemu)
+            { name: 'Uncategorized', description: 'Fallback kategori', icon: 'package' },
         ];
 
         const categories: Category[] = [];
@@ -390,8 +393,6 @@ async function seedDatabase() {
                 category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
-
-            // SPAREPART
             {
                 sku: 'LMP-001',
                 barcode: '8991234560031',
@@ -416,8 +417,6 @@ async function seedDatabase() {
                 category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
-
-            // SPAREPART
             {
                 sku: 'AKI-001',
                 barcode: '8991234560041',
@@ -442,8 +441,6 @@ async function seedDatabase() {
                 category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
-
-            // SPAREPART
             {
                 sku: 'FIL-001',
                 barcode: '8991234560051',
@@ -468,8 +465,6 @@ async function seedDatabase() {
                 category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
-
-            // SPAREPART
             {
                 sku: 'MSN-001',
                 barcode: '8991234560061',
