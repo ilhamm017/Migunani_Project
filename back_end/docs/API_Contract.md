@@ -141,6 +141,10 @@ Catatan pricing checkout:
 | `POST` | `/whatsapp/connect` | `super_admin`, `admin_gudang` | Start koneksi WA |
 | `POST` | `/whatsapp/logout` | `super_admin` | Logout session WA |
 
+Catatan inbound filter:
+- Jika `WA_REQUIRE_REGISTERED_CUSTOMER=true`, pesan WhatsApp masuk hanya diproses bila nomor pengirim terdaftar sebagai `users.role=customer` dan `users.status=active` (nomor lain tidak akan membuat sesi/thread/chat).
+- Opsional: set `WA_UNREGISTERED_AUTO_REPLY` untuk auto-reply saat nomor tidak terdaftar (kosong = tidak balas).
+
 ## K) Staff Management
 
 | Method | Endpoint | Access | Keterangan |

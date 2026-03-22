@@ -13,6 +13,9 @@ import {
 import { buildUnreadBadgePayloadsForThread } from './ChatBadgeService';
 
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
+const WA_REQUIRE_REGISTERED_CUSTOMER = String(process.env.WA_REQUIRE_REGISTERED_CUSTOMER || '').toLowerCase();
+const WA_REQUIRE_REGISTERED_CUSTOMER_ENABLED = ['1', 'true', 'yes', 'y', 'on'].includes(WA_REQUIRE_REGISTERED_CUSTOMER);
+const WA_UNREGISTERED_AUTO_REPLY = String(process.env.WA_UNREGISTERED_AUTO_REPLY || '').trim();
 
 const isCreatedViaEnumError = (error: unknown): boolean => {
     const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -155,12 +158,25 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
         // We need to match by whatsapp_number.
         // Note: whatsapp-web.js uses '628...' format. Our DB should store same.
 
-        let user = await User.findOne({
-            where: { whatsapp_number: { [Op.in]: whatsappCandidates } }
+        const foundUser = await User.findOne({
+            where: { whatsapp_number: { [Op.in]: whatsappCandidates } },
+            attributes: ['id', 'role', 'status', 'whatsapp_number']
         });
+        const user = foundUser?.role === 'customer' && foundUser.status === 'active'
+            ? foundUser
+            : null;
 
-        // If user doesn't exist, maybe create a temporary 'Guest' user or just proceed without User ID?
-        // ChatSession needs User ID? Schema says User ID is Nullable.
+        if (WA_REQUIRE_REGISTERED_CUSTOMER_ENABLED && !user) {
+            console.warn(`[WA] ignored incoming message from unregistered number=${normalizedSenderNumber}`);
+            if (WA_UNREGISTERED_AUTO_REPLY) {
+                try {
+                    await msg.reply(WA_UNREGISTERED_AUTO_REPLY);
+                } catch (error) {
+                    console.warn('[WA] failed to auto reply unregistered sender:', error);
+                }
+            }
+            return;
+        }
 
         // 2. Find or Create Chat Session (khusus kanal WhatsApp)
         let session: ChatSession | null = null;
@@ -223,7 +239,7 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
             sessionId: session.id,
             senderType: 'customer',
             senderId: user?.id,
-            body: msg.body,
+            body: msg.body || ATTACHMENT_FALLBACK_BODY,
             channel: 'whatsapp',
             isRead: false,
             deliveryState: 'sent',
