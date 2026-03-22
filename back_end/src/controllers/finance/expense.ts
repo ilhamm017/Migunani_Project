@@ -103,6 +103,10 @@ export const createExpense = asyncWrapper(async (req: Request, res: Response) =>
         }, { transaction: t });
 
         // No journal entry at creation - moved to payment
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'finance_expense_created_refresh_badges'
+        });
 
         await t.commit();
         res.status(201).json(expense);
@@ -136,6 +140,11 @@ export const approveExpense = asyncWrapper(async (req: Request, res: Response) =
             approved_by: userId,
             approved_at: new Date()
         }, { transaction: t });
+
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'finance_expense_approved_refresh_badges'
+        });
 
         await t.commit();
         res.json({ message: 'Expense approved', expense });
@@ -213,6 +222,11 @@ export const payExpense = asyncWrapper(async (req: Request, res: Response) => {
             }, t);
         }
 
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'finance_expense_paid_refresh_badges'
+        });
+
         await t.commit();
         res.json({ message: 'Expense paid', expense });
     } catch (error) {
@@ -221,4 +235,3 @@ export const payExpense = asyncWrapper(async (req: Request, res: Response) => {
         throw new CustomError('Error paying expense', 500);
     }
 });
-

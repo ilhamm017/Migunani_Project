@@ -143,7 +143,7 @@ export const useAdminActionBadges = ({
         .then((res) => (res.data || {}) as DashboardStats)
         .catch(() => ({} as DashboardStats));
 
-      const needFinanceCounts = normalizedRole === 'admin_finance';
+      const needFinanceCounts = normalizedRole === 'admin_finance' || normalizedRole === 'super_admin';
       const codPromise = needFinanceCounts
         ? api.admin.finance.getDriverCodList().then((res) => res.data).catch(() => [])
         : Promise.resolve([]);

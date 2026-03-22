@@ -1,6 +1,7 @@
 import { StockOpname, StockOpnameItem, Product, User, sequelize, Account } from '../models';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
+import { emitAdminRefreshBadges } from '../utils/orderNotification';
 
 export class StockOpnameService {
     static async getAllOpnames() {
@@ -32,6 +33,11 @@ export class StockOpnameService {
                 notes,
                 started_at: new Date()
             }, { transaction: t });
+
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'stock_opname_started_refresh_badges'
+            });
 
             await t.commit();
             return opname;
@@ -158,6 +164,11 @@ export class StockOpnameService {
                 status: 'completed',
                 completed_at: new Date()
             }, { transaction: t });
+
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'stock_opname_finished_refresh_badges'
+            });
 
             await t.commit();
             return opname;

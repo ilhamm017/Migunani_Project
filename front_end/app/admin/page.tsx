@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AlertTriangle, Boxes, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -10,6 +10,9 @@ import { useAuthStore } from '@/store/authStore';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
+import { getSocket } from '@/lib/socket';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import BalanceCard from '@/components/admin/finance/BalanceCard';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
@@ -26,6 +29,8 @@ export default function AdminOverviewPage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const canUseOrderNotifications = ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || ''));
+  const canUseChatUnread = canUseChatUnreadByRole(user?.role);
+  const chatUnreadCount = useChatUnreadCount({ enabled: !!allowed && canUseChatUnread, userId: user?.id });
 
   // General Summary State
   const [summary, setSummary] = useState({ pendingOrders: 0, unpaid: 0, unpaidTotal: 0, chats: 0, outOfStock: 0 });
@@ -64,131 +69,265 @@ export default function AdminOverviewPage() {
     userId: user?.id,
   });
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const canReadAR = ['super_admin', 'admin_finance'].includes(String(user?.role || ''));
-        const [statsRes, arData, chatRes] = await Promise.all([
-          api.admin.orderManagement.getStats(),
-          canReadAR
-            ? api.admin.finance
-              .getAR()
-              .then((res) => (Array.isArray(res.data) ? (res.data as DashboardArRow[]) : []))
-              .catch((): DashboardArRow[] => [])
-            : Promise.resolve<DashboardArRow[]>([]),
-          api.chat.getSessions(),
+  const isMountedRef = useRef(true);
+  useEffect(() => () => {
+    isMountedRef.current = false;
+  }, []);
+
+  const refreshOverview = useCallback(async () => {
+    if (!allowed) return;
+    if (user?.role === 'driver') return;
+
+    const role = String(user?.role || '').trim();
+    try {
+      const canReadAR = ['super_admin', 'admin_finance'].includes(role);
+      const [statsRes, arRows] = await Promise.all([
+        api.admin.orderManagement.getStats().catch(() => ({ data: {} })),
+        canReadAR
+          ? api.admin.finance
+            .getAR()
+            .then((res) => (Array.isArray(res.data) ? (res.data as DashboardArRow[]) : []))
+            .catch((): DashboardArRow[] => [])
+          : Promise.resolve<DashboardArRow[]>([]),
+      ]);
+
+      const stats = (statsRes as any)?.data || {};
+      const pendingAllocCount = Number(stats.pending || 0);
+
+      let actionableCount = 0;
+      if (role === 'admin_finance') {
+        actionableCount = Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
+      } else if (role === 'admin_gudang') {
+        actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.hold || 0);
+      } else if (role === 'kasir') {
+        actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0);
+      } else {
+        actionableCount =
+          pendingAllocCount +
+          Number(stats.waiting_invoice || 0) +
+          Number(stats.ready_to_ship || 0) +
+          Number(stats.waiting_admin_verification || 0) +
+          Number(stats.delivered || 0) +
+          Number(stats.allocated || 0) +
+          Number(stats.partially_fulfilled || 0) +
+          Number(stats.shipped || 0) +
+          Number(stats.hold || 0);
+      }
+
+      let outOfStockCount = 0;
+      const newWarehouseBadges: Record<string, number> = {};
+
+      if (role === 'kasir' || role === 'super_admin') {
+        newWarehouseBadges['/admin/warehouse/allocation'] = pendingAllocCount;
+      }
+
+      if (role === 'admin_gudang' || role === 'super_admin') {
+        const [processingRes, allocatedRes, productsRes, auditsRes] = await Promise.all([
+          api.admin.orderManagement.getAll({ status: 'waiting_admin_verification', limit: 1 }).catch(() => ({ data: { total: 0 } })),
+          api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }).catch(() => ({ data: { total: 0 } })),
+          api.admin.inventory.getProducts({ limit: 100 }).catch(() => ({ data: { products: [] } })),
+          api.admin.inventory.getAudits().catch(() => ({ data: [] })),
         ]);
 
-        const stats = statsRes.data || {};
-        const pendingAllocCount = Number(stats.pending || 0);
+        const processingOrders = Number((processingRes as any)?.data?.total || 0);
+        const allocatedOrders = Number((allocatedRes as any)?.data?.total || 0);
+        const readyToShipOrders = Number(stats.ready_to_ship || 0);
 
-        let actionableCount = 0;
-        if (user?.role === 'admin_finance') {
-          // Finance tasks: verify transfer, verify COD settlement
-          actionableCount = Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
+        const products = Array.isArray((productsRes as any)?.data?.products) ? ((productsRes as any).data.products as DashboardProductRow[]) : [];
+        outOfStockCount = products.filter((p) => Number(p.stock_quantity || 0) <= 0).length;
 
-          // --- Fetch Additional Finance Specific Stats ---
-          // 1. Pending Verification (waiting_admin_verification)
-          // 2. Pending COD
-          const resCod = await api.admin.finance.getDriverCodList();
-          let codCount = 0;
-          if (Array.isArray(resCod.data)) {
-            codCount = (resCod.data as DashboardCodRow[]).filter((d) => Number(d.total_pending || 0) > 0).length;
-          }
+        const audits = Array.isArray((auditsRes as any)?.data) ? ((auditsRes as any).data as DashboardAuditRow[]) : [];
+        const openAuditCount = audits.filter((audit) => String(audit?.status || '').toLowerCase() === 'open').length;
 
-          // 3. Pending Expense
-          const resExp = await api.admin.finance.getExpenses({ status: 'requested', limit: 1 });
-
-          setFinanceStats({
-            pendingVerify: Number(stats.waiting_admin_verification || 0),
-            pendingCod: codCount,
-            pendingExpense: resExp.data?.total || 0,
-            cashBalance: 0 // Placeholder
-          });
-
-        } else if (user?.role === 'admin_gudang') {
-          // Warehouse tasks: ship ready_to_ship + follow-up shortage (hold)
-          actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.hold || 0);
-        } else if (user?.role === 'kasir') {
-          // Kasir tasks: allocate pending orders + issue invoice
-          actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0);
-        } else {
-          // Super admin / Others: actionable admin tasks only (exclude customer-action statuses).
-          actionableCount =
-            pendingAllocCount +
-            Number(stats.waiting_invoice || 0) +
-            Number(stats.ready_to_ship || 0) +
-            Number(stats.waiting_admin_verification || 0) +
-            Number(stats.delivered || 0) +
-            Number(stats.allocated || 0) +
-            Number(stats.partially_fulfilled || 0) +
-            Number(stats.shipped || 0) +
-            Number(stats.hold || 0);
-        }
-
-        let outOfStockCount = 0;
-        const newWarehouseBadges: Record<string, number> = {};
-
-        // Badges for Kasir (Allocation)
-        if (user?.role === 'kasir' || user?.role === 'super_admin') {
-          newWarehouseBadges['/admin/warehouse/allocation'] = pendingAllocCount;
-        }
-
-        if (user?.role === 'admin_gudang' || user?.role === 'super_admin') {
-          const [processingRes, allocatedRes, productsRes, auditsRes] = await Promise.all([
-            api.admin.orderManagement.getAll({ status: 'waiting_admin_verification', limit: 1 }).catch(() => ({ data: { total: 0 } })),
-            api.admin.orderManagement.getAll({ status: 'allocated', limit: 1 }).catch(() => ({ data: { total: 0 } })),
-            api.admin.inventory.getProducts({ limit: 100 }).catch(() => ({ data: { products: [] } })),
-            api.admin.inventory.getAudits().catch(() => ({ data: [] })),
-          ]);
-
-          const processingOrders = Number(processingRes.data?.total || 0);
-          const allocatedOrders = Number(allocatedRes.data?.total || 0);
-          const readyToShipOrders = Number(stats.ready_to_ship || 0);
-
-          const products = Array.isArray(productsRes.data?.products) ? (productsRes.data.products as DashboardProductRow[]) : [];
-          outOfStockCount = products.filter((p) => Number(p.stock_quantity || 0) <= 0).length;
-
-          const audits = Array.isArray(auditsRes.data) ? (auditsRes.data as DashboardAuditRow[]) : [];
-          const openAuditCount = audits.filter((audit) => String(audit?.status || '').toLowerCase() === 'open').length;
-
-          // Merge updates
-          Object.assign(newWarehouseBadges, {
-            '/admin/warehouse/allocation': pendingAllocCount, // Explicitly set again to be sure
-            '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders,
-            '/admin/warehouse/helper': processingOrders,
-            '/admin/warehouse/audit': openAuditCount,
-            '/admin/warehouse/driver-issues': Number(stats.hold || 0),
-          });
-        }
-
-        if (user?.role === 'kasir' || user?.role === 'super_admin') {
-          const retursRes = await api.retur.getAll().catch(() => ({ data: [] }));
-          const returs = Array.isArray(retursRes.data) ? (retursRes.data as DashboardReturRow[]) : [];
-          const pendingReturActions = returs.filter((r) => {
-            const status = String(r?.status || '').toLowerCase();
-            const hasAdminResponse = String(r?.admin_response || '').trim().length > 0;
-            return status === 'pending' && !hasAdminResponse;
-          }).length;
-          newWarehouseBadges['/admin/warehouse/retur'] = pendingReturActions;
-        }
-
-        setWarehouseCardBadges(newWarehouseBadges);
-
-        setSummary({
-          pendingOrders: actionableCount,
-          unpaid: arData.length,
-          unpaidTotal: arData.reduce((sum: number, row) => sum + Number(row.amount_due || 0), 0),
-          chats: Number(chatRes.data?.pending_total || 0),
-          outOfStock: outOfStockCount,
+        Object.assign(newWarehouseBadges, {
+          '/admin/warehouse/allocation': pendingAllocCount,
+          '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders,
+          '/admin/warehouse/helper': processingOrders,
+          '/admin/warehouse/audit': openAuditCount,
+          '/admin/warehouse/driver-issues': Number(stats.hold || 0),
         });
-      } catch (error) {
-        console.error('Failed to load admin summary:', error);
       }
+
+      if (role === 'kasir' || role === 'super_admin') {
+        const retursRes = await api.retur.getAll().catch(() => ({ data: [] }));
+        const returs = Array.isArray((retursRes as any).data) ? ((retursRes as any).data as DashboardReturRow[]) : [];
+        const pendingReturActions = returs.filter((r) => {
+          const status = String(r?.status || '').toLowerCase();
+          const hasAdminResponse = String(r?.admin_response || '').trim().length > 0;
+          return status === 'pending' && !hasAdminResponse;
+        }).length;
+        newWarehouseBadges['/admin/warehouse/retur'] = pendingReturActions;
+      }
+
+      if (!isMountedRef.current) return;
+      setWarehouseCardBadges(newWarehouseBadges);
+      setSummary((prev) => ({
+        ...prev,
+        pendingOrders: actionableCount,
+        unpaid: arRows.length,
+        unpaidTotal: arRows.reduce((sum: number, row) => sum + Number(row.amount_due || 0), 0),
+        outOfStock: outOfStockCount,
+      }));
+
+      if (role === 'admin_finance' || role === 'super_admin') {
+        const [resCod, resExp] = await Promise.all([
+          api.admin.finance.getDriverCodList().catch(() => ({ data: [] })),
+          api.admin.finance.getExpenses({ status: 'requested', limit: 1 }).catch(() => ({ data: { total: 0 } })),
+        ]);
+
+        let codCount = 0;
+        if (Array.isArray((resCod as any).data)) {
+          codCount = ((resCod as any).data as DashboardCodRow[]).filter((d) => Number((d as any).total_pending || 0) > 0).length;
+        }
+
+        if (!isMountedRef.current) return;
+        setFinanceStats({
+          pendingVerify: Number(stats.waiting_admin_verification || 0),
+          pendingCod: codCount,
+          pendingExpense: Number((resExp as any).data?.total || 0),
+          cashBalance: 0,
+        });
+      } else {
+        setFinanceStats((prev) => (prev.pendingVerify || prev.pendingCod || prev.pendingExpense || prev.cashBalance ? { pendingVerify: 0, pendingCod: 0, pendingExpense: 0, cashBalance: 0 } : prev));
+      }
+    } catch (error) {
+      console.error('Failed to load admin summary:', error);
+    }
+  }, [allowed, user?.role]);
+
+  useRealtimeRefresh({
+    enabled: Boolean(allowed && user?.role && user?.role !== 'driver'),
+    onRefresh: refreshOverview,
+    domains: ['admin', 'order', 'retur', 'cod'],
+    debounceMs: 250,
+    pollIntervalMs: 15000,
+    refreshOnFocus: true,
+    refreshOnVisibility: true,
+  });
+
+  useEffect(() => {
+    setSummary((prev) => (prev.chats === chatUnreadCount ? prev : { ...prev, chats: chatUnreadCount }));
+  }, [chatUnreadCount]);
+
+  const [dashboardToast, setDashboardToast] = useState<string | null>(null);
+  const dashboardToastTimerRef = useRef<number | null>(null);
+  const lastToastRef = useRef<{ message: string; at: number } | null>(null);
+  const dismissDashboardToast = useCallback(() => {
+    setDashboardToast(null);
+    if (dashboardToastTimerRef.current) {
+      window.clearTimeout(dashboardToastTimerRef.current);
+      dashboardToastTimerRef.current = null;
+    }
+  }, []);
+  const showDashboardToast = useCallback((message: string) => {
+    const now = Date.now();
+    const last = lastToastRef.current;
+    if (last && last.message === message && now - last.at < 2500) return;
+    lastToastRef.current = { message, at: now };
+    setDashboardToast(message);
+    if (dashboardToastTimerRef.current) window.clearTimeout(dashboardToastTimerRef.current);
+    dashboardToastTimerRef.current = window.setTimeout(() => {
+      setDashboardToast(null);
+      dashboardToastTimerRef.current = null;
+    }, 4500);
+  }, []);
+
+  useEffect(() => {
+    if (!allowed || user?.role === 'driver') return;
+    const socket = getSocket();
+
+    const onReturChanged = (payload: { order_id?: string; to_status?: string }) => {
+      const nextStatus = String(payload?.to_status || '').trim();
+      if (!nextStatus) return;
+      const orderId = String(payload?.order_id || '').trim();
+      showDashboardToast(orderId ? `Update retur: ${nextStatus} (Order ${orderId})` : `Update retur: ${nextStatus}`);
     };
 
-    if (allowed && user?.role !== 'driver') load();
-  }, [allowed, user]);
+    const onCodSettlementUpdated = (payload: { driver_id?: string; settled_at?: string }) => {
+      const driverId = String(payload?.driver_id || '').trim();
+      showDashboardToast(driverId ? `Settlement COD diperbarui untuk driver ${driverId}` : 'Settlement COD diperbarui');
+    };
+
+    socket.on('retur:status_changed', onReturChanged);
+    socket.on('cod:settlement_updated', onCodSettlementUpdated);
+
+    return () => {
+      socket.off('retur:status_changed', onReturChanged);
+      socket.off('cod:settlement_updated', onCodSettlementUpdated);
+      dismissDashboardToast();
+    };
+  }, [allowed, dismissDashboardToast, showDashboardToast, user?.role]);
+
+  const lastCodPendingRef = useRef<number | null>(null);
+  const lastVerifyPendingRef = useRef<number | null>(null);
+  const lastRefundPendingRef = useRef<number | null>(null);
+  const lastExpensePendingRef = useRef<number | null>(null);
+  const lastChatUnreadRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const current = Number(financeCardBadges.codSettlement || 0);
+    if (lastCodPendingRef.current === null) {
+      lastCodPendingRef.current = current;
+      return;
+    }
+    const prev = lastCodPendingRef.current;
+    lastCodPendingRef.current = current;
+    if (current > prev) {
+      showDashboardToast(`${current - prev} settlement COD baru menunggu diproses.`);
+    }
+  }, [financeCardBadges.codSettlement, showDashboardToast]);
+
+  useEffect(() => {
+    const current = Number(financeCardBadges.verifyPayment || 0);
+    if (lastVerifyPendingRef.current === null) {
+      lastVerifyPendingRef.current = current;
+      return;
+    }
+    const prev = lastVerifyPendingRef.current;
+    lastVerifyPendingRef.current = current;
+    if (current > prev) {
+      showDashboardToast(`${current - prev} pembayaran transfer baru menunggu verifikasi.`);
+    }
+  }, [financeCardBadges.verifyPayment, showDashboardToast]);
+
+  useEffect(() => {
+    const current = Number(financeCardBadges.refundRetur || 0);
+    if (lastRefundPendingRef.current === null) {
+      lastRefundPendingRef.current = current;
+      return;
+    }
+    const prev = lastRefundPendingRef.current;
+    lastRefundPendingRef.current = current;
+    if (current > prev) {
+      showDashboardToast(`${current - prev} retur baru menunggu refund.`);
+    }
+  }, [financeCardBadges.refundRetur, showDashboardToast]);
+
+  useEffect(() => {
+    const current = Number(financeStats.pendingExpense || 0);
+    if (lastExpensePendingRef.current === null) {
+      lastExpensePendingRef.current = current;
+      return;
+    }
+    const prev = lastExpensePendingRef.current;
+    lastExpensePendingRef.current = current;
+    if (current > prev) {
+      showDashboardToast(`${current - prev} pengajuan expense baru menunggu proses.`);
+    }
+  }, [financeStats.pendingExpense, showDashboardToast]);
+
+  useEffect(() => {
+    const current = Number(chatUnreadCount || 0);
+    if (lastChatUnreadRef.current === null) {
+      lastChatUnreadRef.current = current;
+      return;
+    }
+    const prev = lastChatUnreadRef.current;
+    lastChatUnreadRef.current = current;
+    if (current > prev) {
+      showDashboardToast(`${current - prev} chat baru belum dibalas.`);
+    }
+  }, [chatUnreadCount, showDashboardToast]);
 
   useEffect(() => {
     if (user?.role === 'driver') {
@@ -429,6 +568,16 @@ export default function AdminOverviewPage() {
             <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
           </button>
         )}
+        {dashboardToast && (
+          <button
+            type="button"
+            onClick={dismissDashboardToast}
+            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
+            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+          </button>
+        )}
       </div>
     );
   }
@@ -613,6 +762,16 @@ export default function AdminOverviewPage() {
             <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
           </button>
         )}
+        {dashboardToast && (
+          <button
+            type="button"
+            onClick={dismissDashboardToast}
+            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
+            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+          </button>
+        )}
       </div>
     );
   }
@@ -729,6 +888,16 @@ export default function AdminOverviewPage() {
           >
             <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
             <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+          </button>
+        )}
+        {dashboardToast && (
+          <button
+            type="button"
+            onClick={dismissDashboardToast}
+            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+          >
+            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
+            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
           </button>
         )}
       </div>
@@ -1072,10 +1241,31 @@ export default function AdminOverviewPage() {
         ))}
       </div>
 
-      {/* Footer Disclaimer */}
-      <div className="text-center pt-4 sm:pt-8 pb-4 sm:pb-6">
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Migunani Advanced Admin v2.1 • Owner Control Mode</p>
-      </div>
-    </div>
-  );
-}
+	      {/* Footer Disclaimer */}
+	      <div className="text-center pt-4 sm:pt-8 pb-4 sm:pb-6">
+	        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Migunani Advanced Admin v2.1 • Owner Control Mode</p>
+	      </div>
+
+	      {activeToast && (
+	        <button
+	          type="button"
+	          onClick={dismissToast}
+	          className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+	        >
+	          <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
+	          <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+	        </button>
+	      )}
+	      {dashboardToast && (
+	        <button
+	          type="button"
+	          onClick={dismissDashboardToast}
+	          className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+	        >
+	          <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
+	          <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+	        </button>
+	      )}
+	    </div>
+	  );
+	}
