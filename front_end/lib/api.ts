@@ -37,15 +37,20 @@ type SavedAddressesPayload = unknown[];
 // Response interceptor - handle errors
 apiClient.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
         if (error.response?.status === 401) {
-            // Unauthorized - clear token and redirect to login
+            // Unauthorized - clear auth state and redirect to login
             if (typeof window !== 'undefined') {
-                sessionStorage.removeItem('token');
-                sessionStorage.removeItem('user');
-                sessionStorage.removeItem('web_chat_session_id');
-                sessionStorage.removeItem('web_chat_guest_id');
-                window.dispatchEvent(new CustomEvent('webchat:close'));
+                try {
+                    const { useAuthStore } = await import('@/store/authStore');
+                    useAuthStore.getState().logout();
+                } catch {
+                    sessionStorage.removeItem('token');
+                    sessionStorage.removeItem('user');
+                    sessionStorage.removeItem('web_chat_session_id');
+                    sessionStorage.removeItem('web_chat_guest_id');
+                    window.dispatchEvent(new CustomEvent('webchat:close'));
+                }
                 window.location.href = '/auth/login';
             }
         }

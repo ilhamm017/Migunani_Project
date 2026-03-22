@@ -5,7 +5,7 @@ import path from 'path';
 import { Readable } from 'stream';
 import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
 import { JournalService } from '../../services/JournalService';
-import { Op, Transaction } from 'sequelize';
+import { Op, Transaction, col, fn, literal } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService } from '../../services/TaxConfigService';
 import { normalizeCategoryIcon, parseCategoryDiscountField, toNullablePercentage } from './utils';
@@ -14,11 +14,51 @@ import { CustomError } from '../../utils/CustomError';
 
 export const getCategories = asyncWrapper(async (_req: Request, res: Response) => {
     try {
-        const categories = await Category.findAll({
-            attributes: ['id', 'name', 'description', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'],
-            order: [['name', 'ASC']]
+        const [categories, primaryUsageRows, tagUsageRows] = await Promise.all([
+            Category.findAll({
+                attributes: ['id', 'name', 'description', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'],
+                order: [['name', 'ASC']]
+            }),
+            Product.findAll({
+                attributes: ['category_id', [fn('COUNT', col('id')), 'count']],
+                group: ['category_id'],
+                raw: true
+            }) as unknown as Promise<Array<{ category_id: number | string; count: number | string }>>,
+            ProductCategory.findAll({
+                attributes: ['category_id', [fn('COUNT', literal('DISTINCT product_id')), 'count']],
+                group: ['category_id'],
+                raw: true
+            }) as unknown as Promise<Array<{ category_id: number | string; count: number | string }>>
+        ]);
+
+        const primaryCountByCategory = new Map<number, number>();
+        primaryUsageRows.forEach((row) => {
+            const id = Number(row.category_id);
+            if (!Number.isInteger(id) || id <= 0) return;
+            primaryCountByCategory.set(id, Number(row.count) || 0);
         });
-        res.json({ categories });
+
+        const tagCountByCategory = new Map<number, number>();
+        tagUsageRows.forEach((row) => {
+            const id = Number(row.category_id);
+            if (!Number.isInteger(id) || id <= 0) return;
+            tagCountByCategory.set(id, Number(row.count) || 0);
+        });
+
+        const enriched = categories.map((category) => {
+            const data = category.toJSON() as any;
+            const primary_product_count = primaryCountByCategory.get(category.id) || 0;
+            const tag_product_count = tagCountByCategory.get(category.id) || 0;
+            return {
+                ...data,
+                primary_product_count,
+                tag_product_count,
+                is_primary: primary_product_count > 0,
+                is_tag: tag_product_count > 0
+            };
+        });
+
+        res.json({ categories: enriched });
     } catch (error) {
         if (error instanceof CustomError) throw error;
         throw new CustomError('Error fetching categories', 500);
@@ -253,18 +293,62 @@ export const deleteCategory = asyncWrapper(async (req: Request, res: Response) =
                 { where: { category_id: categoryId }, transaction }
             );
 
+            const mappings = await ProductCategory.findAll({
+                attributes: ['product_id'],
+                where: { category_id: categoryId },
+                transaction,
+                raw: true
+            }) as unknown as Array<{ product_id: string }>;
+
+            let movedTagMappings = 0;
+            let removedDuplicateMappings = 0;
+            for (const mapping of mappings) {
+                const productId = String(mapping.product_id || '');
+                if (!productId) continue;
+
+                const duplicate = await ProductCategory.findOne({
+                    where: { product_id: productId, category_id: replacementCategoryId },
+                    transaction
+                });
+
+                if (duplicate) {
+                    removedDuplicateMappings += 1;
+                    await ProductCategory.destroy({
+                        where: { product_id: productId, category_id: categoryId },
+                        transaction
+                    });
+                    continue;
+                }
+
+                const [updated] = await ProductCategory.update(
+                    { category_id: replacementCategoryId },
+                    { where: { product_id: productId, category_id: categoryId }, transaction }
+                );
+                movedTagMappings += Number(updated) || 0;
+            }
+
             await category.destroy({ transaction });
             await transaction.commit();
             return res.json({
                 message: 'Kategori berhasil dihapus dan produk dipindahkan',
-                moved_products: movedCount
+                moved_products: movedCount,
+                moved_tag_mappings: movedTagMappings,
+                removed_duplicate_tag_mappings: removedDuplicateMappings
             });
         }
 
-        const totalProducts = await Product.count({ where: { category_id: categoryId }, transaction });
-        if (totalProducts > 0) {
+        const [totalPrimaryProducts, totalTaggedProducts] = await Promise.all([
+            Product.count({ where: { category_id: categoryId }, transaction }),
+            ProductCategory.count({ where: { category_id: categoryId }, transaction })
+        ]);
+
+        if (totalPrimaryProducts > 0 || totalTaggedProducts > 0) {
             await transaction.rollback();
-            throw new CustomError(`Kategori masih dipakai ${totalProducts} produk. Pilih replacement_category_id untuk memindahkan produk sebelum hapus.`, 400);
+            const detail = [
+                totalPrimaryProducts > 0 ? `${totalPrimaryProducts} produk (kategori utama)` : null,
+                totalTaggedProducts > 0 ? `${totalTaggedProducts} produk (tag/multi-kategori)` : null
+            ].filter(Boolean).join(' + ');
+            throw new CustomError(`Kategori masih dipakai ${detail}. Pilih replacement_category_id untuk memindahkan sebelum hapus.`, 400);
         }
 
         await category.destroy({ transaction });

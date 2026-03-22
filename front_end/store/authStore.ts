@@ -59,6 +59,16 @@ export const useAuthStore = create<AuthState>()(
                 },
                 removeItem: (name) => sessionStorage.removeItem(name),
             },
+            onRehydrateStorage: () => (state) => {
+                if (typeof window === 'undefined') return;
+                try {
+                    const token = state?.token ?? null;
+                    if (token) sessionStorage.setItem('token', token);
+                    else sessionStorage.removeItem('token');
+                } catch {
+                    // ignore storage errors
+                }
+            },
         }
     )
 );

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
@@ -10,6 +10,10 @@ interface CategoryRow {
   name: string;
   description: string | null;
   icon: string | null;
+  primary_product_count?: number;
+  tag_product_count?: number;
+  is_primary?: boolean;
+  is_tag?: boolean;
 }
 
 type ApiErrorWithMessage = {
@@ -35,6 +39,8 @@ export default function InventoryCategoriesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [query, setQuery] = useState('');
+  const [filterMode, setFilterMode] = useState<'all' | 'primary' | 'tag' | 'unused'>('all');
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryDescription, setNewCategoryDescription] = useState('');
   const [newCategoryIcon, setNewCategoryIcon] = useState('');
@@ -62,6 +68,49 @@ export default function InventoryCategoriesPage() {
       loadCategories();
     }
   }, [allowed]);
+
+  const normalizedCategories = useMemo(() => {
+    return categories.map((category) => {
+      const primary = Number(category.primary_product_count || 0);
+      const tag = Number(category.tag_product_count || 0);
+      const isPrimary = Boolean(category.is_primary) || primary > 0;
+      const isTag = Boolean(category.is_tag) || tag > 0;
+      const role: 'primary' | 'tag' | 'both' | 'unused' =
+        isPrimary && isTag ? 'both' : isPrimary ? 'primary' : isTag ? 'tag' : 'unused';
+      return {
+        ...category,
+        primary_product_count: primary,
+        tag_product_count: tag,
+        is_primary: isPrimary,
+        is_tag: isTag,
+        role,
+      };
+    });
+  }, [categories]);
+
+  const filteredCategories = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return normalizedCategories.filter((category) => {
+      if (filterMode === 'primary' && category.role !== 'primary' && category.role !== 'both') return false;
+      if (filterMode === 'tag' && category.role !== 'tag' && category.role !== 'both') return false;
+      if (filterMode === 'unused' && category.role !== 'unused') return false;
+      if (!q) return true;
+      return (
+        category.name.toLowerCase().includes(q) ||
+        String(category.id).includes(q) ||
+        String(category.icon || '').toLowerCase().includes(q)
+      );
+    });
+  }, [normalizedCategories, query, filterMode]);
+
+  const summary = useMemo(() => {
+    const total = normalizedCategories.length;
+    const primary = normalizedCategories.filter((item) => item.role === 'primary').length;
+    const tag = normalizedCategories.filter((item) => item.role === 'tag').length;
+    const both = normalizedCategories.filter((item) => item.role === 'both').length;
+    const unused = normalizedCategories.filter((item) => item.role === 'unused').length;
+    return { total, primary, tag, both, unused };
+  }, [normalizedCategories]);
 
   if (!allowed) return null;
 
@@ -141,8 +190,14 @@ export default function InventoryCategoriesPage() {
   };
 
   const onDeleteCategory = async (category: CategoryRow) => {
+    const primaryCount = Number(category.primary_product_count || 0);
+    const tagCount = Number(category.tag_product_count || 0);
+    const usageDetail = primaryCount > 0 || tagCount > 0
+      ? `Dipakai: ${primaryCount} produk (utama) + ${tagCount} produk (tag)`
+      : 'Tidak dipakai produk.';
+
     const replacementInput = window.prompt(
-      `Hapus kategori "${category.name}"?\nJika kategori dipakai produk, isi ID kategori pengganti.\nKosongkan jika kategori tidak dipakai.`,
+      `Hapus kategori "${category.name}"?\n${usageDetail}\n\nJika kategori dipakai, wajib isi ID kategori pengganti.\nKosongkan hanya jika benar-benar tidak dipakai.`,
       ''
     );
     if (replacementInput === null) return;
@@ -151,6 +206,12 @@ export default function InventoryCategoriesPage() {
     if (replacementInput.trim() !== '' && (!Number.isInteger(replacementId) || Number(replacementId) <= 0)) {
       setMessageType('error');
       setMessage('ID kategori pengganti tidak valid.');
+      return;
+    }
+
+    if ((primaryCount > 0 || tagCount > 0) && replacementId === undefined) {
+      setMessageType('error');
+      setMessage('Kategori masih dipakai produk, replacement ID wajib diisi untuk menghapus.');
       return;
     }
 
@@ -174,7 +235,9 @@ export default function InventoryCategoriesPage() {
     <div className="warehouse-page">
       <div>
         <h1 className="warehouse-title">Manajemen Kategori</h1>
-        <p className="warehouse-subtitle">Kelola pengelompokan produk untuk mempermudah pencarian dan filter stok.</p>
+        <p className="warehouse-subtitle">
+          Format import baru: <span className="font-bold">"BAN LUAR: IRC"</span> berarti <span className="font-bold">BAN LUAR</span> (kategori utama) + <span className="font-bold">IRC</span> (tag/multi-kategori).
+        </p>
       </div>
 
       {message && (
@@ -184,6 +247,28 @@ export default function InventoryCategoriesPage() {
       )}
 
       <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Cari nama / ID / icon..."
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm"
+          />
+          <select
+            value={filterMode}
+            onChange={(e) => setFilterMode(e.target.value as any)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white"
+          >
+            <option value="all">Semua kategori ({summary.total})</option>
+            <option value="primary">Kategori utama ({summary.primary + summary.both})</option>
+            <option value="tag">Tag / multi-kategori ({summary.tag + summary.both})</option>
+            <option value="unused">Tidak dipakai ({summary.unused})</option>
+          </select>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <span className="font-bold text-slate-700">Ringkas:</span> Utama {summary.primary} • Tag {summary.tag} • Keduanya {summary.both} • Tidak dipakai {summary.unused}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <input
             value={newCategoryName}
@@ -222,7 +307,7 @@ export default function InventoryCategoriesPage() {
           <p className="text-sm text-slate-500">Belum ada kategori.</p>
         ) : (
           <div className="space-y-2 max-h-[520px] overflow-auto pr-1">
-            {categories.map((category) => (
+            {filteredCategories.map((category) => (
               <div key={category.id} className="border border-slate-200 rounded-xl p-3 bg-slate-50">
                 {editingCategoryId === category.id ? (
                   <div className="space-y-2">
@@ -254,9 +339,24 @@ export default function InventoryCategoriesPage() {
                 ) : (
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-sm font-bold text-slate-900">{category.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-bold text-slate-900">{category.name}</p>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${category.role === 'primary'
+                          ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                          : category.role === 'tag'
+                            ? 'bg-blue-100 text-blue-700 border-blue-200'
+                            : category.role === 'both'
+                              ? 'bg-violet-100 text-violet-700 border-violet-200'
+                              : 'bg-slate-200 text-slate-700 border-slate-300'
+                          }`}>
+                          {category.role === 'primary' ? 'UTAMA' : category.role === 'tag' ? 'TAG' : category.role === 'both' ? 'UTAMA+TAG' : 'UNUSED'}
+                        </span>
+                      </div>
                       <p className="text-xs text-slate-500">{category.description || '-'}</p>
                       <p className="text-xs text-slate-500">Icon: {category.icon || '-'}</p>
+                      <p className="text-xs text-slate-500">
+                        Dipakai: <span className="font-bold">{Number(category.primary_product_count || 0)}</span> (utama) + <span className="font-bold">{Number(category.tag_product_count || 0)}</span> (tag)
+                      </p>
                       <p className="text-[11px] text-slate-400">ID: {category.id}</p>
                     </div>
                     <div className="flex gap-2 shrink-0">
