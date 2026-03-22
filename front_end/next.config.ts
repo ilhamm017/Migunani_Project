@@ -10,7 +10,7 @@ const frontendRoot = fs.existsSync(path.join(frontendFromRepoRoot, "app"))
 const backendApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const backendOrigin = backendApiBase.replace(/\/api\/v1\/?$/, "");
 const backendOriginUrl = new URL(backendOrigin);
-const externalImageHosts = (process.env.NEXT_PUBLIC_IMAGE_HOSTS || "www.berkatakurnanjaya.com")
+const externalImageHosts = (process.env.NEXT_PUBLIC_IMAGE_HOSTS || "www.berkatakurnanjaya.com,maxxis.id,www.maxxis.id")
   .split(",")
   .map((host) => host.trim())
   .filter(Boolean);
