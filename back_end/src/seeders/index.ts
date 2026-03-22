@@ -4,6 +4,7 @@ import {
     User,
     Category,
     Product,
+    ProductCategory,
     Supplier,
     Account,
     Setting
@@ -178,21 +179,52 @@ async function seedDatabase() {
         // Seed Categories
         console.log('📁 Seeding categories...');
         const categoryData = [
-            { name: 'Ban Motor', description: 'Ban motor berbagai ukuran', icon: 'circle-dot' },
-            { name: 'Oli & Pelumas', description: 'Oli mesin dan pelumas motor', icon: 'droplets' },
-            { name: 'Kampas Rem', description: 'Kampas rem depan dan belakang', icon: 'disc-3' },
-            { name: 'Lampu', description: 'Lampu motor LED dan halogen', icon: 'lightbulb' },
-            { name: 'Aki & Baterai', description: 'Aki motor berbagai merk', icon: 'battery-charging' },
-            { name: 'Filter', description: 'Filter udara dan oli', icon: 'funnel' },
-            { name: 'Suku Cadang Mesin', description: 'Komponen mesin motor', icon: 'settings' },
+            // Primary categories (to match import format "PRIMARY: TAG")
+            { name: 'BAN LUAR', description: 'Kategori utama ban luar', icon: 'circle-dot' },
+            { name: 'BAN DALAM', description: 'Kategori utama ban dalam', icon: 'circle-dot' },
+            { name: 'PELUMAS MESIN', description: 'Kategori utama pelumas mesin', icon: 'droplets' },
+            { name: 'SPAREPART', description: 'Kategori utama suku cadang', icon: 'settings' },
+
+            // Tags / brands (flat categories used as multi-category tags)
+            { name: 'IRC', description: null, icon: null },
+            { name: 'ASPIRA', description: null, icon: null },
+            { name: 'AHM', description: null, icon: null },
+            { name: 'MAXXIS', description: null, icon: null },
+            { name: 'PIRELLI', description: null, icon: null },
+            { name: 'KENDA', description: null, icon: null },
+            { name: 'SWALLOW', description: null, icon: null },
+            { name: 'ASPIRA SPORTIVO', description: null, icon: null },
+            { name: 'FEDERAL', description: null, icon: null },
+            { name: 'YAMALUBE', description: null, icon: null },
+            { name: 'EVALUBE', description: null, icon: null },
+            { name: 'CASTROL', description: null, icon: null },
+            { name: 'IDEMITSU', description: null, icon: null },
+            { name: 'MOTUL', description: null, icon: null },
+            { name: 'VENUS', description: null, icon: null },
+            { name: 'FEDERAL OIL', description: null, icon: null },
+            { name: 'SHELL', description: null, icon: null },
+            { name: 'YAMAHA', description: null, icon: null },
+            { name: 'SUZUKI', description: null, icon: null },
+            { name: 'NPP', description: null, icon: null },
         ];
 
         const categories: Category[] = [];
+        const categoryByName = new Map<string, Category>();
         for (const data of categoryData) {
+            if (categoryByName.has(data.name)) continue;
             const cat = await Category.create(data);
             categories.push(cat);
+            categoryByName.set(cat.name, cat);
         }
         console.log(`✅ ${categories.length} categories created\n`);
+
+        const mustCategory = (name: string): Category => {
+            const category = categoryByName.get(name);
+            if (!category) {
+                throw new Error(`Missing seeded category: ${name}`);
+            }
+            return category;
+        };
 
         // Seed Suppliers
         console.log('🏢 Seeding suppliers...');
@@ -257,7 +289,7 @@ async function seedDatabase() {
         // Seed Products
         console.log('📦 Seeding products...');
         const products = await Product.bulkCreate([
-            // Ban Motor
+            // BAN LUAR
             {
                 sku: 'BAN-001',
                 barcode: '8991234560001',
@@ -267,7 +299,7 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 25,
                 min_stock: 5,
-                category_id: categories[0].id,
+                category_id: mustCategory('BAN LUAR').id,
                 status: 'active',
             },
             {
@@ -279,7 +311,7 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 20,
                 min_stock: 5,
-                category_id: categories[0].id,
+                category_id: mustCategory('BAN LUAR').id,
                 status: 'active',
             },
             {
@@ -291,11 +323,11 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 15,
                 min_stock: 5,
-                category_id: categories[0].id,
+                category_id: mustCategory('BAN LUAR').id,
                 status: 'active',
             },
 
-            // Oli & Pelumas
+            // PELUMAS MESIN
             {
                 sku: 'OLI-001',
                 barcode: '8991234560011',
@@ -305,7 +337,7 @@ async function seedDatabase() {
                 unit: 'Liter',
                 stock_quantity: 50,
                 min_stock: 10,
-                category_id: categories[1].id,
+                category_id: mustCategory('PELUMAS MESIN').id,
                 status: 'active',
             },
             {
@@ -317,23 +349,23 @@ async function seedDatabase() {
                 unit: 'Liter',
                 stock_quantity: 40,
                 min_stock: 10,
-                category_id: categories[1].id,
+                category_id: mustCategory('PELUMAS MESIN').id,
                 status: 'active',
             },
             {
                 sku: 'OLI-003',
                 barcode: '8991234560013',
-                name: 'Oli Top 1 Action Matic 0.8L',
+                name: 'Oli Mesin YAMALUBE 0.8L',
                 base_price: 35000,
                 price: 45000,
                 unit: 'Liter',
                 stock_quantity: 60,
                 min_stock: 15,
-                category_id: categories[1].id,
+                category_id: mustCategory('PELUMAS MESIN').id,
                 status: 'active',
             },
 
-            // Kampas Rem
+            // SPAREPART
             {
                 sku: 'KRM-001',
                 barcode: '8991234560021',
@@ -343,7 +375,7 @@ async function seedDatabase() {
                 unit: 'Set',
                 stock_quantity: 30,
                 min_stock: 8,
-                category_id: categories[2].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
             {
@@ -355,11 +387,11 @@ async function seedDatabase() {
                 unit: 'Set',
                 stock_quantity: 25,
                 min_stock: 8,
-                category_id: categories[2].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
 
-            // Lampu
+            // SPAREPART
             {
                 sku: 'LMP-001',
                 barcode: '8991234560031',
@@ -369,7 +401,7 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 18,
                 min_stock: 5,
-                category_id: categories[3].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
             {
@@ -381,11 +413,11 @@ async function seedDatabase() {
                 unit: 'Pasang',
                 stock_quantity: 40,
                 min_stock: 10,
-                category_id: categories[3].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
 
-            // Aki & Baterai
+            // SPAREPART
             {
                 sku: 'AKI-001',
                 barcode: '8991234560041',
@@ -395,7 +427,7 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 12,
                 min_stock: 3,
-                category_id: categories[4].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
             {
@@ -407,11 +439,11 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 15,
                 min_stock: 3,
-                category_id: categories[4].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
 
-            // Filter
+            // SPAREPART
             {
                 sku: 'FIL-001',
                 barcode: '8991234560051',
@@ -421,7 +453,7 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 22,
                 min_stock: 5,
-                category_id: categories[5].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
             {
@@ -433,11 +465,11 @@ async function seedDatabase() {
                 unit: 'Pcs',
                 stock_quantity: 20,
                 min_stock: 5,
-                category_id: categories[5].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
 
-            // Suku Cadang Mesin
+            // SPAREPART
             {
                 sku: 'MSN-001',
                 barcode: '8991234560061',
@@ -447,7 +479,7 @@ async function seedDatabase() {
                 unit: 'Set',
                 stock_quantity: 8,
                 min_stock: 2,
-                category_id: categories[6].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
             {
@@ -459,7 +491,7 @@ async function seedDatabase() {
                 unit: 'Set',
                 stock_quantity: 10,
                 min_stock: 2,
-                category_id: categories[6].id,
+                category_id: mustCategory('SPAREPART').id,
                 status: 'active',
             },
 
@@ -473,12 +505,46 @@ async function seedDatabase() {
                 unit: 'Liter',
                 stock_quantity: 0, // Out of stock
                 min_stock: 5,
-                category_id: categories[1].id,
+                category_id: mustCategory('PELUMAS MESIN').id,
                 status: 'active',
             },
         ]);
 
         console.log(`✅ ${products.length} products created\n`);
+
+        // Seed product_categories mappings so "Categories" (tags) are visible in UI.
+        const productBySku = new Map(products.map((product) => [String(product.sku), product]));
+        const tagMappingsSeed: Array<{ sku: string; categories: string[] }> = [
+            { sku: 'BAN-001', categories: ['BAN LUAR', 'IRC'] },
+            { sku: 'BAN-002', categories: ['BAN LUAR', 'ASPIRA'] },
+            { sku: 'BAN-003', categories: ['BAN LUAR', 'MAXXIS'] },
+            { sku: 'OLI-001', categories: ['PELUMAS MESIN', 'SHELL'] },
+            { sku: 'OLI-002', categories: ['PELUMAS MESIN', 'CASTROL'] },
+            { sku: 'OLI-003', categories: ['PELUMAS MESIN', 'YAMALUBE'] },
+            { sku: 'OLI-004', categories: ['PELUMAS MESIN', 'MOTUL'] },
+            { sku: 'KRM-001', categories: ['SPAREPART', 'AHM'] },
+            { sku: 'KRM-002', categories: ['SPAREPART', 'YAMAHA'] },
+            { sku: 'MSN-001', categories: ['SPAREPART', 'AHM'] },
+            { sku: 'MSN-002', categories: ['SPAREPART', 'YAMAHA'] },
+        ];
+
+        const productCategoryRows: Array<{ product_id: string; category_id: number }> = [];
+        const seen = new Set<string>();
+        for (const item of tagMappingsSeed) {
+            const product = productBySku.get(item.sku);
+            if (!product) continue;
+            for (const categoryName of item.categories) {
+                const category = mustCategory(categoryName);
+                const key = `${product.id}:${category.id}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                productCategoryRows.push({ product_id: product.id, category_id: category.id });
+            }
+        }
+
+        if (productCategoryRows.length > 0) {
+            await ProductCategory.bulkCreate(productCategoryRows);
+        }
 
         console.log('🎉 Database seeding completed successfully!\n');
         console.log('📋 Summary:');
