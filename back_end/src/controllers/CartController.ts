@@ -21,7 +21,7 @@ export const getCart = asyncWrapper(async (req: Request, res: Response) => {
                 model: CartItem,
                 include: [{
                     model: Product,
-                    attributes: ['id', 'name', 'price', 'sku', 'stock_quantity', 'branch_id'] // Assuming products are universal or branch specific logic handles elsewhere
+                    attributes: ['id', 'name', 'price', 'sku', 'stock_quantity', 'image_url']
                 }]
             }
         ]
