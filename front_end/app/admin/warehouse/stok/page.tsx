@@ -210,7 +210,7 @@ export default function WarehouseInventoryPage() {
     });
 
     return (
-        <div className="warehouse-screen warehouse-screen-fill warehouse-screen-flush-bottom warehouse-screen-edge-to-edge flex min-h-0 flex-col overflow-hidden bg-slate-50">
+        <div className="warehouse-screen warehouse-screen-fill warehouse-screen-flush-bottom warehouse-screen-edge-to-edge flex min-h-0 flex-col overflow-hidden bg-slate-50 pt-2">
             {/* Stats Bar */}
             <div className="warehouse-panel flex-shrink-0 px-4 md:px-6 py-3 bg-white border-b border-slate-200">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
