@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting } from '../../models';
+import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Category, Setting } from '../../models';
 import { Op } from 'sequelize';
 import { resolveShippingMethodByCode } from '../ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../../services/whatsappClient';
@@ -264,37 +264,12 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
 
         // Create Order Items
         for (const itemData of orderItemsData) {
-            const createdItem = await OrderItem.create({
+            await OrderItem.create({
                 order_id: order.id,
                 ordered_qty_original: Number(itemData.qty || 0),
                 qty_canceled_backorder: 0,
                 ...itemData
             }, { transaction: t });
-
-            const product = await Product.findByPk(itemData.product_id, { transaction: t });
-            const available = Number(product?.stock_quantity || 0);
-            const shortage = Math.max(0, Number(itemData.qty || 0) - available);
-            if (shortage > 0) {
-                await Backorder.create({
-                    order_item_id: createdItem.id,
-                    qty_pending: shortage,
-                    status: 'waiting_stock',
-                    notes: 'Auto created on order placement'
-                }, { transaction: t });
-                await recordOrderEvent({
-                    transaction: t,
-                    order_id: String(order.id),
-                    order_item_id: String(createdItem.id),
-                    event_type: 'backorder_opened',
-                    actor_user_id: String(req.user?.id || ''),
-                    actor_role: String(req.user?.role || ''),
-                    payload: {
-                        before: { shortage_qty: 0 },
-                        after: { shortage_qty: Number(shortage || 0) },
-                        delta: { shortage_qty: Number(shortage || 0) }
-                    }
-                });
-            }
         }
 
         if (pointsEarned > 0) {

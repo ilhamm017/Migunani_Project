@@ -18,7 +18,13 @@ export const getPendingAllocations = asyncWrapper(async (req: Request, res: Resp
             },
             include: [
                 { model: User, as: 'Customer', attributes: ['id', 'name'] },
-                { model: OrderItem, include: [{ model: Product, attributes: ['id', 'name', 'sku', 'base_price', 'stock_quantity', 'allocated_quantity'] }] },
+                {
+                    model: OrderItem,
+                    include: [
+                        { model: Product, attributes: ['id', 'name', 'sku', 'base_price', 'stock_quantity', 'allocated_quantity'] },
+                        { model: Backorder, attributes: ['id', 'qty_pending', 'status'], required: false },
+                    ]
+                },
                 { model: OrderAllocation, as: 'Allocations' }
             ],
             order: [['createdAt', 'ASC']] // FIFO
@@ -29,6 +35,14 @@ export const getPendingAllocations = asyncWrapper(async (req: Request, res: Resp
                 const plain = order.get({ plain: true });
                 const { orderedTotal, allocatedTotal, shortageTotal, shortageItems } = buildShortageSummary(plain.OrderItems, plain.Allocations);
                 const needsAllocation = shortageTotal > 0;
+                const orderItems = Array.isArray(plain.OrderItems) ? plain.OrderItems : [];
+                const hasActiveBackorderRecord = orderItems.some((oi: any) => {
+                    const bo = (oi as any)?.Backorder;
+                    return bo && Number(bo.qty_pending || 0) > 0 && String(bo.status || '') === 'waiting_stock';
+                });
+                const fulfillmentLabel = !needsAllocation
+                    ? 'fulfilled'
+                    : (hasActiveBackorderRecord ? (allocatedTotal > 0 ? 'backorder' : 'preorder') : 'unallocated');
 
                 return {
                     ...plain,
@@ -36,8 +50,9 @@ export const getPendingAllocations = asyncWrapper(async (req: Request, res: Resp
                     allocated_total: allocatedTotal,
                     shortage_total: shortageTotal,
                     needs_allocation: needsAllocation,
-                    is_backorder: needsAllocation && allocatedTotal > 0,
-                    status_label: !needsAllocation ? 'fulfilled' : (allocatedTotal > 0 ? 'backorder' : 'preorder'),
+                    has_active_backorder_record: hasActiveBackorderRecord,
+                    is_backorder: fulfillmentLabel === 'backorder',
+                    status_label: fulfillmentLabel,
                     shortage_items: shortageItems,
                 };
             })

@@ -411,6 +411,30 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             }
         }
 
+        // If the entire order is canceled, ensure any open backorders are also canceled
+        // so they don't appear in backorder/preorder reports.
+        if (nextStatus === 'canceled') {
+            const orderItems = await OrderItem.findAll({
+                where: { order_id: orderId },
+                attributes: ['id'],
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            const orderItemIds = orderItems.map((row: any) => row.id);
+            if (orderItemIds.length > 0) {
+                await Backorder.update({
+                    qty_pending: 0,
+                    status: 'canceled'
+                }, {
+                    where: {
+                        order_item_id: { [Op.in]: orderItemIds },
+                        status: { [Op.notIn]: ['canceled', 'fulfilled'] }
+                    },
+                    transaction: t
+                });
+            }
+        }
+
         // If canceled, restore stock from allocations
         if (nextStatus === 'canceled' && order.stock_released === false) {
             const allocations = await OrderAllocation.findAll({
