@@ -593,16 +593,20 @@ export const parseProductsExportRows = (
             .every((value) => value === '');
         if (isCompletelyEmpty) return;
 
-        const sku = skuRaw.trim();
-        const name = nameRaw.trim();
-        const rawCategoryIds = getCellValueByHeader(row, 'category_ids');
-        const parsedCategoryIds = parseCategoryIdsInput(rawCategoryIds);
-        const categoryIdFromList = parsedCategoryIds.length > 0 ? parsedCategoryIds[0] : null;
+	        const sku = skuRaw.trim();
+	        const name = nameRaw.trim();
+	        const rawCategoryIds = getCellValueByHeader(row, 'category_ids');
+	        const parsedCategoryIds = parseCategoryIdsInput(rawCategoryIds);
+	        const rawCategoryId = getCellValueByHeader(row, 'category_id');
+	        // Backward compatibility: allow multi-ID input in "category_id" column (e.g. "4,5,8").
+	        const parsedFromCategoryId = parsedCategoryIds.length > 0 ? [] : parseCategoryIdsInput(rawCategoryId);
+	        const effectiveCategoryIds = parsedCategoryIds.length > 0 ? parsedCategoryIds : parsedFromCategoryId;
 
-        const categoryIdParsed = categoryIdFromList === null
-            ? parseFlexibleNumber(getCellValueByHeader(row, 'category_id'))
-            : categoryIdFromList;
-        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
+	        const categoryIdFromList = effectiveCategoryIds.length > 0 ? effectiveCategoryIds[0] : null;
+	        const categoryIdParsed = categoryIdFromList === null
+	            ? parseFlexibleNumber(rawCategoryId)
+	            : categoryIdFromList;
+	        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
 
         rows.push({
             rowNumber,
@@ -619,14 +623,14 @@ export const parseProductsExportRows = (
             priceRaw: priceValue,
             stockRaw: stockValue,
             totalModalRaw: getCellValueByHeader(row, 'total_modal'),
-            varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
-            grosirRaw: getCellValueByHeader(row, 'grosir'),
-            categoryId,
-            categoryIds: parsedCategoryIds.length > 0 ? parsedCategoryIds : undefined,
-            descriptionRaw: getCellValueByHeader(row, 'description'),
-            imageUrlRaw: getCellValueByHeader(row, 'image_url'),
-            allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
-            minStockRaw: getCellValueByHeader(row, 'min_stock'),
+	            varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
+	            grosirRaw: getCellValueByHeader(row, 'grosir'),
+	            categoryId,
+	            categoryIds: effectiveCategoryIds.length > 0 ? effectiveCategoryIds : undefined,
+	            descriptionRaw: getCellValueByHeader(row, 'description'),
+	            imageUrlRaw: getCellValueByHeader(row, 'image_url'),
+	            allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
+	            minStockRaw: getCellValueByHeader(row, 'min_stock'),
             binLocationRaw: getCellValueByHeader(row, 'bin_location'),
             vehicleCompatibilityRaw: getCellValueByHeader(row, 'vehicle_compatibility')
         });
@@ -1446,7 +1450,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
 
 
 
