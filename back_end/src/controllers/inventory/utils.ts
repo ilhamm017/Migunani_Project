@@ -41,6 +41,7 @@ export const PRODUCT_EXPORT_IMPORT_HEADERS = [
     'allocated_quantity',
     'min_stock',
     'category_id',
+    'category_ids',
     'status',
     'keterangan',
     'tipe_modal',
@@ -100,6 +101,7 @@ export interface ImportPreviewRow {
     name: string;
     category_name: string;
     category_id?: number | null;
+    category_ids?: number[] | null;
     unit: string;
     barcode: string;
     base_price: number | null;
@@ -141,6 +143,7 @@ export interface ImportNormalizedRow {
     name: string;
     categoryName: string;
     categoryId: number | null;
+    categoryIds?: number[] | null;
     unit: string;
     barcode: string | null;
     basePrice: number;
@@ -322,6 +325,63 @@ export const parseFlexibleNumber = (value: unknown): number | null => {
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+export const parseCategoryIdsInput = (value: unknown): number[] => {
+    if (value === null || value === undefined) return [];
+    if (Array.isArray(value)) {
+        const parsed = value
+            .map((item) => parseFlexibleNumber(item))
+            .filter((num): num is number => typeof num === 'number' && Number.isFinite(num))
+            .map((num) => Math.trunc(num))
+            .filter((num) => num > 0);
+        const uniqueOrdered: number[] = [];
+        const seen = new Set<number>();
+        for (const id of parsed) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            uniqueOrdered.push(id);
+        }
+        return uniqueOrdered;
+    }
+
+    const text = readCellText(value);
+    if (!text) return [];
+
+    // Accept JSON array (e.g. "[1,2,3]") in addition to loose separators (e.g. "1,2,3" / "1|2|3").
+    const trimmed = text.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return parseCategoryIdsInput(parsed);
+        } catch {
+            // fall back to loose parsing below
+        }
+    }
+
+    const normalized = trimmed
+        .replace(/\s+(dan|and)\s+/gi, ',')
+        .replace(/[\r\n\t]+/g, ',')
+        .replace(/[&;/+|]/g, ',');
+    const tokens = normalized
+        .split(',')
+        .map((token) => token.trim())
+        .filter(Boolean);
+
+    const parsedIds = tokens
+        .map((token) => parseFlexibleNumber(token))
+        .filter((num): num is number => typeof num === 'number' && Number.isFinite(num))
+        .map((num) => Math.trunc(num))
+        .filter((num) => num > 0);
+
+    const uniqueOrdered: number[] = [];
+    const seen = new Set<number>();
+    for (const id of parsedIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        uniqueOrdered.push(id);
+    }
+    return uniqueOrdered;
+};
+
 export const parseRequiredNumber = (value: unknown, fieldName: string): number => {
     const parsed = parseFlexibleNumber(value);
     if (parsed === null) {
@@ -500,6 +560,7 @@ export const parseImportRows = (worksheet: ExcelJS.Worksheet, headerMap: Record<
 
 export interface ImportFileRowExtras {
     categoryId?: number | null;
+    categoryIds?: number[] | null;
     descriptionRaw?: unknown;
     imageUrlRaw?: unknown;
     allocatedQuantityRaw?: unknown;
@@ -534,7 +595,13 @@ export const parseProductsExportRows = (
 
         const sku = skuRaw.trim();
         const name = nameRaw.trim();
-        const categoryIdParsed = parseFlexibleNumber(getCellValueByHeader(row, 'category_id'));
+        const rawCategoryIds = getCellValueByHeader(row, 'category_ids');
+        const parsedCategoryIds = parseCategoryIdsInput(rawCategoryIds);
+        const categoryIdFromList = parsedCategoryIds.length > 0 ? parsedCategoryIds[0] : null;
+
+        const categoryIdParsed = categoryIdFromList === null
+            ? parseFlexibleNumber(getCellValueByHeader(row, 'category_id'))
+            : categoryIdFromList;
         const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
 
         rows.push({
@@ -555,6 +622,7 @@ export const parseProductsExportRows = (
             varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
             grosirRaw: getCellValueByHeader(row, 'grosir'),
             categoryId,
+            categoryIds: parsedCategoryIds.length > 0 ? parsedCategoryIds : undefined,
             descriptionRaw: getCellValueByHeader(row, 'description'),
             imageUrlRaw: getCellValueByHeader(row, 'image_url'),
             allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
@@ -744,6 +812,7 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
     };
 
     if (extras.categoryId !== undefined) preview.category_id = extras.categoryId;
+    if (extras.categoryIds !== undefined) preview.category_ids = extras.categoryIds;
     if (extras.descriptionRaw !== undefined) preview.description = readCellText(extras.descriptionRaw) || null;
     if (extras.imageUrlRaw !== undefined) preview.image_url = readCellText(extras.imageUrlRaw) || null;
     if (extras.allocatedQuantityRaw !== undefined) {
@@ -790,8 +859,12 @@ export const buildPreviewFromWorkbook = async (workbook: ExcelJS.Workbook): Prom
 
         const fileRows = parseProductsExportRows(worksheet, headerMapLoose);
 
-        // Resolve category_name from category_id (best-effort).
-        const categoryIds = [...new Set(fileRows.map((row) => row.categoryId).filter((id): id is number => typeof id === 'number' && id > 0))];
+        // Resolve category_name from category_id/category_ids (best-effort, using first ID).
+        const categoryIds = [...new Set(
+            fileRows
+                .map((row) => (Array.isArray(row.categoryIds) && row.categoryIds.length > 0 ? row.categoryIds[0] : row.categoryId))
+                .filter((id): id is number => typeof id === 'number' && id > 0)
+        )];
         const categoryNameById = new Map<number, string>();
         if (categoryIds.length > 0) {
             const categories = await Category.findAll({ where: { id: categoryIds } });
@@ -801,7 +874,8 @@ export const buildPreviewFromWorkbook = async (workbook: ExcelJS.Workbook): Prom
         }
 
         rows = fileRows.map((row) => {
-            const resolvedCategoryName = row.categoryId ? (categoryNameById.get(row.categoryId) ?? 'Uncategorized') : 'Uncategorized';
+            const primaryCategoryId = Array.isArray(row.categoryIds) && row.categoryIds.length > 0 ? row.categoryIds[0] : row.categoryId;
+            const resolvedCategoryName = primaryCategoryId ? (categoryNameById.get(primaryCategoryId) ?? 'Uncategorized') : 'Uncategorized';
             const hydratedRow = { ...row, categoryName: resolvedCategoryName };
             return buildPreviewRow(hydratedRow);
         });
@@ -864,7 +938,22 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
         const sku = rawSku || rawName;
         const name = rawName || rawSku;
         const categoryName = readCellText(data.category_name) || 'Uncategorized';
-        const categoryIdParsed = parseFlexibleNumber((data as any).category_id);
+
+        const categoryIdsFromPayload = (() => {
+            if (Object.prototype.hasOwnProperty.call(data, 'category_ids')) {
+                return parseCategoryIdsInput((data as any).category_ids);
+            }
+            // Backward compatibility: allow "category_id" to contain a multi-ID string like "4,5,8".
+            const rawCategoryIdText = readCellText((data as any).category_id);
+            if (!rawCategoryIdText) return [];
+            if (!/[,&;+/|]/.test(rawCategoryIdText) && !/\s+(dan|and)\s+/i.test(rawCategoryIdText)) return [];
+            const parsed = parseCategoryIdsInput(rawCategoryIdText);
+            return parsed.length > 1 ? parsed : [];
+        })();
+
+        const categoryIdParsed = categoryIdsFromPayload.length > 0
+            ? categoryIdsFromPayload[0]
+            : parseFlexibleNumber((data as any).category_id);
         const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
         const unit = readCellText(data.unit) || 'Pcs';
         const barcodeText = readCellText(data.barcode);
@@ -956,6 +1045,7 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
             name,
             categoryName,
             categoryId,
+            categoryIds: categoryIdsFromPayload.length > 0 ? categoryIdsFromPayload : undefined,
             unit,
             barcode: barcodeText || null,
             basePrice,
@@ -1115,7 +1205,35 @@ export const commitNormalizedRows = async (
         const transaction = await sequelize.transaction();
         try {
             let categoryIds: number[] = [];
-            if (row.categoryId) {
+            if (Array.isArray(row.categoryIds) && row.categoryIds.length > 0) {
+                const normalizedIds = row.categoryIds
+                    .map((value) => Number(value))
+                    .filter((value) => Number.isInteger(value) && value > 0);
+
+                if (normalizedIds.length === 0) {
+                    throw new Error('category_ids harus berisi daftar ID kategori yang valid');
+                }
+
+                const categories = await Category.findAll({
+                    attributes: ['id'],
+                    where: { id: { [Op.in]: normalizedIds } },
+                    transaction
+                });
+                const existingIds = new Set(categories.map((cat) => Number(cat.id)));
+                const missing = normalizedIds.filter((id) => !existingIds.has(id));
+                if (missing.length > 0) {
+                    throw new Error(`Kategori ID tidak ditemukan: ${missing.join(', ')}`);
+                }
+                // Preserve input order while removing duplicates.
+                const uniqueOrdered: number[] = [];
+                const seen = new Set<number>();
+                for (const id of normalizedIds) {
+                    if (seen.has(id)) continue;
+                    seen.add(id);
+                    uniqueOrdered.push(id);
+                }
+                categoryIds = uniqueOrdered;
+            } else if (row.categoryId) {
                 const existingCategory = await Category.findByPk(row.categoryId, { transaction });
                 if (existingCategory) categoryIds = [existingCategory.id];
             }
@@ -1328,8 +1446,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
-
 
 
 
