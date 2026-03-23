@@ -31,11 +31,19 @@ interface PreviewRow extends Record<string, unknown> {
   sku: string;
   name: string;
   category_name: string;
+  category_id?: number | null;
+  category_ids?: number[] | string | null;
   unit: string;
   barcode: string;
   base_price: number | null;
   price: number | null;
   stock_quantity: number | null;
+  allocated_quantity?: number | null;
+  min_stock?: number | null;
+  bin_location?: string | null;
+  vehicle_compatibility?: string | null;
+  description?: string | null;
+  image_url?: string | null;
   status: 'active' | 'inactive';
   keterangan: string;
   tipe_modal: string;
@@ -300,6 +308,7 @@ export default function InventoryImportPage() {
   const [commitSummary, setCommitSummary] = useState<CommitSummary | null>(null);
   const [commitErrors, setCommitErrors] = useState<ImportErrorRow[]>([]);
   const [showOnlyErrorRows, setShowOnlyErrorRows] = useState(false);
+  const [showAllColumns, setShowAllColumns] = useState(true);
   const [bulkRegularPct, setBulkRegularPct] = useState('');
   const [bulkGoldPct, setBulkGoldPct] = useState('');
   const [bulkPlatinumPct, setBulkPlatinumPct] = useState('');
@@ -514,6 +523,14 @@ export default function InventoryImportPage() {
             />
             Tampilkan hanya baris error
           </label>
+          <label className="inline-flex items-center gap-2 mt-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={showAllColumns}
+              onChange={(e) => setShowAllColumns(e.target.checked)}
+            />
+            Tampilkan semua kolom (sesuai file)
+          </label>
         </div>
       )}
 
@@ -600,22 +617,37 @@ export default function InventoryImportPage() {
             </div>
           </div>
           <div ref={draftTableRef} className="overflow-auto border border-slate-200 rounded-2xl max-h-[560px]">
-            <table className="w-full min-w-[1820px] text-sm">
+            <table className={`w-full ${showAllColumns ? 'min-w-[3800px]' : 'min-w-[1820px]'} text-sm`}>
               <thead className="bg-slate-50 text-slate-600 sticky top-0">
                 <tr>
                   <th className="text-left p-3">Row</th>
                   <th className="text-left p-3">SKU</th>
                   <th className="text-left p-3">Nama</th>
                   <th className="text-left p-3">Kategori</th>
+                  {showAllColumns && <th className="text-left p-3">Category ID</th>}
+                  {showAllColumns && <th className="text-left p-3">Category IDs</th>}
+                  {showAllColumns && <th className="text-left p-3">Unit</th>}
+                  {showAllColumns && <th className="text-left p-3">Barcode</th>}
                   <th className="text-left p-3">Stok</th>
+                  {showAllColumns && <th className="text-left p-3">Allocated</th>}
+                  {showAllColumns && <th className="text-left p-3">Min Stok</th>}
                   <th className="text-left p-3">Harga Beli</th>
                   <th className="text-left p-3">Harga Jual</th>
+                  {showAllColumns && <th className="text-left p-3">Total Modal</th>}
                   <th className="text-left p-3">Status</th>
+                  {showAllColumns && <th className="text-left p-3">Keterangan</th>}
+                  {showAllColumns && <th className="text-left p-3">Tipe Modal</th>}
                   <th className="text-left p-3">Diskon Reguler (%)</th>
                   <th className="text-left p-3">Diskon Gold (%)</th>
                   <th className="text-left p-3">Diskon Platinum (%)</th>
                   <th className="text-left p-3">Harga Member (Auto)</th>
                   <th className="text-left p-3">Grosir Min Qty</th>
+                  {showAllColumns && <th className="text-left p-3">Bin</th>}
+                  {showAllColumns && <th className="text-left p-3">Vehicle</th>}
+                  {showAllColumns && <th className="text-left p-3">Description</th>}
+                  {showAllColumns && <th className="text-left p-3">Image URL</th>}
+                  {showAllColumns && <th className="text-left p-3">Varian Harga (JSON)</th>}
+                  {showAllColumns && <th className="text-left p-3">Grosir (JSON)</th>}
                   <th className="text-left p-3">Error</th>
                 </tr>
               </thead>
@@ -628,15 +660,101 @@ export default function InventoryImportPage() {
                       <td className="p-2"><input value={row.sku} onChange={(e) => updateRowField(realIndex, 'sku', e.target.value)} className="w-[160px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
                       <td className="p-2"><input value={row.name} onChange={(e) => updateRowField(realIndex, 'name', e.target.value)} className="w-[220px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
                       <td className="p-2"><input value={row.category_name} onChange={(e) => updateRowField(realIndex, 'category_name', e.target.value)} className="w-[170px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            value={row.category_id ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'category_id', e.target.value === '' ? null : Number(e.target.value))}
+                            className="w-[120px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={Array.isArray(row.category_ids) ? row.category_ids.join(',') : (row.category_ids ?? '')}
+                            onChange={(e) => updateRowField(realIndex, 'category_ids', e.target.value)}
+                            className="w-[160px] border border-slate-200 rounded-lg px-2 py-1.5"
+                            placeholder="mis. 4,5,8"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.unit ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'unit', e.target.value)}
+                            className="w-[90px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.barcode ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'barcode', e.target.value)}
+                            className="w-[170px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
                       <td className="p-2"><input type="number" value={row.stock_quantity ?? ''} onChange={(e) => updateRowField(realIndex, 'stock_quantity', e.target.value === '' ? null : Number(e.target.value))} className="w-[100px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            value={row.allocated_quantity ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'allocated_quantity', e.target.value === '' ? null : Number(e.target.value))}
+                            className="w-[110px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            value={row.min_stock ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'min_stock', e.target.value === '' ? null : Number(e.target.value))}
+                            className="w-[110px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
                       <td className="p-2"><input type="number" value={row.base_price ?? ''} onChange={(e) => updateRowField(realIndex, 'base_price', e.target.value === '' ? null : Number(e.target.value))} className="w-[130px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
                       <td className="p-2"><input type="number" value={row.price ?? ''} onChange={(e) => updateRowField(realIndex, 'price', e.target.value === '' ? null : Number(e.target.value))} className="w-[130px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            value={row.total_modal ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'total_modal', e.target.value === '' ? null : Number(e.target.value))}
+                            className="w-[140px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
                       <td className="p-2">
                         <select value={row.status} onChange={(e) => updateRowField(realIndex, 'status', e.target.value as 'active' | 'inactive')} className="w-[120px] border border-slate-200 rounded-lg px-2 py-1.5">
                           <option value="active">active</option>
                           <option value="inactive">inactive</option>
                         </select>
                       </td>
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.keterangan ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'keterangan', e.target.value)}
+                            className="w-[200px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.tipe_modal ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'tipe_modal', e.target.value)}
+                            className="w-[150px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
                       <td className="p-2"><input type="number" min={0} max={100} value={row.discount_regular_pct ?? 0} onChange={(e) => updateRowField(realIndex, 'discount_regular_pct', e.target.value === '' ? 0 : Number(e.target.value))} className="w-[150px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
                       <td className="p-2"><input type="number" min={0} max={100} value={row.discount_gold_pct ?? 0} onChange={(e) => updateRowField(realIndex, 'discount_gold_pct', e.target.value === '' ? 0 : Number(e.target.value))} className="w-[140px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
                       <td className="p-2"><input type="number" min={0} max={100} value={row.discount_platinum_pct ?? 0} onChange={(e) => updateRowField(realIndex, 'discount_platinum_pct', e.target.value === '' ? 0 : Number(e.target.value))} className="w-[160px] border border-slate-200 rounded-lg px-2 py-1.5" /></td>
@@ -654,6 +772,66 @@ export default function InventoryImportPage() {
                           className="w-[110px] border border-slate-200 rounded-lg px-2 py-1.5"
                         />
                       </td>
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.bin_location ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'bin_location', e.target.value)}
+                            className="w-[120px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.vehicle_compatibility ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'vehicle_compatibility', e.target.value)}
+                            className="w-[180px] border border-slate-200 rounded-lg px-2 py-1.5"
+                            placeholder="mis. Beat, Vario"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <textarea
+                            value={row.description ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'description', e.target.value)}
+                            className="w-[280px] border border-slate-200 rounded-lg px-2 py-1.5"
+                            rows={2}
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <input
+                            value={row.image_url ?? ''}
+                            onChange={(e) => updateRowField(realIndex, 'image_url', e.target.value)}
+                            className="w-[260px] border border-slate-200 rounded-lg px-2 py-1.5"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <textarea
+                            value={row.varian_harga_text || ''}
+                            readOnly
+                            className="w-[260px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                            rows={2}
+                            title="Auto-generated dari diskon & harga"
+                          />
+                        </td>
+                      )}
+                      {showAllColumns && (
+                        <td className="p-2">
+                          <textarea
+                            value={row.grosir_text || ''}
+                            readOnly
+                            className="w-[220px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                            rows={2}
+                            title="Auto-generated dari grosir min qty & harga jual"
+                          />
+                        </td>
+                      )}
                       <td className="p-2 min-w-[260px] text-rose-700">{row.reasons.join('; ') || '-'}</td>
                     </tr>
                   );

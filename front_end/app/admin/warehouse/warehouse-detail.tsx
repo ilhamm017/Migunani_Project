@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductRow } from '../inventory/types';
 import { api } from '@/lib/api';
 import { normalizeProductImageUrl } from '@/lib/image';
@@ -30,6 +30,7 @@ interface EditFormState {
     allocated_quantity: string;
     min_stock: string;
     category_id: string;
+    category_ids: string[];
     status: 'active' | 'inactive';
     keterangan: string;
     tipe_modal: string;
@@ -255,6 +256,18 @@ const toFormState = (product: ProductRow): EditFormState => {
     const sellingPrice = Math.max(0, Number(product.price || 0));
     const discounts = parseVarianDiscounts(product.varian_harga, sellingPrice);
     const grosir = parseGrosirConfig(product.grosir, sellingPrice);
+    const primaryCategoryId = String(product.category_id || '').trim();
+    const taggedCategoryIds = Array.isArray(product.Categories)
+        ? product.Categories.map((item) => String(item?.id ?? '').trim()).filter(Boolean)
+        : [];
+    const mergedCategoryIds = [primaryCategoryId, ...taggedCategoryIds].filter(Boolean);
+    const uniqueCategoryIds: string[] = [];
+    const seenCategoryIds = new Set<string>();
+    for (const id of mergedCategoryIds) {
+        if (seenCategoryIds.has(id)) continue;
+        seenCategoryIds.add(id);
+        uniqueCategoryIds.push(id);
+    }
 
     return {
         sku: String(product.sku || ''),
@@ -268,7 +281,8 @@ const toFormState = (product: ProductRow): EditFormState => {
         stock_quantity: String(Number(product.stock_quantity || 0)),
         allocated_quantity: String(Number(product.allocated_quantity || 0)),
         min_stock: String(Number(product.min_stock || 0)),
-        category_id: String(product.category_id || ''),
+        category_id: primaryCategoryId,
+        category_ids: uniqueCategoryIds,
         status: product.status === 'inactive' ? 'inactive' : 'active',
         keterangan: String(product.keterangan || ''),
         tipe_modal: String(product.tipe_modal || ''),
@@ -298,6 +312,160 @@ const parseOptionalNonNegativeNumber = (value: string, label: string): number | 
     if (!Number.isFinite(parsed)) throw new Error(`${label} harus berupa angka yang valid.`);
     if (parsed < 0) throw new Error(`${label} tidak boleh negatif.`);
     return parsed;
+};
+
+type MultiSelectOption = {
+    value: string;
+    label: string;
+};
+
+const normalizeIdList = (ids: string[]): string[] => {
+    const unique: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of ids) {
+        const trimmed = String(raw ?? '').trim();
+        if (!trimmed) continue;
+        if (!/^\d+$/.test(trimmed)) continue;
+        const normalized = String(Math.max(0, Math.trunc(Number(trimmed))));
+        if (normalized === '0') continue;
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        unique.push(normalized);
+    }
+    return unique;
+};
+
+const MultiSelectCombobox = ({
+    value,
+    options,
+    onChange,
+    placeholder = 'Ketik untuk mencari...',
+    disabled = false,
+}: {
+    value: string[];
+    options: MultiSelectOption[];
+    onChange: (next: string[]) => void;
+    placeholder?: string;
+    disabled?: boolean;
+}) => {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+
+    const selectedSet = useMemo(() => new Set(value), [value]);
+
+    const filteredOptions = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return options;
+        return options.filter((opt) => opt.label.toLowerCase().includes(q));
+    }, [options, query]);
+
+    const toggleValue = useCallback((nextValue: string) => {
+        onChange(selectedSet.has(nextValue)
+            ? value.filter((v) => v !== nextValue)
+            : [...value, nextValue]
+        );
+    }, [onChange, selectedSet, value]);
+
+    useEffect(() => {
+        if (!open) return;
+        const handler = (event: MouseEvent) => {
+            const target = event.target as Node | null;
+            if (!target) return;
+            if (containerRef.current && !containerRef.current.contains(target)) {
+                setOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [open]);
+
+    const selectedChips = value
+        .map((v) => options.find((opt) => opt.value === v) ?? { value: v, label: v });
+
+    return (
+        <div ref={containerRef} className="mt-1 relative">
+            <button
+                type="button"
+                disabled={disabled}
+                onClick={() => setOpen((prev) => !prev)}
+                className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-left text-xs outline-none focus:border-emerald-500 bg-white disabled:bg-slate-100 disabled:text-slate-500"
+            >
+                <div className="flex flex-wrap gap-1.5">
+                    {selectedChips.length === 0 ? (
+                        <span className="text-slate-400">{placeholder}</span>
+                    ) : (
+                        selectedChips.map((chip) => (
+                            <span
+                                key={chip.value}
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                {chip.label}
+                                <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => toggleValue(chip.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') toggleValue(chip.value);
+                                    }}
+                                    className="ml-0.5 inline-flex items-center justify-center rounded hover:bg-slate-200 px-0.5"
+                                    aria-label={`Hapus ${chip.label}`}
+                                >
+                                    <X size={12} />
+                                </span>
+                            </span>
+                        ))
+                    )}
+                </div>
+            </button>
+
+            {open && !disabled && (
+                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+                    <div className="p-2 border-b border-slate-100">
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder="Cari..."
+                            className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500"
+                            autoFocus
+                        />
+                        {value.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => onChange([])}
+                                className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                            >
+                                Kosongkan pilihan
+                            </button>
+                        )}
+                    </div>
+                    <div className="max-h-[220px] overflow-auto">
+                        {filteredOptions.length === 0 ? (
+                            <div className="p-3 text-xs text-slate-500">Tidak ada hasil.</div>
+                        ) : (
+                            filteredOptions.map((opt) => {
+                                const checked = selectedSet.has(opt.value);
+                                return (
+                                    <button
+                                        key={opt.value}
+                                        type="button"
+                                        onClick={() => toggleValue(opt.value)}
+                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-slate-50 ${checked ? 'bg-emerald-50' : 'bg-white'}`}
+                                    >
+                                        <span className="text-slate-800">{opt.label}</span>
+                                        <span className={`text-[11px] font-black ${checked ? 'text-emerald-700' : 'text-slate-300'}`}>
+                                            {checked ? 'TERPILIH' : '—'}
+                                        </span>
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 };
 
 export default function WarehouseDetailPanel({ product, categories, onClose, onProductUpdated, mode = 'info', onRequestEdit }: WarehouseDetailProps) {
@@ -450,11 +618,16 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             const sku = form.sku.trim();
             const name = form.name.trim();
             const unit = form.unit.trim() || 'Pcs';
-            const categoryId = Number(form.category_id);
+            const normalizedCategoryIds = normalizeIdList(form.category_ids);
+            const primaryCategoryIdText = (form.category_id && normalizedCategoryIds.includes(form.category_id))
+                ? form.category_id
+                : (normalizedCategoryIds[0] || form.category_id);
+            const categoryId = Number(primaryCategoryIdText);
 
             if (!sku) throw new Error('SKU wajib diisi.');
             if (!name) throw new Error('Nama produk wajib diisi.');
             if (!Number.isInteger(categoryId) || categoryId <= 0) throw new Error('Kategori wajib dipilih.');
+            if (normalizedCategoryIds.length === 0) throw new Error('Minimal pilih 1 kategori.');
 
             const nextStock = parseRequiredNonNegativeNumber(form.stock_quantity, 'Stok Fisik', true);
             const minStock = parseRequiredNonNegativeNumber(form.min_stock, 'Min Stok', true);
@@ -470,6 +643,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                 price: Math.max(0, grosirPrice),
             };
 
+            const orderedCategoryIds = normalizeIdList([String(categoryId), ...normalizedCategoryIds]);
             const updatePayload: Record<string, unknown> = {
                 sku,
                 barcode: form.barcode.trim() || null,
@@ -480,6 +654,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                 unit,
                 min_stock: minStock,
                 category_id: categoryId,
+                category_ids: orderedCategoryIds.map((id) => Number(id)),
                 status: form.status,
                 keterangan: form.keterangan.trim() || null,
                 tipe_modal: form.tipe_modal.trim() || null,
@@ -504,6 +679,14 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             }
 
             const updatedCategoryName = categories.find((item) => item.id === categoryId)?.name;
+            const selectedCategories = orderedCategoryIds
+                .map((id) => Number(id))
+                .filter((id) => Number.isInteger(id) && id > 0)
+                .map((id) => {
+                    const name = categories.find((item) => item.id === id)?.name;
+                    return name ? { id, name } : null;
+                })
+                .filter(Boolean) as Array<{ id: number; name: string }>;
 	            const mergedProduct: ProductRow = {
 	                ...product,
 	                ...(updateRes.data || {}),
@@ -512,6 +695,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                 base_price: basePrice,
                 category_id: categoryId,
                 Category: updatedCategoryName ? { name: updatedCategoryName } : product.Category,
+                Categories: selectedCategories.length > 0 ? selectedCategories : product.Categories,
                 grosir,
 	                total_modal: totalModal,
 	                bin_location: form.bin_location.trim() || null,
@@ -672,16 +856,56 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                         <section className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kategori & Metadata</p>
                             <div className="grid grid-cols-2 gap-2">
-                                <label>
-                                    <span className="text-[11px] text-slate-500 font-semibold">Kategori</span>
-                                    <select value={form.category_id} onChange={(e) => setField('category_id', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500 bg-white">
-                                        <option value="">Pilih kategori</option>
-                                        {categories.map((category) => (
-                                            <option key={category.id} value={String(category.id)}>
-                                                {category.name}
-                                            </option>
-                                        ))}
-                                    </select>
+                                <label className="col-span-2">
+                                    <span className="text-[11px] text-slate-500 font-semibold">Kategori (Multi)</span>
+                                    <MultiSelectCombobox
+                                        value={form.category_ids}
+                                        options={categories.map((c) => ({ value: String(c.id), label: c.name }))}
+                                        onChange={(next) => {
+                                            const normalized = normalizeIdList(next);
+                                            setForm((prev) => {
+                                                if (!prev) return prev;
+                                                const primary = prev.category_id && normalized.includes(prev.category_id)
+                                                    ? prev.category_id
+                                                    : (normalized[0] || '');
+                                                return { ...prev, category_ids: normalized, category_id: primary };
+                                            });
+                                        }}
+                                        placeholder="Pilih satu atau lebih kategori..."
+                                    />
+                                    <div className="mt-2 grid grid-cols-2 gap-2">
+                                        <label className="col-span-2">
+                                            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Kategori Utama (untuk diskon/harga)</span>
+                                            <select
+                                                value={form.category_id}
+                                                onChange={(e) => {
+                                                    const nextPrimary = String(e.target.value || '').trim();
+                                                    setForm((prev) => {
+                                                        if (!prev) return prev;
+                                                        const normalized = normalizeIdList([...prev.category_ids, nextPrimary]);
+                                                        const primary = nextPrimary && normalized.includes(nextPrimary) ? nextPrimary : (normalized[0] || '');
+                                                        const ordered = primary ? [primary, ...normalized.filter((id) => id !== primary)] : normalized;
+                                                        return { ...prev, category_id: primary, category_ids: ordered };
+                                                    });
+                                                }}
+                                                className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500 bg-white"
+                                            >
+                                                <option value="">Pilih kategori utama</option>
+                                                {form.category_ids.map((id) => {
+                                                    const idNum = Number(id);
+                                                    const name = categories.find((item) => item.id === idNum)?.name || `#${id}`;
+                                                    return (
+                                                        <option key={id} value={id}>
+                                                            {name}
+                                                        </option>
+                                                    );
+                                                })}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <p className="mt-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                                        Tips: gunakan pencarian. Multi-kategori disimpan ke tag, dan kategori utama disimpan ke field utama.
+                                    </p>
                                 </label>
                                 <label>
                                     <span className="text-[11px] text-slate-500 font-semibold">Tipe Modal</span>
@@ -715,23 +939,14 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                         </div>
                                     ) : (
                                         <>
-                                            <select
-                                                multiple
+                                            <MultiSelectCombobox
                                                 value={form.vehicle_compatibility}
-                                                onChange={(e) => {
-                                                    const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value);
-                                                    setField('vehicle_compatibility', selected);
-                                                }}
-                                                className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none focus:border-emerald-500 bg-white"
-                                            >
-                                                {vehicleOptions.map((opt) => (
-                                                    <option key={opt} value={opt}>
-                                                        {opt}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                options={vehicleOptions.map((opt) => ({ value: opt, label: opt }))}
+                                                onChange={(next) => setField('vehicle_compatibility', next)}
+                                                placeholder="Cari & pilih jenis kendaraan..."
+                                            />
                                             <p className="mt-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
-                                                Pilih 1+ item (Ctrl/⌘ untuk multi-select)
+                                                Klik untuk pilih beberapa item. Gunakan pencarian untuk mempercepat.
                                             </p>
                                         </>
                                     )}
