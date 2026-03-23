@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Search, X, SlidersHorizontal } from 'lucide-react';
 import ProductCard from '@/components/product/ProductCard';
 import ProductGrid from '@/components/product/ProductGrid';
 import { ScrollChips, ChipItem } from '@/components/ui/ScrollChips';
 import { api } from '@/lib/api';
 import { useCartStore } from '@/store/cartStore';
+import { useAuthStore } from '@/store/authStore';
 
 interface Product {
     id: string;
@@ -30,16 +31,10 @@ const CATALOG_STATE_PREFIX = 'catalog_state_v1:';
 const CATALOG_SCROLL_PREFIX = 'catalog_scroll_v1:';
 const CATALOG_STATE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 
-// Filter categories
-const filterCategories: ChipItem[] = [
-    { id: 'all', label: 'Semua' },
-    { id: 'motor', label: 'Motor' },
-    { id: 'ban', label: 'Ban' },
-    { id: 'oli', label: 'Oli' },
-    { id: 'kampas', label: 'Rem' },
-    { id: 'lampu', label: 'Lampu' },
-    { id: 'aksesoris', label: 'Aksesoris' },
-];
+type ApiCategoryRow = {
+    id: number | string;
+    name?: string | null;
+};
 
 type CatalogPersistedState = {
     savedAt: number;
@@ -49,15 +44,17 @@ type CatalogPersistedState = {
     searchQuery: string;
     appliedSearch: string;
     showFilters: boolean;
-    activeCategory: string;
+    activeCategoryId: string;
     currentPage: number;
     totalPages: number;
     hasMore: boolean;
 };
 
 function CatalogContent() {
+    const router = useRouter();
     const searchParams = useSearchParams();
     const addItem = useCartStore((state) => state.addItem);
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
 
     const [products, setProducts] = useState<Product[]>([]);
@@ -66,10 +63,11 @@ function CatalogContent() {
     const [searchQuery, setSearchQuery] = useState(searchParams?.get('search') || '');
     const [appliedSearch, setAppliedSearch] = useState(searchParams?.get('search') || '');
     const [showFilters, setShowFilters] = useState(false);
-    const [activeCategory, setActiveCategory] = useState('all');
+    const [activeCategoryId, setActiveCategoryId] = useState('all');
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [hasMore, setHasMore] = useState(false);
+    const [categoryChips, setCategoryChips] = useState<ChipItem[]>([{ id: 'all', label: 'Semua' }]);
 
     const cacheKey = useMemo(() => {
         const raw = searchParams?.toString() || '';
@@ -101,6 +99,7 @@ function CatalogContent() {
 
             const response = await api.catalog.getProducts({
                 search: appliedSearch || undefined,
+                category_id: activeCategoryId !== 'all' ? activeCategoryId : undefined,
                 page: targetPage,
                 limit: CATALOG_PAGE_SIZE,
             });
@@ -130,7 +129,7 @@ function CatalogContent() {
                 setLoading(false);
             }
         }
-    }, [appliedSearch]);
+    }, [activeCategoryId, appliedSearch]);
 
     const persistSnapshot = useCallback(() => {
         if (typeof window === 'undefined') return;
@@ -153,12 +152,36 @@ function CatalogContent() {
             searchQuery,
             appliedSearch,
             showFilters,
-            activeCategory,
+            activeCategoryId,
             currentPage,
             totalPages,
             hasMore,
         };
-    }, [products, loading, loadingMore, searchQuery, appliedSearch, showFilters, activeCategory, currentPage, totalPages, hasMore]);
+    }, [products, loading, loadingMore, searchQuery, appliedSearch, showFilters, activeCategoryId, currentPage, totalPages, hasMore]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadCategories = async () => {
+            try {
+                const res = await api.catalog.getCategories({ limit: 20 });
+                const rows: ApiCategoryRow[] = Array.isArray(res.data?.categories) ? res.data.categories : [];
+                const mapped = rows
+                    .map((row) => ({
+                        id: String(row?.id ?? '').trim(),
+                        label: String(row?.name ?? '').trim(),
+                    }))
+                    .filter((row) => Boolean(row.id) && Boolean(row.label));
+                const next = [{ id: 'all', label: 'Semua' }, ...mapped];
+                if (!cancelled) setCategoryChips(next);
+            } catch (error) {
+                console.error('Failed to load categories:', error);
+            }
+        };
+        void loadCategories();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -175,7 +198,7 @@ function CatalogContent() {
                     setSearchQuery(String(parsed.searchQuery ?? ''));
                     setAppliedSearch(String(parsed.appliedSearch ?? ''));
                     setShowFilters(Boolean(parsed.showFilters === true));
-                    setActiveCategory(String(parsed.activeCategory ?? 'all'));
+                    setActiveCategoryId(String(parsed.activeCategoryId ?? 'all'));
                     setCurrentPage(Number(parsed.currentPage || 1));
                     setTotalPages(Number(parsed.totalPages || 1));
                     setHasMore(Boolean(parsed.hasMore === true));
@@ -211,16 +234,21 @@ function CatalogContent() {
             return;
         }
         loadProducts(1, false);
-    }, [appliedSearch, loadProducts]);
+    }, [appliedSearch, activeCategoryId, loadProducts]);
 
     useEffect(() => {
-        const fromUrl = searchParams?.get('search') || '';
-        const hasSearchParam = Boolean(searchParams?.has('search'));
-        if (hasSearchParam && fromUrl !== appliedSearch) {
-            setSearchQuery(fromUrl);
-            setAppliedSearch(fromUrl);
+        const fromUrlSearch = String(searchParams?.get('search') || '');
+        const fromUrlCategoryRaw = String(searchParams?.get('category_id') || '').trim();
+        const fromUrlCategoryId = /^\d+$/.test(fromUrlCategoryRaw) ? fromUrlCategoryRaw : 'all';
+
+        if (fromUrlSearch !== appliedSearch) {
+            setSearchQuery(fromUrlSearch);
+            setAppliedSearch(fromUrlSearch);
         }
-    }, [appliedSearch, searchParams]);
+        if (fromUrlCategoryId !== activeCategoryId) {
+            setActiveCategoryId(fromUrlCategoryId);
+        }
+    }, [activeCategoryId, appliedSearch, searchParams]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -235,12 +263,36 @@ function CatalogContent() {
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
-        setAppliedSearch(searchQuery.trim());
+        const trimmed = searchQuery.trim();
+        const nextParams = new URLSearchParams(searchParams?.toString() || '');
+        if (trimmed) nextParams.set('search', trimmed);
+        else nextParams.delete('search');
+        if (activeCategoryId !== 'all') nextParams.set('category_id', activeCategoryId);
+        else nextParams.delete('category_id');
+        const qs = nextParams.toString();
+        router.push(qs ? `/catalog?${qs}` : '/catalog');
+    };
+
+    const handlePickCategory = (id: string) => {
+        const nextId = id === 'all' ? 'all' : String(id || '').trim();
+        setActiveCategoryId(nextId || 'all');
+        const nextParams = new URLSearchParams(searchParams?.toString() || '');
+        if (appliedSearch.trim()) nextParams.set('search', appliedSearch.trim());
+        else nextParams.delete('search');
+        if (nextId !== 'all') nextParams.set('category_id', nextId);
+        else nextParams.delete('category_id');
+        const qs = nextParams.toString();
+        router.push(qs ? `/catalog?${qs}` : '/catalog');
     };
 
     const handleAddToCart = async (productId: string) => {
         const product = products.find((p) => p.id === productId);
         if (!product) return;
+
+        if (!isAuthenticated) {
+            router.push('/auth/login');
+            return;
+        }
 
         addItem({
             id: productId,
@@ -304,12 +356,9 @@ function CatalogContent() {
 
             {/* Category Chips */}
             <ScrollChips
-                items={filterCategories}
-                activeId={activeCategory}
-                onItemClick={(id) => {
-                    setActiveCategory(id);
-                    console.log('Filter by category:', id);
-                }}
+                items={categoryChips}
+                activeId={activeCategoryId}
+                onItemClick={(id) => handlePickCategory(String(id))}
             />
 
             {/* Advanced Filters */}

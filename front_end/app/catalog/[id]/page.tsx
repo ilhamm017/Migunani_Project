@@ -17,7 +17,6 @@ interface ProductDetail {
   sku?: string;
   price: number;
   imageUrl?: string;
-  stock_quantity?: number;
   description?: string;
   unit?: string;
   category_name?: string;
@@ -33,7 +32,6 @@ type ProductApiDetail = {
   sku?: string;
   price?: number;
   image_url?: string | null;
-  stock_quantity?: number;
   description?: string;
   unit?: string;
   Categories?: ProductCategory[];
@@ -83,7 +81,6 @@ export default function ProductDetailPage() {
           sku: p.sku,
           price: Number(p.price || 0),
           imageUrl: p.image_url ? String(p.image_url) : undefined,
-          stock_quantity: Number(p.stock_quantity || 0),
           description: p.description,
           unit: p.unit,
           category_name: Array.isArray(p.Categories) && p.Categories.length > 0
@@ -235,7 +232,7 @@ export default function ProductDetailPage() {
           </div>
           <div className="bg-slate-50 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
             <p className="text-[11px] text-slate-500">Ketersediaan</p>
-            <p className="text-sm font-black text-emerald-700">Tersedia</p>
+            <p className="text-sm font-black text-slate-900">Diproses setelah pesanan dibuat</p>
           </div>
         </div>
 

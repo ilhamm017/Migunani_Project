@@ -25,7 +25,6 @@ interface CatalogProduct {
   id: string;
   name: string;
   price: number;
-  stock: number;
   category: string;
 }
 
@@ -95,7 +94,6 @@ export default function GuestLanding() {
           id: String(item.id),
           name: item.name,
           price: Number(item.price),
-          stock: Number(item.stock_quantity || 0),
           category: item.Category?.name || 'Sparepart',
         }));
         setProductTotal(Number.isFinite(Number(productResponse.data?.total)) ? Number(productResponse.data?.total) : null);
@@ -235,7 +233,6 @@ export default function GuestLanding() {
                   <p className="text-xs text-slate-500 mt-1">Kategori: {product.category}</p>
                   <div className="mt-2 flex items-center gap-2">
                     <p className="text-sm font-black text-slate-900">{formatCurrency(product.price)}</p>
-                    <span className="text-xs text-slate-500">Stok: {product.stock}</span>
                   </div>
                 </div>
                 <div className="flex items-center">

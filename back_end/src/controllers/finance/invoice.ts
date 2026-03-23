@@ -208,9 +208,10 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
         const customerId = String(primaryOrder.customer_id || '');
         const paymentMethod = resolveCombinedInvoicePaymentMethod(orders as any[]);
 
-        if (!VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
+        // Payment method is intentionally allowed to be "undecided" (null on order, pending on invoice).
+        if (paymentMethod && !VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
             await t.rollback();
-            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
+            throw new CustomError('Metode pembayaran order tidak valid.', 400);
         }
 
         for (const order of orders as any[]) {
@@ -224,7 +225,9 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
             }
         }
 
-        await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
+        if (paymentMethod) {
+            await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
+        }
 
         const orderItemIds = orders
             .flatMap((order: any) => Array.isArray(order.OrderItems) ? order.OrderItems : [])
@@ -605,11 +608,13 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
         });
 
         const paymentMethod = resolveCombinedInvoicePaymentMethod(orders as any[]);
-        if (!VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
+        if (paymentMethod && !VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
             await t.rollback();
-            throw new CustomError('Metode pembayaran order belum ditentukan.', 400);
+            throw new CustomError('Metode pembayaran order tidak valid.', 400);
         }
-        await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
+        if (paymentMethod) {
+            await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
+        }
 
         const priorInvoiceItems = await InvoiceItem.findAll({
             where: { order_item_id: { [Op.in]: orderItemIds } },

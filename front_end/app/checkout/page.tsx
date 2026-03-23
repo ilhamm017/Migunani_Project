@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, CheckCircle2, Package2, Tag } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle2, Package2, Tag, WalletCards } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
@@ -17,6 +17,20 @@ type UserProfilePayload = {
   };
 };
 
+type ApiCartProduct = {
+  id: string;
+  name?: string;
+  price?: number;
+  image_url?: string | null;
+};
+
+type ApiCartItem = {
+  id: string | number;
+  product_id: string;
+  qty: number;
+  Product?: ApiCartProduct;
+};
+
 type PromoPayload = {
   code: string;
   discount_pct: number;
@@ -26,28 +40,35 @@ type PromoPayload = {
   product_sku?: string | null;
 };
 
-type ShippingOption = {
-  id: string;
-  label: string;
-  eta: string;
+type ShippingMethod = {
+  code: string;
+  name: string;
   fee: number;
 };
 
-const SHIPPING_OPTIONS: ShippingOption[] = [
-  { id: 'kurir_reguler', label: 'Kurir Reguler', eta: 'Estimasi 2-3 hari', fee: 12000 },
-  { id: 'same_day', label: 'Same Day', eta: 'Tiba di hari yang sama', fee: 25000 },
-  { id: 'pickup', label: 'Ambil di Toko', eta: 'Tanpa ongkir', fee: 0 },
+const FALLBACK_SHIPPING_METHODS: ShippingMethod[] = [
+  { code: 'kurir_reguler', name: 'Kurir Reguler', fee: 12000 },
+  { code: 'same_day', name: 'Same Day', fee: 25000 },
+  { code: 'pickup', name: 'Ambil di Toko', fee: 0 },
 ];
+
+const ETA_BY_CODE: Record<string, string> = {
+  kurir_reguler: 'Estimasi 2-3 hari',
+  same_day: 'Tiba di hari yang sama',
+  pickup: 'Ambil langsung di toko',
+};
 
 export default function CheckoutPage() {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
-  const { items, totalPrice, totalItems, clearCart } = useCartStore();
+  const { items, totalPrice, totalItems, clearCart, setCart } = useCartStore();
 
-  const [shippingMethod, setShippingMethod] = useState<string>(SHIPPING_OPTIONS[0].id);
+  const [shippingMethods, setShippingMethods] = useState<ShippingMethod[]>(FALLBACK_SHIPPING_METHODS);
+  const [shippingMethod, setShippingMethod] = useState<string>(FALLBACK_SHIPPING_METHODS[0].code);
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [cartSyncing, setCartSyncing] = useState(false);
   const [formError, setFormError] = useState('');
   const [checkoutError, setCheckoutError] = useState('');
 
@@ -59,12 +80,12 @@ export default function CheckoutPage() {
   const [validatingPromo, setValidatingPromo] = useState(false);
 
   const selectedShippingMethod = useMemo(
-    () => SHIPPING_OPTIONS.find((option) => option.id === shippingMethod) || SHIPPING_OPTIONS[0],
-    [shippingMethod]
+    () => shippingMethods.find((option) => option.code === shippingMethod) || shippingMethods[0] || FALLBACK_SHIPPING_METHODS[0],
+    [shippingMethod, shippingMethods]
   );
 
   const shippingFee = selectedShippingMethod.fee;
-  const isPickup = selectedShippingMethod.id === 'pickup';
+  const isPickup = selectedShippingMethod.code === 'pickup';
 
   const savedAddresses = useMemo(() => {
     const raw = userProfile?.CustomerProfile?.saved_addresses;
@@ -108,6 +129,92 @@ export default function CheckoutPage() {
   }, [promoData, promoEligibleTotal]);
 
   const grandTotal = Math.max(0, totalPrice + shippingFee - promoDiscount);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    const loadShippingMethods = async () => {
+      try {
+        const res = await api.shippingMethods.getAll({ active_only: true });
+        const rawRows: Array<Record<string, unknown>> = Array.isArray(res.data?.shipping_methods)
+          ? (res.data.shipping_methods as Array<Record<string, unknown>>)
+          : [];
+
+        const mapped: ShippingMethod[] = rawRows
+          .map((row) => {
+            const code = String(row.code || '').trim();
+            const name = String(row.name || row.code || '').trim();
+            const fee = Math.max(0, Math.round(Number(row.fee || 0)));
+            return { code, name, fee };
+          })
+          .filter((row) => Boolean(row.code) && Boolean(row.name));
+
+        const next: ShippingMethod[] = mapped.length > 0 ? mapped : FALLBACK_SHIPPING_METHODS;
+        if (cancelled) return;
+        setShippingMethods(next);
+        if (!next.some((m) => m.code === shippingMethod)) {
+          setShippingMethod(next[0]?.code || FALLBACK_SHIPPING_METHODS[0].code);
+        }
+      } catch (error) {
+        console.error('Failed to load shipping methods:', error);
+        if (!cancelled) {
+          setShippingMethods(FALLBACK_SHIPPING_METHODS);
+        }
+      }
+    };
+    void loadShippingMethods();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+
+    const syncCart = async () => {
+      try {
+        setCartSyncing(true);
+        const res = await api.cart.getCart();
+        const cart = res.data;
+        const rawItems: ApiCartItem[] = Array.isArray(cart?.CartItems)
+          ? cart.CartItems
+          : Array.isArray(cart?.items)
+            ? cart.items
+            : [];
+
+        const mapped = rawItems
+          .map((row) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return null;
+            const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
+            const product = row?.Product;
+            return {
+              id: productId,
+              cartItemId: String(row?.id ?? ''),
+              productId,
+              productName: String(product?.name || ''),
+              price: Number(product?.price || 0),
+              quantity: qty,
+              imageUrl: product?.image_url ? String(product.image_url) : undefined,
+            };
+          })
+          .filter(Boolean) as Parameters<typeof setCart>[0];
+
+        if (!cancelled) setCart(mapped);
+      } catch (error) {
+        console.error('Failed to sync cart for checkout:', error);
+      } finally {
+        if (!cancelled) setCartSyncing(false);
+      }
+    };
+
+    void syncCart();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, setCart]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -256,15 +363,9 @@ export default function CheckoutPage() {
     try {
       setLoading(true);
 
-      const payloadItems = items.map((item) => ({
-        product_id: item.productId,
-        qty: item.quantity,
-      }));
-
       const res = await api.orders.checkout({
-        from_cart: false,
+        from_cart: true,
         shipping_method_code: shippingMethod,
-        items: payloadItems,
         promo_code: promoData?.code || undefined,
         shipping_address: isPickup ? undefined : address.trim(),
         customer_note: notes.trim() || undefined,
@@ -298,6 +399,22 @@ export default function CheckoutPage() {
           <Link href="/auth/login" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl bg-emerald-600 text-white text-xs font-black uppercase">
             Login
           </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (cartSyncing) {
+    return (
+      <div className="p-6 max-w-2xl mx-auto space-y-5">
+        <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <ArrowLeft size={16} /> Kembali
+        </button>
+        <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm text-center space-y-3">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center">
+            <Package2 size={24} />
+          </div>
+          <p className="text-sm text-slate-600">Memuat keranjang...</p>
         </div>
       </div>
     );
@@ -343,6 +460,21 @@ export default function CheckoutPage() {
             </span>
           </div>
 
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Metode Pembayaran</p>
+            <div className="mt-2 flex items-start gap-3">
+              <div className="mt-0.5 h-10 w-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-700">
+                <WalletCards size={18} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-slate-900">Ditentukan saat barang datang</p>
+                <p className="text-xs text-slate-600">
+                  Metode pembayaran akan ditentukan bersama driver saat proses pengiriman.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {(formError || checkoutError) && (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
               <p className="text-xs font-semibold text-red-700 flex items-center gap-2">
@@ -355,18 +487,18 @@ export default function CheckoutPage() {
           <div className="space-y-3">
             <h2 className="text-sm font-bold text-slate-900">Metode Pengiriman</h2>
             <div className="grid grid-cols-1 gap-2">
-              {SHIPPING_OPTIONS.map((option) => (
+              {shippingMethods.map((option) => (
                 <label
-                  key={option.id}
+                  key={option.code}
                   className={`flex items-center justify-between rounded-2xl px-4 py-3 cursor-pointer border transition-all ${
-                    shippingMethod === option.id
+                    shippingMethod === option.code
                       ? 'border-emerald-500 bg-emerald-50'
                       : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
                   }`}
                 >
                   <div className="space-y-0.5">
-                    <p className="text-sm font-bold text-slate-900">{option.label}</p>
-                    <p className="text-[11px] text-slate-500">{option.eta}</p>
+                    <p className="text-sm font-bold text-slate-900">{option.name}</p>
+                    <p className="text-[11px] text-slate-500">{ETA_BY_CODE[option.code] || 'Estimasi mengikuti metode pengiriman.'}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs font-black text-slate-700">
@@ -375,8 +507,8 @@ export default function CheckoutPage() {
                     <input
                       type="radio"
                       name="shipping"
-                      checked={shippingMethod === option.id}
-                      onChange={() => setShippingMethod(option.id)}
+                      checked={shippingMethod === option.code}
+                      onChange={() => setShippingMethod(option.code)}
                     />
                   </div>
                 </label>
@@ -526,7 +658,7 @@ export default function CheckoutPage() {
               <span>{formatCurrency(totalPrice)}</span>
             </div>
             <div className="flex justify-between text-sm opacity-80">
-              <span>Ongkir ({selectedShippingMethod.label})</span>
+              <span>Ongkir ({selectedShippingMethod.name})</span>
               <span>{shippingFee === 0 ? 'Gratis' : formatCurrency(shippingFee)}</span>
             </div>
             {promoDiscount > 0 && (

@@ -146,6 +146,12 @@ export const api = {
         validate: (code: string) => apiClient.get(`/promos/validate/${code}`),
     },
 
+    // Shipping Methods (Public)
+    shippingMethods: {
+        getAll: (params?: { active_only?: boolean }) =>
+            apiClient.get('/shipping-methods', { params }),
+    },
+
     invoices: {
         getById: (invoiceId: string) => apiClient.get<InvoiceDetailResponse>(`/invoices/${invoiceId}`),
         uploadPaymentProof: (invoiceId: string, formData: FormData) =>

@@ -20,7 +20,6 @@ export default function ProductCard({
     name,
     price,
     imageUrl,
-    stock: _stock,
     onAddToCart,
 }: ProductCardProps) {
     const normalizedImageUrl = normalizeProductImageUrl(imageUrl);

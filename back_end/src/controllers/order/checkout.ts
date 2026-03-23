@@ -45,11 +45,14 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
         const requestedPaymentMethod = typeof payment_method === 'string'
             ? payment_method.trim().toLowerCase()
             : '';
-        if (requestedPaymentMethod && !ALLOWED_PAYMENT_METHODS.includes(requestedPaymentMethod as CheckoutPaymentMethod)) {
-            await t.rollback();
-            throw new CustomError('Metode pembayaran tidak valid', 400);
+        let resolvedPaymentMethod: CheckoutPaymentMethod | null = null;
+        if (requestedPaymentMethod) {
+            if (!ALLOWED_PAYMENT_METHODS.includes(requestedPaymentMethod as CheckoutPaymentMethod)) {
+                await t.rollback();
+                throw new CustomError('Metode pembayaran tidak valid', 400);
+            }
+            resolvedPaymentMethod = requestedPaymentMethod as CheckoutPaymentMethod;
         }
-        const resolvedPaymentMethod: CheckoutPaymentMethod = (requestedPaymentMethod || 'transfer_manual') as CheckoutPaymentMethod;
 
         let finalItems = normalizeCheckoutItems(items);
 
@@ -299,7 +302,7 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             from_status: null,
             to_status: String(order.status || 'pending'),
             source: String(order.source || source || 'web'),
-            payment_method: resolvedPaymentMethod,
+            payment_method: resolvedPaymentMethod ?? null,
             courier_id: null,
             triggered_by_role: userRole || null,
             target_roles: ['kasir'],

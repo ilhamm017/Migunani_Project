@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Package, ShoppingCart, MessageSquare, ArrowRight, ScanLine, CreditCard, Search, Boxes, ReceiptText } from 'lucide-react';
 import ProductCard from '@/components/product/ProductCard';
 import ProductGrid from '@/components/product/ProductGrid';
 import { useCartStore } from '@/store/cartStore';
+import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { formatCurrency } from '@/lib/utils';
@@ -14,7 +16,6 @@ type ProductPreview = {
   name: string;
   price: number;
   image_url: string | null;
-  stock_quantity: number;
 };
 
 type OrderInvoiceSummary = {
@@ -41,6 +42,8 @@ const formatCount = (value: number) => {
 };
 
 export default function MemberHome() {
+  const router = useRouter();
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const [products, setProducts] = useState<ProductPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const addItem = useCartStore((state) => state.addItem);
@@ -63,7 +66,6 @@ export default function MemberHome() {
             name: String(product.name ?? ''),
             price: Number(product.price ?? 0),
             image_url: product.image_url ? String(product.image_url) : null,
-            stock_quantity: Number(product.stock_quantity ?? 0),
           }))
           : [];
         setProducts(nextProducts);
@@ -116,6 +118,11 @@ export default function MemberHome() {
   const handleAddToCart = async (productId: string) => {
     const product = products.find((item) => String(item.id) === String(productId));
     if (!product) return;
+
+    if (!isAuthenticated) {
+      router.push('/auth/login');
+      return;
+    }
 
     addItem({
       id: String(product.id),
@@ -208,7 +215,6 @@ export default function MemberHome() {
                 name={product.name}
                 price={Number(product.price)}
                 imageUrl={product.image_url ?? undefined}
-                stock={Number(product.stock_quantity)}
                 onAddToCart={handleAddToCart}
               />
             ))}

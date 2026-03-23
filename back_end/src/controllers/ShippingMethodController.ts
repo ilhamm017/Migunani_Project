@@ -13,6 +13,17 @@ export const getShippingMethods = asyncWrapper(async (req: Request, res: Respons
     }
 });
 
+export const getPublicShippingMethods = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const raw = String(req.query.active_only ?? '').trim();
+        const activeOnly = raw ? raw === 'true' : true;
+        const rows = await ShippingMethodService.getShippingMethods(activeOnly);
+        return res.json({ shipping_methods: rows });
+    } catch (error) {
+        throw new CustomError('Gagal memuat metode pengiriman', 500);
+    }
+});
+
 export const createShippingMethod = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const saved = await ShippingMethodService.createShippingMethod(req.body);
@@ -70,4 +81,3 @@ export const removeShippingMethod = asyncWrapper(async (req: Request, res: Respo
 export const resolveShippingMethodByCode = async (codeRaw: unknown) => {
     return ShippingMethodService.resolveShippingMethodByCode(codeRaw);
 };
-

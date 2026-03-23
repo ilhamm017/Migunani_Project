@@ -55,7 +55,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
 
         const { count, rows } = await Product.findAndCountAll({
             where: whereClause,
-            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'stock_quantity', 'category_id'], // Explicit attributes
+            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'], // Explicit attributes (hide stock from public)
             include: [
                 { model: Category, attributes: ['id', 'name', 'icon'] },
                 { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
@@ -94,7 +94,7 @@ export const getProductDetails = asyncWrapper(async (req: Request, res: Response
                 [Op.or]: [{ id }, { sku: id }], // Friendly URL support
                 status: 'active'
             },
-            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'stock_quantity', 'category_id'],
+            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'],
             include: [
                 { model: Category, attributes: ['id', 'name', 'icon'] },
                 { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
