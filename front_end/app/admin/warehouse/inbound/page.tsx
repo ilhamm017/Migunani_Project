@@ -33,6 +33,8 @@ interface BackorderSuggestion {
   sku: string;
   stock: number;
   shortage: number;
+  shortage_unallocated?: number;
+  shortage_confirmed?: number;
   base_price: number;
 }
 
@@ -47,6 +49,8 @@ interface BackorderItemRow {
 
 interface BackorderOrderRow {
   shortage_items?: BackorderItemRow[];
+  status_label?: 'fulfilled' | 'backorder' | 'preorder' | 'unallocated' | string;
+  has_active_backorder_record?: boolean;
 }
 
 interface CreatePOResult {
@@ -83,6 +87,7 @@ export default function PurchaseOrderPage() {
   const [selectedBackorderIds, setSelectedBackorderIds] = useState<Set<string>>(new Set());
   const [backorderSearch, setBackorderSearch] = useState('');
   const backorderMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const [backorderOrderLabelCounts, setBackorderOrderLabelCounts] = useState<Record<string, number>>({});
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -172,21 +177,31 @@ export default function PurchaseOrderPage() {
 
       // Aggregate shortages by product
       const aggregated = new Map<string, BackorderSuggestion>();
+      const labelCounts: Record<string, number> = {};
 
       rows.forEach((order) => {
+        const label = String(order?.status_label || 'unallocated');
+        labelCounts[label] = Number(labelCounts[label] || 0) + 1;
+
         (order.shortage_items || []).forEach((item) => {
           const productId = item.product_id;
           const existing = aggregated.get(productId);
+          const shortageQty = Number(item.shortage_qty || 0);
+          const isUnallocated = label === 'unallocated';
           if (existing) {
-            existing.shortage += Number(item.shortage_qty || 0);
+            existing.shortage += shortageQty;
+            if (isUnallocated) existing.shortage_unallocated = Number(existing.shortage_unallocated || 0) + shortageQty;
+            else existing.shortage_confirmed = Number(existing.shortage_confirmed || 0) + shortageQty;
           } else {
             aggregated.set(productId, {
               id: productId,
               name: item.product_name,
               sku: item.sku,
               stock: Number(item.stock_quantity || 0),
-              shortage: Number(item.shortage_qty || 0),
-              base_price: Number(item.base_price || 0)
+              shortage: shortageQty,
+              shortage_unallocated: isUnallocated ? shortageQty : 0,
+              shortage_confirmed: isUnallocated ? 0 : shortageQty,
+              base_price: Number(item.base_price || 0),
             });
           }
         });
@@ -199,10 +214,12 @@ export default function PurchaseOrderPage() {
           return a.name.localeCompare(b.name);
         })
       );
+      setBackorderOrderLabelCounts(labelCounts);
       setSelectedBackorderIds(new Set());
     } catch (error) {
       console.error('Failed to load backorder suggestions', error);
       setBackorderSuggestions([]);
+      setBackorderOrderLabelCounts({});
     } finally {
       setLoadingBackorderSuggestions(false);
     }
@@ -750,6 +767,18 @@ export default function PurchaseOrderPage() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-3 flex-1 min-h-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                      Unallocated: {Number(backorderOrderLabelCounts.unallocated || 0)}
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-purple-100 text-purple-700">
+                      Preorder: {Number(backorderOrderLabelCounts.preorder || 0)}
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                      Backorder: {Number(backorderOrderLabelCounts.backorder || 0)}
+                    </span>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     <div className="md:col-span-2">
                       <input
@@ -844,7 +873,16 @@ export default function PurchaseOrderPage() {
                                 </td>
                                 <td className="px-3 py-2 text-slate-600 font-mono text-xs whitespace-nowrap">{it.sku}</td>
                                 <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{it.stock}</td>
-                                <td className="px-3 py-2 text-right font-black text-rose-700 whitespace-nowrap">{it.shortage}</td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <div className="font-black text-rose-700">{it.shortage}</div>
+                                  {(Number(it.shortage_unallocated || 0) > 0 || Number(it.shortage_confirmed || 0) > 0) && (
+                                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5">
+                                      {Number(it.shortage_unallocated || 0) > 0 ? `Unalloc ${Number(it.shortage_unallocated || 0)}` : null}
+                                      {Number(it.shortage_unallocated || 0) > 0 && Number(it.shortage_confirmed || 0) > 0 ? ' • ' : null}
+                                      {Number(it.shortage_confirmed || 0) > 0 ? `Confirmed ${Number(it.shortage_confirmed || 0)}` : null}
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="px-3 py-2 text-right whitespace-nowrap">
                                   <button
                                     onClick={() => {
