@@ -631,7 +631,7 @@ export default function OrderDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button onClick={loadOrder} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm">Refresh Status</button>
+          <button onClick={() => void loadOrder({ silent: false })} className="py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm">Refresh Status</button>
           {['delivered', 'completed'].includes(String(order.status || '')) && (
             <>
               <Link href={`/orders/${order.id}/return`} className="py-3 bg-rose-100 text-rose-700 rounded-2xl font-bold text-sm inline-flex items-center justify-center gap-2 hover:bg-rose-200 transition-colors">
