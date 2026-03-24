@@ -162,35 +162,50 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Touch-friendly defaults */
-button,
-a,
-[role="button"] {
+/* Touch-friendly defaults + clickable animation */
+:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]) {
   min-height: var(--touch-target);
   min-width: var(--touch-target);
   touch-action: manipulation;
-  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
 }
 
-button:active,
-a:active,
-[role="button"]:active {
-  transform: translateY(1px) scale(0.98);
-  filter: brightness(0.95);
+:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
+    transition: translate 120ms ease, scale 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+    will-change: translate, scale, filter;
+  }
+
+  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):hover {
+    filter: brightness(1.02);
+  }
+
+  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):active {
+    translate: 0 1px;
+    scale: 0.98;
+    filter: brightness(0.97);
+  }
+}
+
+@supports not (scale: 1) {
+  @media (prefers-reduced-motion: no-preference) {
+    :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
+      transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+      will-change: transform, filter;
+    }
+
+    :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):active {
+      transform: translateY(1px) scale(0.98);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-
-  button,
-  a,
-  [role="button"] {
+  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]) {
     transition: none;
-  }
-
-  button:active,
-  a:active,
-  [role="button"]:active {
-    transform: none;
   }
 }
 
