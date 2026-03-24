@@ -4,7 +4,7 @@ import { User, CustomerProfile, sequelize } from '../../models';
 import bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../../utils/whatsappNumber';
-import { customerOtpMap, cleanupOtpSessions, normalizeTier, normalizeEmail, isValidEmail } from './utils';
+import { customerOtpMap, cleanupOtpSessions, normalizeTier, normalizeEmail, isValidEmail, normalizeId } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { sendWhatsappSafe } from '../../services/WhatsappSendService';
@@ -186,5 +186,90 @@ export const createCustomerByAdmin = asyncWrapper(async (req: Request, res: Resp
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
         throw new CustomError('Gagal menambahkan customer', 500);
+    }
+});
+
+export const updateCustomerEmailByAdmin = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const id = normalizeId(req.params?.id);
+        if (!id) {
+            throw new CustomError('ID customer tidak valid', 400);
+        }
+
+        const email = normalizeEmail(req.body?.email);
+        if (!email) {
+            throw new CustomError('Email wajib diisi', 400);
+        }
+        if (!isValidEmail(email)) {
+            throw new CustomError('Format email tidak valid', 400);
+        }
+
+        const customer = await User.findOne({ where: { id, role: 'customer' } });
+        if (!customer) {
+            throw new CustomError('Customer tidak ditemukan', 404);
+        }
+
+        const conflict = await User.findOne({
+            where: {
+                id: { [Op.ne]: id },
+                email
+            },
+            attributes: ['id']
+        });
+        if (conflict) {
+            throw new CustomError('Email sudah terdaftar', 409);
+        }
+
+        await customer.update({ email });
+
+        return res.json({
+            message: 'Email customer berhasil diperbarui',
+            customer: {
+                id: customer.id,
+                name: customer.name,
+                whatsapp_number: customer.whatsapp_number,
+                email: customer.email,
+                status: customer.status
+            }
+        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Gagal update email customer', 500);
+    }
+});
+
+export const updateCustomerPasswordByAdmin = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const id = normalizeId(req.params?.id);
+        if (!id) {
+            throw new CustomError('ID customer tidak valid', 400);
+        }
+
+        const rawPassword = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+        if (!rawPassword || rawPassword.length < MIN_CUSTOMER_PASSWORD_LENGTH) {
+            throw new CustomError(`Password minimal ${MIN_CUSTOMER_PASSWORD_LENGTH} karakter`, 400);
+        }
+
+        const customer = await User.findOne({ where: { id, role: 'customer' } });
+        if (!customer) {
+            throw new CustomError('Customer tidak ditemukan', 404);
+        }
+
+        const hashedPassword = await bcrypt.hash(rawPassword, 10);
+        await customer.update({ password: hashedPassword });
+
+        return res.json({
+            message: 'Password customer berhasil diperbarui',
+            customer: {
+                id: customer.id,
+                name: customer.name,
+                whatsapp_number: customer.whatsapp_number,
+                email: customer.email,
+                status: customer.status
+            }
+        });
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Gagal update password customer', 500);
     }
 });

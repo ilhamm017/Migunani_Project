@@ -10,6 +10,8 @@ router.post('/otp/send', authenticate, requireRole('super_admin', 'kasir'), Cust
 router.post('/create', authenticate, requireRole('super_admin', 'kasir'), CustomerController.createCustomerByAdmin);
 router.get('/:id', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerById);
 router.get('/:id/orders', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerOrders);
+router.patch('/:id/email', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerEmailByAdmin);
+router.patch('/:id/password', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerPasswordByAdmin);
 router.patch('/:id/tier', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerTier);
 router.patch('/:id/status', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerStatus);
 

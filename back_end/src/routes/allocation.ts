@@ -5,9 +5,10 @@ import * as OrderAllocationController from '../controllers/allocation';
 const router = Router();
 
 router.use(authenticate);
-router.use(requireRole('super_admin', 'kasir'));
+router.use(requireRole('super_admin', 'admin_gudang', 'kasir'));
 
 router.get('/pending', OrderAllocationController.getPendingAllocations);
+router.get('/picklist', OrderAllocationController.getPicklist);
 router.get('/product/:productId', OrderAllocationController.getProductAllocations);
 router.post('/:id/cancel-backorder', OrderAllocationController.cancelBackorder);
 router.get('/:id', OrderAllocationController.getOrderDetails);

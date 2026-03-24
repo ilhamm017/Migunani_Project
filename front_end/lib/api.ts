@@ -172,6 +172,13 @@ export const api = {
     allocation: {
         getPending: (params?: { scope?: 'shortage' | 'all' }) =>
             apiClient.get('/allocation/pending', { params }),
+        getPicklist: (params?: {
+            view?: 'product' | 'customer';
+            q?: string;
+            allocation_status?: 'pending' | 'picked' | 'shipped' | 'all' | string;
+            order_status?: string; // comma-separated
+            limit?: number;
+        }) => apiClient.get('/allocation/picklist', { params }),
         getByProduct: (productId: string) => apiClient.get(`/allocation/product/${productId}`),
         getDetail: (id: string) => apiClient.get(`/allocation/${id}`),
         allocate: (id: string, items: Array<{ product_id: string; qty: number }>) =>
