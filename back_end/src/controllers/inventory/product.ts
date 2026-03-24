@@ -17,13 +17,18 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
         await ensureProductColumnsReady();
 
-        const { page = 1, limit = 10, search, category_id, status = 'all' } = req.query;
+        const { page = 1, limit = 10, search, category_id, status = 'all', stock_filter = 'all' } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = {};
         const normalizedStatus = String(status).toLowerCase();
         if (normalizedStatus === 'active' || normalizedStatus === 'inactive') {
             whereClause.status = normalizedStatus;
+        }
+
+        const normalizedStockFilter = String(stock_filter ?? 'all').toLowerCase();
+        if (!['all', 'empty', 'low'].includes(normalizedStockFilter)) {
+            throw new CustomError('stock_filter tidak valid (gunakan: all|empty|low)', 400);
         }
 
         if (search) {
@@ -71,9 +76,22 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
             return next;
         };
 
+        const listWhere = (() => {
+            if (normalizedStockFilter === 'empty') {
+                return buildWhereWithAnd([{ stock_quantity: { [Op.lte]: 0 } }]);
+            }
+            if (normalizedStockFilter === 'low') {
+                return buildWhereWithAnd([
+                    { stock_quantity: { [Op.gt]: 0 } },
+                    where(col('stock_quantity'), Op.lte, col('min_stock'))
+                ]);
+            }
+            return whereClause;
+        })();
+
         const [listResult, emptyStockCount, lowStockCount] = await Promise.all([
             Product.findAndCountAll({
-                where: whereClause,
+                where: listWhere,
                 include: [
                     { model: Category, attributes: ['id', 'name'] },
                     { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }

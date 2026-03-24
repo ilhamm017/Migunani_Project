@@ -315,7 +315,7 @@ export const api = {
             moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
         },
         inventory: {
-            getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive' }) =>
+            getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive'; stock_filter?: 'all' | 'empty' | 'low' }) =>
                 apiClient.get('/admin/products', { params }),
             getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>
                 apiClient.get('/admin/products/restock-suggestions', { params }),

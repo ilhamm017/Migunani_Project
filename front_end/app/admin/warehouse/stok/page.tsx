@@ -25,6 +25,7 @@ type InventoryQuery = {
     status: 'all' | 'active' | 'inactive';
     search?: string;
     category_id?: number;
+    stock_filter?: 'all' | 'empty';
 };
 
 export default function WarehouseInventoryPage() {
@@ -42,6 +43,7 @@ export default function WarehouseInventoryPage() {
     const [sorting, setSorting] = useState<SortingState>([]);
     const [isEditMode, setIsEditMode] = useState(false);
     const [detailMode, setDetailMode] = useState<'info' | 'edit'>('info');
+    const [stockFilter, setStockFilter] = useState<'all' | 'empty'>('all');
 
     // Summary stats
     const stats = useMemo(() => {
@@ -67,6 +69,7 @@ export default function WarehouseInventoryPage() {
             };
             if (search.trim()) params.search = search.trim();
             if (selectedCategory !== 'all') params.category_id = Number(selectedCategory);
+            if (stockFilter !== 'all') params.stock_filter = stockFilter;
 
             const res = await api.admin.inventory.getProducts(params);
             setProducts(res.data?.products || []);
@@ -81,7 +84,7 @@ export default function WarehouseInventoryPage() {
         } finally {
             setLoading(false);
         }
-    }, [currentPage, search, selectedCategory]);
+    }, [currentPage, search, selectedCategory, stockFilter]);
 
     const loadCategories = useCallback(async () => {
         try {
@@ -188,6 +191,7 @@ export default function WarehouseInventoryPage() {
 
     const pageStart = totalProducts === 0 ? 0 : (currentPage - 1) * PRODUCTS_PER_PAGE + 1;
     const pageEnd = totalProducts === 0 ? 0 : Math.min(currentPage * PRODUCTS_PER_PAGE, totalProducts);
+    const isEmptyFilterActive = stockFilter === 'empty';
 
     const table = useReactTable({
         data: products,
@@ -226,11 +230,25 @@ export default function WarehouseInventoryPage() {
                                 <span className="text-xs font-bold text-amber-700">{stats.low} Low</span>
                             </div>
                         )}
-                        {stats.kosong > 0 && (
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-200">
+                        {(stats.kosong > 0 || isEmptyFilterActive) && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setStockFilter((prev) => (prev === 'empty' ? 'all' : 'empty'));
+                                    setCurrentPage(1);
+                                    setSelectedProduct(null);
+                                }}
+                                aria-pressed={isEmptyFilterActive}
+                                title={isEmptyFilterActive ? 'Klik untuk tampilkan semua stok' : 'Klik untuk filter stok kosong'}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors min-h-0 min-w-0 ${isEmptyFilterActive
+                                    ? 'bg-rose-100 border-rose-300 ring-2 ring-rose-300 text-rose-800'
+                                    : 'bg-rose-50 border-rose-200 hover:bg-rose-100'
+                                    }`}
+                            >
                                 <AlertTriangle size={14} className="text-rose-600" />
                                 <span className="text-xs font-bold text-rose-700">{stats.kosong} Kosong</span>
-                            </div>
+                                {isEmptyFilterActive && <X size={12} className="text-rose-700" />}
+                            </button>
                         )}
                     </div>
 
@@ -266,6 +284,20 @@ export default function WarehouseInventoryPage() {
                                 </button>
                             )}
                         </div>
+                        {isEmptyFilterActive && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setStockFilter('all');
+                                    setCurrentPage(1);
+                                }}
+                                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-black border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 min-h-0 min-w-0"
+                                title="Hapus filter stok kosong"
+                            >
+                                Stok Kosong
+                                <X size={12} />
+                            </button>
+                        )}
                         <div className="relative">
                             <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                             <select
