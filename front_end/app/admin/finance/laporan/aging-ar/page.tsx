@@ -28,7 +28,7 @@ type ARAgingData = {
 };
 
 export default function ARAgingPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const [data, setData] = useState<ARAgingData | null>(null);
     const [loading, setLoading] = useState(false);
 

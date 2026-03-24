@@ -14,7 +14,7 @@ type InventoryValueSummary = {
 };
 
 export default function LaporanPersediaanPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<InventoryValueSummary | null>(null);
 

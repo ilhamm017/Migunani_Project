@@ -17,7 +17,7 @@ type PORow = {
 };
 
 export default function LaporanPembelianPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
   const defaults = useMemo(() => getDefaultMonthRange(), []);
 
   const [startDate, setStartDate] = useState(defaults.startDate);

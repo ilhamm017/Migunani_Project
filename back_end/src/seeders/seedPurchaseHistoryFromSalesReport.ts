@@ -1,14 +1,18 @@
 import crypto from 'crypto';
 import { col, fn, where } from 'sequelize';
-import { Category, CustomerProfile, Order, OrderItem, Product, User, sequelize } from '../models';
+import { Account, Category, CustomerProfile, Invoice, InvoiceItem, Journal, Order, OrderItem, Product, User, sequelize } from '../models';
 import { SalesReportInvoice } from './salesReportDiskonParser';
 import { salesReportDiskonSeedInvoices } from './data/sales_report_diskon_2026_03_24';
+import { JournalService } from '../services/JournalService';
 
 type SeedPurchaseHistoryResult = {
     source: string;
     parsedInvoices: number;
     insertedOrders: number;
     insertedOrderItems: number;
+    insertedInvoices: number;
+    insertedInvoiceItems: number;
+    insertedJournals: number;
     createdCustomers: number;
     promotedToGold: number;
     createdProducts: number;
@@ -29,6 +33,27 @@ const generateSkuFromName = (name: string): string => {
 const normalizeLower = (value: string): string => value.trim().toLowerCase();
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+const resolveSeedActorId = async (t: any): Promise<string> => {
+    const preferredRoles = ['super_admin', 'admin_finance', 'kasir'];
+    for (const role of preferredRoles) {
+        const found = await User.findOne({ where: { role }, attributes: ['id'], transaction: t });
+        const id = String((found as any)?.id || '').trim();
+        if (id) return id;
+    }
+    const fallback = await User.findOne({ attributes: ['id'], transaction: t });
+    const fallbackId = String((fallback as any)?.id || '').trim();
+    if (!fallbackId) throw new Error('No users exist to attribute seeded journal entries (created_by).');
+    return fallbackId;
+};
+
+const getAccountIdByCode = async (code: string, t: any): Promise<number> => {
+    const row = await Account.findOne({ where: { code }, attributes: ['id'], transaction: t });
+    const idRaw = (row as any)?.id;
+    const id = Number(idRaw);
+    if (!Number.isFinite(id) || id <= 0) throw new Error(`Account code '${code}' not found (required for journal seeding).`);
+    return id;
+};
 
 const computeUnitPaid = (invoice: SalesReportInvoice, item: SalesReportInvoice['items'][number]): number => {
     const qty = Math.max(1, Number(item.qty || 0));
@@ -57,9 +82,18 @@ export const seedPurchaseHistoryFromSalesReport = async (options?: {
     try {
         let insertedOrders = 0;
         let insertedOrderItems = 0;
+        let insertedInvoices = 0;
+        let insertedInvoiceItems = 0;
+        let insertedJournals = 0;
         let createdCustomers = 0;
         let promotedToGold = 0;
         let createdProducts = 0;
+
+        const seedActorId = await resolveSeedActorId(t);
+        const kasAccountId = await getAccountIdByCode('1101', t);
+        const revenueAccountId = await getAccountIdByCode('4100', t);
+        const hppAccountId = await getAccountIdByCode('5100', t);
+        const inventoryAccountId = await getAccountIdByCode('1300', t);
 
         const userByNameLower = new Map<string, any>();
         const productByNameLower = new Map<string, any>();
@@ -146,6 +180,50 @@ export const seedPurchaseHistoryFromSalesReport = async (options?: {
             } as any, { transaction: t });
             if (!existingOrder) insertedOrders += 1;
 
+            let invoiceCogs = 0;
+            let invoiceRow = await Invoice.findOne({
+                where: { invoice_number: String(invoice.invoice_no || '').trim() },
+                transaction: t
+            });
+            if (!invoiceRow) {
+                invoiceRow = await Invoice.create({
+                    order_id: String(order.id),
+                    customer_id: String(user.id),
+                    invoice_number: String(invoice.invoice_no || '').trim(),
+                    payment_method: 'cash_store',
+                    payment_status: 'paid',
+                    amount_paid: Number(invoice.netto || 0),
+                    change_amount: 0,
+                    payment_proof_url: null,
+                    verified_by: null,
+                    verified_at: invoice.date,
+                    subtotal: Number(invoice.bruto || 0),
+                    discount_amount: Number(invoice.diskon || 0),
+                    shipping_fee_total: 0,
+                    tax_percent: 0,
+                    tax_amount: 0,
+                    total: Number(invoice.netto || 0),
+                    tax_mode_snapshot: 'non_pkp',
+                    pph_final_amount: null,
+                    shipping_method_code: null,
+                    shipping_method_name: null,
+                    courier_id: null,
+                    shipment_status: 'delivered',
+                    shipped_at: invoice.date,
+                    delivered_at: invoice.date,
+                    delivery_proof_url: null,
+                    expiry_date: null,
+                    createdAt: invoice.date,
+                    updatedAt: invoice.date
+                } as any, { transaction: t });
+                insertedInvoices += 1;
+            } else {
+                const patch: any = {};
+                if (!invoiceRow.order_id) patch.order_id = String(order.id);
+                if (!invoiceRow.customer_id) patch.customer_id = String(user.id);
+                if (Object.keys(patch).length > 0) await invoiceRow.update(patch, { transaction: t });
+            }
+
             for (const item of invoice.items) {
                 const name = item.product_name.trim();
                 const productKey = normalizeLower(name);
@@ -187,39 +265,88 @@ export const seedPurchaseHistoryFromSalesReport = async (options?: {
                 }
 
                 const qty = Math.max(0, Number(item.qty || 0));
+                if (qty <= 0) continue;
                 const unitPaid = computeUnitPaid(invoice, item);
                 const baseUnit = round2(Number(item.price_per_unit || 0));
                 const discountPct = baseUnit > 0 ? round2(Math.min(100, Math.max(0, ((baseUnit - unitPaid) / baseUnit) * 100))) : 0;
                 const assumedTier = invoiceHasDiscount && (Number(item.discount_amount || 0) > 0 || discountPct > 0) ? 'gold' : 'regular';
+                invoiceCogs += Number(item.cost_per_unit || 0) * qty;
 
-                const existingItem = await OrderItem.findOne({
+                let orderItem = await OrderItem.findOne({
                     where: {
                         order_id: String(order.id),
                         product_id: String(product.id)
                     },
                     transaction: t
                 });
-                if (existingItem) continue;
+                if (!orderItem) {
+                    orderItem = await OrderItem.create({
+                        order_id: String(order.id),
+                        product_id: String(product.id),
+                        qty,
+                        ordered_qty_original: qty,
+                        qty_canceled_backorder: 0,
+                        price_at_purchase: unitPaid,
+                        cost_at_purchase: Number(item.cost_per_unit || 0),
+                        pricing_snapshot: {
+                            tier: assumedTier,
+                            base_price: baseUnit,
+                            discount_pct: discountPct,
+                            discount_source: (discountPct > 0) ? 'tier_fallback' : 'none',
+                            note: item.note || null,
+                            imported_invoice: invoice.invoice_no
+                        }
+                    } as any, { transaction: t });
+                    insertedOrderItems += 1;
+                }
 
-                await OrderItem.create({
-                    order_id: String(order.id),
-                    product_id: String(product.id),
+                const existingInvoiceItem = await InvoiceItem.findOne({
+                    where: {
+                        invoice_id: String(invoiceRow.id),
+                        order_item_id: String(orderItem.id)
+                    },
+                    transaction: t
+                });
+                if (existingInvoiceItem) continue;
+
+                await InvoiceItem.create({
+                    invoice_id: String(invoiceRow.id),
+                    order_item_id: String(orderItem.id),
                     qty,
-                    ordered_qty_original: qty,
-                    qty_canceled_backorder: 0,
-                    price_at_purchase: unitPaid,
-                    cost_at_purchase: Number(item.cost_per_unit || 0),
-                    pricing_snapshot: {
-                        tier: assumedTier,
-                        base_price: baseUnit,
-                        discount_pct: discountPct,
-                        discount_source: (discountPct > 0) ? 'tier_fallback' : 'none',
-                        note: item.note || null,
-                        imported_invoice: invoice.invoice_no
-                    }
+                    unit_price: unitPaid,
+                    unit_cost: Number(item.cost_per_unit || 0),
+                    line_total: round2(unitPaid * qty)
                 } as any, { transaction: t });
-                insertedOrderItems += 1;
+                insertedInvoiceItems += 1;
             }
+
+            // Create a balanced journal entry so finance reports (P&L, etc.) can show seeded sales.
+            // Idempotent by invoice number.
+            const revenue = round2(Number(invoice.netto || 0));
+            const cogs = round2(Number(invoiceCogs || 0));
+            const idempotencyKey = `seed_sales_report_${String(invoice.invoice_no || '').trim()}`;
+            const existingJournal = await Journal.findOne({
+                where: { idempotency_key: idempotencyKey },
+                attributes: ['id'],
+                transaction: t
+            });
+            if (!existingJournal) {
+                insertedJournals += 1;
+            }
+            await JournalService.createEntry({
+                date: invoice.date,
+                description: `Seed sales report invoice ${invoice.invoice_no}`,
+                reference_type: 'seed_sales_report',
+                reference_id: String(invoice.invoice_no || ''),
+                created_by: seedActorId,
+                idempotency_key: idempotencyKey,
+                lines: [
+                    { account_id: kasAccountId, debit: revenue, credit: 0 },
+                    { account_id: revenueAccountId, debit: 0, credit: revenue },
+                    { account_id: hppAccountId, debit: cogs, credit: 0 },
+                    { account_id: inventoryAccountId, debit: 0, credit: cogs },
+                ]
+            }, t);
         }
 
         await t.commit();
@@ -228,6 +355,9 @@ export const seedPurchaseHistoryFromSalesReport = async (options?: {
             parsedInvoices: invoices.length,
             insertedOrders,
             insertedOrderItems,
+            insertedInvoices,
+            insertedInvoiceItems,
+            insertedJournals,
             createdCustomers,
             promotedToGold,
             createdProducts

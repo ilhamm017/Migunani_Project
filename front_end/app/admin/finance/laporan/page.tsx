@@ -29,7 +29,7 @@ import {
 import { useAuthStore } from '@/store/authStore';
 
 export default function FinanceReportsPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
 
     if (!allowed) return null;

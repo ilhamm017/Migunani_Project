@@ -30,7 +30,7 @@ type CombinedRow = {
 };
 
 export default function LaporanInvoiceBelumLunasPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const [loading, setLoading] = useState(false);
   const [arRows, setArRows] = useState<ArRow[]>([]);
   const [apRows, setApRows] = useState<SupplierInvoiceRow[]>([]);

@@ -28,7 +28,7 @@ type APAgingData = {
 };
 
 export default function APAgingPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const [data, setData] = useState<APAgingData | null>(null);
     const [loading, setLoading] = useState(false);
 

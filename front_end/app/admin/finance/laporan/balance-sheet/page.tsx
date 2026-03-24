@@ -19,7 +19,7 @@ type BalanceSheetData = {
 };
 
 export default function BalanceSheetPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
 
     const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
     const [data, setData] = useState<BalanceSheetData | null>(null);

@@ -1,13 +1,17 @@
 import crypto from 'crypto';
 import { Op, col, fn, where } from 'sequelize';
-import { Backorder, Category, Order, OrderAllocation, OrderItem, Product, User, sequelize } from '../models';
+import { Account, Backorder, Category, Invoice, InvoiceItem, Journal, Order, OrderAllocation, OrderItem, Product, User, sequelize } from '../models';
 import { salesReportBackorderSeedInvoices, SalesReportBackorderSeedInvoice } from './data/sales_report_backorder_2026_03_24';
+import { JournalService } from '../services/JournalService';
 
 type SeedBackorderHistoryResult = {
     source: string;
     parsedInvoices: number;
     insertedOrders: number;
     insertedOrderItems: number;
+    insertedInvoices: number;
+    insertedInvoiceItems: number;
+    insertedJournals: number;
     insertedBackorders: number;
     insertedAllocations: number;
     missingCustomers: string[];
@@ -29,6 +33,26 @@ const generateSkuFromName = (name: string): string => {
 const normalizeLower = (value: string): string => value.trim().toLowerCase();
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+const resolveSeedActorId = async (t: any): Promise<string> => {
+    const preferredRoles = ['super_admin', 'admin_finance', 'kasir'];
+    for (const role of preferredRoles) {
+        const found = await User.findOne({ where: { role }, attributes: ['id'], transaction: t });
+        const id = String((found as any)?.id || '').trim();
+        if (id) return id;
+    }
+    const fallback = await User.findOne({ attributes: ['id'], transaction: t });
+    const fallbackId = String((fallback as any)?.id || '').trim();
+    if (!fallbackId) throw new Error('No users exist to attribute seeded journal entries (created_by).');
+    return fallbackId;
+};
+
+const getAccountIdByCode = async (code: string, t: any): Promise<number> => {
+    const row = await Account.findOne({ where: { code }, attributes: ['id'], transaction: t });
+    const id = Number((row as any)?.id);
+    if (!Number.isFinite(id) || id <= 0) throw new Error(`Account code '${code}' not found (required for journal seeding).`);
+    return id;
+};
 
 const computeUnitPaid = (item: SalesReportBackorderSeedInvoice['items'][number]): number => {
     const qtyRequested = Math.max(1, Number(item.qty_requested || 0));
@@ -61,10 +85,19 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
     try {
         let insertedOrders = 0;
         let insertedOrderItems = 0;
+        let insertedInvoices = 0;
+        let insertedInvoiceItems = 0;
+        let insertedJournals = 0;
         let insertedBackorders = 0;
         let insertedAllocations = 0;
         let createdProducts = 0;
         const missingCustomersSet = new Set<string>();
+
+        const seedActorId = await resolveSeedActorId(t);
+        const kasAccountId = await getAccountIdByCode('1101', t);
+        const revenueAccountId = await getAccountIdByCode('4100', t);
+        const hppAccountId = await getAccountIdByCode('5100', t);
+        const inventoryAccountId = await getAccountIdByCode('1300', t);
 
         const userByNameLower = new Map<string, any>();
         const productByNameLower = new Map<string, any>();
@@ -131,6 +164,107 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
                 updatedAt: invoice.parsed_date
             } as any, { transaction: t });
             if (!existingOrder) insertedOrders += 1;
+
+            // Ensure invoice exists so it appears in "riwayat" screens (which are invoice-driven).
+            const invoiceNumber = String(invoice.invoice_no || '').trim();
+            const invoiceIdempotencyKey = `seed_sales_report_backorder_${invoiceNumber}`;
+
+            let invoiceRow = await Invoice.findOne({
+                where: { invoice_number: invoiceNumber },
+                transaction: t
+            });
+            if (!invoiceRow) {
+                invoiceRow = await Invoice.create({
+                    order_id: String(order.id),
+                    customer_id: String(user.id),
+                    invoice_number: invoiceNumber,
+                    payment_method: 'cash_store',
+                    payment_status: 'paid',
+                    amount_paid: Number(invoice.netto || 0),
+                    change_amount: 0,
+                    payment_proof_url: null,
+                    verified_by: null,
+                    verified_at: invoice.parsed_date,
+                    subtotal: Number(invoice.bruto || 0),
+                    discount_amount: Number(invoice.diskon || 0),
+                    shipping_fee_total: 0,
+                    tax_percent: 0,
+                    tax_amount: 0,
+                    total: Number(invoice.netto || 0),
+                    tax_mode_snapshot: 'non_pkp',
+                    pph_final_amount: null,
+                    shipping_method_code: null,
+                    shipping_method_name: null,
+                    courier_id: null,
+                    shipment_status: hasBackorder ? 'shipped' : 'delivered',
+                    shipped_at: invoice.parsed_date,
+                    delivered_at: hasBackorder ? null : invoice.parsed_date,
+                    delivery_proof_url: null,
+                    expiry_date: null,
+                    createdAt: invoice.parsed_date,
+                    updatedAt: invoice.parsed_date
+                } as any, { transaction: t });
+                insertedInvoices += 1;
+            } else {
+                const patch: any = {};
+                if (!invoiceRow.order_id) patch.order_id = String(order.id);
+                if (!invoiceRow.customer_id) patch.customer_id = String(user.id);
+                if (Object.keys(patch).length > 0) await invoiceRow.update(patch, { transaction: t });
+            }
+
+            // Post a journal entry (idempotent) so finance reports can pick up this seed.
+            const existingJournal = await Journal.findOne({
+                where: { idempotency_key: invoiceIdempotencyKey },
+                attributes: ['id'],
+                transaction: t
+            });
+            if (!existingJournal) {
+                const revenue = round2(Number(invoice.netto || 0));
+                // For backorder reports, recognize COGS for items actually displayed/supplied (qty_display),
+                // not the requested quantity that may still be pending.
+                const cogs = round2(
+                    invoice.items.reduce((sum, it) => sum + (Number(it.cost_per_unit || 0) * Math.max(0, Number(it.qty_display || 0))), 0)
+                );
+                insertedJournals += 1;
+                try {
+                    await JournalService.createEntry({
+                        date: invoice.parsed_date,
+                        description: `Seed sales backorder report invoice ${invoiceNumber}`,
+                        reference_type: 'seed_sales_report_backorder',
+                        reference_id: invoiceNumber,
+                        created_by: seedActorId,
+                        idempotency_key: invoiceIdempotencyKey,
+                        lines: [
+                            { account_id: kasAccountId, debit: revenue, credit: 0 },
+                            { account_id: revenueAccountId, debit: 0, credit: revenue },
+                            { account_id: hppAccountId, debit: cogs, credit: 0 },
+                            { account_id: inventoryAccountId, debit: 0, credit: cogs },
+                        ]
+                    }, t);
+                } catch (error: any) {
+                    const message = String(error?.message || '');
+                    if (message.toLowerCase().includes('periode akuntansi') && message.toLowerCase().includes('ditutup')) {
+                        await JournalService.createAdjustmentEntry({
+                            date: invoice.parsed_date,
+                            description: `Seed (adjustment) sales backorder report invoice ${invoiceNumber}`,
+                            reference_type: 'seed_sales_report_backorder',
+                            reference_id: invoiceNumber,
+                            created_by: seedActorId,
+                            idempotency_key: invoiceIdempotencyKey,
+                            lines: [
+                                { account_id: kasAccountId, debit: revenue, credit: 0 },
+                                { account_id: revenueAccountId, debit: 0, credit: revenue },
+                                { account_id: hppAccountId, debit: cogs, credit: 0 },
+                                { account_id: inventoryAccountId, debit: 0, credit: cogs },
+                            ]
+                        }, t);
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+
+            // Idempotency: if order already existed, only ensure invoice/journal.
             if (existingOrder) continue;
 
             const allocatedQtyByProductId = new Map<string, number>();
@@ -184,7 +318,6 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
                 const unitPaid = computeUnitPaid(item);
                 const baseUnit = round2(Number(item.price_per_unit || 0));
                 const discountPct = Number(item.discount_pct || 0) > 0 ? Number(item.discount_pct || 0) : computeDiscountPctFallback(item);
-
                 const orderItem = await OrderItem.create({
                     order_id: String(order.id),
                     product_id: String(product.id),
@@ -206,6 +339,29 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
                     updatedAt: invoice.parsed_date
                 } as any, { transaction: t });
                 insertedOrderItems += 1;
+
+                const existingInvoiceItem = await InvoiceItem.findOne({
+                    where: {
+                        invoice_id: String(invoiceRow.id),
+                        order_item_id: String(orderItem.id)
+                    },
+                    transaction: t
+                });
+                if (!existingInvoiceItem) {
+                    // InvoiceItems represent "supplied/billed" qty for history screens.
+                    // If qtyDisplay is 0, leave it absent so it won't be counted as supplied.
+                    if (qtyDisplay > 0) {
+                        await InvoiceItem.create({
+                            invoice_id: String(invoiceRow.id),
+                            order_item_id: String(orderItem.id),
+                            qty: qtyDisplay,
+                            unit_price: unitPaid,
+                            unit_cost: Number(item.cost_per_unit || 0),
+                            line_total: round2(unitPaid * qtyDisplay)
+                        } as any, { transaction: t });
+                        insertedInvoiceItems += 1;
+                    }
+                }
 
                 if (boQty > 0) {
                     await Backorder.create({
@@ -247,6 +403,9 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
             parsedInvoices: invoices.length,
             insertedOrders,
             insertedOrderItems,
+            insertedInvoices,
+            insertedInvoiceItems,
+            insertedJournals,
             insertedBackorders,
             insertedAllocations,
             missingCustomers: Array.from(missingCustomersSet.values()).sort((a, b) => a.localeCompare(b)),

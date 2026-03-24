@@ -48,7 +48,7 @@ interface BackorderReportData {
 const toDateInputValue = (date: Date) => date.toISOString().slice(0, 10);
 
 export default function BackorderReportPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'kasir']);
     const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
     const [exporting, setExporting] = useState(false);

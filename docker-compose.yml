@@ -35,6 +35,8 @@ services:
       DB_USER: ${DB_USER:-migunani}
       DB_PASS: ${DB_PASS:-password}
       DB_NAME: ${DB_NAME:-migunani_motor_db}
+      # Keep seeding non-destructive by default (no forced/alter sync).
+      DB_SYNC_MODE: ${DB_SYNC_MODE_SEED:-safe}
       JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
       BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:5000}
       DB_SCHEMA_LOCK_NAME: ${DB_SCHEMA_LOCK_NAME:-migunani_schema_lock}

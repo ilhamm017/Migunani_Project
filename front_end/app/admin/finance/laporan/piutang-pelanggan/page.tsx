@@ -10,7 +10,7 @@ import type { ArRow } from '@/app/admin/finance/piutang/arShared';
 import { toNumber } from '@/app/admin/finance/laporan/reportUtils';
 
 export default function LaporanPiutangPelangganPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<ArRow[]>([]);
 

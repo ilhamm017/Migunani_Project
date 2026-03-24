@@ -26,7 +26,7 @@ type DueRow =
 const toIsoDate = (d: Date) => d.toISOString().split('T')[0];
 
 export default function LaporanJatuhTempoPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(7);
   const [supplierInvoices, setSupplierInvoices] = useState<SupplierInvoiceRow[]>([]);

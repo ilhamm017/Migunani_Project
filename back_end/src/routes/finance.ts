@@ -43,19 +43,19 @@ router.put('/settings/tax', authorizeRoles('super_admin', 'admin_finance'), Fina
 
 // Reports (Super Admin, Owner - assuming Owner has super_admin/admin_finance role or separate)
 // Reports
-router.get('/reports/pnl', authorizeRoles('super_admin'), ReportController.getProfitAndLoss);
-router.get('/reports/balance-sheet', authorizeRoles('super_admin'), ReportController.getBalanceSheet);
-router.get('/reports/cash-flow', authorizeRoles('super_admin'), ReportController.getCashFlow);
-router.get('/reports/inventory-value', authorizeRoles('super_admin'), ReportController.getInventoryValue);
-router.get('/reports/aging-ap', authorizeRoles('super_admin'), ReportController.getAccountsPayableAging);
-router.get('/reports/aging-ar', authorizeRoles('super_admin'), ReportController.getAccountsReceivableAging);
-router.get('/reports/backorders', authorizeRoles('super_admin'), ReportController.getBackorderPreorderReport);
-router.get('/reports/backorders/export', authorizeRoles('super_admin'), ReportController.exportBackorderPreorderReportExcel);
-router.get('/reports/stock-reduction', authorizeRoles('super_admin'), ReportController.getStockReductionReport);
-router.get('/reports/stock-reduction/export', authorizeRoles('super_admin'), ReportController.exportStockReductionReportExcel);
-router.get('/reports/tax-summary', authorizeRoles('super_admin'), ReportController.getTaxSummary);
-router.get('/reports/vat-monthly', authorizeRoles('super_admin'), ReportController.getVatMonthlyReport);
-router.get('/reports/products-sold', authorizeRoles('super_admin'), ReportController.getProductsSoldReport);
+router.get('/reports/pnl', authorizeRoles('super_admin', 'admin_finance'), ReportController.getProfitAndLoss);
+router.get('/reports/balance-sheet', authorizeRoles('super_admin', 'admin_finance'), ReportController.getBalanceSheet);
+router.get('/reports/cash-flow', authorizeRoles('super_admin', 'admin_finance'), ReportController.getCashFlow);
+router.get('/reports/inventory-value', authorizeRoles('super_admin', 'admin_finance'), ReportController.getInventoryValue);
+router.get('/reports/aging-ap', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsPayableAging);
+router.get('/reports/aging-ar', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsReceivableAging);
+router.get('/reports/backorders', authorizeRoles('super_admin', 'kasir'), ReportController.getBackorderPreorderReport);
+router.get('/reports/backorders/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportBackorderPreorderReportExcel);
+router.get('/reports/stock-reduction', authorizeRoles('super_admin', 'kasir'), ReportController.getStockReductionReport);
+router.get('/reports/stock-reduction/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportStockReductionReportExcel);
+router.get('/reports/tax-summary', authorizeRoles('super_admin', 'admin_finance'), ReportController.getTaxSummary);
+router.get('/reports/vat-monthly', authorizeRoles('super_admin', 'admin_finance'), ReportController.getVatMonthlyReport);
+router.get('/reports/products-sold', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.getProductsSoldReport);
 
 // Legacy/Operational AR
 router.get('/ar', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountsReceivable);

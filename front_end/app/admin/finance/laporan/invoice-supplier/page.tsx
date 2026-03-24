@@ -22,7 +22,7 @@ type SupplierInvoiceRow = {
 };
 
 export default function LaporanInvoiceSupplierPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const defaults = useMemo(() => getDefaultMonthRange(), []);
 
   const [startDate, setStartDate] = useState(defaults.startDate);

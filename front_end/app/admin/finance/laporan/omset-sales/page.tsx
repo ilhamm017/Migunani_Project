@@ -18,7 +18,7 @@ type OrderRow = {
 const EXCLUDED_STATUSES = new Set(['canceled', 'expired']);
 
 export default function LaporanOmsetSalesPage() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
   const defaults = useMemo(() => getDefaultMonthRange(), []);
 
   const [startDate, setStartDate] = useState(defaults.startDate);

@@ -15,7 +15,7 @@ type VatRow = {
 };
 
 export default function VatMonthlyPage() {
-    const allowed = useRequireRoles(['super_admin']);
+    const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const [year, setYear] = useState<number>(new Date().getFullYear());
     const [rows, setRows] = useState<VatRow[]>([]);
     const [loading, setLoading] = useState(false);

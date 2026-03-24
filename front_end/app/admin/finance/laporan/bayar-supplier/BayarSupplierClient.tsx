@@ -42,7 +42,7 @@ const flattenAccounts = (nodes: AccountNode[]) => {
 };
 
 export default function BayarSupplierClient() {
-  const allowed = useRequireRoles(['super_admin']);
+  const allowed = useRequireRoles(['super_admin', 'admin_finance']);
   const searchParams = useSearchParams();
   const invoiceFromUrl = Number(searchParams.get('invoice') || 0);
 
@@ -234,4 +234,3 @@ export default function BayarSupplierClient() {
     </div>
   );
 }
-

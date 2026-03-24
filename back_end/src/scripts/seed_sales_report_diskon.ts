@@ -6,10 +6,11 @@ import { seedGoldDiscountsFromSalesReport } from '../seeders/seedGoldDiscountsFr
 type DbSyncMode = 'alter' | 'safe' | 'off';
 
 const resolveDbSyncMode = (): DbSyncMode => {
-    const rawMode = String(process.env.DB_SYNC_MODE || 'alter').trim().toLowerCase();
+    // Default to 'safe' to avoid any destructive/DDL-altering behavior during seeding unless explicitly requested.
+    const rawMode = String(process.env.DB_SYNC_MODE || 'safe').trim().toLowerCase();
     if (rawMode === 'safe' || rawMode === 'off' || rawMode === 'alter') return rawMode;
-    console.warn(`[seed:sales-report] Unknown DB_SYNC_MODE='${rawMode}', fallback to 'alter'`);
-    return 'alter';
+    console.warn(`[seed:sales-report] Unknown DB_SYNC_MODE='${rawMode}', fallback to 'safe'`);
+    return 'safe';
 };
 
 const main = async () => {
