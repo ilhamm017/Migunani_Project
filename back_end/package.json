@@ -11,6 +11,8 @@
     "seed": "ts-node src/scripts/seed_sales_report_diskon.ts",
     "seed:sales-report": "ts-node src/scripts/seed_sales_report_diskon.ts",
     "generate:seed:sales-report": "ts-node src/scripts/generate_sales_report_seed_data.ts",
+    "seed:customers": "ts-node src/scripts/seed_customers.ts",
+    "stock:set-20": "ts-node src/scripts/set_stock_20_per_sku.ts",
     "test:system-status": "ts-node src/scripts/system_status.ts",
     "test:action-matrix": "ts-node src/scripts/regression_action_matrix.ts",
     "test:finance-replay": "ts-node src/scripts/regression_finance_replay.ts",

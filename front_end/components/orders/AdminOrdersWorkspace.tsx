@@ -143,8 +143,9 @@ type CourierOption = {
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
 const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'waiting_payment', 'processing', 'hold']);
-const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'allocated', 'debt_pending', 'hold']);
-const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'partially_fulfilled', 'debt_pending', 'hold', 'delivered', 'completed']);
+const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
+const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'ready_to_ship', 'partially_fulfilled', 'hold', 'delivered', 'completed']);
+const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;
 const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
 const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
 const ORDER_SECTION_OPTIONS_ALL: OrderSection[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
@@ -200,6 +201,29 @@ const invoiceGroupKeyForOrder = (order: AdminOrderListRow) => {
 const normalizeOrderStatus = (raw: unknown) => {
   const status = String(raw || '').trim();
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
+};
+
+const resolveInvoiceCreatedAtMs = (invoiceDetail: any): number | null => {
+  const raw = String(invoiceDetail?.createdAt || '').trim();
+  if (!raw) return null;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : null;
+};
+
+const getBackorderAllocationLockReason = (params: {
+  invoiceDetail: any;
+  invoiceShipmentStatus: string;
+}): string | null => {
+  const shipment = String(params.invoiceShipmentStatus || '').trim().toLowerCase();
+  if (!shipment) return null;
+  if (['shipped', 'delivered', 'canceled'].includes(shipment)) return null;
+
+  const createdAtMs = resolveInvoiceCreatedAtMs(params.invoiceDetail);
+  if (!createdAtMs) return null;
+  const ageMs = Date.now() - createdAtMs;
+  if (!Number.isFinite(ageMs)) return null;
+  if (ageMs <= BACKORDER_TOPUP_GRACE_MS) return null;
+  return `Top up backorder dikunci karena invoice belum lewat gudang (>24 jam). Status kirim: ${shipment}`;
 };
 
 const resolveWorkspaceShipmentStatus = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
@@ -488,15 +512,16 @@ export default function AdminOrdersWorkspace({
 }: AdminOrdersWorkspaceProps) {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
   const { user } = useAuthStore();
+  const normalizedRole = String(user?.role || '').trim();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const hasRenderableAccess = isAuthenticated && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || ''));
-  const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(user?.role || ''), [user?.role]);
-  const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(user?.role || ''), [user?.role]);
-  const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(user?.role || ''), [user?.role]);
-  const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang'].includes(user?.role || ''), [user?.role]);
-  const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(user?.role || ''), [user?.role]);
-  const isFinanceRole = useMemo(() => user?.role === 'admin_finance', [user?.role]);
-  const isWarehouseRole = useMemo(() => user?.role === 'admin_gudang', [user?.role]);
+  const hasRenderableAccess = isAuthenticated && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
+  const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
+  const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
+  const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
+  const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
+  const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
+  const isFinanceRole = useMemo(() => normalizedRole === 'admin_finance', [normalizedRole]);
+  const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang', [normalizedRole]);
   type OrderDetailsMap = Record<string, OrderDetailResponse | undefined>;
   type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
 
@@ -2555,17 +2580,12 @@ export default function AdminOrdersWorkspace({
                           const allocationDraft = allocationDrafts[orderId] || {};
                           const invoiceShipmentStatus = String(invoiceDetail?.shipment_status || order?.shipment_status || '').trim().toLowerCase();
                           const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
-                          const hasIssuedInvoice = Boolean(invoiceId || invoiceNumber);
-                          const hasPassedWarehouseStage = (() => {
-                            const normalized = orderStatus === 'waiting_payment' ? 'ready_to_ship' : orderStatus;
-                            if (invoiceShipmentStatus) {
-                              return ['delivered', 'canceled'].includes(invoiceShipmentStatus);
-                            }
-                            return ['delivered', 'partially_fulfilled'].includes(normalized);
-                          })();
-                          const isBackorderInputUnlocked = hasIssuedInvoice && hasPassedWarehouseStage;
+                          const backorderLockReason = getBackorderAllocationLockReason({
+                            invoiceDetail,
+                            invoiceShipmentStatus
+                          });
                           const isBackorderAllocationActionEnabled =
-                            canAllocate && isBackorderAllocationEditable && isBackorderInputUnlocked;
+                            canAllocate && isBackorderAllocationEditable && !backorderLockReason;
                           const backorderEditorItems = groupedItems
                             .map((item) => {
                               const productId = String(item?.product_id || '');
@@ -2674,15 +2694,9 @@ export default function AdminOrdersWorkspace({
                                     {backorderEditorItems.length} item editable
                                   </span>
                                 </div>
-                                {!hasIssuedInvoice && (
+                                {backorderLockReason && (
                                   <p className="text-[10px] text-amber-700">
-                                    Top up backorder dibuka setelah invoice sebelumnya diterbitkan dan melewati proses gudang.
-                                  </p>
-                                )}
-                                {hasIssuedInvoice && !hasPassedWarehouseStage && (
-                                  <p className="text-[10px] text-amber-700">
-                                    Top up backorder masih dikunci. Menunggu invoice sebelumnya melewati proses gudang
-                                    (status kirim saat ini: <span className="font-bold">{invoiceShipmentStatus || orderStatus || '-'}</span>).
+                                    {backorderLockReason}
                                   </p>
                                 )}
                                 {!isBackorderAllocationEditable && (
@@ -3170,19 +3184,12 @@ export default function AdminOrdersWorkspace({
                       const invoiceShipmentStatus = String(
                         invoiceDetail?.shipment_status || order?.Invoice?.shipment_status || detail?.Invoice?.shipment_status || ''
                       ).trim().toLowerCase();
-                      const hasIssuedInvoice = Boolean(invoiceId || invoiceNumber);
-                      const hasPassedWarehouseStage = (() => {
-                        const normalized = normalizeOrderStatus(rawOrderStatus);
-                        if (COMPLETED_STATUSES.has(normalized)) return true;
-
-                        if (invoiceShipmentStatus) {
-                          return ['delivered', 'canceled'].includes(invoiceShipmentStatus);
-                        }
-                        return ['delivered', 'partially_fulfilled'].includes(normalized);
-                      })();
-                      const isBackorderInputUnlocked = hasIssuedInvoice && hasPassedWarehouseStage;
+                      const backorderLockReason = getBackorderAllocationLockReason({
+                        invoiceDetail,
+                        invoiceShipmentStatus
+                      });
                       const isBackorderAllocationActionEnabled =
-                        canAllocate && isBackorderAllocationEditable && isBackorderInputUnlocked;
+                        canAllocate && isBackorderAllocationEditable && !backorderLockReason;
                       const warehouseTargetId = normalizeInvoiceRef(invoiceId || order?.id);
                       const warehouseActionLabel = orderStatus === 'ready_to_ship'
                         ? invoiceGroupCount > 1
@@ -3361,15 +3368,9 @@ export default function AdminOrdersWorkspace({
                                 </button>
                               </div>
                             </div>
-                            {!hasIssuedInvoice && (
+                            {backorderLockReason && (
                               <p className="text-[10px] text-amber-700">
-                                Top up backorder dibuka setelah invoice sebelumnya diterbitkan dan melewati proses gudang.
-                              </p>
-                            )}
-                            {hasIssuedInvoice && !hasPassedWarehouseStage && (
-                              <p className="text-[10px] text-amber-700">
-                                Top up backorder masih dikunci. Menunggu invoice sebelumnya melewati proses gudang
-                                (status kirim saat ini: <span className="font-bold">{invoiceShipmentStatus || orderStatus || '-'}</span>).
+                                {backorderLockReason}
                               </p>
                             )}
                             {canCancelBackorderEarly && !isBackorderAllocationActionEnabled && (
