@@ -7,6 +7,7 @@ import { AccountingPostingService } from '../../services/AccountingPostingServic
 import { JournalService } from '../../services/JournalService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { recordOrderEvent } from '../../utils/orderEvent';
 import { DELIVERY_EMPLOYEE_ROLES, withOrderTrackingFields, normalizeIssueNote, ISSUE_SLA_HOURS, resolveEmployeeDisplayName, ORDER_STATUS_OPTIONS } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
@@ -544,6 +545,172 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         res.json({ message: `Order status updated to ${nextStatus}` });
 
 
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        throw error;
+    }
+});
+
+export const moveOrderToIndent = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params as { id: string };
+        const orderId = String(id || '').trim();
+        if (!orderId) {
+            await t.rollback();
+            throw new CustomError('Order ID tidak valid', 400);
+        }
+
+        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!order) {
+            await t.rollback();
+            throw new CustomError('Order not found', 404);
+        }
+
+        const currentStatus = String(order.status || '').trim().toLowerCase();
+        if (['completed', 'canceled', 'expired'].includes(currentStatus)) {
+            await t.rollback();
+            throw new CustomError(`Order dengan status '${currentStatus}' tidak bisa dipindahkan ke indent.`, 409);
+        }
+
+        const orderItems = await OrderItem.findAll({
+            where: { order_id: orderId },
+            include: [{ model: Product, attributes: ['id', 'stock_quantity'] }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (orderItems.length === 0) {
+            await t.rollback();
+            throw new CustomError('Order item tidak ditemukan', 404);
+        }
+
+        const allocations = await OrderAllocation.findAll({
+            where: { order_id: orderId },
+            attributes: ['product_id', 'allocated_qty'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const allocatedByProduct = allocations.reduce((acc: Record<string, number>, row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return acc;
+            acc[productId] = Number(acc[productId] || 0) + Number(row?.allocated_qty || 0);
+            return acc;
+        }, {});
+
+        const candidates = orderItems
+            .map((row: any) => {
+                const orderItemId = String(row?.id || '').trim();
+                const productId = String(row?.product_id || '').trim();
+                if (!orderItemId || !productId) return null;
+
+                const allocatedTotalForProduct = Math.max(0, Number(allocatedByProduct[productId] || 0));
+                if (allocatedTotalForProduct > 0) return null;
+
+                const productStock = Number(row?.Product?.stock_quantity);
+                if (!Number.isFinite(productStock) || productStock > 0) return null;
+
+                const orderedQtyOriginal = Math.max(0, Number(row?.ordered_qty_original || row?.qty || 0));
+                const canceledBackorderQty = Math.max(0, Number(row?.qty_canceled_backorder || 0));
+                const qtyPending = Math.max(0, orderedQtyOriginal - allocatedTotalForProduct - canceledBackorderQty);
+                if (qtyPending <= 0) return null;
+
+                return { orderItemId, qtyPending };
+            })
+            .filter(Boolean) as Array<{ orderItemId: string; qtyPending: number }>;
+
+        if (candidates.length === 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada item yang memenuhi syarat indent (stok 0 dan belum dialokasikan).', 409);
+        }
+
+        const actorId = req.user?.id ? String(req.user.id) : null;
+        const actorRole = req.user?.role ? String(req.user.role) : null;
+
+        let createdCount = 0;
+        let updatedCount = 0;
+        let skippedCount = 0;
+        const touchedBackorderIds: string[] = [];
+
+        for (const candidate of candidates) {
+            const existing = await Backorder.findOne({
+                where: { order_item_id: candidate.orderItemId },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+
+            if (!existing) {
+                const created = await Backorder.create({
+                    order_item_id: candidate.orderItemId,
+                    qty_pending: candidate.qtyPending,
+                    status: 'waiting_stock',
+                    notes: 'dipindahkan ke indent (stok 0, belum dialokasikan)'
+                }, { transaction: t });
+                createdCount += 1;
+                touchedBackorderIds.push(String(created.id));
+                await recordOrderEvent({
+                    transaction: t,
+                    order_id: orderId,
+                    order_item_id: candidate.orderItemId,
+                    event_type: 'backorder_opened',
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    reason: 'move_to_indent',
+                    payload: {
+                        before: { shortage_qty: 0 },
+                        after: { shortage_qty: candidate.qtyPending },
+                        delta: { shortage_qty: candidate.qtyPending }
+                    }
+                });
+                continue;
+            }
+
+            const beforePending = Math.max(0, Number(existing.qty_pending || 0));
+            const beforeStatus = String(existing.status || '').trim().toLowerCase();
+            if (beforePending === candidate.qtyPending && beforeStatus === 'waiting_stock') {
+                skippedCount += 1;
+                touchedBackorderIds.push(String(existing.id));
+                continue;
+            }
+
+            await existing.update({
+                qty_pending: candidate.qtyPending,
+                status: 'waiting_stock'
+            }, { transaction: t });
+            updatedCount += 1;
+            touchedBackorderIds.push(String(existing.id));
+
+            const isOpening = beforePending <= 0 || ['fulfilled', 'canceled', 'cancelled'].includes(beforeStatus);
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                order_item_id: candidate.orderItemId,
+                event_type: isOpening ? 'backorder_opened' : 'backorder_reallocated',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason: 'move_to_indent',
+                payload: {
+                    before: { shortage_qty: beforePending },
+                    after: { shortage_qty: candidate.qtyPending },
+                    delta: { shortage_qty: candidate.qtyPending - beforePending }
+                }
+            });
+        }
+
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'move_order_to_indent'
+        });
+
+        await t.commit();
+
+        res.json({
+            message: 'Order berhasil dipindahkan ke indent.',
+            order_id: orderId,
+            created: createdCount,
+            updated: updatedCount,
+            skipped: skippedCount,
+            backorder_ids: touchedBackorderIds
+        });
     } catch (error) {
         try { await t.rollback(); } catch { }
         throw error;

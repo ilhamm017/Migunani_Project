@@ -1657,6 +1657,31 @@ export default function AdminOrdersWorkspace({
     setAllocationConfirm({ orderId, step: 1, action: 'cancel_order' });
   };
 
+  const handleMoveToIndent = async (orderId: string) => {
+    if (!orderId) return;
+    if (allocationSaving[orderId]) return;
+    setAllocationSaving((prev) => ({ ...prev, [orderId]: true }));
+    try {
+      await api.admin.orderManagement.moveToIndent(orderId);
+      setAllocationDrafts((prev) => ({ ...prev, [orderId]: {} }));
+      setOrderDetails((prev) => {
+        if (!prev[orderId]) return prev;
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+      await loadOrders();
+    } catch (error: unknown) {
+      console.error('Move to indent failed:', error);
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal memindahkan order ke indent.')
+        : 'Gagal memindahkan order ke indent.';
+      alert(message);
+    } finally {
+      setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
+    }
+  };
+
   const handleIssueInvoice = async () => {
     if (readyOrderIds.length === 0) return;
     setAllocationConfirm({ orderId: '__batch_invoice__', step: 1, action: 'issue_invoice' });
@@ -3143,10 +3168,11 @@ export default function AdminOrdersWorkspace({
                         : orderStatus === 'shipped'
                           ? 'Lihat Pengiriman'
                           : 'Proses Gudang';
+                      const isBackorder = isOrderBackorder(order, detail, backorderIds);
                       const isOrderCancelable =
                         canCancelOrder &&
                         CANCELABLE_ORDER_STATUSES.has(rawOrderStatus) &&
-                        !isOrderBackorder(order, detail, backorderIds) &&
+                        !isBackorder &&
                         Number(totals.allocQty || 0) <= 0;
                       const allocationDirty = groupedItems.some((item) => {
                         const productId = String(item.product_id || '');
@@ -3155,6 +3181,39 @@ export default function AdminOrdersWorkspace({
                         const persistedQty = Number(persistedAlloc[productId] ?? 0);
                         return draftQty !== persistedQty;
                       });
+                      const indentCandidates = groupedItems
+                        .map((item) => {
+                          const productId = String(item?.product_id || '').trim();
+                          if (!productId) return null;
+                          const orderedQty = Math.max(0, Number(item?.qty || 0));
+                          if (orderedQty <= 0) return null;
+
+                          const allocatedQty = Math.max(0, Number(persistedAlloc[productId] || 0));
+                          if (allocatedQty > 0) return null;
+
+                          const stockQtyRaw = Number(item?.Product?.stock_quantity);
+                          if (!Number.isFinite(stockQtyRaw) || stockQtyRaw > 0) return null;
+
+                          const shortageQty = Math.max(0, orderedQty - allocatedQty);
+                          if (shortageQty <= 0) return null;
+
+                          return {
+                            product_id: productId,
+                            sku: String(item?.Product?.sku || '-'),
+                            name: String(item?.Product?.name || 'Produk'),
+                            shortageQty,
+                          };
+                        })
+                        .filter(Boolean) as Array<{ product_id: string; sku: string; name: string; shortageQty: number }>;
+                      const indentQty = indentCandidates.reduce((sum, row) => sum + Number(row.shortageQty || 0), 0);
+                      const canMoveToIndent =
+                        canAllocate &&
+                        isAllocationEditable &&
+                        !allocationBusy &&
+                        !allocationDirty &&
+                        !isBackorder &&
+                        Number(totals.allocQty || 0) <= 0 &&
+                        indentQty > 0;
                       const allocationAttentionSummary = groupedItems.reduce(
                         (acc, item) => {
                           const productId = String(item.product_id || '');
@@ -3459,7 +3518,12 @@ export default function AdminOrdersWorkspace({
                                 {allocationAttentionSummary.hasStockConstraint ? 'Stok kurang' : 'Belum dialokasikan'} {totals.remainingQty}
                               </span>
                             )}
-                            {isOrderBackorder(order, detail, backorderIds) && (
+                            {!isBackorder && Number(totals.allocQty || 0) <= 0 && indentQty > 0 && (
+                              <span className="rounded-full bg-indigo-100 px-2 py-1 text-indigo-700">
+                                Indent {indentQty}
+                              </span>
+                            )}
+                            {isBackorder && (
                               <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">
                                 Backorder {backorderSummary.shortageTotal || totals.remainingQty}
                               </span>
@@ -3631,6 +3695,30 @@ export default function AdminOrdersWorkspace({
                                         </p>
                                       )}
                                     </div>
+                                  </div>
+                                </div>
+                              )}
+                              {canMoveToIndent && (
+                                <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-3">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">Indent (stok 0)</p>
+                                  <p className="mt-1 text-[11px] text-indigo-700">
+                                    Ada <span className="font-black">{indentCandidates.length}</span> produk stok 0 yang belum dialokasikan (
+                                    {indentCandidates.slice(0, 3).map((row) => row.sku).join(', ')}
+                                    {indentCandidates.length > 3 ? ', …' : ''}
+                                    ).
+                                  </p>
+                                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleMoveToIndent(String(order.id))}
+                                      disabled={allocationBusy}
+                                      className="rounded-xl bg-indigo-700 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                                    >
+                                      {allocationBusy ? 'Memproses...' : 'Pindahkan ke Indent'}
+                                    </button>
+                                    <p className="text-[10px] text-indigo-700">
+                                      Sistem akan membuat backorder untuk item yang stoknya 0 sehingga order masuk ke section backorder.
+                                    </p>
                                   </div>
                                 </div>
                               )}

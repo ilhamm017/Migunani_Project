@@ -295,6 +295,7 @@ export const api = {
                 issue_note?: string;
                 resolution_note?: string;
             }) => apiClient.patch(`/orders/admin/${id}/status`, data),
+            moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
         },
         inventory: {
             getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive' }) =>
