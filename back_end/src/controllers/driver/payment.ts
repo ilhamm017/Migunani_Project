@@ -10,6 +10,7 @@ import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
+import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 
 export const recordPayment = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -56,7 +57,17 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 throw new CustomError('Tidak ada invoice COD yang perlu dibayar untuk order ini.', 400);
             }
 
-            const totalToPay = unpaidCodInvoices.reduce((sum: number, inv: any) => sum + Number(inv.total || 0), 0);
+            const netTotalsByInvoiceId = new Map<string, number>();
+            let totalToPay = 0;
+            for (const inv of unpaidCodInvoices as any[]) {
+                const invId = String(inv?.id || '').trim();
+                if (!invId) continue;
+                const computed = await computeInvoiceNetTotals(invId, { transaction: t });
+                const net = Number(computed?.net_total || 0);
+                netTotalsByInvoiceId.set(invId, net);
+                totalToPay += net;
+            }
+            totalToPay = Math.round(totalToPay * 100) / 100;
             const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
                 ? totalToPay
                 : Number(rawAmount);
@@ -69,15 +80,16 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
             const amountReceived = parsedAmount;
             if (Math.abs(amountReceived - totalToPay) > 0.01) {
                 await t.rollback();
-                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD (${totalToPay.toLocaleString()}).`, 400);
+                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD setelah retur (${totalToPay.toLocaleString()}).`, 400);
             }
 
             let totalDelta = 0;
             for (const invoice of unpaidCodInvoices) {
-                const invoiceAmount = Number(invoice.total || 0);
+                const invoiceId = String(invoice?.id || '').trim();
+                const invoiceAmount = Number(netTotalsByInvoiceId.get(invoiceId) || 0);
 
                 const existingCollection = await CodCollection.findOne({
-                    where: { invoice_id: invoice.id, driver_id: userId, status: 'collected' },
+                    where: { invoice_id: invoiceId, driver_id: userId, status: 'collected' },
                     transaction: t,
                     lock: t.LOCK.UPDATE
                 });
@@ -89,7 +101,7 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                     await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
                 } else {
                     await CodCollection.create({
-                        invoice_id: invoice.id,
+                        invoice_id: invoiceId,
                         driver_id: userId,
                         amount: invoiceAmount,
                         status: 'collected'

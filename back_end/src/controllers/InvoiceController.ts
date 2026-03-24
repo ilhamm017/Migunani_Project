@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Invoice, InvoiceItem, OrderItem, Product, User, Order, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, sequelize } from '../models';
 import { Op } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
@@ -8,6 +8,7 @@ import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNo
 import { enqueueWhatsappNotification } from '../services/TransactionNotificationOutboxService';
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
+import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
 
 export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response) => {
     const invoiceId = String(req.params.id || '').trim();
@@ -133,11 +134,29 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         })
         : null;
 
+    const deliveryReturs = orderIds.length > 0
+        ? await Retur.findAll({
+            where: {
+                order_id: { [Op.in]: orderIds },
+                retur_type: 'delivery_refusal',
+                status: { [Op.ne]: 'rejected' }
+            },
+            include: [
+                { model: Product, attributes: ['id', 'name', 'sku', 'unit'] },
+                { model: User, as: 'Courier', attributes: ['id', 'name', 'whatsapp_number'], required: false }
+            ],
+            order: [['createdAt', 'ASC']]
+        })
+        : [];
+    const deliveryReturnSummary = await computeInvoiceNetTotals(invoiceId);
+
     return res.json({
         ...plain,
         InvoiceItems: invoiceItems,
         order_ids: orderIds,
         customer: customer ? customer.get({ plain: true }) : null,
+        delivery_returs: deliveryReturs.map((r: any) => r.get({ plain: true })),
+        delivery_return_summary: deliveryReturnSummary
     });
 });
 

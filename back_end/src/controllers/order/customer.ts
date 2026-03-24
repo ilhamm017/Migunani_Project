@@ -10,6 +10,7 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 import { enqueueWhatsappNotification } from '../../services/TransactionNotificationOutboxService';
+import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 
 export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
     const userId = req.user!.id;
@@ -209,10 +210,27 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         };
     });
 
+    const inferredInvoiceId = String((trackedOrder as any)?.Invoice?.id || '').trim();
+    let deliveryReturnSummary: any = null;
+    if (inferredInvoiceId) {
+        try {
+            deliveryReturnSummary = await computeInvoiceNetTotals(inferredInvoiceId);
+        } catch {
+            deliveryReturnSummary = null;
+        }
+    }
+    const returs = Array.isArray((trackedOrder as any)?.Returs) ? (trackedOrder as any).Returs : [];
+    const deliveryReturs = returs.filter((r: any) =>
+        String(r?.retur_type || '') === 'delivery_refusal'
+        && String(r?.status || '') !== 'rejected'
+    );
+
     res.json({
         ...trackedOrder,
         item_summaries: itemSummaries,
         timeline,
+        delivery_returs: deliveryReturs,
+        delivery_return_summary: deliveryReturnSummary,
     });
 });
 

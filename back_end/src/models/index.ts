@@ -28,6 +28,7 @@ import StockOpname from './StockOpname';
 import StockOpnameItem from './StockOpnameItem';
 import OrderAllocation from './OrderAllocation';
 import Retur from './Retur';
+import DriverDebtAdjustment from './DriverDebtAdjustment';
 import Account from './Account';
 import Journal from './Journal';
 import JournalLine from './JournalLine';
@@ -67,6 +68,16 @@ User.hasMany(Retur, { foreignKey: 'created_by' });
 
 Retur.belongsTo(User, { foreignKey: 'courier_id', as: 'Courier' });
 User.hasMany(Retur, { foreignKey: 'courier_id', as: 'CourierReturs' });
+
+// Driver Debt Adjustments
+DriverDebtAdjustment.belongsTo(User, { foreignKey: 'driver_id', as: 'Driver' });
+User.hasMany(DriverDebtAdjustment, { foreignKey: 'driver_id', as: 'DriverDebtAdjustments' });
+DriverDebtAdjustment.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+User.hasMany(DriverDebtAdjustment, { foreignKey: 'created_by', as: 'CreatedDriverDebtAdjustments' });
+DriverDebtAdjustment.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice' });
+Invoice.hasMany(DriverDebtAdjustment, { foreignKey: 'invoice_id', as: 'DriverDebtAdjustments' });
+DriverDebtAdjustment.belongsTo(Retur, { foreignKey: 'retur_id', as: 'Retur' });
+Retur.hasOne(DriverDebtAdjustment, { foreignKey: 'retur_id', as: 'DriverDebtAdjustment' });
 
 // User & Auth
 User.hasOne(CustomerProfile, { foreignKey: 'user_id' });
@@ -297,6 +308,7 @@ export {
     StockOpnameItem,
     OrderAllocation,
     Retur,
+    DriverDebtAdjustment,
     Account,
     Journal,
     JournalLine,

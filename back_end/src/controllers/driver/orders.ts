@@ -3,10 +3,11 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 
 export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -108,5 +109,189 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
             throw error;
         }
         throw new CustomError('Error fetching assigned orders', 500);
+    }
+});
+
+export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const driverId = String(req.user!.id || '').trim();
+        const id = String(req.params?.id || '').trim();
+        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+
+        if (!id) {
+            await t.rollback();
+            throw new CustomError('Order/Invoice ID wajib diisi', 400);
+        }
+        if (items.length === 0) {
+            await t.rollback();
+            throw new CustomError('items wajib diisi', 400);
+        }
+
+        const context = await findDriverInvoiceContextByOrderOrInvoiceId(id, driverId, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const invoice = context.invoice;
+        const orders = context.orders;
+        if (!invoice || orders.length === 0) {
+            await t.rollback();
+            throw new CustomError('Order/invoice tidak ditemukan atau bukan tugas Anda.', 404);
+        }
+
+        const orderIds = orders.map((o: any) => String(o.id)).filter(Boolean);
+        const invoiceItems = await InvoiceItem.findAll({
+            where: { invoice_id: String(invoice.id) },
+            include: [{
+                model: OrderItem,
+                required: true,
+                attributes: ['id', 'order_id', 'product_id'],
+                where: { order_id: { [Op.in]: orderIds } }
+            }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        const invoiceQtyByOrderProduct = new Map<string, number>();
+        invoiceItems.forEach((row: any) => {
+            const orderId = String(row?.OrderItem?.order_id || '').trim();
+            const productId = String(row?.OrderItem?.product_id || '').trim();
+            if (!orderId || !productId) return;
+            const key = `${orderId}:${productId}`;
+            invoiceQtyByOrderProduct.set(key, Number(invoiceQtyByOrderProduct.get(key) || 0) + Math.max(0, Number(row?.qty || 0)));
+        });
+
+        const requestedProductIds: string[] = Array.from(new Set(
+            items.map((it: any) => String(it?.product_id || '').trim()).filter(Boolean)
+        ));
+        if (requestedProductIds.length === 0) {
+            await t.rollback();
+            throw new CustomError('product_id wajib diisi', 400);
+        }
+
+        const existingReturs = await Retur.findAll({
+            where: {
+                order_id: { [Op.in]: orderIds },
+                product_id: { [Op.in]: requestedProductIds },
+                retur_type: 'delivery_refusal',
+                status: { [Op.ne]: 'rejected' }
+            },
+            attributes: ['order_id', 'product_id', 'qty', 'status', 'qty_received'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const existingQtyByOrderProduct = new Map<string, number>();
+        existingReturs.forEach((retur: any) => {
+            const orderId = String(retur?.order_id || '').trim();
+            const productId = String(retur?.product_id || '').trim();
+            if (!orderId || !productId) return;
+            const key = `${orderId}:${productId}`;
+            existingQtyByOrderProduct.set(key, Number(existingQtyByOrderProduct.get(key) || 0) + Math.max(0, Number(retur?.qty || 0)));
+        });
+
+        const orderById = new Map<string, any>();
+        orders.forEach((o: any) => orderById.set(String(o.id), o));
+
+        const createdReturs: any[] = [];
+        for (const raw of items) {
+            const productId = String(raw?.product_id || '').trim();
+            const qty = Math.max(0, Math.trunc(Number(raw?.qty || 0)));
+            const reason = typeof raw?.reason === 'string' && raw.reason.trim() ? raw.reason.trim() : 'Retur saat pengiriman (tidak jadi beli)';
+            const evidenceImg = typeof raw?.evidence_img === 'string' && raw.evidence_img.trim() ? raw.evidence_img.trim() : null;
+            const requestedOrderId = typeof raw?.order_id === 'string' ? raw.order_id.trim() : '';
+
+            if (!productId) {
+                await t.rollback();
+                throw new CustomError('product_id wajib diisi', 400);
+            }
+            if (!Number.isFinite(qty) || qty <= 0) {
+                await t.rollback();
+                throw new CustomError('qty retur tidak valid', 400);
+            }
+
+            let resolvedOrderId = requestedOrderId;
+            if (resolvedOrderId) {
+                if (!orderById.has(resolvedOrderId)) {
+                    await t.rollback();
+                    throw new CustomError('order_id tidak valid untuk invoice ini', 400);
+                }
+                const key = `${resolvedOrderId}:${productId}`;
+                if (!invoiceQtyByOrderProduct.has(key)) {
+                    await t.rollback();
+                    throw new CustomError('Produk tidak ditemukan pada invoice untuk order tersebut', 400);
+                }
+            } else {
+                const candidates = orderIds.filter((oid) => invoiceQtyByOrderProduct.has(`${oid}:${productId}`));
+                if (candidates.length === 0) {
+                    await t.rollback();
+                    throw new CustomError('Produk tidak ditemukan pada invoice ini', 400);
+                }
+                if (candidates.length > 1) {
+                    await t.rollback();
+                    throw new CustomError('Produk ada di beberapa order dalam invoice ini. Mohon sertakan order_id.', 409);
+                }
+                resolvedOrderId = candidates[0];
+            }
+
+            const key = `${resolvedOrderId}:${productId}`;
+            const invoiceQty = Math.max(0, Number(invoiceQtyByOrderProduct.get(key) || 0));
+            const existingQty = Math.max(0, Number(existingQtyByOrderProduct.get(key) || 0));
+            if (qty + existingQty > invoiceQty) {
+                await t.rollback();
+                throw new CustomError(`Qty retur melebihi qty di invoice (${qty + existingQty}/${invoiceQty}).`, 409);
+            }
+
+            const ownerOrder = orderById.get(resolvedOrderId);
+            const customerId = String(ownerOrder?.customer_id || '').trim();
+            if (!customerId) {
+                await t.rollback();
+                throw new CustomError('Order ini tidak memiliki customer_id. Retur delivery tidak bisa dibuat.', 409);
+            }
+
+            const retur = await Retur.create({
+                retur_type: 'delivery_refusal',
+                order_id: resolvedOrderId,
+                product_id: productId,
+                qty,
+                reason,
+                evidence_img: evidenceImg,
+                status: 'picked_up',
+                created_by: customerId,
+                courier_id: driverId
+            }, { transaction: t });
+
+            await emitReturStatusChanged({
+                retur_id: String(retur.id),
+                order_id: String(resolvedOrderId),
+                from_status: null,
+                to_status: 'picked_up',
+                courier_id: driverId,
+                triggered_by_role: String(req.user?.role || 'driver'),
+                target_roles: ['driver', 'kasir', 'admin_gudang', 'admin_finance', 'customer', 'super_admin'],
+                target_user_ids: [driverId]
+            }, {
+                transaction: t,
+                requestContext: 'driver_create_delivery_retur_ticket'
+            });
+
+            existingQtyByOrderProduct.set(key, existingQty + qty);
+            createdReturs.push(retur.get({ plain: true }));
+        }
+
+        const invoiceNetTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
+        await t.commit();
+
+        return res.status(201).json({
+            message: 'Tiket retur berhasil dibuat.',
+            invoice_id: String(invoice.id),
+            invoice_net_totals: invoiceNetTotals,
+            returs: createdReturs
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal membuat tiket retur', 500);
     }
 });

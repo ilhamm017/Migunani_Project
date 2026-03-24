@@ -1,5 +1,5 @@
 import { Transaction } from 'sequelize';
-import { CodCollection, Invoice, InvoiceItem, Order, OrderItem } from '../models';
+import { CodCollection, DriverDebtAdjustment, Invoice, InvoiceItem, Order, OrderItem } from '../models';
 
 type DriverCodExposure = {
     exposure: number;
@@ -51,8 +51,10 @@ export const calculateDriverCodExposure = async (
         const invoiceId = String(invoice.id || '');
         if (!invoiceId || pendingInvoiceTotals.has(invoiceId)) return;
 
-        const total = Number(invoice.total || 0);
-        pendingInvoiceTotals.set(invoiceId, Number.isFinite(total) ? total : 0);
+        const invoiceTotal = Number(invoice.total || 0);
+        const paidSnapshot = Number(invoice.amount_paid || 0);
+        const amount = paidSnapshot > 0 ? paidSnapshot : invoiceTotal;
+        pendingInvoiceTotals.set(invoiceId, Number.isFinite(amount) ? amount : 0);
     });
 
     const pendingInvoiceTotal = Array.from(pendingInvoiceTotals.values())
@@ -68,8 +70,18 @@ export const calculateDriverCodExposure = async (
     const collectedTotal = collections
         .reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
+    const openAdjustments = await DriverDebtAdjustment.findAll({
+        where: {
+            driver_id: driverId,
+            status: 'open'
+        },
+        attributes: ['amount'],
+        transaction: options?.transaction
+    });
+    const adjustmentsTotal = openAdjustments.reduce((sum, row: any) => sum + Number(row.amount || 0), 0);
+
     return {
-        exposure: Math.max(pendingInvoiceTotal, collectedTotal),
+        exposure: Math.max(pendingInvoiceTotal, collectedTotal) + Math.max(0, adjustmentsTotal),
         pendingInvoiceTotal,
         collectedTotal
     };

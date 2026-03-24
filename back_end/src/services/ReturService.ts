@@ -1,7 +1,10 @@
-import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account } from '../models';
+import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account, DriverDebtAdjustment } from '../models';
 import { Op } from 'sequelize';
 import { JournalService } from './JournalService';
 import { emitReturStatusChanged } from '../utils/orderNotification';
+import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
+import { calculateDriverCodExposure } from '../utils/codExposure';
+import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
 
 export class ReturService {
     static async requestRetur(payload: {
@@ -132,6 +135,7 @@ export class ReturService {
             courier_id?: string;
             refund_amount?: number;
             is_back_to_stock?: boolean;
+            qty_received?: number;
         },
         user: { id: string; role: string }
     ) {
@@ -161,9 +165,9 @@ export class ReturService {
                 throw new Error('Retur request not found');
             }
 
-            const isReturOperator = ['super_admin', 'kasir'].includes(user.role);
+            const isReturOperator = ['super_admin', 'kasir', 'admin_gudang'].includes(user.role);
             if (!isReturOperator) {
-                throw new Error('Hanya Kasir atau Super Admin yang dapat mengubah status retur');
+                throw new Error('Hanya Kasir, Admin Gudang, atau Super Admin yang dapat mengubah status retur');
             }
 
             const transitionIsValid = (
@@ -183,6 +187,7 @@ export class ReturService {
                 courier_id?: string | null;
                 refund_amount?: number | null;
                 is_back_to_stock?: boolean | null;
+                qty_received?: number | null;
             } = { status: nextStatus };
 
             if (admin_response !== undefined) {
@@ -211,8 +216,93 @@ export class ReturService {
                 updateData.is_back_to_stock = Boolean(is_back_to_stock);
             }
 
+            if (nextStatus === 'received') {
+                const rawQtyReceived = payload.qty_received;
+                const isDeliveryRetur = String((retur as any).retur_type || '') === 'delivery_refusal';
+                if (isDeliveryRetur) {
+                    const parsed = Number(rawQtyReceived);
+                    if (!Number.isFinite(parsed)) {
+                        throw new Error('qty_received wajib diisi saat verifikasi retur delivery');
+                    }
+                    const receivedQty = Math.max(0, Math.min(Number(retur.qty || 0), Math.trunc(parsed)));
+                    if (receivedQty > Number(retur.qty || 0)) {
+                        throw new Error('qty_received melebihi qty retur');
+                    }
+                    updateData.qty_received = receivedQty;
+                } else if (rawQtyReceived !== undefined && rawQtyReceived !== null && String(rawQtyReceived).trim() !== '') {
+                    const parsed = Number(rawQtyReceived);
+                    if (!Number.isFinite(parsed) || parsed < 0) {
+                        throw new Error('qty_received tidak valid');
+                    }
+                    updateData.qty_received = Math.max(0, Math.min(Number(retur.qty || 0), Math.trunc(parsed)));
+                }
+            }
+
             const previousStatus = String(retur.status || '');
             await retur.update(updateData, { transaction: t });
+
+            // Delivery refusal mismatch: if received less than claimed, create driver debt adjustment.
+            if (
+                nextStatus === 'received'
+                && String((retur as any).retur_type || '') === 'delivery_refusal'
+            ) {
+                const driverId = String((retur as any).courier_id || '').trim();
+                if (!driverId) {
+                    throw new Error('Retur delivery tidak memiliki courier_id');
+                }
+                const claimedQty = Math.max(0, Math.trunc(Number(retur.qty || 0)));
+                const receivedQty = Math.max(0, Math.trunc(Number((retur as any).qty_received || updateData.qty_received || 0)));
+
+                if (receivedQty < claimedQty) {
+                    const latestInvoice = await findLatestInvoiceByOrderId(String(retur.order_id), { transaction: t });
+                    if (!latestInvoice) {
+                        throw new Error('Invoice terkait tidak ditemukan untuk retur delivery');
+                    }
+
+                    const claimedTotals = await computeInvoiceNetTotals(String(latestInvoice.id), {
+                        transaction: t,
+                        effective_qty_override_by_retur_id: { [String(retur.id)]: claimedQty }
+                    });
+                    const receivedTotals = await computeInvoiceNetTotals(String(latestInvoice.id), { transaction: t });
+                    const deltaDue = Math.max(0, Math.round((receivedTotals.net_total - claimedTotals.net_total) * 100) / 100);
+
+                    if (deltaDue > 0) {
+                        const existing = await DriverDebtAdjustment.findOne({
+                            where: { retur_id: String(retur.id) },
+                            transaction: t,
+                            lock: t.LOCK.UPDATE
+                        });
+                        const note = `Selisih verifikasi retur delivery (Retur #${String(retur.id).slice(0, 8)}): received ${receivedQty}/${claimedQty}.`;
+                        if (existing) {
+                            await existing.update({
+                                driver_id: driverId,
+                                invoice_id: String(latestInvoice.id),
+                                amount: deltaDue,
+                                status: 'open',
+                                note,
+                                created_by: String(user.id)
+                            }, { transaction: t });
+                        } else {
+                            await DriverDebtAdjustment.create({
+                                driver_id: driverId,
+                                invoice_id: String(latestInvoice.id),
+                                retur_id: String(retur.id),
+                                amount: deltaDue,
+                                status: 'open',
+                                note,
+                                created_by: String(user.id)
+                            }, { transaction: t });
+                        }
+
+                        // Refresh driver debt snapshot.
+                        const driver = await User.findByPk(driverId, { transaction: t, lock: t.LOCK.UPDATE });
+                        if (driver) {
+                            const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
+                            await driver.update({ debt: exposure.exposure }, { transaction: t });
+                        }
+                    }
+                }
+            }
 
             // Logic for completion: if is_back_to_stock is true, increment product stock
             if (nextStatus === 'completed' && is_back_to_stock === true) {

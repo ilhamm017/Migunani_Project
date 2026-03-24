@@ -27,6 +27,7 @@ router.use(authenticateToken);
 
 router.get('/orders', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedOrders);
 router.post('/orders/:id/complete', authorizeRoles('driver'), completeDeliveryUploadMiddleware, DriverController.completeDelivery);
+router.post('/orders/:id/retur', authorizeRoles('driver'), DriverController.createDeliveryReturTicket);
 router.post('/orders/:id/payment', authorizeRoles('driver'), recordPaymentUploadMiddleware, DriverController.recordPayment);
 router.patch('/orders/:id/payment-method', authorizeRoles('driver'), DriverController.updatePaymentMethod);
 router.post('/orders/:id/issue', authorizeRoles('driver'), issueEvidenceUploadMiddleware, DriverController.reportIssue);

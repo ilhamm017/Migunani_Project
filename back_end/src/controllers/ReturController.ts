@@ -82,7 +82,7 @@ export const updateReturStatus = asyncWrapper(async (req: Request, res: Response
             if (message === 'Retur request not found') {
                 throw new CustomError(message, 404);
             }
-            if (message.includes('Hanya Kasir atau Super Admin')) {
+            if (message.includes('dapat mengubah status retur')) {
                 throw new CustomError(message, 403);
             }
             if (message.includes('Transisi status tidak diizinkan')) {

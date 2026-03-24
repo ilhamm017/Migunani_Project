@@ -3,9 +3,11 @@ import sequelize from '../config/database';
 
 interface ReturAttributes {
     id: string; // UUID
+    retur_type: 'customer_request' | 'delivery_refusal';
     order_id: string; // UUID
     product_id: string; // UUID
     qty: number;
+    qty_received?: number | null;
     reason: string;
     evidence_img?: string | null;
     status: 'pending' | 'approved' | 'pickup_assigned' | 'picked_up' | 'handed_to_warehouse' | 'received' | 'completed' | 'rejected';
@@ -19,13 +21,15 @@ interface ReturAttributes {
     created_by: string; // User ID (Customer)
 }
 
-interface ReturCreationAttributes extends Optional<ReturAttributes, 'id' | 'status' | 'evidence_img' | 'admin_response' | 'courier_id' | 'refund_amount' | 'is_back_to_stock'> { }
+interface ReturCreationAttributes extends Optional<ReturAttributes, 'id' | 'retur_type' | 'status' | 'evidence_img' | 'admin_response' | 'courier_id' | 'refund_amount' | 'is_back_to_stock' | 'qty_received'> { }
 
 class Retur extends Model<ReturAttributes, ReturCreationAttributes> implements ReturAttributes {
     declare id: string;
+    declare retur_type: 'customer_request' | 'delivery_refusal';
     declare order_id: string;
     declare product_id: string;
     declare qty: number;
+    declare qty_received: number | null;
     declare reason: string;
     declare evidence_img: string | null;
     declare status: 'pending' | 'approved' | 'pickup_assigned' | 'picked_up' | 'handed_to_warehouse' | 'received' | 'completed' | 'rejected';
@@ -49,6 +53,11 @@ Retur.init(
             defaultValue: DataTypes.UUIDV4,
             primaryKey: true,
         },
+        retur_type: {
+            type: DataTypes.ENUM('customer_request', 'delivery_refusal'),
+            allowNull: false,
+            defaultValue: 'customer_request',
+        },
         order_id: {
             type: DataTypes.UUID,
             allowNull: false,
@@ -60,6 +69,10 @@ Retur.init(
         qty: {
             type: DataTypes.INTEGER,
             allowNull: false,
+        },
+        qty_received: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
         },
         reason: {
             type: DataTypes.TEXT,
