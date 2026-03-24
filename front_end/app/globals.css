@@ -162,49 +162,99 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Touch-friendly defaults + clickable animation */
-:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]) {
+/* Touch-friendly defaults + 3D clickable buttons */
+:root {
+  --btn-3d-raise: 6px;
+  --btn-3d-press: 4px;
+  --btn-3d-shadow: 15 23 42;
+}
+
+button,
+[role="button"],
+a[role="button"],
+input[type="button"],
+input[type="submit"],
+a[href].btn-3d,
+a[href][class*="rounded"] {
   min-height: var(--touch-target);
   min-width: var(--touch-target);
   touch-action: manipulation;
 }
 
-:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"], a[href]):not(:disabled):not([aria-disabled="true"]) {
+button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not(:disabled):not([aria-disabled="true"]),
+a[role="button"]:not([aria-disabled="true"]),
+input[type="button"]:not(:disabled):not([aria-disabled="true"]),
+input[type="submit"]:not(:disabled):not([aria-disabled="true"]),
+a[href].btn-3d:not([aria-disabled="true"]),
+a[href][class*="rounded"]:not([aria-disabled="true"]) {
   cursor: pointer;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  /* Links: keep it lightweight (no translate/scale) to avoid shifting inline text */
-  :where(a[href]):not(:disabled):not([aria-disabled="true"]) {
-    transition: filter 120ms ease;
-    will-change: filter;
-  }
-
-  :where(a[href]):not(:disabled):not([aria-disabled="true"]):hover {
-    filter: brightness(1.02);
-  }
-
-  :where(a[href]):not(:disabled):not([aria-disabled="true"]):active {
-    filter: brightness(0.97);
-  }
-
-  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not(:disabled):not([aria-disabled="true"]),
+  a[role="button"]:not([aria-disabled="true"]),
+  input[type="button"]:not(:disabled):not([aria-disabled="true"]),
+  input[type="submit"]:not(:disabled):not([aria-disabled="true"]),
+  a[href].btn-3d:not([aria-disabled="true"]),
+  a[href][class*="rounded"]:not([aria-disabled="true"]) {
     transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
     will-change: transform, filter;
+    box-shadow: 0 var(--btn-3d-raise) 0 rgb(var(--btn-3d-shadow) / 0.18), 0 14px 30px rgb(var(--btn-3d-shadow) / 0.12) !important;
+    transform: translateY(0) !important;
   }
 
-  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):hover {
+  button:not(:disabled):not([aria-disabled="true"]):hover,
+  [role="button"]:not(:disabled):not([aria-disabled="true"]):hover,
+  a[role="button"]:not([aria-disabled="true"]):hover,
+  input[type="button"]:not(:disabled):not([aria-disabled="true"]):hover,
+  input[type="submit"]:not(:disabled):not([aria-disabled="true"]):hover,
+  a[href].btn-3d:not([aria-disabled="true"]):hover,
+  a[href][class*="rounded"]:not([aria-disabled="true"]):hover {
     filter: brightness(1.03);
+    transform: translateY(-1px) !important;
+    box-shadow: 0 calc(var(--btn-3d-raise) + 1px) 0 rgb(var(--btn-3d-shadow) / 0.18), 0 18px 36px rgb(var(--btn-3d-shadow) / 0.14) !important;
   }
 
-  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):active {
-    transform: translateY(1px) scale(0.98);
-    filter: brightness(0.93);
+  button:not(:disabled):not([aria-disabled="true"]):active,
+  [role="button"]:not(:disabled):not([aria-disabled="true"]):active,
+  a[role="button"]:not([aria-disabled="true"]):active,
+  input[type="button"]:not(:disabled):not([aria-disabled="true"]):active,
+  input[type="submit"]:not(:disabled):not([aria-disabled="true"]):active,
+  a[href].btn-3d:not([aria-disabled="true"]):active,
+  a[href][class*="rounded"]:not([aria-disabled="true"]):active {
+    filter: brightness(0.96);
+    transform: translateY(var(--btn-3d-press)) !important;
+    box-shadow: 0 2px 0 rgb(var(--btn-3d-shadow) / 0.18), 0 10px 20px rgb(var(--btn-3d-shadow) / 0.10) !important;
   }
 }
 
+button:disabled,
+button[aria-disabled="true"],
+[role="button"]:disabled,
+[role="button"][aria-disabled="true"],
+input[type="button"]:disabled,
+input[type="button"][aria-disabled="true"],
+input[type="submit"]:disabled,
+input[type="submit"][aria-disabled="true"],
+a[role="button"][aria-disabled="true"],
+a[href].btn-3d[aria-disabled="true"],
+a[href][class*="rounded"][aria-disabled="true"] {
+  cursor: not-allowed;
+  filter: grayscale(0.1) saturate(0.9);
+  box-shadow: none !important;
+  transform: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]) {
+  button,
+  [role="button"],
+  a[role="button"],
+  input[type="button"],
+  input[type="submit"],
+  a[href].btn-3d,
+  a[href][class*="rounded"] {
     transition: none;
   }
 }
