@@ -6,7 +6,8 @@ import {
     ChevronLeft, Clock,
     Package, ChevronDown,
     ChevronRight, ChevronsLeft, ChevronsRight,
-    Search
+    Search,
+    XCircle
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -19,6 +20,7 @@ const TABS = [
     { id: 'ready_to_ship', label: 'Persiapan Barang', icon: Package },
     { id: 'shipped', label: 'Dalam Pengiriman', icon: Clock },
     { id: 'delivered', label: 'Terkirim', icon: Package },
+    { id: 'canceled', label: 'Dibatalkan', icon: XCircle },
 ];
 
 const TAB_GROUPS = [
@@ -31,6 +33,11 @@ const TAB_GROUPS = [
         id: 'pengiriman',
         label: 'Status Kirim',
         tabs: ['shipped', 'delivered'],
+    },
+    {
+        id: 'riwayat',
+        label: 'Riwayat',
+        tabs: ['canceled'],
     },
 ];
 
@@ -153,6 +160,7 @@ export default function OrdersPage() {
     const matchesTab = useCallback((order: OrderSummary, tabId: string) => {
         const displayStatus = deriveDisplayStatus(order);
         const indentQty = Number(order?.indent_qty || 0);
+        if (displayStatus === 'canceled') return tabId === 'canceled';
         if (tabId === 'processing') {
             return ['pending', 'waiting_invoice', 'allocated', 'waiting_admin_verification', 'hold', 'debt_pending'].includes(displayStatus);
         }
