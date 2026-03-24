@@ -445,6 +445,8 @@ export const api = {
                 apiClient.get('/admin/finance/reports/aging-ar'),
             getBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders', { params }),
+            exportBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/finance/reports/backorders/export', { params, responseType: 'blob' }),
             getStockReductionReport: (params?: {
                 startDate?: string;
                 endDate?: string;

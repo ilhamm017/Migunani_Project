@@ -50,6 +50,7 @@ router.get('/reports/inventory-value', authorizeRoles('super_admin'), ReportCont
 router.get('/reports/aging-ap', authorizeRoles('super_admin'), ReportController.getAccountsPayableAging);
 router.get('/reports/aging-ar', authorizeRoles('super_admin'), ReportController.getAccountsReceivableAging);
 router.get('/reports/backorders', authorizeRoles('super_admin'), ReportController.getBackorderPreorderReport);
+router.get('/reports/backorders/export', authorizeRoles('super_admin'), ReportController.exportBackorderPreorderReportExcel);
 router.get('/reports/stock-reduction', authorizeRoles('super_admin'), ReportController.getStockReductionReport);
 router.get('/reports/stock-reduction/export', authorizeRoles('super_admin'), ReportController.exportStockReductionReportExcel);
 router.get('/reports/tax-summary', authorizeRoles('super_admin'), ReportController.getTaxSummary);

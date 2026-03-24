@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
-import { ArrowLeft, Package, Users } from 'lucide-react';
+import { ArrowLeft, Download, Filter, Package, Users } from 'lucide-react';
 import Link from 'next/link';
 
 interface BackorderSummary {
@@ -45,15 +45,30 @@ interface BackorderReportData {
     details?: BackorderDetailItem[];
 }
 
+const toDateInputValue = (date: Date) => date.toISOString().slice(0, 10);
+
 export default function BackorderReportPage() {
     const allowed = useRequireRoles(['super_admin']);
     const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
+    const [exporting, setExporting] = useState(false);
 
-    const load = async () => {
+    const [startDate, setStartDate] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 7);
+        return toDateInputValue(d);
+    });
+    const [endDate, setEndDate] = useState(() => toDateInputValue(new Date()));
+
+    const filterParams = useMemo(() => ({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+    }), [startDate, endDate]);
+
+    const load = useCallback(async () => {
         try {
             setLoading(true);
-            const res = await api.admin.finance.getBackorderReport();
+            const res = await api.admin.finance.getBackorderReport(filterParams);
             setData(res.data);
         } catch (e) {
             console.error(e);
@@ -61,26 +76,89 @@ export default function BackorderReportPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [filterParams]);
+
+    const handleExport = useCallback(async () => {
+        try {
+            setExporting(true);
+            const res = await api.admin.finance.exportBackorderReport(filterParams);
+            const contentDisposition = String(res.headers?.['content-disposition'] || '');
+            const fileNameMatch = contentDisposition.match(/filename="([^"]+)"/i);
+            const fileName = fileNameMatch?.[1] || `laporan-backorder-preorder-${toDateInputValue(new Date()).replace(/-/g, '')}.xlsx`;
+
+            const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error(e);
+            alert('Gagal export Excel');
+        } finally {
+            setExporting(false);
+        }
+    }, [filterParams]);
 
     useEffect(() => {
         if (allowed) load();
-    }, [allowed]);
+    }, [allowed, load]);
 
     if (!allowed) return null;
 
     return (
         <div className="bg-slate-50 min-h-screen pb-10">
             <div className="bg-white px-6 py-4 shadow-sm sticky top-0 z-40 mb-4">
-                <div className="flex items-center gap-3">
-                    <Link href="/admin/finance/laporan" className="p-2 -ml-2 rounded-full hover:bg-slate-100">
-                        <ArrowLeft size={20} className="text-slate-700" />
-                    </Link>
-                    <h1 className="font-bold text-lg text-slate-900">Laporan Backorder / Preorder</h1>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                        <Link href="/admin/finance/laporan" className="p-2 -ml-2 rounded-full hover:bg-slate-100">
+                            <ArrowLeft size={20} className="text-slate-700" />
+                        </Link>
+                        <h1 className="font-bold text-lg text-slate-900">Laporan Backorder / Preorder</h1>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleExport}
+                        disabled={exporting || loading}
+                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-60"
+                    >
+                        <Download size={14} />
+                        {exporting ? 'Exporting...' : 'Export Excel'}
+                    </button>
                 </div>
             </div>
 
             <div className="px-5 space-y-4">
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                    <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500 mb-3">
+                        <Filter size={14} />
+                        Filter Tanggal
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">Dari</label>
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => setStartDate(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">Sampai</label>
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => setEndDate(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                </div>
+
                 {loading ? (
                     <div className="text-center py-10 text-slate-400">Loading...</div>
                 ) : data ? (

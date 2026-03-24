@@ -915,6 +915,7 @@ export default function AdminOverviewPage() {
 	    { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
     { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white' },
     { href: '/admin/reports/stock-reduction', title: 'Pengurangan Stok', desc: 'Monitor stok keluar & export IPO.', icon: ShoppingCart, badge: 0, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
+    { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
     { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
     { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
   ];
