@@ -10,6 +10,7 @@ import {
     Setting
 } from '../models';
 import { acquireSchemaLock, SchemaLockError } from '../utils/schemaLock';
+import { seedCustomersFromExcel } from './seedCustomersFromExcel';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -539,6 +540,23 @@ async function seedDatabase() {
 
         if (productCategoryRows.length > 0) {
             await ProductCategory.bulkCreate(productCategoryRows);
+        }
+
+        // Optional: Seed customers from Excel (Pelanggan)
+        const pelangganExcelPath =
+            process.env.SEED_CUSTOMERS_EXCEL_PATH ||
+            '../Pelanggan_@24-03-2026 12-43-15.xlsx';
+        const pelangganSeed = await seedCustomersFromExcel({ excelPath: pelangganExcelPath });
+        if (pelangganSeed.inserted > 0 || pelangganSeed.parsed > 0) {
+            console.log('👤 Seed customers from Excel:');
+            console.log(`   - Excel: ${pelangganSeed.excelPath}`);
+            console.log(`   - Parsed: ${pelangganSeed.parsed}`);
+            console.log(`   - Inserted: ${pelangganSeed.inserted}`);
+            console.log(`   - Deduped: ${pelangganSeed.deduped}`);
+            console.log(`   - Skipped(no name): ${pelangganSeed.skippedNoName}`);
+            console.log(`   - Invalid phones blanked: ${pelangganSeed.invalidPhonesBlanked}`);
+            console.log(`   - Invalid emails blanked: ${pelangganSeed.invalidEmailsBlanked}`);
+            console.log('');
         }
 
         console.log('🎉 Database seeding completed successfully!\n');

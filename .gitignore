@@ -23,3 +23,6 @@ yarn-error.log*
 
 # Spreadsheets
 *.xlsx
+
+# Windows Zone Identifier (download mark) sidecar files
+*:Zone.Identifier
