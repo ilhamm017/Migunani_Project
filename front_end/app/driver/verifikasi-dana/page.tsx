@@ -22,9 +22,10 @@ export default function DriverVerifikasiDanaPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const [walletRes, ordersRes] = await Promise.all([
         api.driver.getWallet(),
         api.driver.getOrders({ status: 'shipped,delivered,completed' }),
@@ -34,7 +35,7 @@ export default function DriverVerifikasiDanaPage() {
     } catch (error) {
       console.error('Failed to load driver COD finance handover tasks:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -46,7 +47,7 @@ export default function DriverVerifikasiDanaPage() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: load,
+    onRefresh: () => load({ silent: true }),
     domains: ['order', 'cod', 'admin'],
     pollIntervalMs: 12000,
     filterDriverIds: user?.id ? [String(user.id)] : [],

@@ -18,28 +18,33 @@ export default function OrderDetailPage() {
   const orderId = String(params?.id || '');
 
   const [order, setOrder] = useState<OrderDetailResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
 
-  const loadOrder = useCallback(async () => {
+  const loadOrder = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) {
+        setInitialLoading(true);
+      }
       const res = await api.orders.getOrderById(orderId);
       setOrder(res.data);
     } catch (error) {
       console.error('Failed to load order detail:', error);
-      setOrder(null);
+      if (!silent) setOrder(null);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setInitialLoading(false);
+      }
     }
   }, [orderId]);
 
   useEffect(() => {
-    if (orderId) void loadOrder();
+    if (orderId) void loadOrder({ silent: false });
   }, [orderId, loadOrder]);
 
   useRealtimeRefresh({
     enabled: Boolean(orderId),
-    onRefresh: loadOrder,
+    onRefresh: () => loadOrder({ silent: true }),
     domains: ['order', 'retur', 'admin'],
     pollIntervalMs: 10000,
     filterOrderIds: orderId ? [orderId] : [],
@@ -208,7 +213,7 @@ export default function OrderDetailPage() {
   };
 
 
-  if (loading) {
+  if (initialLoading && !order) {
     return <div className="p-6"><p className="text-sm text-slate-500">Memuat detail pesanan...</p></div>;
   }
 

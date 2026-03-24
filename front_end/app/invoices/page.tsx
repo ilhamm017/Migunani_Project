@@ -110,14 +110,15 @@ export default function CustomerInvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     if (!isAuthenticated) {
       setRows([]);
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.orders.getMyOrders({ page: 1, limit: 200 });
       const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const latestInvoiceIds = new Set<string>();
@@ -162,7 +163,7 @@ export default function CustomerInvoicesPage() {
       console.error('Failed to load invoices:', error);
       setRows([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [isAuthenticated]);
 
@@ -172,7 +173,7 @@ export default function CustomerInvoicesPage() {
 
   useRealtimeRefresh({
     enabled: isAuthenticated,
-    onRefresh: load,
+    onRefresh: () => load({ silent: true }),
     domains: ['order', 'retur', 'admin'],
     pollIntervalMs: 20000,
   });

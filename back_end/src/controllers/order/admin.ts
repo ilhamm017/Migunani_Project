@@ -417,7 +417,7 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         if (nextStatus === 'canceled') {
             const orderItems = await OrderItem.findAll({
                 where: { order_id: orderId },
-                attributes: ['id'],
+                attributes: ['id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder'],
                 transaction: t,
                 lock: t.LOCK.UPDATE
             });
@@ -433,6 +433,62 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
                     },
                     transaction: t
                 });
+            }
+
+            // Keep OrderItem backorder fields in sync with Backorder cancellation so
+            // customer/admin detail pages don't show "Backorder Aktif" for canceled orders.
+            if (orderItems.length > 0) {
+                const allocations = await OrderAllocation.findAll({
+                    where: { order_id: orderId },
+                    attributes: ['product_id', 'allocated_qty'],
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const allocatedByProduct = allocations.reduce((acc: Record<string, number>, row: any) => {
+                    const productId = String(row?.product_id || '').trim();
+                    if (!productId) return acc;
+                    acc[productId] = Number(acc[productId] || 0) + Math.max(0, Number(row?.allocated_qty || 0));
+                    return acc;
+                }, {});
+
+                const itemsByProduct = new Map<string, any[]>();
+                orderItems.forEach((item: any) => {
+                    const productId = String(item?.product_id || '').trim();
+                    if (!productId) return;
+                    const rows = itemsByProduct.get(productId) || [];
+                    rows.push(item);
+                    itemsByProduct.set(productId, rows);
+                });
+
+                const allocatedByItemId: Record<string, number> = {};
+                itemsByProduct.forEach((rows, productId) => {
+                    let remaining = Math.max(0, Number(allocatedByProduct[productId] || 0));
+                    const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+                    sortedRows.forEach((row: any) => {
+                        const itemId = String(row?.id || '');
+                        const activeQty = Math.max(0, Number(row?.qty || 0));
+                        const allocatedQty = Math.max(0, Math.min(remaining, activeQty));
+                        allocatedByItemId[itemId] = allocatedQty;
+                        remaining = Math.max(0, remaining - allocatedQty);
+                    });
+                });
+
+                for (const item of orderItems as any[]) {
+                    const itemId = String(item?.id || '').trim();
+                    if (!itemId) continue;
+                    const orderedQtyOriginal = Math.max(0, Number(item?.ordered_qty_original || item?.qty || 0));
+                    const allocatedQtyTotal = Math.max(0, Number(allocatedByItemId[itemId] || 0));
+                    const canceledBefore = Math.max(0, Number(item?.qty_canceled_backorder || 0));
+                    const remainingToCancel = Math.max(0, orderedQtyOriginal - allocatedQtyTotal - canceledBefore);
+                    if (remainingToCancel <= 0) continue;
+
+                    await OrderItem.update({
+                        qty_canceled_backorder: canceledBefore + remainingToCancel,
+                    }, {
+                        where: { id: itemId },
+                        transaction: t
+                    });
+                }
             }
         }
 

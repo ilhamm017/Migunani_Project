@@ -14,15 +14,16 @@ export default function AdminInvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.admin.finance.getAR();
       setRows(Array.isArray(res.data) ? (res.data as ArRow[]) : []);
     } catch (error) {
       console.error('Failed to load invoices:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -32,7 +33,7 @@ export default function AdminInvoicesPage() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: loadRows,
+    onRefresh: () => loadRows({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 30000,
   });

@@ -86,15 +86,16 @@ export default function WarehouseDriverIssuesPage() {
 
   const loadData = useCallback(async (
     searchValue: string,
-    options?: { append?: boolean; page?: number }
+    options?: { append?: boolean; page?: number; silent?: boolean }
   ) => {
     const append = options?.append === true;
     const targetPage = options?.page && options.page > 0 ? options.page : 1;
+    const silent = options?.silent === true;
     try {
       if (append) {
         setLoadingMore(true);
       } else {
-        setLoading(true);
+        if (!silent) setLoading(true);
       }
 
       const ordersPromise = api.admin.orderManagement.getAll({
@@ -154,7 +155,7 @@ export default function WarehouseDriverIssuesPage() {
       if (append) {
         setLoadingMore(false);
       } else {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     }
   }, []);
@@ -168,7 +169,7 @@ export default function WarehouseDriverIssuesPage() {
   }, [allowed, loadData, search]);
 
   const refreshCurrent = useCallback(() => {
-    void loadData(search.trim());
+    void loadData(search.trim(), { silent: true });
   }, [loadData, search]);
 
   const loadMore = useCallback(() => {

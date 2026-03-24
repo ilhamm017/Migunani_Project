@@ -59,9 +59,10 @@ export default function AdminDriverCodPage() {
         return parsed > 0 ? new Intl.NumberFormat('id-ID').format(parsed) : '';
     }, [parseAmountInput]);
 
-    const loadDrivers = useCallback(async () => {
+    const loadDrivers = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.admin.finance.getDriverCodList();
             const driverList = Array.isArray(res.data) ? (res.data as DriverCodSummary[]) : [];
             setDrivers(driverList);
@@ -77,7 +78,7 @@ export default function AdminDriverCodPage() {
         } catch (error) {
             console.error('Failed to load drivers:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -87,7 +88,7 @@ export default function AdminDriverCodPage() {
 
     useRealtimeRefresh({
         enabled: allowed,
-        onRefresh: loadDrivers,
+        onRefresh: () => loadDrivers({ silent: true }),
         domains: ['cod', 'order', 'admin'],
         pollIntervalMs: 10000,
     });

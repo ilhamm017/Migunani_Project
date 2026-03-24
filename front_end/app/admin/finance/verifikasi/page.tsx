@@ -84,9 +84,10 @@ export default function FinanceVerifyPage() {
     variant: NotifyPopupVariant;
   }>({ open: false, title: '', message: '', variant: 'info' });
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const status = 'waiting_admin_verification,delivered,completed,canceled';
       const firstPage = await api.admin.orderManagement.getAll({
         page: 1,
@@ -132,7 +133,7 @@ export default function FinanceVerifyPage() {
     } catch (error) {
       console.error('Failed to load orders:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -142,7 +143,7 @@ export default function FinanceVerifyPage() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: load,
+    onRefresh: () => load({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 10000,
   });

@@ -45,9 +45,10 @@ export default function WarehouseHelperPage() {
     const [loading, setLoading] = useState(true);
     const [confirming, setConfirming] = useState<string | null>(null);
 
-    const loadPickingItems = useCallback(async () => {
+    const loadPickingItems = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.admin.orderManagement.getAll({ status: 'processing', limit: 20 });
             const fetchedOrders: WarehouseOrderRow[] = Array.isArray(res.data?.orders)
                 ? res.data.orders.map((row: Record<string, unknown>) => {
@@ -106,7 +107,7 @@ export default function WarehouseHelperPage() {
         } catch {
             // Silent
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -116,7 +117,7 @@ export default function WarehouseHelperPage() {
 
     useRealtimeRefresh({
         enabled: true,
-        onRefresh: loadPickingItems,
+        onRefresh: () => loadPickingItems({ silent: true }),
         domains: ['order', 'admin'],
         pollIntervalMs: 15000,
     });

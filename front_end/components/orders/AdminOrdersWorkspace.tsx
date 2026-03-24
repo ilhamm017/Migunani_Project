@@ -534,10 +534,11 @@ export default function AdminOrdersWorkspace({
     [isWarehouseRole, warehouseCustomerFocusMode]
   );
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     if (!hasRenderableAccess) return;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const [allRes, backorderRes] = await Promise.all([
         api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all' }),
         api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all', is_backorder: 'true' })
@@ -617,7 +618,7 @@ export default function AdminOrdersWorkspace({
     } catch (error) {
       console.error('Failed to load orders:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [hasRenderableAccess]);
 
@@ -677,7 +678,7 @@ export default function AdminOrdersWorkspace({
 
   useRealtimeRefresh({
     enabled: hasRenderableAccess,
-    onRefresh: loadOrders,
+    onRefresh: () => loadOrders({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 15000,
   });

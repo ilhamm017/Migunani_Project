@@ -32,20 +32,22 @@ export default function MyReturnsPage() {
     const [returs, setReturs] = useState<ReturItem[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const loadReturs = useCallback(async () => {
+    const loadReturs = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         if (!isAuthenticated) {
-            setLoading(false);
+            setReturs([]);
+            if (!silent) setLoading(false);
             return;
         }
 
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.retur.getMyReturs();
             setReturs(res.data || []);
         } catch (error) {
             console.error('Failed to load returs:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [isAuthenticated]);
 
@@ -55,7 +57,7 @@ export default function MyReturnsPage() {
 
     useRealtimeRefresh({
         enabled: isAuthenticated,
-        onRefresh: loadReturs,
+        onRefresh: () => loadReturs({ silent: true }),
         domains: ['retur', 'order', 'admin'],
         pollIntervalMs: 10000,
     });
@@ -83,7 +85,7 @@ export default function MyReturnsPage() {
         }
     };
 
-    if (loading) {
+    if (loading && returs.length === 0) {
         return (
             <div className="p-6">
                 <p className="text-sm text-slate-500">Memuat data retur...</p>

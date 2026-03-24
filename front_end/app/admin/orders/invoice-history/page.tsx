@@ -89,10 +89,11 @@ function AdminCompletedInvoiceHistoryPageContent() {
   const scopedCustomerId = String(searchParams.get('customerId') || '').trim();
   const scopedCustomerName = String(searchParams.get('customerName') || '').trim();
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     if (!allowed) return;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all' });
       const allOrders = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const groups = new Map<string, HistoryRow & { paymentStatuses: Set<string>; shipmentStatuses: Set<string> }>();
@@ -155,7 +156,7 @@ function AdminCompletedInvoiceHistoryPageContent() {
     } catch (error) {
       console.error('Failed to load completed invoice history:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [allowed, scopedCustomerId]);
 
@@ -165,7 +166,7 @@ function AdminCompletedInvoiceHistoryPageContent() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: loadRows,
+    onRefresh: () => loadRows({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 30000,
   });

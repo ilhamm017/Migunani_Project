@@ -40,9 +40,10 @@ export default function FinanceReturPage() {
     const [loading, setLoading] = useState(true);
     const router = useRouter();
 
-    const loadData = useCallback(async () => {
+    const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.retur.getAll();
             const rows = Array.isArray(res.data) ? res.data : [];
             const mapped: ReturFinanceRow[] = rows.map((item) => {
@@ -73,7 +74,7 @@ export default function FinanceReturPage() {
         } catch (error) {
             console.error('Failed to load returs for finance:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -85,7 +86,7 @@ export default function FinanceReturPage() {
 
     useRealtimeRefresh({
         enabled: allowed,
-        onRefresh: loadData,
+        onRefresh: () => loadData({ silent: true }),
         domains: ['retur', 'order', 'cod', 'admin'],
         pollIntervalMs: 10000,
     });

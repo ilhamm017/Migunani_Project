@@ -46,9 +46,10 @@ export default function AdminIssueOrdersPage() {
   const [search, setSearch] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
 
-  const load = useCallback(async (searchValue: string) => {
+  const load = useCallback(async (searchValue: string, opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.admin.orderManagement.getAll({
         status: 'hold',
         limit: 100,
@@ -90,7 +91,7 @@ export default function AdminIssueOrdersPage() {
       console.error('Failed to load problematic orders:', error);
       setOrders([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -103,7 +104,7 @@ export default function AdminIssueOrdersPage() {
   }, [allowed, load, search]);
 
   const refreshCurrent = useCallback(() => {
-    void load(search.trim());
+    void load(search.trim(), { silent: true });
   }, [load, search]);
 
   useRealtimeRefresh({

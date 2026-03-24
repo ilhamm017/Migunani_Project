@@ -52,9 +52,10 @@ export default function FinanceIssueInvoicePage() {
     return String(orderById.get(firstId)?.customer_name || '');
   }, [orderById, selectedOrderIds]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.admin.orderManagement.getAll({
         page: 1,
         limit: 200,
@@ -73,7 +74,7 @@ export default function FinanceIssueInvoicePage() {
     } catch (error) {
       console.error('Failed to load invoice candidates:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -83,7 +84,7 @@ export default function FinanceIssueInvoicePage() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: load,
+    onRefresh: () => load({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 10000,
   });

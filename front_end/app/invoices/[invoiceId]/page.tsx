@@ -97,14 +97,15 @@ export default function CustomerInvoiceDetailPage() {
   const [detail, setDetail] = useState<InvoiceDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     if (!isAuthenticated || !invoiceId) {
       setDetail(null);
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.invoices.getById(String(invoiceId));
       const invoice = res.data || {};
       setDetail({
@@ -127,7 +128,7 @@ export default function CustomerInvoiceDetailPage() {
       console.error('Failed to load invoice detail:', error);
       setDetail(null);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [invoiceId, isAuthenticated]);
 
@@ -137,7 +138,7 @@ export default function CustomerInvoiceDetailPage() {
 
   useRealtimeRefresh({
     enabled: isAuthenticated,
-    onRefresh: load,
+    onRefresh: () => load({ silent: true }),
     domains: ['order', 'retur', 'admin'],
     pollIntervalMs: 20000,
   });

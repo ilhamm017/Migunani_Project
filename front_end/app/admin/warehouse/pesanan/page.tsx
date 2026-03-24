@@ -98,9 +98,10 @@ export default function WarehouseKanbanPage() {
     const [courierModal, setCourierModal] = useState<{ orderId: string; target: string } | null>(null);
     const [selectedCourierId, setSelectedCourierId] = useState('');
 
-    const loadOrders = useCallback(async () => {
+    const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             // Fetch orders for each relevant status
             const statuses = ['ready_to_ship', 'shipped'];
             const results = await Promise.all(
@@ -130,7 +131,7 @@ export default function WarehouseKanbanPage() {
         } catch {
             // Silent fail
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -158,7 +159,7 @@ export default function WarehouseKanbanPage() {
 
     useRealtimeRefresh({
         enabled: true,
-        onRefresh: loadOrders,
+        onRefresh: () => loadOrders({ silent: true }),
         domains: ['order', 'admin'],
         pollIntervalMs: 15000,
     });

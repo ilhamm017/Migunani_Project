@@ -112,14 +112,15 @@ export default function OrdersPage() {
     const [activeTab, setActiveTab] = useState('processing');
     const [page, setPage] = useState(1);
 
-    const loadOrders = useCallback(async () => {
+    const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         if (!isAuthenticated) {
             setOrders([]);
-            setLoading(false);
+            if (!silent) setLoading(false);
             return;
         }
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const firstPage = await api.orders.getMyOrders({ page: 1, limit: 100 });
             const firstOrders = Array.isArray(firstPage.data?.orders) ? firstPage.data.orders : [];
             const totalPages = Math.max(1, Number(firstPage.data?.totalPages || 1));
@@ -142,7 +143,7 @@ export default function OrdersPage() {
             console.error('Failed to load orders:', error);
             setOrders([]);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [isAuthenticated]);
 
@@ -152,7 +153,7 @@ export default function OrdersPage() {
 
     useRealtimeRefresh({
         enabled: isAuthenticated,
-        onRefresh: loadOrders,
+        onRefresh: () => loadOrders({ silent: true }),
         domains: ['order', 'retur', 'admin'],
         pollIntervalMs: 15000,
   });

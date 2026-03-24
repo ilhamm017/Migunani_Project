@@ -98,9 +98,10 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
     return 'Tanggal mulai tidak boleh lebih besar dari tanggal akhir.';
   }, [startDate, endDate]);
 
-  const load = useCallback(async (params?: { search?: string; startDate?: string; endDate?: string }) => {
+  const load = useCallback(async (params?: { search?: string; startDate?: string; endDate?: string; silent?: boolean }) => {
+    const silent = Boolean(params?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
 
       let fetchStatus = activeStatus;
       let isBackorder = undefined;
@@ -159,7 +160,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
     } catch (error) {
       console.error('Failed to load admin orders:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [activeStatus, activeTab, fixedStatus]);
 
@@ -212,7 +213,7 @@ export default function AdminOrdersListView({ title, description, fixedStatus = 
 
   const refreshCurrent = useCallback(() => {
     if (dateRangeError) return;
-    void load({ search, startDate, endDate });
+    void load({ search, startDate, endDate, silent: true });
 
     if (fixedStatus === 'all') {
       void loadTabBadgeCounts();

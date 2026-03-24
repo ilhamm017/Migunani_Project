@@ -170,8 +170,17 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         const orderedQtyOriginal = Math.max(0, Number(item?.ordered_qty_original || item?.qty || 0));
         const allocatedQtyTotal = Math.max(0, Number(allocatedByItemId[itemId] || 0));
         const invoicedQtyTotal = Math.max(0, Number(invoicedByItemId[itemId] || 0));
-        const backorderCanceledQty = Math.max(0, Number(item?.qty_canceled_backorder || 0));
-        const backorderOpenQty = Math.max(0, orderedQtyOriginal - allocatedQtyTotal - backorderCanceledQty);
+        const orderStatus = String(trackedOrder?.status || '').trim().toLowerCase();
+        const backorderCanceledQtyBase = Math.max(0, Number(item?.qty_canceled_backorder || 0));
+        // For legacy data, some canceled orders didn't write qty_canceled_backorder.
+        // Treat remaining qty as canceled so UI doesn't show "Backorder Aktif" on canceled orders.
+        const inferredCanceledOnFullCancel = orderStatus === 'canceled'
+            ? Math.max(0, orderedQtyOriginal - allocatedQtyTotal)
+            : 0;
+        const backorderCanceledQty = Math.max(backorderCanceledQtyBase, inferredCanceledOnFullCancel);
+        const backorderOpenQty = orderStatus === 'canceled'
+            ? 0
+            : Math.max(0, orderedQtyOriginal - allocatedQtyTotal - backorderCanceledQty);
         return {
             order_item_id: itemId,
             ordered_qty_original: orderedQtyOriginal,

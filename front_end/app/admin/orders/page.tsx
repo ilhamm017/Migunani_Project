@@ -77,16 +77,17 @@ export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<unknown[]>([]);
   const hasRenderableAccess = isAuthenticated && ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(String(user?.role || ''));
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     if (!hasRenderableAccess) return;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all' });
       setOrders(Array.isArray(response?.data?.orders) ? response.data.orders : []);
     } catch (error) {
       console.error('Failed to load admin order inbox:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [hasRenderableAccess]);
 
@@ -96,7 +97,7 @@ export default function AdminOrdersPage() {
 
   useRealtimeRefresh({
     enabled: hasRenderableAccess,
-    onRefresh: loadOrders,
+    onRefresh: () => loadOrders({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 15000,
   });

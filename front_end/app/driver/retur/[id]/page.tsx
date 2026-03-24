@@ -66,10 +66,11 @@ export default function DriverReturDetailPage() {
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
 
-    const loadRetur = useCallback(async () => {
+    const loadRetur = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         if (!returId) return;
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.driver.getReturById(returId);
             const row = res.data as Record<string, unknown> | null;
             if (!row || typeof row !== 'object') {
@@ -112,19 +113,19 @@ export default function DriverReturDetailPage() {
             console.error('Failed to load retur detail:', error);
             setRetur(null);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [returId]);
 
     useEffect(() => {
         if (allowed && returId) {
-            void loadRetur();
+            void loadRetur({ silent: false });
         }
     }, [allowed, loadRetur, returId]);
 
     useRealtimeRefresh({
         enabled: allowed && Boolean(returId),
-        onRefresh: loadRetur,
+        onRefresh: () => loadRetur({ silent: true }),
         domains: ['retur', 'admin'],
         pollIntervalMs: 12000,
         filterReturIds: returId ? [returId] : [],
@@ -191,7 +192,7 @@ export default function DriverReturDetailPage() {
 
     if (!allowed) return null;
 
-    if (loading) {
+    if (loading && !retur) {
         return (
             <div className="p-6 space-y-4">
                 <div className="h-8 w-40 bg-slate-100 rounded-xl animate-pulse" />

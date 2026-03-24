@@ -13,15 +13,16 @@ export default function FinanceARPage() {
   const [rows, setRows] = useState<ArRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await api.admin.finance.getAR();
       setRows(Array.isArray(res.data) ? (res.data as ArRow[]) : []);
     } catch (error) {
       console.error('Failed to load AR:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -31,7 +32,7 @@ export default function FinanceARPage() {
 
   useRealtimeRefresh({
     enabled: allowed,
-    onRefresh: loadRows,
+    onRefresh: () => loadRows({ silent: true }),
     domains: ['order', 'retur', 'cod', 'admin'],
     pollIntervalMs: 30000,
   });

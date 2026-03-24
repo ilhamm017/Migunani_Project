@@ -73,28 +73,29 @@ export default function FinanceReturDetailPage() {
     const [submitting, setSubmitting] = useState(false);
     const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
-    const loadData = useCallback(async () => {
+    const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.retur.getAll();
             const found = ((res.data || []) as ReturDetail[]).find((r) => String(r.id) === String(returId));
             setRetur(found || null);
         } catch (error) {
             console.error('Failed to load retur detail:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [returId]);
 
     useEffect(() => {
         if (allowed && returId) {
-            void loadData();
+            void loadData({ silent: false });
         }
     }, [allowed, loadData, returId]);
 
     useRealtimeRefresh({
         enabled: allowed && Boolean(returId),
-        onRefresh: loadData,
+        onRefresh: () => loadData({ silent: true }),
         domains: ['retur', 'order', 'cod', 'admin'],
         pollIntervalMs: 10000,
         filterReturIds: returId ? [returId] : [],
@@ -123,7 +124,7 @@ export default function FinanceReturDetailPage() {
 
     if (!allowed) return null;
 
-    if (loading) {
+    if (loading && !retur) {
         return (
             <div className="p-6 max-w-3xl mx-auto space-y-4">
                 <div className="h-10 w-48 bg-slate-100 rounded-xl animate-pulse" />

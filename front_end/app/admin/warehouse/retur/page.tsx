@@ -70,15 +70,16 @@ export default function WarehouseReturPage() {
     const [isBackToStock, setIsBackToStock] = useState<boolean>(true);
     const [adminResponse, setAdminResponse] = useState('');
 
-    const loadData = useCallback(async () => {
+    const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+        const silent = Boolean(opts?.silent);
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const res = await api.retur.getAll();
             setReturs(res.data || []);
         } catch (error) {
             console.error('Failed to load returs:', error);
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -100,7 +101,7 @@ export default function WarehouseReturPage() {
 
     useRealtimeRefresh({
         enabled: allowed,
-        onRefresh: loadData,
+        onRefresh: () => loadData({ silent: true }),
         domains: ['retur', 'order', 'cod', 'admin'],
         pollIntervalMs: 15000,
     });
