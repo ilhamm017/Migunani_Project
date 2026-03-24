@@ -38,7 +38,13 @@ type SavedAddressesPayload = unknown[];
 apiClient.interceptors.response.use(
     (response) => response,
     async (error) => {
-        if (error.response?.status === 401) {
+        const status = error.response?.status;
+        const message = String(error.response?.data?.message || '');
+        const isAuthTokenInvalid =
+            status === 401 ||
+            (status === 403 && /invalid (or )?expired token|invalid token payload/i.test(message));
+
+        if (isAuthTokenInvalid) {
             // Unauthorized - clear auth state and redirect to login
             if (typeof window !== 'undefined') {
                 try {

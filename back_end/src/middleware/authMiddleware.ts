@@ -35,7 +35,8 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
         const decoded = jwt.verify(token, getJwtSecret()) as { id?: string };
         const userId = String(decoded?.id || '').trim();
         if (!userId) {
-            return res.status(403).json({ message: 'Invalid token payload' });
+            // Treat invalid token as unauthenticated so FE can trigger re-login.
+            return res.status(401).json({ message: 'Invalid token payload' });
         }
 
         const dbUser = await User.findByPk(userId, {
@@ -55,7 +56,8 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
         };
         next();
     } catch {
-        return res.status(403).json({ message: 'Invalid or expired token' });
+        // JWT verification failure => unauthenticated (not authorized).
+        return res.status(401).json({ message: 'Invalid or expired token' });
     }
 };
 
