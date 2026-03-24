@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText } from 'lucide-react';
+import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -947,6 +947,7 @@ export default function AdminOverviewPage() {
         { href: '/admin/sales/member-baru', title: 'Register Member', desc: 'Onboarding WA OTP.', icon: UserCheck },
         { href: '/admin/orders/create', title: 'Input Order', desc: 'Manual order entry.', icon: Plus },
         { href: '/admin/orders', title: 'Monitor Order', desc: 'Kontrol order aktif.', icon: ClipboardList },
+        { href: '/admin/orders/invoice-history', title: 'Riwayat Invoice Selesai', desc: 'Arsip invoice dari order selesai.', icon: Receipt },
         { href: '/admin/invoices', title: 'Invoice Customer', desc: 'Daftar invoice customer aktif.', icon: FileText },
         { href: '/admin/orders/issues', title: 'Issue Pesanan', desc: 'Kendala order di lapangan.', icon: AlertTriangle },
         { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer support.', icon: MessageSquare, badge: summary.chats },
