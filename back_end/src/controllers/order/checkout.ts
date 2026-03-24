@@ -53,6 +53,10 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             }
             resolvedPaymentMethod = requestedPaymentMethod as CheckoutPaymentMethod;
         }
+        if (userRole === 'customer' && !resolvedPaymentMethod) {
+            await t.rollback();
+            throw new CustomError('Metode pembayaran wajib dipilih', 400);
+        }
 
         let finalItems = normalizeCheckoutItems(items);
 

@@ -10,7 +10,7 @@ import {
     Setting
 } from '../models';
 import { acquireSchemaLock, SchemaLockError } from '../utils/schemaLock';
-import { seedCustomersFromExcel } from './seedCustomersFromExcel';
+import { seedCustomersFromData } from './seedCustomersFromData';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -542,20 +542,19 @@ async function seedDatabase() {
             await ProductCategory.bulkCreate(productCategoryRows);
         }
 
-        // Optional: Seed customers from Excel (Pelanggan)
-        const pelangganExcelPath =
-            process.env.SEED_CUSTOMERS_EXCEL_PATH ||
-            '../Pelanggan_@24-03-2026 12-43-15.xlsx';
-        const pelangganSeed = await seedCustomersFromExcel({ excelPath: pelangganExcelPath });
+        // Seed customers (Pelanggan) from checked-in data file
+        const pelangganSeed = await seedCustomersFromData();
         if (pelangganSeed.inserted > 0 || pelangganSeed.parsed > 0) {
-            console.log('👤 Seed customers from Excel:');
-            console.log(`   - Excel: ${pelangganSeed.excelPath}`);
+            console.log('👤 Seed customers from data:');
+            console.log(`   - Source: ${pelangganSeed.source}`);
             console.log(`   - Parsed: ${pelangganSeed.parsed}`);
             console.log(`   - Inserted: ${pelangganSeed.inserted}`);
-            console.log(`   - Deduped: ${pelangganSeed.deduped}`);
-            console.log(`   - Skipped(no name): ${pelangganSeed.skippedNoName}`);
-            console.log(`   - Invalid phones blanked: ${pelangganSeed.invalidPhonesBlanked}`);
-            console.log(`   - Invalid emails blanked: ${pelangganSeed.invalidEmailsBlanked}`);
+            console.log(`   - Worksheet: ${pelangganSeed.meta.worksheet}`);
+            console.log(`   - Total rows: ${pelangganSeed.meta.totalRows}`);
+            console.log(`   - Deduped: ${pelangganSeed.meta.deduped}`);
+            console.log(`   - Skipped(no name): ${pelangganSeed.meta.skippedNoName}`);
+            console.log(`   - Invalid phones blanked: ${pelangganSeed.meta.invalidPhonesBlanked}`);
+            console.log(`   - Invalid emails blanked: ${pelangganSeed.meta.invalidEmailsBlanked}`);
             console.log('');
         }
 

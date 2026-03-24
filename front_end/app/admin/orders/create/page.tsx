@@ -57,6 +57,8 @@ type CartItem = {
     qty: number;
 };
 
+type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
+
 function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
@@ -80,7 +82,7 @@ function ManualOrderContent() {
 
     // Cart State
     const [cart, setCart] = useState<CartItem[]>([]);
-    const [paymentMethod, setPaymentMethod] = useState<'transfer_manual' | 'cod' | 'cash_store'>('cash_store');
+    const [paymentMethod, setPaymentMethod] = useState<PaymentMethodUi>('cash_store');
     const [submitting, setSubmitting] = useState(false);
     const [prefillingCustomer, setPrefillingCustomer] = useState(false);
     const [chatContextLoading, setChatContextLoading] = useState(false);
@@ -419,13 +421,15 @@ function ManualOrderContent() {
 
         setSubmitting(true);
         try {
-            await api.orders.checkout({
+            const payload: Parameters<typeof api.orders.checkout>[0] = {
                 customer_id: selectedCustomer.id, // Only works if admin
                 items: cart.map(item => ({ product_id: item.product.id, qty: item.qty })),
-                payment_method: paymentMethod,
                 shipping_method_code: shippingMethodCode || undefined,
-                from_cart: false
-            });
+                from_cart: false,
+                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {})
+            };
+
+            await api.orders.checkout(payload);
             alert('Pesanan berhasil dibuat!');
             router.push('/admin/orders');
         } catch (error: unknown) {
@@ -739,13 +743,19 @@ function ManualOrderContent() {
                                 <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
                                 <select
                                     value={paymentMethod}
-                                    onChange={(e) => setPaymentMethod(e.target.value as 'transfer_manual' | 'cod' | 'cash_store')}
+                                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodUi)}
                                     className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
                                 >
                                     <option value="cash_store">Cash (Bayar di Toko)</option>
                                     <option value="transfer_manual">Transfer Bank</option>
                                     <option value="cod">COD (Bayar ditempat)</option>
+                                    <option value="follow_driver">Mengikuti Driver (ditentukan saat pengiriman)</option>
                                 </select>
+                                {paymentMethod === 'follow_driver' ? (
+                                    <p className="text-[11px] text-slate-500 mt-1">
+                                        Metode pembayaran akan dipilih oleh driver saat pengiriman.
+                                    </p>
+                                ) : null}
                             </div>
                             <div>
                                 <div className="flex items-center justify-between gap-2 mb-1">
