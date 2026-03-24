@@ -159,11 +159,6 @@ export const verifyInboundStep2AndPost = asyncWrapper(async (req: Request, res: 
             throw new CustomError('Wajib Verifikasi langkah 1 terlebih dahulu', 400);
         }
 
-        if (String(po.verified1_by) === String(req.user!.id)) {
-            await t.rollback();
-            throw new CustomError('Verifikasi langkah 2 harus oleh user berbeda', 400);
-        }
-
         if (po.verified2_at) {
             await t.rollback();
             throw new CustomError('Verifikasi langkah 2 sudah dilakukan', 409);
