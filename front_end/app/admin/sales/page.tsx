@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, ShieldOff, ShieldCheck, Search, History } from 'lucide-react';
+import { RefreshCw, ShieldOff, ShieldCheck, Search, History, Plus } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -108,14 +108,22 @@ export default function AdminSalesHubPage() {
         <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-black text-slate-900">Manajemen Customer</h2>
-            <button
-              type="button"
-              onClick={() => void loadCustomers()}
-              disabled={loadingCustomers}
-              className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-50"
-            >
-              <RefreshCw size={12} /> Refresh
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/admin/sales/member-baru"
+                className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white"
+              >
+                <Plus size={12} /> Daftarkan Customer
+              </Link>
+              <button
+                type="button"
+                onClick={() => void loadCustomers()}
+                disabled={loadingCustomers}
+                className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-50"
+              >
+                <RefreshCw size={12} /> Refresh
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2">

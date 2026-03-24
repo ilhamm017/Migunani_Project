@@ -9,11 +9,6 @@ const frontendRoot = fs.existsSync(path.join(frontendFromRepoRoot, "app"))
   : cwd;
 const backendApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const backendOrigin = backendApiBase.replace(/\/api\/v1\/?$/, "");
-const backendOriginUrl = new URL(backendOrigin);
-const externalImageHosts = (process.env.NEXT_PUBLIC_IMAGE_HOSTS || "www.berkatakurnanjaya.com,maxxis.id,www.maxxis.id")
-  .split(",")
-  .map((host) => host.trim())
-  .filter(Boolean);
 
 const nextConfig: NextConfig = {
   turbopack: {
@@ -21,24 +16,9 @@ const nextConfig: NextConfig = {
   },
   images: {
     remotePatterns: [
-      {
-        protocol: backendOriginUrl.protocol.replace(':', '') as 'http' | 'https',
-        hostname: backendOriginUrl.hostname,
-        port: backendOriginUrl.port || undefined,
-        pathname: '/uploads/**',
-      },
-      ...externalImageHosts.flatMap((hostname) => ([
-        {
-          protocol: 'https' as const,
-          hostname,
-          pathname: '/**',
-        },
-        {
-          protocol: 'http' as const,
-          hostname,
-          pathname: '/**',
-        },
-      ])),
+      // Temporary: allow all remote image hosts.
+      { protocol: "https", hostname: "**", pathname: "/**" },
+      { protocol: "http", hostname: "**", pathname: "/**" },
     ],
   },
   async rewrites() {
