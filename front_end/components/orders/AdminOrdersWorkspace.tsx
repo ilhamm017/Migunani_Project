@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Package, Search, Users } from 'lucide-react';
+import { AlertCircle, Minus, Package, Plus, Search, Users } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
@@ -2722,15 +2722,35 @@ export default function AdminOrdersWorkspace({
                                           </div>
                                           <div className="min-w-[150px] space-y-1 text-right">
                                             <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
-                                            <input
-                                              type="number"
-                                              min={0}
-                                              max={item.allocatableQty}
-                                              value={topupQty}
-                                              disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
-                                              onChange={(e) => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, e.target.value)}
-                                              className="w-full rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
-                                            />
+                                            <div className="flex items-center justify-end gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, String(topupQty - 1))}
+                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty <= 0}
+                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                                                aria-label="Kurangi top up alokasi"
+                                              >
+                                                <Minus size={14} />
+                                              </button>
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={item.allocatableQty}
+                                                value={topupQty}
+                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
+                                                onChange={(e) => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, e.target.value)}
+                                                className="w-24 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={() => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, String(topupQty + 1))}
+                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty >= item.allocatableQty}
+                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                                                aria-label="Tambah top up alokasi"
+                                              >
+                                                <Plus size={14} />
+                                              </button>
+                                            </div>
                                           </div>
                                         </div>
                                       </div>
@@ -3394,15 +3414,35 @@ export default function AdminOrdersWorkspace({
                                       </div>
                                       <div className="text-right space-y-1 min-w-[150px]">
                                         <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
-                                        <input
-                                          type="number"
-                                          min={0}
-                                          max={item.allocatableQty}
-                                          value={topupQty}
-                                          disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
-                                          onChange={(e) => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, e.target.value)}
-                                          className="w-full rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
-                                        />
+                                        <div className="flex items-center justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, String(topupQty - 1))}
+                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty <= 0}
+                                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                                            aria-label="Kurangi top up alokasi"
+                                          >
+                                            <Minus size={14} />
+                                          </button>
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            max={item.allocatableQty}
+                                            value={topupQty}
+                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
+                                            onChange={(e) => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, e.target.value)}
+                                            className="w-24 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, String(topupQty + 1))}
+                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty >= item.allocatableQty}
+                                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                                            aria-label="Tambah top up alokasi"
+                                          >
+                                            <Plus size={14} />
+                                          </button>
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
@@ -3884,15 +3924,35 @@ export default function AdminOrdersWorkspace({
                                           </div>
                                           <div className="text-right">
                                             <p className="text-[10px] text-slate-400">Alokasi</p>
-                                            <input
-                                              type="number"
-                                              min={0}
-                                              max={maxAlloc}
-                                              value={draftQty}
-                                              disabled={!canAllocate || !isAllocationEditable}
-                                              onChange={(e) => handleAllocationChange(String(order.id), String(item.product_id), maxAlloc, e.target.value)}
-                                              className="w-20 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-                                            />
+                                            <div className="flex items-center justify-end gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleAllocationChange(String(order.id), String(item.product_id), maxAlloc, String(draftQty - 1))}
+                                                disabled={!canAllocate || !isAllocationEditable || draftQty <= 0}
+                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+                                                aria-label="Kurangi alokasi"
+                                              >
+                                                <Minus size={14} />
+                                              </button>
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={maxAlloc}
+                                                value={draftQty}
+                                                disabled={!canAllocate || !isAllocationEditable}
+                                                onChange={(e) => handleAllocationChange(String(order.id), String(item.product_id), maxAlloc, e.target.value)}
+                                                className="w-20 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={() => handleAllocationChange(String(order.id), String(item.product_id), maxAlloc, String(draftQty + 1))}
+                                                disabled={!canAllocate || !isAllocationEditable || draftQty >= maxAlloc}
+                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+                                                aria-label="Tambah alokasi"
+                                              >
+                                                <Plus size={14} />
+                                              </button>
+                                            </div>
                                           </div>
                                         </div>
                                       </div>
