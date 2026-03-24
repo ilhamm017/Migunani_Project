@@ -169,11 +169,25 @@ body {
   touch-action: manipulation;
 }
 
-:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
+:where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"], a[href]):not(:disabled):not([aria-disabled="true"]) {
   cursor: pointer;
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Links: keep it lightweight (no translate/scale) to avoid shifting inline text */
+  :where(a[href]):not(:disabled):not([aria-disabled="true"]) {
+    transition: filter 120ms ease;
+    will-change: filter;
+  }
+
+  :where(a[href]):not(:disabled):not([aria-disabled="true"]):hover {
+    filter: brightness(1.02);
+  }
+
+  :where(a[href]):not(:disabled):not([aria-disabled="true"]):active {
+    filter: brightness(0.97);
+  }
+
   :where(button, [role="button"], a[role="button"], input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]) {
     transition: translate 120ms ease, scale 120ms ease, filter 120ms ease, box-shadow 120ms ease;
     will-change: translate, scale, filter;
