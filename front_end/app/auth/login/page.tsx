@@ -103,6 +103,7 @@ export default function LoginPage() {
                                 <button
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
+                                    data-no-3d="true"
                                     className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"
                                 >
                                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}

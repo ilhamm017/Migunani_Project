@@ -26,6 +26,7 @@ export function ScrollChips({ items, activeId, onItemClick, className }: ScrollC
                         key={item.id}
                         type="button"
                         onClick={() => onItemClick?.(item.id)}
+                        data-no-3d="true"
                         className={cn(
                             'flex-shrink-0 px-4 py-2 rounded-xl font-bold text-[10px] uppercase tracking-wider',
                             'transition-all touch-manipulation active:scale-95',

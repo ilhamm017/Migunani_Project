@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, ShieldOff, ShieldCheck, Search, History, Plus } from 'lucide-react';
+import { RefreshCw, ShieldOff, ShieldCheck, Search, History, Plus, Pencil } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 
@@ -111,7 +111,7 @@ export default function AdminSalesHubPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 href="/admin/sales/member-baru"
-                className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white"
+                className="btn-3d inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white"
               >
                 <Plus size={12} /> Daftarkan Customer
               </Link>
@@ -119,7 +119,7 @@ export default function AdminSalesHubPage() {
                 type="button"
                 onClick={() => void loadCustomers()}
                 disabled={loadingCustomers}
-                className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-50"
+                className="btn-3d inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200/70 disabled:opacity-50"
               >
                 <RefreshCw size={12} /> Refresh
               </button>
@@ -178,7 +178,7 @@ export default function AdminSalesHubPage() {
                     <div className="flex flex-wrap items-center gap-2 mt-3">
                       <Link
                         href={`/admin/chat?userId=${customer.id}`}
-                        className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200"
+                        className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200"
                         onClick={(event) => event.stopPropagation()}
                       >
                         Chat Customer
@@ -186,21 +186,28 @@ export default function AdminSalesHubPage() {
 
                       <Link
                         href={`/admin/sales/${customer.id}#profil-customer`}
-                        className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 border border-slate-200"
+                        className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 border border-slate-200"
                       >
                         Detail Customer
                       </Link>
 
                       <Link
                         href={`/admin/sales/customer-purchases?customerId=${customer.id}&customerName=${encodeURIComponent(customer.name || '')}`}
-                        className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-violet-50 text-violet-700 border border-violet-200"
+                        className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-violet-50 text-violet-700 border border-violet-200"
                       >
                         <span className="inline-flex items-center gap-1"><History size={12} /> Riwayat Order</span>
                       </Link>
 
                       <Link
+                        href={`/admin/sales/${customer.id}?edit=1`}
+                        className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200"
+                      >
+                        <span className="inline-flex items-center gap-1"><Pencil size={12} /> Edit Data</span>
+                      </Link>
+
+                      <Link
                         href={`/admin/orders/create?customerId=${customer.id}`}
-                        className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200"
+                        className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200"
                       >
                         Buat Order
                       </Link>
@@ -211,7 +218,7 @@ export default function AdminSalesHubPage() {
                         onClick={() => {
                           void handleToggleCustomerStatus(customer);
                         }}
-                        className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${customer.status === 'active'
+                        className={`btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${customer.status === 'active'
                           ? 'bg-rose-50 text-rose-700 border-rose-200'
                           : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}

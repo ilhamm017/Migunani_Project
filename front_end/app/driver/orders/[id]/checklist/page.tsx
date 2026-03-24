@@ -397,7 +397,7 @@ export default function DriverOrderChecklistPage() {
 
   return (
     <div className="p-5 space-y-4 pb-40">
-      <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+      <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
 

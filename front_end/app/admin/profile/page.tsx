@@ -62,7 +62,7 @@ export default function AdminProfilePage() {
 
             <button
                 onClick={handleLogout}
-                className="w-full bg-rose-50 text-rose-600 border border-rose-100 rounded-2xl py-4 font-bold flex items-center justify-center gap-2 hover:bg-rose-100 transition-colors active:scale-[0.98]"
+                className="btn-3d w-full bg-rose-50 text-rose-600 border border-rose-100 rounded-2xl py-4 font-bold flex items-center justify-center gap-2 hover:bg-rose-100 transition-colors active:scale-[0.98]"
             >
                 <LogOut size={20} />
                 Keluar Dashboard

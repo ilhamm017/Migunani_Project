@@ -141,7 +141,7 @@ export default function InvoiceUploadProofPage() {
         onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
       />
       <div className="p-6 space-y-5">
-        <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali
         </button>
 

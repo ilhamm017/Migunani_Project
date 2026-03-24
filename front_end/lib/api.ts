@@ -224,6 +224,10 @@ export const api = {
                 startDate?: string;
                 endDate?: string;
             }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
+            updateEmail: (id: string, email: string) =>
+                apiClient.patch(`/admin/customers/${id}/email`, { email }),
+            updatePassword: (id: string, password: string) =>
+                apiClient.patch(`/admin/customers/${id}/password`, { password }),
             updateStatus: (id: string, data: {
                 status: 'active' | 'banned';
                 halt_open_orders?: boolean;

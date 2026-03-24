@@ -324,7 +324,7 @@ function DriverChatContent() {
   return (
     <div className="p-4 md:p-6 pb-0 -mb-24 space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali
         </button>
       </div>

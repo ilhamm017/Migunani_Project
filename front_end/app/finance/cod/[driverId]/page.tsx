@@ -54,7 +54,7 @@ export default function CodSettlementPage() {
         <div className="bg-slate-50 min-h-screen pb-24 flex flex-col">
             {/* Header */}
             <div className="bg-white px-4 py-3 border-b border-slate-200 sticky top-0 z-10 flex items-center gap-3">
-                <button onClick={() => step > 1 ? setStep(step - 1) : router.back()} className="p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-full">
+                <button data-no-3d="true" onClick={() => step > 1 ? setStep(step - 1) : router.back()} className="p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-full">
                     <ArrowLeft size={20} />
                 </button>
                 <div className="flex-1">

@@ -347,19 +347,12 @@ function CatalogContent() {
                     <button
                         type="button"
                         onClick={() => setShowFilters(!showFilters)}
-                        className={`p-3 rounded-2xl border border-slate-100 shadow-sm transition-all active:scale-95 ${showFilters ? 'bg-emerald-600 text-white' : 'bg-white text-slate-400'}`}
+                        className={`btn-3d p-3 rounded-2xl border border-slate-100 shadow-sm transition-all active:scale-95 ${showFilters ? 'bg-emerald-600 text-white' : 'bg-white text-slate-400'}`}
                     >
                         <SlidersHorizontal size={20} />
                     </button>
                 </div>
             </form>
-
-            {/* Category Chips */}
-            <ScrollChips
-                items={categoryChips}
-                activeId={activeCategoryId}
-                onItemClick={(id) => handlePickCategory(String(id))}
-            />
 
             {/* Advanced Filters */}
             {showFilters && (
@@ -376,6 +369,15 @@ function CatalogContent() {
                     <p className="text-[11px] text-slate-400">
                         Filter harga, merek, dan lainnya akan ditambahkan di sini...
                     </p>
+
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Kategori</p>
+                        <ScrollChips
+                            items={categoryChips}
+                            activeId={activeCategoryId}
+                            onItemClick={(id) => handlePickCategory(String(id))}
+                        />
+                    </div>
                 </div>
             )}
 

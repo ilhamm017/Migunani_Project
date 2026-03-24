@@ -66,7 +66,7 @@ export default function UploadProofPage() {
         onPrimary={popup.onPrimary}
         onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
       />
-      <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+      <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
 

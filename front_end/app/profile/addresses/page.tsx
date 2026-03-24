@@ -78,6 +78,7 @@ export default function AddressesPage() {
         <div className="p-6 space-y-6 pb-24">
             <div className="flex items-center gap-4">
                 <button
+                    data-no-3d="true"
                     onClick={() => router.back()}
                     className="w-10 h-10 rounded-xl bg-white border border-slate-100 flex items-center justify-center text-slate-900 active:scale-95 transition-all shadow-sm"
                 >

@@ -2202,7 +2202,7 @@ export default function AdminOrdersWorkspace({
                 <button
                   type="button"
                   onClick={() => setAllocationConfirm(null)}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600"
+                  className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600"
                 >
                   Batal
                 </button>
@@ -2210,6 +2210,7 @@ export default function AdminOrdersWorkspace({
                   <button
                     type="button"
                     onClick={() => setAllocationConfirm({ orderId: allocationConfirm.orderId, step: 1, action: allocationConfirm.action })}
+                    data-no-3d="true"
                     className={`rounded-xl px-4 py-2 text-[11px] font-bold ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'border border-rose-200 bg-rose-50 text-rose-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}
                   >
                     Kembali
@@ -2219,7 +2220,7 @@ export default function AdminOrdersWorkspace({
                   type="button"
                   onClick={() => void handleConfirmAllocationStep()}
                   disabled={allocationConfirm.action === 'cancel_backorder' && allocationConfirm.step === 1 && !backorderCancelReason.trim()}
-                  className={`rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-600' : 'bg-emerald-600'}`}
+                  className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-600' : 'bg-emerald-600'}`}
                 >
                   {allocationConfirm.step === 1
                     ? 'Lanjut Verifikasi'
@@ -2294,7 +2295,7 @@ export default function AdminOrdersWorkspace({
                     if (warehouseBatchAssigning) return;
                     setWarehouseAssignConfirm(null);
                   }}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600"
+                  className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600"
                   disabled={warehouseBatchAssigning}
                 >
                   Batal
@@ -2302,7 +2303,7 @@ export default function AdminOrdersWorkspace({
                 <button
                   type="button"
                   onClick={() => void handleConfirmWarehouseAssign()}
-                  className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white disabled:opacity-50"
+                  className="btn-3d rounded-xl bg-amber-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white disabled:opacity-50"
                   disabled={warehouseBatchAssigning}
                 >
                   {warehouseBatchAssigning
@@ -2336,6 +2337,7 @@ export default function AdminOrdersWorkspace({
           {forcedCustomerId && (
             <Link
               href="/admin/orders"
+              data-no-3d="true"
               className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
             >
               Kembali ke daftar customer
@@ -2451,7 +2453,7 @@ export default function AdminOrdersWorkspace({
                     <button
                       onClick={handleIssueInvoice}
                       disabled={busyInvoice || readyOrderIds.length === 0}
-                      className="mt-2 px-4 py-2 rounded-xl bg-emerald-500 text-xs font-black uppercase disabled:opacity-50"
+                      className="btn-3d mt-2 px-4 py-2 rounded-xl bg-emerald-500 text-xs font-black uppercase disabled:opacity-50"
                     >
                       {busyInvoice ? 'Memproses...' : 'Issue Invoice'}
                     </button>
@@ -2482,7 +2484,7 @@ export default function AdminOrdersWorkspace({
                         key={filter}
                         type="button"
                         onClick={() => setOrderSectionFilter(filter)}
-                        className={`px-2 py-1 rounded-full text-[10px] font-bold border ${active ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
+                        className={`btn-3d px-2 py-1 rounded-full text-[10px] font-bold border ${active ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
                           }`}
                       >
                         <span>{label}</span>
@@ -2510,7 +2512,7 @@ export default function AdminOrdersWorkspace({
                             ? `/admin/orders/invoice-history?customerId=${encodeURIComponent(selectedGroup.customer_id)}&customerName=${encodeURIComponent(selectedGroup.customer_name)}`
                             : '/admin/orders/invoice-history'
                         }
-                        className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50"
+                        className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50"
                       >
                         Buka Riwayat Invoice Selesai
                       </Link>
@@ -2635,7 +2637,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => handleAutoFillBackorder(orderId, backorderEditorItems)}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy || backorderEditorItems.length === 0}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
                                 >
                                   Auto Fill
                                 </button>
@@ -2643,7 +2645,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => void handleSaveBackorderAllocationWithConfirm(orderId)}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
                                 >
                                   {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                                 </button>
@@ -2651,7 +2653,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => void handleCancelBackorder(orderId)}
                                   disabled={!canCancelBackorderEarly || allocationBusy}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
                                 >
                                   Cancel Backorder
                                 </button>
@@ -3062,7 +3064,7 @@ export default function AdminOrdersWorkspace({
                                 <Link
                                   href={`/admin/orders/${card.invoiceId || card.primaryOrderId}`}
                                   className={`mt-1 text-[10px] font-black uppercase transition-all ${card.actionLabel.includes('Tunjuk Driver')
-                                    ? 'inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
+                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
                                     : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
                                     }`}
                                 >
@@ -3317,7 +3319,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => handleAutoFillBackorder(String(order.id), backorderItems)}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
                                 >
                                   Auto Fill
                                 </button>
@@ -3325,7 +3327,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => void handleSaveBackorderAllocationWithConfirm(String(order.id))}
                                   disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
                                 >
                                   {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                                 </button>
@@ -3333,7 +3335,7 @@ export default function AdminOrdersWorkspace({
                                   type="button"
                                   onClick={() => void handleCancelBackorder(String(order.id))}
                                   disabled={!canCancelBackorderEarly || allocationBusy}
-                                  className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
                                 >
                                   Cancel Backorder
                                 </button>
@@ -3479,7 +3481,7 @@ export default function AdminOrdersWorkspace({
                                 <Link
                                   href={`/admin/orders/${warehouseTargetId}`}
                                   className={`mt-1 text-[10px] font-black uppercase transition-all ${warehouseActionLabel.includes('Tunjuk Driver')
-                                    ? 'inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
+                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
                                     : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
                                     }`}
                                 >
@@ -3547,7 +3549,7 @@ export default function AdminOrdersWorkspace({
                               <div className="mt-3 flex flex-wrap items-center gap-2">
                                 <Link
                                   href={`/admin/orders/${order.id}`}
-                                  className="inline-flex items-center rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white"
+                                  className="btn-3d inline-flex items-center rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white"
                                 >
                                   Buka Detail Order
                                 </Link>
@@ -3555,8 +3557,8 @@ export default function AdminOrdersWorkspace({
                                   <Link
                                     href={`/admin/orders/${warehouseTargetId}`}
                                     className={`text-[10px] font-black uppercase transition-all ${warehouseActionLabel.includes('Tunjuk Driver')
-                                      ? 'inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-lg shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
-                                      : 'inline-flex items-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-emerald-700 hover:bg-emerald-50'
+                                      ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-lg shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
+                                      : 'btn-3d inline-flex items-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-emerald-700 hover:bg-emerald-50'
                                       }`}
                                   >
                                     {warehouseActionLabel}
@@ -3567,7 +3569,7 @@ export default function AdminOrdersWorkspace({
                                     type="button"
                                     onClick={() => void handleCancelOrder(String(order.id))}
                                     disabled={allocationBusy}
-                                    className="px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+                                    className="btn-3d px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
                                   >
                                     Cancel Order
                                   </button>
@@ -3617,7 +3619,7 @@ export default function AdminOrdersWorkspace({
                                       type="button"
                                       onClick={() => handleAutoAllocate(String(order.id))}
                                       disabled={!isAllocationEditable || allocationBusy}
-                                      className="px-3 py-1 rounded-lg text-[10px] font-bold border border-slate-200 text-slate-600 disabled:opacity-50"
+                                      className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-slate-200 text-slate-600 disabled:opacity-50"
                                     >
                                       Auto Fill
                                     </button>
@@ -3625,7 +3627,7 @@ export default function AdminOrdersWorkspace({
                                       type="button"
                                       onClick={() => handleSaveAllocation(String(order.id))}
                                       disabled={!isAllocationEditable || allocationBusy || !allocationDirty}
-                                      className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white disabled:opacity-50"
+                                      className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white disabled:opacity-50"
                                     >
                                       {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                                     </button>
@@ -3634,7 +3636,7 @@ export default function AdminOrdersWorkspace({
                                         type="button"
                                         onClick={() => void handleCancelOrder(String(order.id))}
                                         disabled={allocationBusy}
-                                        className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+                                        className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
                                       >
                                         Cancel Order
                                       </button>
@@ -3713,7 +3715,7 @@ export default function AdminOrdersWorkspace({
                                       type="button"
                                       onClick={() => void handleMoveToIndent(String(order.id))}
                                       disabled={allocationBusy}
-                                      className="rounded-xl bg-indigo-700 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                                      className="btn-3d rounded-xl bg-indigo-700 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
                                     >
                                       {allocationBusy ? 'Memproses...' : 'Pindahkan ke Indent'}
                                     </button>

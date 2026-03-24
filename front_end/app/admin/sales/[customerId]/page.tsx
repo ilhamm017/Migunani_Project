@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import { MessageSquare, RefreshCw, ShieldOff, ShieldCheck } from 'lucide-react';
+import { useParams, useSearchParams } from 'next/navigation';
+import { MessageSquare, RefreshCw, ShieldOff, ShieldCheck, Pencil, X, KeyRound, Mail } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
@@ -44,6 +44,7 @@ const TIER_OPTIONS: Array<{ value: TierType; label: string }> = [
 export default function AdminCustomerDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
   const params = useParams();
+  const searchParams = useSearchParams();
   const customerId = String(params?.customerId || '');
 
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetail | null>(null);
@@ -54,6 +55,11 @@ export default function AdminCustomerDetailPage() {
   const [selectedTierDraft, setSelectedTierDraft] = useState<TierType>('regular');
   const [tierConfirmOpen, setTierConfirmOpen] = useState(false);
   const [tierConfirmStep, setTierConfirmStep] = useState<1 | 2>(1);
+  const [editDataOpen, setEditDataOpen] = useState(false);
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [updatingEmail, setUpdatingEmail] = useState(false);
+  const [updatingPassword, setUpdatingPassword] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
 
@@ -89,6 +95,69 @@ export default function AdminCustomerDetailPage() {
     }
     setSelectedTierDraft('regular');
   }, [selectedCustomer?.CustomerProfile?.tier, selectedCustomer?.id]);
+
+  useEffect(() => {
+    if (!selectedCustomer?.id) return;
+    setEditEmail(String(selectedCustomer.email || ''));
+  }, [selectedCustomer?.id, selectedCustomer?.email]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (!searchParams) return;
+    if (searchParams.get('edit') !== '1') return;
+    setEditDataOpen(true);
+  }, [allowed, searchParams]);
+
+  const handleUpdateCustomerEmail = async () => {
+    if (!selectedCustomer?.id) return;
+    const nextEmail = editEmail.trim();
+    if (!nextEmail) {
+      setError('Email wajib diisi.');
+      return;
+    }
+    try {
+      setUpdatingEmail(true);
+      setError('');
+      setActionMessage('');
+      await api.admin.customers.updateEmail(selectedCustomer.id, nextEmail);
+      setActionMessage('Email customer berhasil diperbarui.');
+      await loadCustomerDetail();
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal update email customer');
+    } finally {
+      setUpdatingEmail(false);
+    }
+  };
+
+  const handleUpdateCustomerPassword = async () => {
+    if (!selectedCustomer?.id) return;
+    const nextPassword = editPassword.trim();
+    if (!nextPassword) {
+      setError('Password wajib diisi.');
+      return;
+    }
+    if (nextPassword.length < 6) {
+      setError('Password minimal 6 karakter.');
+      return;
+    }
+    if (!confirm('Reset password customer? Password lama akan diganti.')) return;
+
+    try {
+      setUpdatingPassword(true);
+      setError('');
+      setActionMessage('');
+      await api.admin.customers.updatePassword(selectedCustomer.id, nextPassword);
+      setEditPassword('');
+      setActionMessage('Password customer berhasil diperbarui.');
+      await loadCustomerDetail();
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal update password customer');
+    } finally {
+      setUpdatingPassword(false);
+    }
+  };
 
   const handleToggleCustomerStatus = async () => {
     if (!selectedCustomer) return;
@@ -257,12 +326,19 @@ export default function AdminCustomerDetailPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Link href={`/admin/chat?userId=${selectedCustomer.id}`} className="text-[11px] font-bold px-3 py-2 rounded-xl bg-blue-50 text-blue-700 border border-blue-200">
+                <Link href={`/admin/chat?userId=${selectedCustomer.id}`} className="btn-3d text-[11px] font-bold px-3 py-2 rounded-xl bg-blue-50 text-blue-700 border border-blue-200">
                   <span className="inline-flex items-center gap-1"><MessageSquare size={12} /> Chat Customer</span>
                 </Link>
-                <Link href={`/admin/orders/create?customerId=${selectedCustomer.id}`} className="text-[11px] font-bold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <Link href={`/admin/orders/create?customerId=${selectedCustomer.id}`} className="btn-3d text-[11px] font-bold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
                   Buat Order
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => setEditDataOpen(true)}
+                  className="text-[11px] font-bold px-3 py-2 rounded-xl bg-amber-50 text-amber-700 border border-amber-200"
+                >
+                  <span className="inline-flex items-center gap-1"><Pencil size={12} /> Edit Data</span>
+                </button>
                 <button
                   type="button"
                   disabled={processingCustomer}
@@ -326,6 +402,79 @@ export default function AdminCustomerDetailPage() {
           {actionMessage && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">{actionMessage}</div>}
         </div>
       )}
+
+      {editDataOpen && selectedCustomer ? (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/70 p-4 md:items-center">
+          <div className="w-full max-w-lg rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">Edit Data Customer</p>
+                <p className="mt-2 text-sm font-black text-slate-900">{selectedCustomer.name || 'Customer'}</p>
+                <p className="mt-1 text-xs text-slate-500">{selectedCustomer.whatsapp_number || selectedCustomer.id}</p>
+              </div>
+              <button
+                type="button"
+                data-no-3d="true"
+                onClick={() => setEditDataOpen(false)}
+                className="p-2 rounded-full bg-slate-50 text-slate-500 hover:bg-slate-100"
+                aria-label="Tutup"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Update Email</p>
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-500">
+                  <Mail size={16} />
+                </div>
+                <input
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="email@example.com"
+                  className="flex-1 h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleUpdateCustomerEmail()}
+                disabled={updatingEmail}
+                className="w-full h-11 rounded-2xl bg-slate-900 text-white text-xs font-black uppercase disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {updatingEmail ? 'Menyimpan...' : 'Update Email'}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Reset Password</p>
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-500">
+                  <KeyRound size={16} />
+                </div>
+                <input
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Password baru (min. 6 karakter)"
+                  className="flex-1 h-10 rounded-2xl border border-slate-200 bg-white px-3 text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleUpdateCustomerPassword()}
+                disabled={updatingPassword}
+                className="w-full h-11 rounded-2xl bg-amber-600 text-white text-xs font-black uppercase disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {updatingPassword ? 'Menyimpan...' : 'Reset Password'}
+              </button>
+              <p className="text-[10px] text-slate-500">
+                Gunakan ini jika customer lupa password. Beritahu customer password barunya.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {tierConfirmOpen && selectedCustomer && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4">

@@ -57,7 +57,7 @@ export default function ProductCard({
 
                     {/* Add to Cart Button */}
                     <button
-                        className="w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 bg-emerald-600 text-white shadow-sm shadow-emerald-200"
+                        className="btn-3d w-full py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide transition-all active:scale-95 bg-emerald-600 text-white shadow-sm shadow-emerald-200"
                         onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();

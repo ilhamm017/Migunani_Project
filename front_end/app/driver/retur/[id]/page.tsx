@@ -205,7 +205,7 @@ export default function DriverReturDetailPage() {
     if (!retur) {
         return (
             <div className="p-6 space-y-4">
-                <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
                     <ArrowLeft size={16} /> Kembali
                 </button>
                 <div className="bg-white border border-slate-200 rounded-[28px] p-8 text-center">
@@ -223,7 +223,7 @@ export default function DriverReturDetailPage() {
 
     return (
         <div className="p-6 space-y-5 pb-24">
-            <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
                 <ArrowLeft size={16} /> Kembali
             </button>
 

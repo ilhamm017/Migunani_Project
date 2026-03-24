@@ -153,6 +153,7 @@ export default function ProductDetailPage() {
   return (
     <div className="p-6 space-y-5">
       <button
+        data-no-3d="true"
         onClick={() => router.back()}
         className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700"
       >

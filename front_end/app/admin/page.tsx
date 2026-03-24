@@ -496,7 +496,7 @@ export default function AdminOverviewPage() {
             <button
               type="button"
               onClick={markNotificationsSeen}
-              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+              className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
             >
               Tandai Dilihat
             </button>
@@ -603,7 +603,7 @@ export default function AdminOverviewPage() {
               <button
                 type="button"
                 onClick={markNotificationsSeen}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+                className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
               >
                 Tandai Dilihat
               </button>
@@ -813,7 +813,7 @@ export default function AdminOverviewPage() {
             <button
               type="button"
               onClick={markNotificationsSeen}
-              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
+              className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100"
             >
               Tandai Dilihat
             </button>
@@ -1127,13 +1127,13 @@ export default function AdminOverviewPage() {
               {priorityNotificationMessage}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={markNotificationsSeen}
-            className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100 w-full sm:w-auto"
-          >
-            Tandai Dilihat
-          </button>
+	          <button
+	            type="button"
+	            onClick={markNotificationsSeen}
+	            className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-blue-300 text-blue-700 bg-white hover:bg-blue-100 w-full sm:w-auto"
+	          >
+	            Tandai Dilihat
+	          </button>
         </div>
       </div>
 
@@ -1201,13 +1201,13 @@ export default function AdminOverviewPage() {
               <div className={`inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-2xl border ${category.tone}`}>
                 <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest">{category.group}</span>
               </div>
-              <button
-                type="button"
-                onClick={() => toggleFeatureSection(category.group)}
-                className="sm:hidden inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-[10px] font-black uppercase tracking-wide text-slate-600"
-              >
-                {collapsedFeatureSections[category.group] ? 'Buka' : 'Tutup'}
-                <ChevronDown
+	              <button
+	                type="button"
+	                onClick={() => toggleFeatureSection(category.group)}
+	                className="btn-3d sm:hidden inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-[10px] font-black uppercase tracking-wide text-slate-600"
+	              >
+	                {collapsedFeatureSections[category.group] ? 'Buka' : 'Tutup'}
+	                <ChevronDown
                   size={13}
                   className={`transition-transform ${collapsedFeatureSections[category.group] ? 'rotate-0' : 'rotate-180'}`}
                 />

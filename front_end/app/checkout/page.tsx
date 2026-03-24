@@ -407,7 +407,7 @@ export default function CheckoutPage() {
   if (cartSyncing) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-5">
-        <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali
         </button>
         <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm text-center space-y-3">
@@ -423,7 +423,7 @@ export default function CheckoutPage() {
   if (items.length === 0) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-5">
-        <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} /> Kembali
         </button>
         <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm text-center space-y-4">
@@ -447,7 +447,7 @@ export default function CheckoutPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-5">
-      <button onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+      <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
         <ArrowLeft size={16} /> Kembali
       </button>
 
