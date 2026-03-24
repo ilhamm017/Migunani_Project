@@ -5,14 +5,12 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
     ArrowLeft,
-    Save,
     CheckCircle2,
     AlertCircle,
     Truck,
     Package,
-    Plus,
-    Minus,
-    Clock
+    Clock,
+    Save
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
@@ -35,10 +33,14 @@ interface POItem {
 
 interface PO {
     id: string;
-    supplier_id: number;
+    supplier_id: number | null;
     status: 'pending' | 'received' | 'partially_received' | 'canceled';
     total_cost: number;
     createdAt: string;
+    verified1_by?: string | null;
+    verified1_at?: string | null;
+    verified2_by?: string | null;
+    verified2_at?: string | null;
     Supplier?: {
         id: number;
         name: string;
@@ -56,26 +58,15 @@ export default function POReceivePage() {
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'success' | 'error'>('success');
 
-    // State for inputting fresh received quantities
-    const [receivedInputs, setReceivedInputs] = useState<Record<string, number>>({});
-    const [itemNotes, setItemNotes] = useState<Record<string, string>>({});
-
     const loadPO = useCallback(async () => {
         if (!id) return;
         try {
             setLoading(true);
             const res = await api.admin.inventory.getPOById(id as string);
             setPo(res.data);
-
-            // Initialize inputs
-            const initials: Record<string, number> = {};
-            res.data.Items?.forEach((item: POItem) => {
-                initials[item.product_id] = 0;
-            });
-            setReceivedInputs(initials);
         } catch (error) {
             console.error('Failed to load PO', error);
-            setMessage('Gagal memuat detail Purchase Order.');
+            setMessage('Gagal memuat detail inbound.');
             setMessageType('error');
         } finally {
             setLoading(false);
@@ -88,53 +79,37 @@ export default function POReceivePage() {
         }
     }, [allowed, id, loadPO]);
 
-    const handleInputChange = (productId: string, val: number) => {
-        const item = po?.Items?.find(i => i.product_id === productId);
-        if (!item) return;
-
-        const boundedVal = Math.max(0, val); // Allow over-receiving if needed, or cap it at remaining
-
-        setReceivedInputs(prev => ({
-            ...prev,
-            [productId]: boundedVal
-        }));
-    };
-
-    const handleNoteChange = (productId: string, note: string) => {
-        setItemNotes(prev => ({
-            ...prev,
-            [productId]: note
-        }));
-    };
-
-    const onSave = async () => {
+    const onVerify1 = async () => {
         if (!po) return;
-
-        const itemsToSubmit = Object.entries(receivedInputs)
-            .filter(([, qty]) => qty > 0)
-            .map(([productId, qty]) => ({
-                product_id: productId,
-                received_qty: qty,
-                note: itemNotes[productId]
-            }));
-
-        if (itemsToSubmit.length === 0) {
-            setMessage('Masukkan setidaknya satu jumlah barang yang diterima.');
-            setMessageType('error');
-            return;
-        }
-
         setIsSaving(true);
         setMessage('');
         try {
-            await api.admin.inventory.receivePO(po.id, { items: itemsToSubmit });
+            await api.admin.inventory.verifyInboundStep1(po.id);
             setMessageType('success');
-            setMessage('Penerimaan stok berhasil dicatat.');
-            await loadPO(); // Reload to update received_qty in list
+            setMessage('Verifikasi langkah 1 berhasil.');
+            await loadPO();
         } catch (error: unknown) {
             const err = error as { response?: { data?: { message?: string } } };
             setMessageType('error');
-            setMessage(err?.response?.data?.message || 'Gagal menyimpan penerimaan barang.');
+            setMessage(err?.response?.data?.message || 'Gagal verifikasi langkah 1.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const onVerify2AndPost = async () => {
+        if (!po) return;
+        setIsSaving(true);
+        setMessage('');
+        try {
+            await api.admin.inventory.verifyInboundStep2(po.id);
+            setMessageType('success');
+            setMessage('Verifikasi langkah 2 OK. Stok langsung masuk gudang.');
+            await loadPO();
+        } catch (error: unknown) {
+            const err = error as { response?: { data?: { message?: string } } };
+            setMessageType('error');
+            setMessage(err?.response?.data?.message || 'Gagal verifikasi langkah 2.');
         } finally {
             setIsSaving(false);
         }
@@ -154,13 +129,15 @@ export default function POReceivePage() {
         return (
             <div className="p-10 text-center">
                 <AlertCircle className="mx-auto text-rose-500 mb-4" size={48} />
-                <h2 className="text-xl font-bold">PO Tidak Ditemukan</h2>
+                <h2 className="text-xl font-bold">Inbound Tidak Ditemukan</h2>
                 <Link href="/admin/warehouse/inbound/history" className="text-emerald-600 font-bold mt-4 inline-block">Kembali ke Riwayat</Link>
             </div>
         );
     }
 
     const isPOClosed = po.status === 'received' || po.status === 'canceled';
+    const canVerify1 = po.status === 'pending' && !po.verified1_at;
+    const canVerify2 = po.status === 'partially_received' && !po.verified2_at;
 
     return (
         <div className="warehouse-page w-full max-w-none lg:h-full lg:overflow-hidden overflow-y-auto">
@@ -175,26 +152,47 @@ export default function POReceivePage() {
                     <div>
                         <h1 className="warehouse-title !mb-0 flex items-center gap-2">
                             <Truck className="text-emerald-600" />
-                            Penerimaan Barang (Inbound)
+                            Inbound (Verifikasi 2 Langkah)
                         </h1>
-                        <p className="warehouse-subtitle !mb-0 font-mono text-xs uppercase tracking-widest text-slate-400">PO #{po.id.split('-')[0].toUpperCase()}</p>
+                        <p className="warehouse-subtitle !mb-0 font-mono text-xs uppercase tracking-widest text-slate-400">INB #{po.id.split('-')[0].toUpperCase()}</p>
                     </div>
                 </div>
 
-                {!isPOClosed && (
-                    <button
-                        onClick={onSave}
-                        disabled={isSaving}
-                        className="rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-emerald-600 transition-all shadow-lg active:scale-95"
-                    >
-                        {isSaving ? (
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        ) : (
-                            <Save size={18} />
-                        )}
-                        Simpan Penerimaan
-                    </button>
-                )}
+                <div className="flex items-center gap-2">
+                    {canVerify1 && (
+                        <button
+                            onClick={onVerify1}
+                            disabled={isSaving}
+                            className="rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-amber-600 transition-all shadow-lg active:scale-95"
+                        >
+                            {isSaving ? (
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            ) : (
+                                <Save size={18} />
+                            )}
+                            Verifikasi 1
+                        </button>
+                    )}
+                    {canVerify2 && (
+                        <button
+                            onClick={onVerify2AndPost}
+                            disabled={isSaving}
+                            className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all shadow-lg active:scale-95"
+                        >
+                            {isSaving ? (
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            ) : (
+                                <CheckCircle2 size={18} />
+                            )}
+                            Verifikasi 2 + Posting
+                        </button>
+                    )}
+                    {isPOClosed && (
+                        <div className="text-xs font-black uppercase tracking-widest text-slate-500 bg-white border border-slate-200 rounded-2xl px-4 py-3">
+                            {po.status === 'received' ? 'Posted' : 'Closed'}
+                        </div>
+                    )}
+                </div>
             </div>
 
             {message && (
@@ -211,16 +209,24 @@ export default function POReceivePage() {
                     <div className="warehouse-panel bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm">
                         <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                             <Truck size={14} className="text-emerald-500" />
-                            Informasi Pemasok
+                            Informasi Inbound
                         </h2>
                         <div className="space-y-4">
                             <div className="flex flex-col">
                                 <span className="text-xs font-bold text-slate-400">Supplier</span>
-                                <span className="text-lg font-black text-slate-900 leading-tight">{po.Supplier?.name}</span>
+                                <span className="text-lg font-black text-slate-900 leading-tight">{po.Supplier?.name || '-'}</span>
                             </div>
                             <div className="flex flex-col">
-                                <span className="text-xs font-bold text-slate-400">Tanggal PO</span>
+                                <span className="text-xs font-bold text-slate-400">Tanggal Input</span>
                                 <span className="text-sm font-bold text-slate-700">{new Date(po.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-400">Verifikasi 1</span>
+                                <span className="text-sm font-bold text-slate-700">{po.verified1_at ? new Date(po.verified1_at).toLocaleString('id-ID') : '-'}</span>
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-400">Verifikasi 2 / Posting</span>
+                                <span className="text-sm font-bold text-slate-700">{po.verified2_at ? new Date(po.verified2_at).toLocaleString('id-ID') : '-'}</span>
                             </div>
                         </div>
                     </div>
@@ -235,15 +241,15 @@ export default function POReceivePage() {
                                     <Clock size={32} />}
                         </div>
                         <h3 className="text-lg font-black text-slate-900">
-                            {po.status === 'received' ? 'PO Selesai' :
-                                po.status === 'partially_received' ? 'Diterima Sebagian' :
-                                    'Menunggu Barang'}
+                            {po.status === 'received' ? 'Posted ke Gudang' :
+                                po.status === 'partially_received' ? 'Verified 1 (Menunggu Posting)' :
+                                    po.status === 'canceled' ? 'Dibatalkan' : 'Draft (Menunggu Verifikasi 1)'}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-1 font-medium">Status saat ini untuk Purchase Order ini.</p>
+                        <p className="text-xs text-slate-500 mt-1 font-medium">Stok hanya bertambah setelah Verifikasi 2.</p>
 
                         <div className="mt-6 pt-6 border-t border-slate-50">
                             <div className="flex justify-between items-center text-xs font-bold mb-1">
-                                <span className="text-slate-400">Progress Penerimaan</span>
+                                <span className="text-slate-400">Progress Posting</span>
                                 <span className="text-emerald-600">
                                     {po.Items?.reduce((acc, item) => acc + item.received_qty, 0)} / {po.Items?.reduce((acc, item) => acc + item.qty, 0)} Pcs
                                 </span>
@@ -263,7 +269,7 @@ export default function POReceivePage() {
                     <div className="flex-1 overflow-y-auto space-y-4 p-4">
                         <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest px-2 flex items-center gap-2">
                             <Package size={14} className="text-emerald-500" />
-                            Verifikasi Barang Datang
+                            Daftar Barang
                         </h2>
 
                         {po.Items?.map((item) => (
@@ -274,57 +280,27 @@ export default function POReceivePage() {
 
                                     <div className="flex items-center gap-4 mt-3">
                                         <div className="bg-slate-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
-                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Total Pesan</span>
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Qty Input</span>
                                             <span className="text-sm font-black text-slate-700">{item.qty}</span>
                                         </div>
                                         <div className="bg-emerald-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
-                                            <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-tighter">Terima Sejauh Ini</span>
+                                            <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-tighter">Posted</span>
                                             <span className="text-sm font-black text-emerald-700">{item.received_qty}</span>
                                         </div>
                                         <div className="bg-blue-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
-                                            <span className="text-[9px] font-bold text-blue-400 uppercase tracking-tighter">Sisa Belum Datang</span>
+                                            <span className="text-[9px] font-bold text-blue-400 uppercase tracking-tighter">Sisa</span>
                                             <span className="text-sm font-black text-blue-700">{Math.max(0, item.qty - item.received_qty)}</span>
+                                        </div>
+                                        <div className="bg-slate-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Modal</span>
+                                            <span className="text-sm font-black text-slate-700">Rp {Number(item.unit_cost || 0).toLocaleString()}</span>
                                         </div>
                                     </div>
                                 </div>
 
-                                {!isPOClosed && item.received_qty < item.qty && (
-                                    <div className="w-full md:w-56 space-y-3">
-                                        <div className="flex flex-col gap-1.5">
-                                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">Baru Diterima (Pcs)</label>
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => handleInputChange(item.product_id, (receivedInputs[item.product_id] || 0) - 1)}
-                                                    className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-colors border border-slate-200"
-                                                >
-                                                    <Minus size={18} />
-                                                </button>
-                                                <input
-                                                    type="number"
-                                                    value={receivedInputs[item.product_id] || ''}
-                                                    onChange={(e) => handleInputChange(item.product_id, parseInt(e.target.value) || 0)}
-                                                    className="flex-1 min-w-0 bg-slate-100/50 border-2 border-slate-200 rounded-xl px-2 py-2.5 text-center font-black text-slate-900 focus:outline-none focus:border-emerald-500 transition-all"
-                                                />
-                                                <button
-                                                    onClick={() => handleInputChange(item.product_id, (receivedInputs[item.product_id] || 0) + 1)}
-                                                    className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition-colors border border-slate-200"
-                                                >
-                                                    <Plus size={18} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <input
-                                            placeholder="Catatan kecil (exp, reject, dll)..."
-                                            value={itemNotes[item.product_id] || ''}
-                                            onChange={(e) => handleNoteChange(item.product_id, e.target.value)}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-emerald-500"
-                                        />
-                                    </div>
-                                )}
-
                                 {isPOClosed && item.received_qty >= item.qty && (
                                     <div className="flex items-center gap-2 text-emerald-600 font-black text-xs uppercase bg-emerald-50 py-2 px-4 rounded-2xl h-fit self-center">
-                                        <CheckCircle2 size={16} /> Fully Received
+                                        <CheckCircle2 size={16} /> Posted
                                     </div>
                                 )}
                             </div>

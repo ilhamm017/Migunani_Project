@@ -63,7 +63,7 @@ export default function POHistoryPage() {
         switch (status) {
             case 'received': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
             case 'partially_received': return 'bg-amber-100 text-amber-700 border-amber-200';
-            case 'pending': return 'bg-blue-100 text-blue-700 border-blue-200';
+            case 'pending': return 'bg-slate-100 text-slate-700 border-slate-200';
             case 'canceled': return 'bg-rose-100 text-rose-700 border-rose-200';
             default: return 'bg-slate-100 text-slate-700 border-slate-200';
         }
@@ -71,9 +71,9 @@ export default function POHistoryPage() {
 
     const getStatusLabel = (status: string) => {
         switch (status) {
-            case 'received': return 'Diterima';
-            case 'partially_received': return 'Parsial';
-            case 'pending': return 'Pending';
+            case 'received': return 'Posted Gudang';
+            case 'partially_received': return 'Verified 1';
+            case 'pending': return 'Draft';
             case 'canceled': return 'Dibatalkan';
             default: return status;
         }
@@ -115,9 +115,9 @@ export default function POHistoryPage() {
                             className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all outline-none"
                         >
                             <option value="">Semua Status</option>
-                            <option value="pending">Pending</option>
-                            <option value="partially_received">Parsial</option>
-                            <option value="received">Diterima</option>
+                            <option value="pending">Draft</option>
+                            <option value="partially_received">Verified 1</option>
+                            <option value="received">Posted Gudang</option>
                             <option value="canceled">Dibatalkan</option>
                         </select>
                     </div>

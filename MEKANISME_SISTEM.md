@@ -283,5 +283,11 @@ Manajemen pengembalian barang rusak/salah.
 Database vendor/distributor sparepart.
 
 #### `purchase_orders` (PO)
-Pesanan toko ke supplier ("Kulakan").
-*   **`status`**: `pending` -> `received` (barang datang, stok bertambah otomatis).
+Dokumen inbound/restock (input gudang). Secara operasional dipakai sebagai *draft inbound* lalu diposting ke stok setelah verifikasi 2 langkah.
+*   **`status`**:
+    *   `pending`: Draft input inbound (belum menambah stok).
+    *   `partially_received`: Verifikasi langkah 1 selesai (masih belum menambah stok).
+    *   `received`: Verifikasi langkah 2 selesai, stok diposting ke gudang.
+    *   `canceled`: Dibatalkan.
+*   **`verified1_by`, `verified1_at`**: jejak verifikasi langkah 1.
+*   **`verified2_by`, `verified2_at`**: jejak verifikasi langkah 2 (posting).

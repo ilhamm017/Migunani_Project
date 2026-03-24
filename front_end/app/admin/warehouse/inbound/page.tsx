@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { Search, Plus, Trash2, Save, Package, AlertTriangle, ShoppingBag, RefreshCw, History as HistoryIcon } from 'lucide-react';
@@ -56,6 +57,7 @@ interface BackorderOrderRow {
 interface CreatePOResult {
   id?: string;
   status?: string;
+  total_cost?: number;
 }
 
 type ApiErrorWithMessage = {
@@ -63,7 +65,8 @@ type ApiErrorWithMessage = {
 };
 
 export default function PurchaseOrderPage() {
-  const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
+  const router = useRouter();
 
   // Form State
   const [supplierId, setSupplierId] = useState('');
@@ -348,10 +351,6 @@ export default function PurchaseOrderPage() {
   }, [isSomeBackorderSelectedOnPage]);
 
   const createPO = async () => {
-    if (!supplierId) {
-      setErrorMessage('Pilih supplier terlebih dahulu.');
-      return;
-    }
     if (items.length === 0) {
       setErrorMessage('Masukkan minimal satu barang.');
       return;
@@ -361,7 +360,7 @@ export default function PurchaseOrderPage() {
       setLoading(true);
       setErrorMessage('');
       const payload = {
-        supplier_id: Number(supplierId),
+        ...(supplierId ? { supplier_id: Number(supplierId) } : {}),
         total_cost: totalCost,
         items: items.map(item => ({
           product_id: item.product.id,
@@ -371,11 +370,9 @@ export default function PurchaseOrderPage() {
       };
 
       const res = await api.admin.inventory.createPO(payload);
-      setResult(res.data);
-
-      // Reset form
-      setSupplierId('');
-      setItems([]);
+      const next = res.data as CreatePOResult;
+      setResult(next);
+      if (next?.id) router.push(`/admin/warehouse/inbound/${next.id}`);
     } catch (error: unknown) {
       console.error('Create PO failed:', error);
       const err = error as ApiErrorWithMessage;
@@ -393,9 +390,9 @@ export default function PurchaseOrderPage() {
         <div>
           <h1 className="warehouse-title !mb-1 flex items-center gap-2">
             <Package className="text-emerald-600" />
-            Inbound / Purchase Order
+            Inbound (Input Gudang)
           </h1>
-          <p className="warehouse-subtitle !mb-0">Buat pesanan pengadaan barang ke supplier untuk menambah stok gudang.</p>
+          <p className="warehouse-subtitle !mb-0">Input data barang masuk (draft), lalu verifikasi 2 langkah sebelum stok diposting.</p>
         </div>
         <Link
           href="/admin/warehouse/inbound/history"
@@ -414,11 +411,11 @@ export default function PurchaseOrderPage() {
 
       {result && (
         <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 shrink-0">
-          <p className="text-sm font-bold text-emerald-700">✅ PO Berhasil Dibuat</p>
+          <p className="text-sm font-bold text-emerald-700">✅ Draft inbound berhasil dibuat</p>
           <div className="text-xs text-emerald-600 mt-1 flex gap-4">
             <span>ID: <span className="font-mono">{result.id}</span></span>
             <span>Status: <span className="uppercase">{result.status}</span></span>
-            <span>Total: <span className="font-bold">Rp {totalCost.toLocaleString()}</span></span>
+            <span>Total: <span className="font-bold">Rp {Number(result.total_cost || totalCost).toLocaleString()}</span></span>
           </div>
         </div>
       )}

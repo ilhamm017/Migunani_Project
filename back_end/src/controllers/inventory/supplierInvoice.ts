@@ -22,6 +22,10 @@ export const createSupplierInvoice = asyncWrapper(async (req: Request, res: Resp
             await t.rollback();
             throw new CustomError('Purchase Order not found', 404);
         }
+        if (!po.supplier_id) {
+            await t.rollback();
+            throw new CustomError('PO belum memiliki supplier. Lengkapi supplier sebelum membuat tagihan.', 400);
+        }
 
         const subtotalNum = Number.isFinite(Number(subtotal)) ? Number(subtotal) : Number(total || 0);
         const taxAmountNum = Number.isFinite(Number(tax_amount)) ? Number(tax_amount) : 0;

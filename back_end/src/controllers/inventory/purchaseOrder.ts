@@ -14,47 +14,75 @@ import { CustomError } from '../../utils/CustomError';
 export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
-        const supplierId = Number(req.body?.supplier_id);
-        const totalCost = Number(req.body?.total_cost);
+        const supplierIdRaw = req.body?.supplier_id;
+        const supplierId = Number.isFinite(Number(supplierIdRaw)) ? Number(supplierIdRaw) : null;
 
-        if (!Number.isInteger(supplierId) || supplierId <= 0) {
+        const items = req.body?.items;
+        if (!Array.isArray(items) || items.length <= 0) {
             await t.rollback();
-            throw new CustomError('supplier_id tidak valid', 400);
-        }
-        if (!Number.isFinite(totalCost) || totalCost < 0) {
-            await t.rollback();
-            throw new CustomError('total_cost tidak valid', 400);
+            throw new CustomError('items wajib diisi (minimal 1 barang)', 400);
         }
 
-        const supplier = await Supplier.findByPk(supplierId, { transaction: t });
-        if (!supplier) {
-            await t.rollback();
-            throw new CustomError('Supplier tidak ditemukan', 404);
+        let supplier: any = null;
+        if (supplierId !== null) {
+            if (!Number.isInteger(supplierId) || supplierId <= 0) {
+                await t.rollback();
+                throw new CustomError('supplier_id tidak valid', 400);
+            }
+            supplier = await Supplier.findByPk(supplierId, { transaction: t });
+            if (!supplier) {
+                await t.rollback();
+                throw new CustomError('Supplier tidak ditemukan', 404);
+            }
+        }
+
+        let computedTotalCost = 0;
+        for (const item of items) {
+            const qty = Number(item?.qty);
+            const unitCost = Number(item?.unit_cost);
+            const productId = String(item?.product_id || '').trim();
+            if (!productId) continue;
+            if (!Number.isFinite(qty) || qty <= 0) continue;
+            if (!Number.isFinite(unitCost) || unitCost < 0) continue;
+            computedTotalCost += qty * unitCost;
         }
 
         const po = await PurchaseOrder.create({
-            supplier_id: supplierId,
+            supplier_id: supplier ? supplier.id : null,
             status: 'pending',
-            total_cost: totalCost,
+            total_cost: Number(computedTotalCost || 0),
             created_by: req.user!.id
         }, { transaction: t });
 
-        const items = req.body?.items;
-        if (Array.isArray(items) && items.length > 0) {
-            for (const item of items) {
-                const qty = Number(item.qty);
-                const unitCost = Number(item.unit_cost);
-                if (qty > 0 && unitCost >= 0) {
-                    await PurchaseOrderItem.create({
-                        purchase_order_id: po.id,
-                        product_id: item.product_id,
-                        qty: qty,
-                        unit_cost: unitCost,
-                        total_cost: qty * unitCost,
-                        received_qty: 0
-                    }, { transaction: t });
-                }
+        let createdCount = 0;
+        for (const item of items) {
+            const qty = Number(item?.qty);
+            const unitCost = Number(item?.unit_cost);
+            const productId = String(item?.product_id || '').trim();
+            if (!productId) continue;
+            if (!Number.isFinite(qty) || qty <= 0) continue;
+            if (!Number.isFinite(unitCost) || unitCost < 0) continue;
+
+            const product = await Product.findByPk(productId, { transaction: t });
+            if (!product) {
+                await t.rollback();
+                throw new CustomError(`Produk tidak ditemukan: ${productId}`, 404);
             }
+
+            await PurchaseOrderItem.create({
+                purchase_order_id: po.id,
+                product_id: productId,
+                qty: qty,
+                unit_cost: unitCost,
+                total_cost: qty * unitCost,
+                received_qty: 0
+            }, { transaction: t });
+            createdCount += 1;
+        }
+
+        if (createdCount <= 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada item valid untuk disimpan', 400);
         }
 
         await t.commit();
@@ -63,6 +91,148 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
         throw new CustomError('Error creating PO', 500);
+    }
+});
+
+export const verifyInboundStep1 = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const id = req.params.id as string;
+
+        const po = await PurchaseOrder.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!po) {
+            await t.rollback();
+            throw new CustomError('Purchase Order not found', 404);
+        }
+
+        if (po.status === 'received' || po.status === 'canceled') {
+            await t.rollback();
+            throw new CustomError(`Tidak bisa verifikasi untuk status ${po.status}`, 400);
+        }
+
+        if (po.verified1_at) {
+            await t.rollback();
+            throw new CustomError('Verifikasi langkah 1 sudah dilakukan', 409);
+        }
+
+        await po.update({
+            status: 'partially_received',
+            verified1_by: req.user!.id,
+            verified1_at: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+        res.json({ message: 'Verifikasi langkah 1 OK', status: po.status });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error verify inbound step 1', 500);
+    }
+});
+
+export const verifyInboundStep2AndPost = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const id = req.params.id as string;
+        const po = await PurchaseOrder.findByPk(id, {
+            include: [{ model: PurchaseOrderItem, as: 'Items' }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (!po) {
+            await t.rollback();
+            throw new CustomError('Purchase Order not found', 404);
+        }
+
+        if (po.status === 'received') {
+            await t.rollback();
+            throw new CustomError('Inbound sudah diposting ke gudang', 409);
+        }
+        if (po.status === 'canceled') {
+            await t.rollback();
+            throw new CustomError('Inbound dibatalkan', 400);
+        }
+
+        if (!po.verified1_at || !po.verified1_by || po.status !== 'partially_received') {
+            await t.rollback();
+            throw new CustomError('Wajib Verifikasi langkah 1 terlebih dahulu', 400);
+        }
+
+        if (String(po.verified1_by) === String(req.user!.id)) {
+            await t.rollback();
+            throw new CustomError('Verifikasi langkah 2 harus oleh user berbeda', 400);
+        }
+
+        if (po.verified2_at) {
+            await t.rollback();
+            throw new CustomError('Verifikasi langkah 2 sudah dilakukan', 409);
+        }
+
+        const items = ((po as any).Items || []) as any[];
+        if (!Array.isArray(items) || items.length <= 0) {
+            await t.rollback();
+            throw new CustomError('Inbound tidak memiliki item', 400);
+        }
+
+        let postedCount = 0;
+        for (const poItem of items) {
+            const qty = Number(poItem.qty || 0);
+            const receivedQtyOld = Number(poItem.received_qty || 0);
+            const delta = Math.max(0, qty - receivedQtyOld);
+            if (delta <= 0) continue;
+
+            const productId = String(poItem.product_id);
+            const product = await Product.findByPk(productId, { transaction: t, lock: t.LOCK.UPDATE });
+            if (!product) {
+                await t.rollback();
+                throw new CustomError(`Produk tidak ditemukan: ${productId}`, 404);
+            }
+
+            await poItem.update({ received_qty: qty }, { transaction: t });
+
+            await product.update({
+                stock_quantity: Number(product.stock_quantity || 0) + delta
+            }, { transaction: t });
+
+            await InventoryCostService.recordInbound({
+                product_id: productId,
+                qty: delta,
+                unit_cost: Number(poItem.unit_cost || product.base_price || 0),
+                reference_type: 'inbound_post',
+                reference_id: String(po.id),
+                note: `Inbound verified #${po.id}`,
+                transaction: t
+            });
+
+            await StockMutation.create({
+                product_id: productId,
+                type: 'in',
+                qty: delta,
+                reference_id: `INB-${po.id}`,
+                note: `Inbound verified #${po.id}`
+            }, { transaction: t });
+
+            postedCount += 1;
+        }
+
+        if (postedCount <= 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada item yang bisa diposting (sudah diposting semua?)', 409);
+        }
+
+        await po.update({
+            status: 'received',
+            verified2_by: req.user!.id,
+            verified2_at: new Date()
+        }, { transaction: t });
+
+        await t.commit();
+        res.json({ message: 'Verifikasi langkah 2 OK, stok masuk gudang', status: po.status });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error verify inbound step 2', 500);
     }
 });
 

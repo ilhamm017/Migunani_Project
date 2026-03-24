@@ -3,20 +3,28 @@ import sequelize from '../config/database';
 
 interface PurchaseOrderAttributes {
     id: string; // UUID
-    supplier_id: number;
+    supplier_id: number | null;
     status: 'pending' | 'received' | 'partially_received' | 'canceled';
     total_cost: number;
     created_by: string; // UUID
+    verified1_by?: string | null; // UUID
+    verified1_at?: Date | null;
+    verified2_by?: string | null; // UUID
+    verified2_at?: Date | null;
 }
 
-interface PurchaseOrderCreationAttributes extends Optional<PurchaseOrderAttributes, 'id'> { }
+interface PurchaseOrderCreationAttributes extends Optional<PurchaseOrderAttributes, 'id' | 'supplier_id' | 'verified1_by' | 'verified1_at' | 'verified2_by' | 'verified2_at'> { }
 
 class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreationAttributes> implements PurchaseOrderAttributes {
     declare id: string;
-    declare supplier_id: number;
+    declare supplier_id: number | null;
     declare status: 'pending' | 'received' | 'partially_received' | 'canceled';
     declare total_cost: number;
     declare created_by: string;
+    declare verified1_by: string | null;
+    declare verified1_at: Date | null;
+    declare verified2_by: string | null;
+    declare verified2_at: Date | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -31,7 +39,7 @@ PurchaseOrder.init(
         },
         supplier_id: {
             type: DataTypes.INTEGER,
-            allowNull: false,
+            allowNull: true,
         },
         status: {
             type: DataTypes.ENUM('pending', 'received', 'partially_received', 'canceled'),
@@ -44,6 +52,26 @@ PurchaseOrder.init(
         created_by: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        verified1_by: {
+            type: DataTypes.UUID,
+            allowNull: true,
+            defaultValue: null,
+        },
+        verified1_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            defaultValue: null,
+        },
+        verified2_by: {
+            type: DataTypes.UUID,
+            allowNull: true,
+            defaultValue: null,
+        },
+        verified2_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            defaultValue: null,
         },
     },
     {

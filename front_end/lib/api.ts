@@ -367,6 +367,8 @@ export const api = {
             getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/inventory/po', { params }),
             getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
+            verifyInboundStep1: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-1`, {}),
+            verifyInboundStep2: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-2`, {}),
             receivePO: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>
                 apiClient.patch(`/admin/inventory/po/${id}/receive`, data),
             scanBySku: (sku: string) =>
