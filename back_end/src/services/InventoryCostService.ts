@@ -9,8 +9,44 @@ import {
     Order,
     sequelize
 } from '../models';
+import { findInvoicesByOrderId } from '../utils/invoiceLookup';
 
 export class InventoryCostService {
+    static BACKORDER_FILL_GRACE_MS = 24 * 60 * 60 * 1000;
+
+    static isInvoiceShipmentPassedWarehouse(shipmentStatusRaw: unknown): boolean {
+        const shipmentStatus = String(shipmentStatusRaw || '').trim().toLowerCase();
+        return shipmentStatus === 'shipped' || shipmentStatus === 'delivered' || shipmentStatus === 'canceled';
+    }
+
+    static async shouldSkipBackorderAllocationForOrder(orderRaw: any, t: Transaction): Promise<boolean> {
+        const order = orderRaw || {};
+        const status = String(order.status || '').trim().toLowerCase();
+
+        // Only allocate for orders that are still in allocation/editable states.
+        const allowedStatuses = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
+        if (!allowedStatuses.has(status)) return true;
+
+        // Block auto-allocation if THIS order already has an unshipped invoice older than the grace window.
+        const orderId = String(order.id || '').trim();
+        if (!orderId) return false;
+        const invoices = await findInvoicesByOrderId(orderId, { transaction: t });
+        const nowMs = Date.now();
+        const unshipped = (Array.isArray(invoices) ? invoices : []).filter((inv: any) => inv && !this.isInvoiceShipmentPassedWarehouse(inv?.shipment_status));
+        const createdAtMsList = unshipped
+            .map((inv: any) => inv?.createdAt ? new Date(inv.createdAt).getTime() : 0)
+            .filter((ms: any) => Number(ms) > 0)
+            .sort((a: number, b: number) => a - b);
+        const oldestMs = createdAtMsList[0] || 0;
+        const blockingInvoice = oldestMs > 0 && (nowMs - oldestMs) > this.BACKORDER_FILL_GRACE_MS
+            ? unshipped.find((inv: any) => {
+                const createdAtMs = inv?.createdAt ? new Date(inv.createdAt).getTime() : 0;
+                return createdAtMs === oldestMs;
+            })
+            : null;
+        return Boolean(blockingInvoice);
+    }
+
     static async ensureState(productId: string, t?: Transaction) {
         const [state] = await ProductCostState.findOrCreate({
             where: { product_id: productId },
@@ -152,6 +188,8 @@ export class InventoryCostService {
                 lock: t.LOCK.UPDATE
             });
 
+            const skipOrderCache = new Map<string, boolean>();
+
             for (const bo of backorders as any[]) {
                 product = await Product.findByPk(productId, { transaction: t, lock: t.LOCK.UPDATE });
                 if (!product) break;
@@ -165,7 +203,17 @@ export class InventoryCostService {
 
                 const orderItem = bo.OrderItem;
                 if (!orderItem) continue;
+                const order = orderItem.Order || null;
                 const orderId = String(orderItem.order_id);
+                if (order) {
+                    const cacheKey = String(order.id || orderId || '').trim() || orderId;
+                    const cached = skipOrderCache.get(cacheKey);
+                    const shouldSkip = typeof cached === 'boolean'
+                        ? cached
+                        : await this.shouldSkipBackorderAllocationForOrder(order, t);
+                    skipOrderCache.set(cacheKey, shouldSkip);
+                    if (shouldSkip) continue;
+                }
 
                 const [allocation] = await OrderAllocation.findOrCreate({
                     where: { order_id: orderId, product_id: productId },

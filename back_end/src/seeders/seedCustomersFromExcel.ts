@@ -16,6 +16,8 @@ type SeedCustomersFromExcelResult = {
     parsed: number;
     inserted: number;
     deduped: number;
+    skippedExisting: number;
+    skippedExistingNonCustomer: number;
     skippedNoName: number;
     invalidPhonesBlanked: number;
     invalidEmailsBlanked: number;
@@ -62,6 +64,8 @@ export const seedCustomersFromExcel = async (
             parsed: 0,
             inserted: 0,
             deduped: 0,
+            skippedExisting: 0,
+            skippedExistingNonCustomer: 0,
             skippedNoName: 0,
             invalidPhonesBlanked: 0,
             invalidEmailsBlanked: 0,
@@ -187,6 +191,8 @@ export const seedCustomersFromExcel = async (
             parsed: 0,
             inserted: 0,
             deduped,
+            skippedExisting: 0,
+            skippedExistingNonCustomer: 0,
             skippedNoName,
             invalidPhonesBlanked,
             invalidEmailsBlanked,
@@ -194,21 +200,52 @@ export const seedCustomersFromExcel = async (
     }
 
     let inserted = 0;
+    let skippedExisting = 0;
+    let skippedExistingNonCustomer = 0;
 
     const t = await sequelize.transaction();
     try {
         for (let i = 0; i < seeds.length; i += chunkSize) {
             const chunk = seeds.slice(i, i + chunkSize);
             for (const seed of chunk) {
-                const user = await User.create({
-                    name: seed.name,
-                    email: seed.email,
-                    password: null,
-                    whatsapp_number: seed.whatsapp_number as any,
-                    role: 'customer',
-                    status: 'active',
-                    debt: 0,
-                }, { transaction: t });
+                let user: any = null;
+                if (seed.whatsapp_number) {
+                    user = await User.findOne({
+                        where: { whatsapp_number: seed.whatsapp_number as any },
+                        transaction: t,
+                    });
+                }
+                if (!user && seed.email) {
+                    user = await User.findOne({
+                        where: { email: seed.email },
+                        transaction: t,
+                    });
+                }
+
+                if (user) {
+                    if (user.role !== 'customer') {
+                        skippedExistingNonCustomer += 1;
+                        continue;
+                    }
+                    skippedExisting += 1;
+                } else {
+                    user = await User.create({
+                        name: seed.name,
+                        email: seed.email,
+                        password: null,
+                        whatsapp_number: seed.whatsapp_number as any,
+                        role: 'customer',
+                        status: 'active',
+                        debt: 0,
+                    }, { transaction: t });
+                    inserted += 1;
+                }
+
+                const existingProfile = await CustomerProfile.findOne({
+                    where: { user_id: user.id },
+                    transaction: t,
+                });
+                if (existingProfile) continue;
 
                 await CustomerProfile.create({
                     user_id: user.id,
@@ -217,8 +254,6 @@ export const seedCustomersFromExcel = async (
                     points: 0,
                     saved_addresses: seed.saved_addresses,
                 }, { transaction: t });
-
-                inserted += 1;
             }
         }
 
@@ -235,9 +270,10 @@ export const seedCustomersFromExcel = async (
         parsed: seeds.length,
         inserted,
         deduped,
+        skippedExisting,
+        skippedExistingNonCustomer,
         skippedNoName,
         invalidPhonesBlanked,
         invalidEmailsBlanked,
     };
 };
-

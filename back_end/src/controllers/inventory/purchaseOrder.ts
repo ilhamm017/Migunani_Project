@@ -209,13 +209,6 @@ export const receivePurchaseOrder = asyncWrapper(async (req: Request, res: Respo
          * Semua penyelesaian kekurangan stok (shortage) wajib melalui proses alokasi manual oleh admin 
          * di dashboard Order Allocation untuk menjaga kontrol penuh administrator.
          */
-        if (Array.isArray(items)) {
-            for (const item of items) {
-                const productId = String(item?.product_id || '');
-                if (!productId) continue;
-                await InventoryCostService.autoAllocateBackordersForProduct(productId, t);
-            }
-        }
         await t.commit();
         res.json({ message: 'PO received successfully', status: newStatus });
     } catch (error) {

@@ -2,12 +2,41 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Order, OrderItem, OrderAllocation, Product, sequelize, User, OrderIssue, Backorder, InvoiceItem } from '../../models';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findInvoicesByOrderId } from '../../utils/invoiceLookup';
 import { recordOrderEvent } from '../../utils/orderEvent';
 import { buildShortageSummary, isAllocationEditableStatus, isReallocatableStatus, TERMINAL_ORDER_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+
+const BACKORDER_FILL_GRACE_MS = 24 * 60 * 60 * 1000;
+
+const safeLower = (v: unknown) => String(v || '').trim().toLowerCase();
+
+const isInvoiceShipmentPassedWarehouse = (shipmentStatusRaw: unknown): boolean => {
+    const shipmentStatus = safeLower(shipmentStatusRaw);
+    return shipmentStatus === 'shipped' || shipmentStatus === 'delivered' || shipmentStatus === 'canceled';
+};
+
+const findBlockingUnshippedInvoiceForBackorderFill = (invoicesRaw: any[], nowMs: number) => {
+    const invoices = Array.isArray(invoicesRaw) ? invoicesRaw : [];
+    const candidates = invoices
+        .filter((inv: any) => inv && !isInvoiceShipmentPassedWarehouse(inv?.shipment_status))
+        .map((inv: any) => {
+            const createdAt = inv?.createdAt ? new Date(inv.createdAt) : null;
+            const createdAtMs = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.getTime() : 0;
+            return { inv, createdAtMs };
+        })
+        .filter((row: any) => row.createdAtMs > 0)
+        .sort((a: any, b: any) => a.createdAtMs - b.createdAtMs);
+
+    if (candidates.length === 0) return null;
+
+    const oldest = candidates[0];
+    const ageMs = nowMs - oldest.createdAtMs;
+    if (ageMs <= BACKORDER_FILL_GRACE_MS) return null;
+    return oldest.inv;
+};
 
 const distributeAllocationByItem = (items: any[], allocatedByProduct: Map<string, number>) => {
     const byProduct = new Map<string, any[]>();
@@ -72,14 +101,31 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
         });
         const allowCompletedBackorderRecovery =
             String(order.status || '').trim().toLowerCase() === 'completed' && activeBackorderRows.length > 0;
+        const allowReadyToShipBackorderTopUp =
+            safeLower(order.status) === 'ready_to_ship' && activeBackorderRows.length > 0;
 
-        if (!isReallocatableStatus(order.status) && !allowCompletedBackorderRecovery) {
+        if (!isReallocatableStatus(order.status) && !allowCompletedBackorderRecovery && !allowReadyToShipBackorderTopUp) {
             await t.rollback();
             throw new CustomError(`Order dengan status '${order.status}' tidak bisa dialokasikan`, 400);
         }
-        if (!isAllocationEditableStatus(order.status) && !allowCompletedBackorderRecovery) {
+        if (!isAllocationEditableStatus(order.status) && !allowCompletedBackorderRecovery && !allowReadyToShipBackorderTopUp) {
             await t.rollback();
             throw new CustomError(`Alokasi dikunci karena order sudah masuk proses finance/pengiriman (status: '${order.status}').`, 400);
+        }
+
+        // Backorder fill policy: do not allow filling/allocating additional backorder qty while an earlier
+        // invoice for THIS order has not passed warehouse/shipping yet (except within a short grace window,
+        // so same-day restock can complete the shortage before warehouse ships).
+        if (activeBackorderRows.length > 0) {
+            const invoices = await findInvoicesByOrderId(String(order.id), { transaction: t });
+            const blockingInvoice = findBlockingUnshippedInvoiceForBackorderFill(invoices as any[], Date.now());
+            if (blockingInvoice) {
+                await t.rollback();
+                throw new CustomError(
+                    `Tidak bisa mengisi/alokasikan backorder untuk order ini karena masih ada invoice yang belum melewati proses gudang (Invoice ${String(blockingInvoice.invoice_number || blockingInvoice.id)} shipment_status '${String(blockingInvoice.shipment_status)}').`,
+                    409
+                );
+            }
         }
 
         const incomingItems = Array.isArray(items) ? items : [];
@@ -338,7 +384,11 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             const previousOrderStatus = String(order.status || '');
             let nextStatus = previousOrderStatus;
             if (hasNewInvoiceableQty) {
-                nextStatus = 'waiting_invoice';
+                // Keep ready_to_ship as-is; extra allocation can be billed via issueInvoiceByItems without
+                // downgrading the warehouse queue status.
+                nextStatus = safeLower(previousOrderStatus) === 'ready_to_ship'
+                    ? previousOrderStatus
+                    : 'waiting_invoice';
             } else {
                 const currentRank = Number(statusProgressRank[previousOrderStatus] || 0);
                 const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
