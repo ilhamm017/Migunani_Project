@@ -76,8 +76,8 @@ export default function WarehouseLandingPage() {
         },
         {
             href: '/admin/warehouse/helper',
-            label: 'Picker Helper',
-            desc: 'Daftar ambil barang (Picking List)',
+            label: 'Picklist Alokasi',
+            desc: 'Daftar barang alokasi untuk diambil',
             icon: UserCheck,
             color: 'text-indigo-600',
             bg: 'bg-indigo-50',
