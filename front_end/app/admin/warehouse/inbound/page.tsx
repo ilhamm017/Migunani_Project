@@ -985,10 +985,10 @@ export default function PurchaseOrderPage() {
                   className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-lg shadow-slate-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
                 >
                   {loading ? 'Menyimpan...' : (
-                    <>
-                      <Save size={18} />
-                      Buat Purchase Order
-                    </>
+                    <span className="inline-flex items-center justify-center gap-2 whitespace-nowrap leading-tight">
+                      <Save size={18} className="shrink-0 -translate-y-[0.5px]" />
+                      <span>Buat Purchase Order</span>
+                    </span>
                   )}
                 </button>
               </div>
