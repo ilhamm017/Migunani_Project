@@ -389,6 +389,8 @@ export const api = {
                 apiClient.post('/admin/inventory/import-from-path', { file_path: filePath }),
             getMutations: (productId: string) =>
                 apiClient.get(`/admin/inventory/mutation/${productId}`),
+            getStockHistory: (productId: string, params?: { limit?: number }) =>
+                apiClient.get(`/admin/inventory/stock-history/${productId}`, { params }),
 
             // Audit
             getAudits: () => apiClient.get('/inventory/audit'),

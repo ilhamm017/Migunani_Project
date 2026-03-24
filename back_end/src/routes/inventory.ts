@@ -56,6 +56,7 @@ router.patch('/admin/products/:id/tier-pricing', authenticateToken, authorizeRol
 router.post('/admin/products/upload-image', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadProductImageMiddleware, InventoryController.uploadProductImage);
 router.post('/admin/inventory/mutation', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createStockMutation);
 router.get('/admin/inventory/mutation/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getProductMutations);
+router.get('/admin/inventory/stock-history/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProductStockHistory);
 router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrders);
 router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrderById);
 router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createPurchaseOrder);

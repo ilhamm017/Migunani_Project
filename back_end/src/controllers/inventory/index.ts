@@ -6,3 +6,4 @@ export * from './purchaseOrder';
 export * from './supplierInvoice';
 export * from './importLogic';
 export * from './vehicleTypes';
+export * from './stockHistory';

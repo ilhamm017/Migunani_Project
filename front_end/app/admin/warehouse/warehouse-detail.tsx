@@ -74,6 +74,29 @@ interface MutationRow {
     createdAt: string;
 }
 
+interface StockHistoryRow {
+    id: number;
+    movement_type: 'in' | 'out' | 'adjustment_plus' | 'adjustment_minus' | string;
+    qty: number;
+    unit_cost: number;
+    total_cost: number;
+    reference_type: string | null;
+    reference_id: string | null;
+    note: string | null;
+    createdAt: string;
+    inbound: null | {
+        purchase_order_id: number;
+        status: string | null;
+        supplier: null | { id: number; name: string };
+    };
+    outbound: null | {
+        order_id: string;
+        status: string | null;
+        customer: null | { id: string; name: string; whatsapp_number?: string | null };
+    };
+    hint?: string;
+}
+
 const getErrorMessage = (error: unknown, fallback: string) => {
     if (typeof error === 'object' && error !== null) {
         const responseMessage = (error as { response?: { data?: { message?: unknown } } }).response?.data?.message;
@@ -471,6 +494,8 @@ const MultiSelectCombobox = ({
 export default function WarehouseDetailPanel({ product, categories, onClose, onProductUpdated, mode = 'info', onRequestEdit }: WarehouseDetailProps) {
     const [mutations, setMutations] = useState<MutationRow[]>([]);
     const [loadingMutations, setLoadingMutations] = useState(false);
+    const [stockHistory, setStockHistory] = useState<StockHistoryRow[]>([]);
+    const [loadingStockHistory, setLoadingStockHistory] = useState(false);
     const [allocationRows, setAllocationRows] = useState<ProductAllocationRow[]>([]);
     const [allocationSummary, setAllocationSummary] = useState({ totalAllocated: 0, openAllocated: 0, orderCount: 0 });
     const [loadingAllocations, setLoadingAllocations] = useState(false);
@@ -485,6 +510,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
         if (!product) {
             setForm(null);
             setMutations([]);
+            setStockHistory([]);
             setAllocationRows([]);
             setAllocationSummary({ totalAllocated: 0, openAllocated: 0, orderCount: 0 });
             setAllocationError(null);
@@ -528,6 +554,35 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             })
             .catch(() => setMutations([]))
             .finally(() => setLoadingMutations(false));
+    }, [product?.id]);
+
+    useEffect(() => {
+        if (!product?.id) {
+            setStockHistory([]);
+            return;
+        }
+        setLoadingStockHistory(true);
+        api.admin.inventory.getStockHistory(product.id, { limit: 30 })
+            .then((res) => {
+                const rows = Array.isArray(res.data?.history) ? res.data.history : [];
+                const mapped: StockHistoryRow[] = rows.map((row: Record<string, unknown>) => ({
+                    id: Number(row.id ?? 0),
+                    movement_type: String(row.movement_type ?? ''),
+                    qty: Number(row.qty ?? 0),
+                    unit_cost: Number(row.unit_cost ?? 0),
+                    total_cost: Number(row.total_cost ?? 0),
+                    reference_type: row.reference_type ? String(row.reference_type) : null,
+                    reference_id: row.reference_id ? String(row.reference_id) : null,
+                    note: row.note ? String(row.note) : null,
+                    createdAt: String(row.createdAt ?? ''),
+                    inbound: row.inbound && typeof row.inbound === 'object' ? (row.inbound as any) : null,
+                    outbound: row.outbound && typeof row.outbound === 'object' ? (row.outbound as any) : null,
+                    hint: row.hint ? String(row.hint) : undefined,
+                })).filter((row: StockHistoryRow) => Boolean(row.id) && Boolean(row.createdAt));
+                setStockHistory(mapped.slice(0, 20));
+            })
+            .catch(() => setStockHistory([]))
+            .finally(() => setLoadingStockHistory(false));
     }, [product?.id]);
 
     useEffect(() => {
@@ -1059,6 +1114,99 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                 </table>
                             )}
                         </div>
+                    </div>
+                </section>
+
+                <section className="space-y-2">
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <History size={14} className="text-slate-500" />
+                        Riwayat Supplier / Customer
+                    </h3>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
+                        {loadingStockHistory ? (
+                            <div className="p-4 text-center text-slate-400 animate-pulse">Memuat riwayat...</div>
+                        ) : stockHistory.length === 0 ? (
+                            <div className="p-4 text-center text-slate-400 italic">Belum ada riwayat supplier/customer.</div>
+                        ) : (
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">
+                                    <tr>
+                                        <th className="px-3 py-2">Waktu</th>
+                                        <th className="px-3 py-2">Arah</th>
+                                        <th className="px-3 py-2 text-right">Qty</th>
+                                        <th className="px-3 py-2">Dari / Ke</th>
+                                        <th className="px-3 py-2">Ref</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {stockHistory.map((row) => {
+                                        const isIn = row.movement_type === 'in' || row.movement_type === 'adjustment_plus';
+                                        const label = row.movement_type === 'in'
+                                            ? 'MASUK'
+                                            : row.movement_type === 'out'
+                                                ? 'KELUAR'
+                                                : row.movement_type === 'adjustment_plus'
+                                                    ? 'ADJ +'
+                                                    : row.movement_type === 'adjustment_minus'
+                                                        ? 'ADJ -'
+                                                        : String(row.movement_type || 'OTHER').toUpperCase();
+                                        const badgeClass = isIn
+                                            ? 'bg-emerald-50 text-emerald-700'
+                                            : 'bg-rose-50 text-rose-700';
+                                        const qtyPrefix = isIn ? '+' : '-';
+
+                                        const supplierName = row.inbound?.supplier?.name || '';
+                                        const poId = row.inbound?.purchase_order_id;
+                                        const customerName = row.outbound?.customer?.name || '';
+                                        const orderId = row.outbound?.order_id;
+
+                                        return (
+                                            <tr key={String(row.id)} className="hover:bg-slate-50/50">
+                                                <td className="px-3 py-2 text-slate-500">
+                                                    {new Date(row.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${badgeClass}`}>
+                                                        {label}
+                                                    </span>
+                                                </td>
+                                                <td className={`px-3 py-2 text-right font-mono font-bold ${isIn ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                    {qtyPrefix}{Math.abs(Number(row.qty || 0))}
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-700">
+                                                    {poId ? (
+                                                        <div className="space-y-0.5">
+                                                            <p className="font-semibold truncate max-w-[180px]" title={supplierName || undefined}>
+                                                                Supplier: {supplierName || '—'}
+                                                            </p>
+                                                            <Link href={`/admin/warehouse/inbound/${poId}`} className="text-[10px] text-blue-700 hover:text-blue-900 hover:underline inline-flex items-center gap-1">
+                                                                PO #{poId}
+                                                                <ExternalLink size={12} />
+                                                            </Link>
+                                                        </div>
+                                                    ) : orderId ? (
+                                                        <div className="space-y-0.5">
+                                                            <p className="font-semibold truncate max-w-[180px]" title={customerName || undefined}>
+                                                                Customer: {customerName || '—'}
+                                                            </p>
+                                                            <Link href={`/admin/orders/${orderId}`} className="text-[10px] text-blue-700 hover:text-blue-900 hover:underline inline-flex items-center gap-1">
+                                                                Order #{String(orderId).slice(0, 8)}
+                                                                <ExternalLink size={12} />
+                                                            </Link>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-slate-400" title={row.note || undefined}>—</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-500 truncate max-w-[120px]" title={row.note || row.reference_id || undefined}>
+                                                    {row.reference_id || row.reference_type || '—'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        )}
                     </div>
                 </section>
 
