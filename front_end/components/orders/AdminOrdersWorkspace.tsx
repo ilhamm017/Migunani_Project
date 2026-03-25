@@ -3365,7 +3365,14 @@ export default function AdminOrdersWorkspace({
                         bucket.orders[0] ||
                         null;
                       const primaryOrderId = String(primaryOrder?.id || '');
-                      const courierId = String((primaryOrder as any)?.Invoice?.courier_id || (primaryOrder as any)?.courier_id || '').trim();
+                      const primaryOrderDetail = primaryOrderId ? orderDetails[primaryOrderId] : undefined;
+                      const courierId = String(
+                        (invoiceDetail as any)?.courier_id ||
+                        (primaryOrderDetail as any)?.Invoice?.courier_id ||
+                        (primaryOrder as any)?.Invoice?.courier_id ||
+                        (primaryOrder as any)?.courier_id ||
+                        ''
+                      ).trim();
                       const statusLabel = statusSet.size <= 1 ? (Array.from(statusSet)[0] || '-') : `${statusSet.size} status`;
                       const actionLabel = isFinanceCompactView
                         ? 'Lihat Detail Invoice'
@@ -3538,13 +3545,23 @@ export default function AdminOrdersWorkspace({
                               )}
                               {canManageWarehouseFlow && section === 'checker' && card.invoiceId && (
                                 <div className="mt-2 flex flex-col items-end gap-2">
-                                  {card.hasReadyToShip && card.courierId && !card.hasChecked && !card.hasShipped && (
-                                    <Link
-                                      href={`/admin/tracker-gudang/${encodeURIComponent(card.invoiceId)}`}
-                                      className="rounded-xl bg-cyan-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-cyan-700 active:scale-95"
-                                    >
-                                      Mulai Checking
-                                    </Link>
+                                  {card.hasReadyToShip && !card.hasChecked && !card.hasShipped && (
+                                    card.courierId ? (
+                                      <Link
+                                        href={`/admin/tracker-gudang/${encodeURIComponent(card.invoiceId)}`}
+                                        className="rounded-xl bg-cyan-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-cyan-700 active:scale-95"
+                                      >
+                                        Mulai Checking
+                                      </Link>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        disabled
+                                        className="rounded-xl bg-slate-200 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500"
+                                      >
+                                        Assign driver dulu
+                                      </button>
+                                    )
                                   )}
                                   {card.hasChecked && !card.hasShipped && (
                                     <button
