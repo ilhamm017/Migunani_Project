@@ -609,11 +609,11 @@ export default function AdminOrdersWorkspace({
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
   const sectionFilterOptions = useMemo<OrderSectionFilter[]>(
-    () => (warehouseCustomerFocusMode ? ['gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_FILTER_OPTIONS_WAREHOUSE : ORDER_FILTER_OPTIONS_ALL),
+    () => (warehouseCustomerFocusMode ? ['allocated', 'gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_FILTER_OPTIONS_WAREHOUSE : ORDER_FILTER_OPTIONS_ALL),
     [isWarehouseRole, warehouseCustomerFocusMode]
   );
   const sectionOptions = useMemo<OrderSection[]>(
-    () => (warehouseCustomerFocusMode ? ['gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_SECTION_OPTIONS_WAREHOUSE : ORDER_SECTION_OPTIONS_ALL),
+    () => (warehouseCustomerFocusMode ? ['allocated', 'gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_SECTION_OPTIONS_WAREHOUSE : ORDER_SECTION_OPTIONS_ALL),
     [isWarehouseRole, warehouseCustomerFocusMode]
   );
 
@@ -1208,7 +1208,7 @@ export default function AdminOrdersWorkspace({
 
   useEffect(() => {
     if (warehouseCustomerFocusMode) {
-      if (!['gudang', 'checker', 'pengiriman'].includes(orderSectionFilter)) setOrderSectionFilter('gudang');
+      if (!['allocated', 'gudang', 'checker', 'pengiriman'].includes(orderSectionFilter)) setOrderSectionFilter('gudang');
       return;
     }
     if (!isWarehouseRole) return;
