@@ -899,9 +899,11 @@ export default function AdminOverviewPage() {
 
 	  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
 	  const canAccessSetoranDriver = user?.role === 'kasir' || user?.role === 'super_admin';
+    const canAccessRiwayatSetoranDriver = canAccessSetoranDriver;
 	  const quickActionCards = [
 	    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
 	    { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
+      { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0, tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white' },
 	    { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
 	    { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
     { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur pesanan gudang.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white' },
@@ -911,7 +913,11 @@ export default function AdminOverviewPage() {
     { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
 	    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
 	    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
-	  ].filter((item) => item.href !== '/admin/setoran-driver' || canAccessSetoranDriver);
+	  ].filter((item) => {
+      if (item.href === '/admin/setoran-driver') return canAccessSetoranDriver;
+      if (item.href === '/admin/riwayat-setoran-driver') return canAccessRiwayatSetoranDriver;
+      return true;
+    });
   const featureCategories = [
 	    {
 	      group: 'Logistics & Inventory',
@@ -924,6 +930,7 @@ export default function AdminOverviewPage() {
 	        { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
 	        { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
 	        { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0 },
+          { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran Driver', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0 },
 	        { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
 	        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
 	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
