@@ -205,7 +205,7 @@ export const createReturHandover = asyncWrapper(async (req: Request, res: Respon
         const returs = await Retur.findAll({
             where: {
                 order_id: { [Op.in]: orderIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: 'picked_up',
                 courier_id: driverId
             },

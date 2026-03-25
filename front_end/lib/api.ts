@@ -678,6 +678,7 @@ export const api = {
         createDeliveryReturTicket: (
             orderOrInvoiceId: string,
             payload: {
+                retur_type?: 'delivery_refusal' | 'delivery_damage';
                 items: Array<{ product_id: string; qty: number; order_id?: string; reason?: string; evidence_img?: string }>;
             }
         ) => apiClient.post(`/driver/orders/${orderOrInvoiceId}/retur`, payload),

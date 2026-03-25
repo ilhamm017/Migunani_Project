@@ -221,7 +221,7 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
     }
     const returs = Array.isArray((trackedOrder as any)?.Returs) ? (trackedOrder as any).Returs : [];
     const deliveryReturs = returs.filter((r: any) =>
-        String(r?.retur_type || '') === 'delivery_refusal'
+        ['delivery_refusal', 'delivery_damage'].includes(String(r?.retur_type || ''))
         && String(r?.status || '') !== 'rejected'
     );
 

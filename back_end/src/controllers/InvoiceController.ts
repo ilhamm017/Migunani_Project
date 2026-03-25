@@ -138,7 +138,7 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         ? await Retur.findAll({
             where: {
                 order_id: { [Op.in]: orderIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: { [Op.ne]: 'rejected' }
             },
             include: [

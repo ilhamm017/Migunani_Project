@@ -30,8 +30,12 @@ const normalizeEffectiveReturQty = (retur: any, overrides?: Record<string, numbe
     }
 
     const status = String(retur?.status || '').trim().toLowerCase();
+    const returType = String(retur?.retur_type || '').trim().toLowerCase();
     const baseQty = Math.max(0, Math.trunc(Number(retur?.qty || 0)));
-    if (status === 'received' || status === 'completed') {
+    // NOTE:
+    // - delivery_refusal: effective qty follows warehouse verification (qty_received) once received/completed.
+    // - delivery_damage: invoice collectible is reduced immediately based on claimed qty and should not be increased back by warehouse qty_received.
+    if ((status === 'received' || status === 'completed') && returType !== 'delivery_damage') {
         const received = Number(retur?.qty_received);
         if (Number.isFinite(received)) {
             return Math.max(0, Math.min(baseQty, Math.trunc(received)));
@@ -75,10 +79,10 @@ export const computeInvoiceNetTotals = async (
         ? await Retur.findAll({
             where: {
                 order_id: { [Op.in]: orderIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: { [Op.ne]: 'rejected' }
             },
-            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status'],
+            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status', 'retur_type'],
             transaction: options?.transaction
         })
         : [];
@@ -236,10 +240,10 @@ export const computeInvoiceNetTotalsBulk = async (
         ? await Retur.findAll({
             where: {
                 order_id: { [Op.in]: uniqueOrderIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: { [Op.ne]: 'rejected' }
             },
-            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status'],
+            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status', 'retur_type'],
             transaction: options?.transaction
         })
         : [];

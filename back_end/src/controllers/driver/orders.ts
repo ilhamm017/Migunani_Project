@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, DriverDebtAdjustment } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
@@ -8,6 +8,7 @@ import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATU
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { calculateDriverCodExposure } from '../../utils/codExposure';
 
 export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -118,6 +119,12 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
         const driverId = String(req.user!.id || '').trim();
         const id = String(req.params?.id || '').trim();
         const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const rawReturType = String(req.body?.retur_type || 'delivery_refusal').trim().toLowerCase();
+        const returType = rawReturType === 'delivery_damage' ? 'delivery_damage' : 'delivery_refusal';
+        if (rawReturType && !['delivery_refusal', 'delivery_damage'].includes(rawReturType)) {
+            await t.rollback();
+            throw new CustomError('retur_type tidak valid. Gunakan delivery_refusal atau delivery_damage.', 400);
+        }
 
         if (!id) {
             await t.rollback();
@@ -144,7 +151,7 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
         const existingDeliveryRetur = await Retur.findOne({
             where: {
                 order_id: { [Op.in]: orderIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: { [Op.ne]: 'rejected' }
             },
             attributes: ['id'],
@@ -189,7 +196,7 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
             where: {
                 order_id: { [Op.in]: orderIds },
                 product_id: { [Op.in]: requestedProductIds },
-                retur_type: 'delivery_refusal',
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
                 status: { [Op.ne]: 'rejected' }
             },
             attributes: ['order_id', 'product_id', 'qty', 'status', 'qty_received'],
@@ -208,11 +215,29 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
         const orderById = new Map<string, any>();
         orders.forEach((o: any) => orderById.set(String(o.id), o));
 
+        const invoiceValueByOrderProduct = new Map<string, { qty: number; value: number }>();
+        invoiceItems.forEach((row: any) => {
+            const orderId = String(row?.OrderItem?.order_id || '').trim();
+            const productId = String(row?.OrderItem?.product_id || '').trim();
+            if (!orderId || !productId) return;
+            const qty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const unitPrice = Math.max(0, Number(row?.unit_price || 0));
+            const key = `${orderId}:${productId}`;
+            const prev = invoiceValueByOrderProduct.get(key) || { qty: 0, value: 0 };
+            prev.qty += qty;
+            prev.value += qty * unitPrice;
+            invoiceValueByOrderProduct.set(key, prev);
+        });
+
         const createdReturs: any[] = [];
         for (const raw of items) {
             const productId = String(raw?.product_id || '').trim();
             const qty = Math.max(0, Math.trunc(Number(raw?.qty || 0)));
-            const reason = typeof raw?.reason === 'string' && raw.reason.trim() ? raw.reason.trim() : 'Retur saat pengiriman (tidak jadi beli)';
+            const reason = typeof raw?.reason === 'string' && raw.reason.trim()
+                ? raw.reason.trim()
+                : (returType === 'delivery_damage'
+                    ? 'Retur saat pengiriman (barang rusak)'
+                    : 'Retur saat pengiriman (tidak jadi beli)');
             const evidenceImg = typeof raw?.evidence_img === 'string' && raw.evidence_img.trim() ? raw.evidence_img.trim() : null;
             const requestedOrderId = typeof raw?.order_id === 'string' ? raw.order_id.trim() : '';
 
@@ -265,7 +290,7 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
             }
 
             const retur = await Retur.create({
-                retur_type: 'delivery_refusal',
+                retur_type: returType,
                 order_id: resolvedOrderId,
                 product_id: productId,
                 qty,
@@ -295,6 +320,67 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
         }
 
         const invoiceNetTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
+
+        if (returType === 'delivery_damage') {
+            const totalDelta = Math.max(0, Math.round(Number(invoiceNetTotals?.return_total || 0) * 100) / 100);
+            if (totalDelta > 0 && createdReturs.length > 0) {
+                const weights = createdReturs.map((r) => {
+                    const orderId = String(r?.order_id || '').trim();
+                    const productId = String(r?.product_id || '').trim();
+                    const qty = Math.max(0, Math.trunc(Number(r?.qty || 0)));
+                    const key = `${orderId}:${productId}`;
+                    const invAgg = invoiceValueByOrderProduct.get(key);
+                    const avgUnit = invAgg && invAgg.qty > 0 ? (invAgg.value / invAgg.qty) : 0;
+                    const value = Math.max(0, avgUnit * qty);
+                    return { retur_id: String(r?.id), qty, value };
+                });
+                const sumValue = weights.reduce((sum, w) => sum + Number(w.value || 0), 0);
+                let allocated = 0;
+                for (let idx = 0; idx < weights.length; idx += 1) {
+                    const w = weights[idx];
+                    const isLast = idx === weights.length - 1;
+                    const portion = sumValue > 0 ? (totalDelta * (Number(w.value || 0) / sumValue)) : (totalDelta / weights.length);
+                    const amount = isLast
+                        ? Math.max(0, Math.round((totalDelta - allocated) * 100) / 100)
+                        : Math.max(0, Math.round(portion * 100) / 100);
+                    allocated = Math.round((allocated + amount) * 100) / 100;
+
+                    const existing = await DriverDebtAdjustment.findOne({
+                        where: { retur_id: String(w.retur_id) },
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    });
+                    const note = `Kompensasi retur barang rusak (invoice ${String(invoice.id).slice(0, 8)}).`;
+                    if (existing) {
+                        await existing.update({
+                            driver_id: driverId,
+                            invoice_id: String(invoice.id),
+                            amount,
+                            status: 'open',
+                            note,
+                            created_by: driverId
+                        }, { transaction: t });
+                    } else {
+                        await DriverDebtAdjustment.create({
+                            driver_id: driverId,
+                            invoice_id: String(invoice.id),
+                            retur_id: String(w.retur_id),
+                            amount,
+                            status: 'open',
+                            note,
+                            created_by: driverId
+                        }, { transaction: t });
+                    }
+                }
+
+                const driver = await User.findByPk(driverId, { transaction: t, lock: t.LOCK.UPDATE });
+                if (driver) {
+                    const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
+                    await driver.update({ debt: exposure.exposure }, { transaction: t });
+                }
+            }
+        }
+
         await t.commit();
 
         return res.status(201).json({

@@ -117,7 +117,10 @@ export default function DriverOrderDetailPage() {
   const [completeMessage, setCompleteMessage] = useState('');
   const [isDeliveryReturOpen, setIsDeliveryReturOpen] = useState(false);
   const [deliveryReturDraft, setDeliveryReturDraft] = useState<Record<string, { qty: string; order_id?: string }>>({});
-  const [deliveryReturReason, setDeliveryReturReason] = useState('Retur saat pengiriman (tidak jadi beli)');
+  const defaultRefusalReason = 'Retur saat pengiriman (tidak jadi beli)';
+  const defaultDamageReason = 'Retur saat pengiriman (barang rusak)';
+  const [deliveryReturType, setDeliveryReturType] = useState<'delivery_refusal' | 'delivery_damage'>('delivery_refusal');
+  const [deliveryReturReason, setDeliveryReturReason] = useState(defaultRefusalReason);
   const [deliveryReturLoading, setDeliveryReturLoading] = useState(false);
   const [deliveryReturMessage, setDeliveryReturMessage] = useState('');
   const [deliveryReturStep, setDeliveryReturStep] = useState<1 | 2>(1);
@@ -616,7 +619,7 @@ export default function DriverOrderDetailPage() {
     try {
       setDeliveryReturLoading(true);
       setDeliveryReturMessage('');
-      await api.driver.createDeliveryReturTicket(orderId, { items: payloadItems });
+      await api.driver.createDeliveryReturTicket(orderId, { retur_type: deliveryReturType, items: payloadItems });
 
       const invoiceIdToRefresh = String(resolvedInvoiceId || invoiceContext.invoiceId || '').trim();
       if (invoiceIdToRefresh) {
@@ -631,7 +634,8 @@ export default function DriverOrderDetailPage() {
       await loadOrder();
       setIsDeliveryReturOpen(false);
       setDeliveryReturDraft({});
-      setDeliveryReturReason('Retur saat pengiriman (tidak jadi beli)');
+      setDeliveryReturType('delivery_refusal');
+      setDeliveryReturReason(defaultRefusalReason);
       setDeliveryReturStep(1);
       setDeliveryReturAck(false);
     } catch (error) {
@@ -827,7 +831,7 @@ export default function DriverOrderDetailPage() {
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-600">
                   Retur Saat Pengiriman
                 </p>
-                <h3 className="mt-2 text-lg font-black text-slate-900">Ajukan retur (tidak jadi beli)</h3>
+                <h3 className="mt-2 text-lg font-black text-slate-900">Ajukan retur saat pengiriman</h3>
                 <p className="mt-2 text-sm text-slate-600">
                   Isi qty barang yang diretur. Setelah disimpan, nominal COD akan mengikuti total setelah retur.
                 </p>
@@ -853,6 +857,32 @@ export default function DriverOrderDetailPage() {
 
             {deliveryReturStep === 1 ? (
               <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Jenis Retur</label>
+                  <select
+                    value={deliveryReturType}
+                    onChange={(e) => {
+                      const next = e.target.value === 'delivery_damage' ? 'delivery_damage' : 'delivery_refusal';
+                      setDeliveryReturType(next);
+                      setDeliveryReturReason((prev) => {
+                        const prevTrim = String(prev || '').trim();
+                        const isDefault = prevTrim === defaultRefusalReason || prevTrim === defaultDamageReason;
+                        if (!isDefault) return prev;
+                        return next === 'delivery_damage' ? defaultDamageReason : defaultRefusalReason;
+                      });
+                    }}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-black text-slate-800 bg-white"
+                  >
+                    <option value="delivery_refusal">Customer tidak jadi beli</option>
+                    <option value="delivery_damage">Barang rusak (keluhan customer)</option>
+                  </select>
+                  {deliveryReturType === 'delivery_damage' && (
+                    <p className="text-[10px] text-amber-700 font-bold">
+                      Retur barang rusak akan membuat kewajiban driver (debt) untuk mengganti nilai potongan retur.
+                    </p>
+                  )}
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alasan</label>
                   <input
@@ -928,6 +958,9 @@ export default function DriverOrderDetailPage() {
                 <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] text-rose-800 space-y-1">
                   <p className="font-black uppercase tracking-widest text-[10px] text-rose-700">Verifikasi Retur (Final)</p>
                   <p>Retur delivery hanya bisa diinput <span className="font-black">1 kali</span> dan <span className="font-black">tidak bisa diubah</span>.</p>
+                  <p>
+                    Jenis: <span className="font-black">{deliveryReturType === 'delivery_damage' ? 'Barang rusak (driver mengganti)' : 'Customer tidak jadi beli'}</span>
+                  </p>
                 </div>
 
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
@@ -1353,6 +1386,8 @@ export default function DriverOrderDetailPage() {
                   setDeliveryReturMessage('');
                   setDeliveryReturStep(1);
                   setDeliveryReturAck(false);
+                  setDeliveryReturType('delivery_refusal');
+                  setDeliveryReturReason(defaultRefusalReason);
                   const nextDraft: Record<string, { qty: string; order_id?: string }> = {};
                   invoiceItemRows.forEach((row) => {
                     nextDraft[row.key] = {

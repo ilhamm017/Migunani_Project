@@ -218,7 +218,7 @@ export class ReturService {
 
             if (nextStatus === 'received') {
                 const rawQtyReceived = payload.qty_received;
-                const isDeliveryRetur = String((retur as any).retur_type || '') === 'delivery_refusal';
+                const isDeliveryRetur = ['delivery_refusal', 'delivery_damage'].includes(String((retur as any).retur_type || ''));
                 if (isDeliveryRetur) {
                     const parsed = Number(rawQtyReceived);
                     if (!Number.isFinite(parsed)) {

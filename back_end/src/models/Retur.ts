@@ -3,7 +3,7 @@ import sequelize from '../config/database';
 
 interface ReturAttributes {
     id: string; // UUID
-    retur_type: 'customer_request' | 'delivery_refusal';
+    retur_type: 'customer_request' | 'delivery_refusal' | 'delivery_damage';
     order_id: string; // UUID
     product_id: string; // UUID
     qty: number;
@@ -25,7 +25,7 @@ interface ReturCreationAttributes extends Optional<ReturAttributes, 'id' | 'retu
 
 class Retur extends Model<ReturAttributes, ReturCreationAttributes> implements ReturAttributes {
     declare id: string;
-    declare retur_type: 'customer_request' | 'delivery_refusal';
+    declare retur_type: 'customer_request' | 'delivery_refusal' | 'delivery_damage';
     declare order_id: string;
     declare product_id: string;
     declare qty: number;
@@ -54,7 +54,7 @@ Retur.init(
             primaryKey: true,
         },
         retur_type: {
-            type: DataTypes.ENUM('customer_request', 'delivery_refusal'),
+            type: DataTypes.ENUM('customer_request', 'delivery_refusal', 'delivery_damage'),
             allowNull: false,
             defaultValue: 'customer_request',
         },
