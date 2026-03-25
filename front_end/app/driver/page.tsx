@@ -442,9 +442,12 @@ export default function DriverTaskPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-xs font-black text-amber-500 uppercase tracking-widest flex items-center gap-2">
-              <RotateCcw size={14} /> Misi Penjemputan Retur ({returs.length})
+              <RotateCcw size={14} /> Misi Penjemputan Retur (Customer Request) ({returs.length})
             </h2>
           </div>
+          <p className="text-[11px] font-bold text-slate-500 px-1">
+            Retur saat pengiriman (tidak jadi beli / rusak) diproses dari detail invoice dan diserahkan ke Admin/Kasir.
+          </p>
 
           <div className="grid grid-cols-1 gap-3">
             {returs.length === 0 && (

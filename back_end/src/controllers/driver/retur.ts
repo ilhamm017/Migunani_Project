@@ -14,6 +14,7 @@ export const getAssignedReturs = asyncWrapper(async (req: Request, res: Response
         const returs = await Retur.findAll({
             where: {
                 courier_id: userId,
+                retur_type: 'customer_request',
                 status: { [Op.in]: ['pickup_assigned', 'picked_up', 'handed_to_warehouse'] }
             },
             include: [
@@ -46,7 +47,8 @@ export const getAssignedReturDetail = asyncWrapper(async (req: Request, res: Res
         const retur = await Retur.findOne({
             where: {
                 id,
-                courier_id: userId
+                courier_id: userId,
+                retur_type: 'customer_request',
             },
             include: [
                 { model: Product, attributes: ['id', 'name', 'sku'] },
@@ -105,7 +107,8 @@ export const updateAssignedReturStatus = asyncWrapper(async (req: Request, res: 
         const retur = await Retur.findOne({
             where: {
                 id,
-                courier_id: userId
+                courier_id: userId,
+                retur_type: 'customer_request',
             },
             transaction: t,
             lock: t.LOCK.UPDATE
