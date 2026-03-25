@@ -31,6 +31,7 @@ interface Preorder {
   createdAt: string;
   finalized_at?: string | null;
   Supplier?: { id: number; name: string };
+  Creator?: { id: string; name: string; role: string };
   Items?: PreorderItem[];
 }
 
@@ -307,6 +308,7 @@ export default function PreorderDetailPage() {
             <div className="text-sm text-slate-700">
               <div className="font-black">{preorder.Supplier?.name || 'Unknown Supplier'}</div>
               <div className="text-xs text-slate-500 mt-1">Status: <span className="font-black uppercase">{preorder.status}</span></div>
+              <div className="text-xs text-slate-500 mt-1">Dibuat: <span className="font-black">{new Date(preorder.createdAt).toLocaleString('id-ID')}</span> oleh <span className="font-black">{preorder.Creator?.name || '-'}</span></div>
             </div>
 
             <label className="text-xs font-black text-slate-500 uppercase tracking-wider mt-4 mb-1">Catatan</label>
@@ -413,4 +415,3 @@ export default function PreorderDetailPage() {
     </div>
   );
 }
-

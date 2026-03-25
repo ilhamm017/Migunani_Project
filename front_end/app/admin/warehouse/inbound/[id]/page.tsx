@@ -48,6 +48,11 @@ interface PO {
         id: number;
         name: string;
     };
+    User?: {
+        id: string;
+        name: string;
+        role: string;
+    };
     Items?: POItem[];
 }
 
@@ -295,6 +300,10 @@ export default function POReceivePage() {
                             <div className="flex flex-col">
                                 <span className="text-xs font-bold text-slate-400">Tanggal Input</span>
                                 <span className="text-sm font-bold text-slate-700">{new Date(po.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-400">Dibuat Oleh</span>
+                                <span className="text-sm font-bold text-slate-700">{po.User?.name || '-'}</span>
                             </div>
                             <div className="flex flex-col">
                                 <span className="text-xs font-bold text-slate-400">Verifikasi 1</span>

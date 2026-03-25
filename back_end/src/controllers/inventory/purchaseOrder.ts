@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import fs from 'fs/promises';
 import path from 'path';
 import { Readable } from 'stream';
-import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
+import { Product, Category, ProductCategory, StockMutation, PurchaseOrder, PurchaseOrderItem, Supplier, User, sequelize, SupplierInvoice, SupplierPayment, Account, Journal, JournalLine } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { Op, Transaction } from 'sequelize';
 import { InventoryCostService } from '../../services/InventoryCostService';
@@ -122,7 +122,16 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
     } catch (error) {
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
-        throw new CustomError('Error creating PO', 500);
+        const errMsg = String((error as any)?.parent?.message || (error as any)?.original?.message || (error as any)?.message || '');
+        const looksLikeSchemaMismatch =
+            /unknown column/i.test(errMsg) ||
+            /doesn't exist/i.test(errMsg) ||
+            /invalid column/i.test(errMsg) ||
+            /unknown attribute/i.test(errMsg);
+        if (looksLikeSchemaMismatch) {
+            throw new CustomError('Skema database belum update. Restart backend dan jalankan DB sync (mis. DB_SYNC_MODE=alter) agar kolom inbound terbaru terbuat.', 500);
+        }
+        throw new CustomError('Error creating inbound', 500);
     }
 });
 
@@ -284,7 +293,10 @@ export const getPurchaseOrders = asyncWrapper(async (req: Request, res: Response
 
         const { count, rows } = await PurchaseOrder.findAndCountAll({
             where,
-            include: [{ model: Supplier, attributes: ['id', 'name'] }],
+            include: [
+                { model: Supplier, attributes: ['id', 'name'] },
+                { model: User, attributes: ['id', 'name', 'role'] }
+            ],
             limit: Number(limit),
             offset: Number(offset),
             order: [['createdAt', 'DESC']]
@@ -307,6 +319,7 @@ export const getPurchaseOrderById = asyncWrapper(async (req: Request, res: Respo
         const po = await PurchaseOrder.findByPk(id, {
             include: [
                 { model: Supplier, attributes: ['id', 'name'] },
+                { model: User, attributes: ['id', 'name', 'role'] },
                 {
                     model: PurchaseOrderItem,
                     as: 'Items',

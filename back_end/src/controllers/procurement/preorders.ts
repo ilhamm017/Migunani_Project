@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
-import { Product, Supplier, SupplierPreorder, SupplierPreorderItem, sequelize } from '../../models';
+import { Product, Supplier, SupplierPreorder, SupplierPreorderItem, User, sequelize } from '../../models';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 
@@ -107,7 +107,10 @@ export const listSupplierPreorders = asyncWrapper(async (req: Request, res: Resp
 
         const { count, rows } = await SupplierPreorder.findAndCountAll({
             where,
-            include: [{ model: Supplier, as: 'Supplier', attributes: ['id', 'name'] }],
+            include: [
+                { model: Supplier, as: 'Supplier', attributes: ['id', 'name'] },
+                { model: User, as: 'Creator', attributes: ['id', 'name', 'role'] }
+            ],
             limit: Number(limit),
             offset: Number(offset),
             order: [['createdAt', 'DESC']]
@@ -130,6 +133,7 @@ export const getSupplierPreorderById = asyncWrapper(async (req: Request, res: Re
         const preorder = await SupplierPreorder.findByPk(id, {
             include: [
                 { model: Supplier, as: 'Supplier', attributes: ['id', 'name'] },
+                { model: User, as: 'Creator', attributes: ['id', 'name', 'role'] },
                 {
                     model: SupplierPreorderItem,
                     as: 'Items',
@@ -342,4 +346,3 @@ export const exportSupplierPreorderXlsx = asyncWrapper(async (req: Request, res:
         throw new CustomError('Error exporting preorder xlsx', 500);
     }
 });
-

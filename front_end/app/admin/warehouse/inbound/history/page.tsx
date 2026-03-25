@@ -24,6 +24,11 @@ interface PO {
         id: number;
         name: string;
     };
+    User?: {
+        id: string;
+        name: string;
+        role: string;
+    };
 }
 
 export default function POHistoryPage() {
@@ -156,11 +161,15 @@ export default function POHistoryPage() {
                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-500 text-xs font-medium">
                                             <div className="flex items-center gap-1.5">
                                                 <Calendar size={14} className="text-slate-400" />
-                                                {new Date(po.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                                {new Date(po.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                             </div>
                                             <div className="flex items-center gap-1.5">
                                                 <Package size={14} className="text-slate-400" />
                                                 Rp {Number(po.total_cost).toLocaleString()}
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Oleh</span>
+                                                <span className="font-bold">{po.User?.name || '-'}</span>
                                             </div>
                                         </div>
                                     </div>

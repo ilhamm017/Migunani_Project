@@ -12,6 +12,7 @@ interface PreorderRow {
   status: 'draft' | 'finalized' | 'canceled';
   createdAt: string;
   Supplier?: { id: number; name: string };
+  Creator?: { id: string; name: string; role: string };
 }
 
 export default function PreorderHistoryPage() {
@@ -137,7 +138,11 @@ export default function PreorderHistoryPage() {
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-500 text-xs font-medium">
                       <div className="flex items-center gap-1.5">
                         <Calendar size={14} className="text-slate-400" />
-                        {new Date(row.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                        {new Date(row.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Oleh</span>
+                        <span className="font-bold">{row.Creator?.name || '-'}</span>
                       </div>
                     </div>
                   </div>
@@ -176,4 +181,3 @@ export default function PreorderHistoryPage() {
     </div>
   );
 }
-

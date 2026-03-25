@@ -340,6 +340,20 @@ const tableExists = async (tableName: string): Promise<boolean> => {
     return Array.isArray(rows) && rows.length > 0;
 };
 
+const columnExists = async (tableName: string, columnName: string): Promise<boolean> => {
+    if (sequelize.getDialect() !== 'mysql') return true;
+    const [rows] = await sequelize.query(
+        `SELECT 1
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = :tableName
+           AND COLUMN_NAME = :columnName
+         LIMIT 1`,
+        { replacements: { tableName, columnName } }
+    ) as any;
+    return Array.isArray(rows) && rows.length > 0;
+};
+
 const ensureCriticalTablesReady = async () => {
     const criticalTables = ['users', 'orders'];
 
@@ -365,6 +379,24 @@ const ensureCriticalTablesReady = async () => {
     }
 };
 
+const ensureInboundCostVarianceColumnsReady = async () => {
+    const tableName = 'purchase_order_items';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const requiredColumns = ['expected_unit_cost', 'cost_note'];
+    const missing: string[] = [];
+    for (const columnName of requiredColumns) {
+        const ok = await columnExists(tableName, columnName);
+        if (!ok) missing.push(columnName);
+    }
+
+    if (missing.length === 0) return;
+
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Running alter sync to update schema...`);
+    await sequelize.sync({ alter: true });
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -375,6 +407,7 @@ const syncDatabaseWithRetry = async () => {
     if (syncMode === 'safe') {
         await sequelize.sync();
         await ensureCriticalTablesReady();
+        await ensureInboundCostVarianceColumnsReady();
         return;
     }
 
@@ -385,6 +418,7 @@ const syncDatabaseWithRetry = async () => {
         try {
             await sequelize.sync({ alter: true });
             await ensureCriticalTablesReady();
+            await ensureInboundCostVarianceColumnsReady();
             return;
         } catch (error) {
             lastError = error;
@@ -398,6 +432,7 @@ const syncDatabaseWithRetry = async () => {
             console.error('Alter sync failed; attempting create-missing sync fallback:', error);
             await sequelize.sync();
             await ensureCriticalTablesReady();
+            await ensureInboundCostVarianceColumnsReady();
             return;
         }
     }
