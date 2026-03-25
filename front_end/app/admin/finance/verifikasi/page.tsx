@@ -228,18 +228,20 @@ export default function FinanceVerifyPage() {
   if (!allowed) return null;
 
   const handleAction = async (id: string, verifyAction?: 'approve' | 'reject') => {
+    const action = verifyAction || 'approve';
     try {
       setBusyId(id);
-      await api.admin.finance.verifyPayment(id, verifyAction || 'approve');
+      await api.admin.finance.verifyPayment(id, action);
       await load();
-      if ((verifyAction || 'approve') === 'approve') {
-        setPopup({
-          open: true,
-          title: 'Approve berhasil',
-          message: 'Pembayaran transfer sudah diverifikasi. Status invoice dan order terkait akan ikut ter-update.',
-          variant: 'success',
-        });
-      }
+      setPopup({
+        open: true,
+        title: action === 'approve' ? 'Approve berhasil' : 'Reject berhasil',
+        message:
+          action === 'approve'
+            ? 'Pembayaran transfer sudah diverifikasi. Status invoice dan order terkait akan ikut ter-update.'
+            : 'Pembayaran ditolak. Status invoice dan order terkait akan ikut ter-update.',
+        variant: 'success',
+      });
     } catch (error: unknown) {
       console.error('Action failed:', error);
       setPopup({

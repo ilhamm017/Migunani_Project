@@ -7,6 +7,7 @@ import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import NotifyPopup, { type NotifyPopupVariant } from '@/components/ui/NotifyPopup';
 
 type InvoiceItemRow = {
   qty?: number | string | null;
@@ -66,6 +67,12 @@ export default function InvoiceHppOverridePage() {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [reason, setReason] = useState('');
   const [lastJournal, setLastJournal] = useState<{ posted: boolean; journal_id?: number; delta_hpp: number } | null>(null);
+  const [popup, setPopup] = useState<{
+    open: boolean;
+    title: string;
+    message?: string;
+    variant: NotifyPopupVariant;
+  }>({ open: false, title: '', message: '', variant: 'info' });
 
   const load = useCallback(async () => {
     if (!allowed || !invoiceId) return;
@@ -179,7 +186,12 @@ export default function InvoiceHppOverridePage() {
     if (!invoiceId) return;
     const trimmedReason = reason.trim();
     if (!trimmedReason) {
-      alert('Reason wajib diisi.');
+      setPopup({
+        open: true,
+        title: 'Reason wajib diisi',
+        message: 'Isi alasan koreksi untuk kebutuhan audit dan deskripsi jurnal.',
+        variant: 'warning',
+      });
       return;
     }
 
@@ -202,7 +214,12 @@ export default function InvoiceHppOverridePage() {
     });
 
     if (changes.length === 0) {
-      alert('Tidak ada perubahan override.');
+      setPopup({
+        open: true,
+        title: 'Tidak ada perubahan',
+        message: 'Ubah salah satu nilai override atau hapus override yang ada, lalu simpan kembali.',
+        variant: 'info',
+      });
       return;
     }
 
@@ -226,7 +243,16 @@ export default function InvoiceHppOverridePage() {
       nextMap.forEach((cost, productId) => (nextInputs[productId] = String(cost)));
       setInputs(nextInputs);
       setLastJournal(payload?.journal || null);
-      alert('Override tersimpan. Jika perlu, jurnal koreksi sudah diposting.');
+      const j = payload?.journal as { posted?: boolean; journal_id?: number; delta_hpp?: number } | null;
+      setPopup({
+        open: true,
+        title: 'Override tersimpan',
+        message: j
+          ? `Target delta HPP: ${formatCurrency(Number(j.delta_hpp || 0))}. ` +
+            (j.posted ? `Jurnal koreksi diposting (ID ${String(j.journal_id || '-')}).` : 'Tidak perlu posting jurnal baru.')
+          : 'Override berhasil disimpan.',
+        variant: 'success',
+      });
     } catch (e: unknown) {
       console.error(e);
       const msg =
@@ -234,7 +260,12 @@ export default function InvoiceHppOverridePage() {
           ? String((e as { response?: { data?: { message?: unknown } } }).response?.data?.message || 'Gagal menyimpan override.')
           : 'Gagal menyimpan override.';
       setError(msg);
-      alert(msg);
+      setPopup({
+        open: true,
+        title: 'Gagal menyimpan',
+        message: msg,
+        variant: 'error',
+      });
     } finally {
       setSaving(false);
     }
@@ -253,6 +284,13 @@ export default function InvoiceHppOverridePage() {
   if (!invoice) {
     return (
       <div className="p-6 space-y-3">
+        <NotifyPopup
+          open={popup.open}
+          title={popup.title}
+          message={popup.message}
+          variant={popup.variant}
+          onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+        />
         <p className="text-sm text-rose-600">{error || 'Invoice tidak ditemukan.'}</p>
         <Link href="/admin/finance/invoices/hpp" className="text-sm font-bold text-emerald-700">
           Kembali
@@ -263,6 +301,13 @@ export default function InvoiceHppOverridePage() {
 
   return (
     <div className="p-6 space-y-5">
+      <NotifyPopup
+        open={popup.open}
+        title={popup.title}
+        message={popup.message}
+        variant={popup.variant}
+        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+      />
       <div className="flex items-center gap-3">
         <Link
           href="/admin/finance/invoices/hpp"
@@ -409,4 +454,3 @@ export default function InvoiceHppOverridePage() {
     </div>
   );
 }
-

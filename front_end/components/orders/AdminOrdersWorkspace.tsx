@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { useAuthStore } from '@/store/authStore';
+import NotifyPopup, { type NotifyPopupVariant } from '@/components/ui/NotifyPopup';
 import axios from 'axios';
 import type { AdminOrderListRow, InvoiceDetailResponse, OrderDetailResponse, ProductLite } from '@/lib/apiTypes';
 
@@ -567,6 +568,12 @@ export default function AdminOrdersWorkspace({
     saving: boolean;
     error: string;
   } | null>(null);
+  const [popup, setPopup] = useState<{
+    open: boolean;
+    title: string;
+    message?: string;
+    variant: NotifyPopupVariant;
+  }>({ open: false, title: '', message: '', variant: 'info' });
   const ordersRef = useRef<AdminOrderListRow[]>([]);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
@@ -1626,7 +1633,12 @@ export default function AdminOrdersWorkspace({
   const saveAllocationDraft = async (orderId: string, draft: Record<string, number>) => {
     const items = buildAllocationPayload(orderId, draft);
     if (items.length === 0) {
-      alert('Tidak ada item alokasi yang valid untuk disimpan.');
+      setPopup({
+        open: true,
+        title: 'Tidak ada alokasi valid',
+        message: 'Isi qty alokasi minimal 1 item (dan pastikan tidak melebihi stok/permintaan).',
+        variant: 'warning',
+      });
       return false;
     }
     setAllocationDrafts((prev) => ({
@@ -1673,13 +1685,24 @@ export default function AdminOrdersWorkspace({
         });
       }
       await loadOrders();
+      setPopup({
+        open: true,
+        title: 'Alokasi tersimpan',
+        message: 'Qty alokasi sudah tersimpan dan data order diperbarui.',
+        variant: 'success',
+      });
       return true;
     } catch (error: unknown) {
       console.error('Allocation save failed:', error);
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan alokasi.')
         : 'Gagal menyimpan alokasi.';
-      alert(message);
+      setPopup({
+        open: true,
+        title: 'Gagal menyimpan alokasi',
+        message,
+        variant: 'error',
+      });
       return false;
     } finally {
       setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
@@ -1823,7 +1846,12 @@ export default function AdminOrdersWorkspace({
       if (saved) {
         setAllocationConfirm(null);
       } else {
-        alert('Tidak ada top up backorder yang valid untuk disimpan.');
+        setPopup({
+          open: true,
+          title: 'Tidak ada top up valid',
+          message: 'Tambah qty top up minimal 1 item lalu simpan kembali.',
+          variant: 'warning',
+        });
       }
       return;
     }
@@ -2238,8 +2266,15 @@ export default function AdminOrdersWorkspace({
 
   return (
     <div className="p-5 pb-24 space-y-5">
-	      {allocationConfirm && allocationConfirmMeta && (
-	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+      <NotifyPopup
+        open={popup.open}
+        title={popup.title}
+        message={popup.message}
+        variant={popup.variant}
+        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
+      />
+		      {allocationConfirm && allocationConfirmMeta && (
+		        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
           <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
             <div className="border-b border-slate-200 px-5 pb-4 pt-5">
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">
