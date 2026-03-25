@@ -669,6 +669,12 @@ export const api = {
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             }),
+        createDeliveryReturTicket: (
+            orderOrInvoiceId: string,
+            payload: {
+                items: Array<{ product_id: string; qty: number; order_id?: string; reason?: string; evidence_img?: string }>;
+            }
+        ) => apiClient.post(`/driver/orders/${orderOrInvoiceId}/retur`, payload),
         recordPayment: (orderId: string, payload: { amount_received?: number; proof?: File | null }) => {
             const formData = new FormData();
             if (payload.amount_received !== undefined && payload.amount_received !== null) {

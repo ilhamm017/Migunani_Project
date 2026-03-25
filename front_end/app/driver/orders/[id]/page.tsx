@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Camera, ClipboardCheck, MessageCircle, Send, Upload, Coins, CreditCard } from 'lucide-react';
+import { ArrowLeft, Camera, ClipboardCheck, MessageCircle, Send, Upload, Coins, CreditCard, Undo2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import axios from 'axios';
@@ -115,6 +115,11 @@ export default function DriverOrderDetailPage() {
   const [paymentMethodConfirm, setPaymentMethodConfirm] = useState<PaymentMethodConfirmState | null>(null);
   const [codPaymentConfirm, setCodPaymentConfirm] = useState<CodPaymentConfirmState | null>(null);
   const [completeMessage, setCompleteMessage] = useState('');
+  const [isDeliveryReturOpen, setIsDeliveryReturOpen] = useState(false);
+  const [deliveryReturDraft, setDeliveryReturDraft] = useState<Record<string, { qty: string; order_id?: string }>>({});
+  const [deliveryReturReason, setDeliveryReturReason] = useState('Retur saat pengiriman (tidak jadi beli)');
+  const [deliveryReturLoading, setDeliveryReturLoading] = useState(false);
+  const [deliveryReturMessage, setDeliveryReturMessage] = useState('');
 
   const loadOrder = useCallback(async () => {
     try {
@@ -212,11 +217,13 @@ export default function DriverOrderDetailPage() {
   }, [allowed, resolvedInvoiceId]);
 
   useEffect(() => {
-    const invoiceTotal = Number(invoiceDetail?.total || 0);
-    if (Number.isFinite(invoiceTotal) && invoiceTotal > 0) {
-      setPaymentAmount(String(invoiceTotal));
+    const net = Number((invoiceDetail as any)?.delivery_return_summary?.net_total || 0);
+    const gross = Number(invoiceDetail?.total || 0);
+    const next = Number.isFinite(net) && net > 0 ? net : gross;
+    if (Number.isFinite(next) && next > 0) {
+      setPaymentAmount(String(next));
     }
-  }, [invoiceDetail?.id, invoiceDetail?.total]);
+  }, [invoiceDetail?.id, invoiceDetail?.total, (invoiceDetail as any)?.delivery_return_summary?.net_total]);
 
   const groupedOrderIds = useMemo(
     () => groupedOrders.map((row) => String(row?.id || '').trim()).filter(Boolean),
@@ -383,6 +390,9 @@ export default function DriverOrderDetailPage() {
       }))
       .sort((a, b) => b.qty - a.qty);
   }, [groupedOrders, invoiceDetail]);
+  const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
+  const deliveryNetTotal = Number(deliveryReturnSummary?.net_total || 0);
+  const deliveryReturnTotal = Number(deliveryReturnSummary?.return_total || 0);
   const invoiceDisplayLabel = useMemo(() => {
     if (invoiceContext.invoiceNumber) return invoiceContext.invoiceNumber;
     if (invoiceContext.invoiceId) return `INV-${invoiceContext.invoiceId.slice(-8).toUpperCase()}`;
@@ -397,6 +407,7 @@ export default function DriverOrderDetailPage() {
   const activePaymentMethod = paymentMethod || invoiceContext.invoicePaymentMethod;
   const isCod = activePaymentMethod === 'cod';
   const paymentRecorded = isCod && ['cod_pending', 'paid'].includes(String(invoiceContext.invoicePaymentStatus || ''));
+  const returLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
   const paymentAmountValue = paymentAmount.trim() ? Number(paymentAmount) : undefined;
   const paymentAmountValid = paymentAmountValue === undefined || Number.isFinite(paymentAmountValue);
   const paymentMethodLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
@@ -513,6 +524,62 @@ export default function DriverOrderDetailPage() {
       setPaymentMessage('Gagal mencatat pembayaran.');
     } finally {
       setPaymentLoading(false);
+    }
+  };
+
+  const submitDeliveryRetur = async () => {
+    if (returLocked) {
+      setDeliveryReturMessage('Invoice sudah tercatat (paid/cod_pending). Retur delivery dikunci.');
+      return;
+    }
+    const payloadItems = invoiceItemRows
+      .map((row) => {
+        const draft = deliveryReturDraft[row.key];
+        const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
+        if (!Number.isFinite(qty) || qty <= 0) return null;
+        const order_id = typeof draft?.order_id === 'string' && draft.order_id.trim()
+          ? draft.order_id.trim()
+          : undefined;
+        return {
+          product_id: row.key,
+          qty,
+          ...(order_id ? { order_id } : {}),
+          ...(deliveryReturReason.trim() ? { reason: deliveryReturReason.trim() } : {})
+        };
+      })
+      .filter(Boolean) as Array<{ product_id: string; qty: number; order_id?: string; reason?: string }>;
+
+    if (payloadItems.length === 0) {
+      setDeliveryReturMessage('Isi minimal 1 item retur dengan qty > 0.');
+      return;
+    }
+
+    try {
+      setDeliveryReturLoading(true);
+      setDeliveryReturMessage('');
+      await api.driver.createDeliveryReturTicket(orderId, { items: payloadItems });
+
+      const invoiceIdToRefresh = String(resolvedInvoiceId || invoiceContext.invoiceId || '').trim();
+      if (invoiceIdToRefresh) {
+        try {
+          const invoiceRes = await api.invoices.getById(invoiceIdToRefresh);
+          setInvoiceDetail(invoiceRes.data || null);
+        } catch (refreshError) {
+          console.error('Refresh invoice detail after retur delivery failed:', refreshError);
+        }
+      }
+
+      await loadOrder();
+      setIsDeliveryReturOpen(false);
+      setDeliveryReturDraft({});
+      setDeliveryReturReason('Retur saat pengiriman (tidak jadi beli)');
+    } catch (error) {
+      const message = axios.isAxiosError(error)
+        ? String(error.response?.data?.message || error.message || 'Gagal mengajukan retur')
+        : 'Gagal mengajukan retur';
+      setDeliveryReturMessage(message);
+    } finally {
+      setDeliveryReturLoading(false);
     }
   };
 
@@ -651,6 +718,126 @@ export default function DriverOrderDetailPage() {
 
   return (
     <div className="p-6 space-y-5">
+      {isDeliveryReturOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-600">
+                  Retur Saat Pengiriman
+                </p>
+                <h3 className="mt-2 text-lg font-black text-slate-900">Ajukan retur (tidak jadi beli)</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Isi qty barang yang diretur. Setelah disimpan, nominal COD akan mengikuti total setelah retur.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (deliveryReturLoading) return;
+                  setIsDeliveryReturOpen(false);
+                }}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black uppercase text-slate-700"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alasan</label>
+              <input
+                value={deliveryReturReason}
+                onChange={(e) => setDeliveryReturReason(e.target.value)}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800"
+                placeholder="Contoh: Customer tidak jadi beli"
+              />
+            </div>
+
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-3">
+              {invoiceItemRows.map((row) => {
+                const draft = deliveryReturDraft[row.key] || { qty: '0', order_id: row.orderIds.length === 1 ? row.orderIds[0] : '' };
+                return (
+                  <div key={row.key} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black text-slate-900">{row.name}</p>
+                        <p className="text-[10px] text-slate-500">Qty invoice: <span className="font-black">{row.qty}</span></p>
+                      </div>
+                      <div className="text-right">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty Retur</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={row.qty}
+                          value={draft.qty}
+                          onChange={(e) => {
+                            const nextQty = e.target.value;
+                            setDeliveryReturDraft((prev) => ({
+                              ...prev,
+                              [row.key]: { ...draft, qty: nextQty }
+                            }));
+                          }}
+                          className="mt-1 w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-800"
+                        />
+                      </div>
+                    </div>
+                    {row.orderIds.length > 1 && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Order</label>
+                        <select
+                          value={draft.order_id || ''}
+                          onChange={(e) => {
+                            const nextOrderId = e.target.value;
+                            setDeliveryReturDraft((prev) => ({
+                              ...prev,
+                              [row.key]: { ...draft, order_id: nextOrderId }
+                            }));
+                          }}
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-800 bg-white"
+                        >
+                          <option value="">Pilih order...</option>
+                          {row.orderIds.map((oid) => (
+                            <option key={oid} value={oid}>
+                              {oid}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-slate-500">Produk ini ada di beberapa order. Wajib pilih order.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {invoiceItemRows.length === 0 && (
+                <p className="text-xs font-semibold text-slate-500">Tidak ada item pada invoice ini.</p>
+              )}
+            </div>
+
+            {deliveryReturMessage && (
+              <p className="text-xs font-bold text-rose-700">{deliveryReturMessage}</p>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsDeliveryReturOpen(false)}
+                disabled={deliveryReturLoading}
+                className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitDeliveryRetur()}
+                disabled={deliveryReturLoading || invoiceItemRows.length === 0}
+                className="py-3 rounded-xl bg-rose-600 text-white text-xs font-black uppercase disabled:opacity-60"
+              >
+                {deliveryReturLoading ? 'Memproses...' : 'Simpan Retur'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {paymentMethodConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
@@ -717,7 +904,7 @@ export default function DriverOrderDetailPage() {
 
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800 space-y-1">
               <p>
-                Total invoice: <span className="font-black">{formatCurrency(Number(invoiceContext.invoiceTotal || 0))}</span>
+                Total ditagih: <span className="font-black">{formatCurrency(Number((deliveryNetTotal > 0 ? deliveryNetTotal : invoiceContext.invoiceTotal) || 0))}</span>
               </p>
               <p>
                 Nominal dicatat: <span className="font-black">{formatCurrency(paymentAmountValue)}</span>
@@ -804,7 +991,7 @@ export default function DriverOrderDetailPage() {
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500 font-bold uppercase">Total Invoice</span>
             <span className="text-xs font-black text-slate-900">
-              Rp {Number(invoiceContext.invoiceTotal || 0).toLocaleString('id-ID')}
+              Rp {Number((deliveryNetTotal > 0 ? deliveryNetTotal : invoiceContext.invoiceTotal) || 0).toLocaleString('id-ID')}
             </span>
           </div>
         </div>
@@ -815,11 +1002,41 @@ export default function DriverOrderDetailPage() {
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Rincian Barang Invoice</p>
               <p className="text-sm font-black text-slate-900">Siapkan barang gabungan sebelum berangkat.</p>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] font-black uppercase text-slate-400">SKU</p>
-              <p className="text-sm font-black text-slate-900">{invoiceItemRows.length}</p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeliveryReturMessage('');
+                  const nextDraft: Record<string, { qty: string; order_id?: string }> = {};
+                  invoiceItemRows.forEach((row) => {
+                    nextDraft[row.key] = {
+                      qty: '0',
+                      order_id: row.orderIds.length === 1 ? row.orderIds[0] : '',
+                    };
+                  });
+                  setDeliveryReturDraft(nextDraft);
+                  setIsDeliveryReturOpen(true);
+                }}
+                disabled={returLocked || invoiceItemRows.length === 0}
+                className="inline-flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-black uppercase text-rose-700 disabled:opacity-60"
+              >
+                <Undo2 size={14} />
+                Ajukan Retur
+              </button>
+              <div className="text-right">
+                <p className="text-[10px] font-black uppercase text-slate-400">SKU</p>
+                <p className="text-sm font-black text-slate-900">{invoiceItemRows.length}</p>
+              </div>
             </div>
           </div>
+          {deliveryReturnTotal > 0 && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0 && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/60 p-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Ringkasan Retur Delivery</p>
+              <p className="text-xs font-bold text-slate-700 mt-1">
+                Potongan retur: {formatCurrency(deliveryReturnTotal)} · Total setelah retur: {formatCurrency(deliveryNetTotal)}
+              </p>
+            </div>
+          )}
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-64 overflow-y-auto space-y-2">
             {invoiceItemRows.map((item) => (
               <div key={item.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
