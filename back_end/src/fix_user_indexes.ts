@@ -1,8 +1,8 @@
 
 import { Sequelize } from 'sequelize';
-import dotenv from 'dotenv';
+import { loadEnv } from './config/env';
 
-dotenv.config();
+loadEnv();
 
 const sequelize = new Sequelize(
     process.env.DB_NAME as string,
@@ -48,6 +48,7 @@ const fixIndexes = async () => {
         };
 
         // Fix users table
+        await cleanTableIndexes('users', 'email');
         await cleanTableIndexes('users', 'whatsapp_number');
 
         // Fix products table

@@ -46,6 +46,14 @@ Run this SQL to enable category-level tier discounts with tier fallback snapshot
 mysql -u root -p migunani_motor_db < back_end/sql/20260217_add_category_tier_discounts_and_order_item_snapshot.sql
 ```
 
+## Repoint transaksi dari SKU lama ke SKU baru
+
+Jika ada transaksi yang masih menunjuk ke produk dengan SKU yang salah/lama, gunakan SQL ini untuk memindahkan semua `product_id` di tabel transaksi ke produk SKU baru:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260325_repoint_product_transactions_by_sku.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

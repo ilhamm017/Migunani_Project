@@ -88,7 +88,8 @@ services:
       BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:5000}
       DB_SCHEMA_LOCK_NAME: ${DB_SCHEMA_LOCK_NAME:-migunani_schema_lock}
       DB_SCHEMA_LOCK_TIMEOUT_SEC: ${DB_SCHEMA_LOCK_TIMEOUT_SEC:-30}
-      DB_SYNC_MODE: ${DB_SYNC_MODE:-alter}
+      # Avoid repeated DDL in long-lived DBs; use `alter` only when you explicitly need it.
+      DB_SYNC_MODE: ${DB_SYNC_MODE:-safe}
       WA_AUTO_INIT: ${WA_AUTO_INIT:-true}
       WA_AUTO_RECONNECT: ${WA_AUTO_RECONNECT:-true}
       WA_CLEAN_PROFILE_LOCKS: ${WA_CLEAN_PROFILE_LOCKS:-true}

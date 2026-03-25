@@ -25,7 +25,8 @@
     "test:boundary-read": "ts-node src/scripts/regression_boundary_read.ts",
     "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
     "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts",
-    "purge:customer-transactions": "ts-node src/scripts/purge_customer_transactions.ts"
+    "purge:customer-transactions": "ts-node src/scripts/purge_customer_transactions.ts",
+    "repoint:sku-transactions": "ts-node src/scripts/repoint_product_transactions_by_sku.ts"
   },
   "keywords": [],
   "author": "",

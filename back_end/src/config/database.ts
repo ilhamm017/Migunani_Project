@@ -1,6 +1,7 @@
 import { Sequelize } from 'sequelize';
-import dotenv from 'dotenv';
-dotenv.config();
+import { loadEnv } from './env';
+
+loadEnv();
 
 const sequelize = new Sequelize(
     process.env.DB_NAME || 'migunani_motor_db',

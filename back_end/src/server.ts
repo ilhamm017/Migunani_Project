@@ -4,7 +4,6 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
@@ -18,8 +17,6 @@ import { acquireSchemaLock, SchemaLockError } from './utils/schemaLock';
 import { TaxConfigService } from './services/TaxConfigService';
 import { startNotificationOutboxWorker } from './services/TransactionNotificationOutboxService';
 import { auditLogMiddleware } from './middleware/auditLogMiddleware';
-
-dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
@@ -316,10 +313,10 @@ const runStartupStep = async (name: string, fn: () => Promise<void>) => {
 type DbSyncMode = 'alter' | 'safe' | 'off';
 
 const resolveDbSyncMode = (): DbSyncMode => {
-    const rawMode = String(process.env.DB_SYNC_MODE || 'alter').trim().toLowerCase();
+    const rawMode = String(process.env.DB_SYNC_MODE || 'safe').trim().toLowerCase();
     if (rawMode === 'safe' || rawMode === 'off' || rawMode === 'alter') return rawMode;
-    console.warn(`[Startup] Unknown DB_SYNC_MODE='${rawMode}', fallback to 'alter'`);
-    return 'alter';
+    console.warn(`[Startup] Unknown DB_SYNC_MODE='${rawMode}', fallback to 'safe'`);
+    return 'safe';
 };
 
 const isDeadlockError = (error: any): boolean => {
@@ -395,8 +392,26 @@ const ensureInboundCostVarianceColumnsReady = async () => {
 
     if (missing.length === 0) return;
 
-    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Running alter sync to update schema...`);
-    await sequelize.sync({ alter: true });
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Applying targeted ALTER TABLE...`);
+
+    const addColumn = async (columnName: string, sqlType: string) => {
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${sqlType}`
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_FIELDNAME') return;
+            throw error;
+        }
+    };
+
+    if (missing.includes('expected_unit_cost')) {
+        await addColumn('expected_unit_cost', 'DECIMAL(15, 2) NULL');
+    }
+    if (missing.includes('cost_note')) {
+        await addColumn('cost_note', 'TEXT NULL');
+    }
 };
 
 const syncDatabaseWithRetry = async () => {
