@@ -1,5 +1,5 @@
 import { Transaction } from 'sequelize';
-import { CodCollection, DriverDebtAdjustment, Invoice, InvoiceItem, Order, OrderItem } from '../models';
+import { CodCollection, DriverDebtAdjustment, DriverBalanceAdjustment, Invoice, InvoiceItem, Order, OrderItem } from '../models';
 
 type DriverCodExposure = {
     exposure: number;
@@ -80,8 +80,24 @@ export const calculateDriverCodExposure = async (
     });
     const adjustmentsTotal = openAdjustments.reduce((sum, row: any) => sum + Number(row.amount || 0), 0);
 
+    const openBalanceAdjustments = await DriverBalanceAdjustment.findAll({
+        where: {
+            driver_id: driverId,
+            status: 'open'
+        },
+        attributes: ['amount', 'direction'],
+        transaction: options?.transaction
+    });
+    const balanceNet = openBalanceAdjustments.reduce((sum, row: any) => {
+        const dir = String(row?.direction || '').trim().toLowerCase();
+        const amt = Number(row?.amount || 0);
+        if (!Number.isFinite(amt) || amt <= 0) return sum;
+        if (dir === 'credit') return sum - amt;
+        return sum + amt;
+    }, 0);
+
     return {
-        exposure: Math.max(pendingInvoiceTotal, collectedTotal) + Math.max(0, adjustmentsTotal),
+        exposure: Math.max(0, Math.max(pendingInvoiceTotal, collectedTotal) + Math.max(0, adjustmentsTotal) + balanceNet),
         pendingInvoiceTotal,
         collectedTotal
     };

@@ -7,7 +7,6 @@ import { useAuthStore } from '@/store/authStore';
 
 const financeMenus = [
   { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi bukti transfer customer.', icon: CheckCircle, tone: 'bg-emerald-100 text-emerald-700' },
-  { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Terima setoran COD dari driver.', icon: Wallet, tone: 'bg-amber-100 text-amber-700' },
   { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Proses pengembalian dana retur.', icon: RotateCcw, tone: 'bg-indigo-100 text-indigo-700' },
   { href: '/admin/finance/biaya', title: 'Biaya Operasional', desc: 'Pengajuan dan pencairan expense.', icon: Clock, tone: 'bg-blue-100 text-blue-700' },
   { href: '/admin/finance/piutang', title: 'Piutang (AR)', desc: 'Monitor invoice belum lunas.', icon: Wallet, tone: 'bg-rose-100 text-rose-700' },

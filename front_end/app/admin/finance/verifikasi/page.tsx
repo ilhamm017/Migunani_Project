@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import Image from 'next/image';
@@ -73,7 +72,7 @@ const normalizeProofImageUrl = (raw?: string | null) => {
 export default function FinanceVerifyPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance']);
 
-  const [activeTab, setActiveTab] = useState<'verify' | 'cod' | 'completed'>('verify');
+  const [activeTab, setActiveTab] = useState<'verify' | 'completed'>('verify');
   const [orders, setOrders] = useState<FinanceOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -166,15 +165,10 @@ export default function FinanceVerifyPage() {
   const tabOrders = useMemo(() => {
       const filtered = orders.filter(o => {
         if (activeTab === 'verify') return o.status === 'waiting_admin_verification' && o.Invoice?.payment_method === 'transfer_manual';
-        if (activeTab === 'cod') {
-        const paymentMethod = o.Invoice?.payment_method || '';
-        const isCod = ['cod', 'cash_store'].includes(paymentMethod);
-        return o.status === 'delivered' && isCod && o.Invoice?.payment_status !== 'paid';
-      }
-      if (activeTab === 'completed') {
-        return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
-      }
-      return false;
+        if (activeTab === 'completed') {
+          return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
+        }
+        return false;
     });
     return filtered.sort((a, b) => {
       const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
@@ -280,13 +274,6 @@ export default function FinanceVerifyPage() {
             Verifikasi
           </button>
           <button
-            onClick={() => setActiveTab('cod')}
-            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'cod' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600'
-              }`}
-          >
-            COD Setoran
-          </button>
-          <button
             onClick={() => setActiveTab('completed')}
             className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeTab === 'completed' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600'
               }`}
@@ -306,7 +293,7 @@ export default function FinanceVerifyPage() {
         ) : (
           boardRows.map((o) => {
             const proofUrl = normalizeProofImageUrl(o.Invoice?.payment_proof_url);
-            const isCodTab = activeTab === 'cod';
+            const isCodTab = false;
             // const isVerifyTab = activeTab === 'verify'; 
             const initial = (o.customer_name || 'C').charAt(0).toUpperCase();
 
@@ -365,14 +352,7 @@ export default function FinanceVerifyPage() {
                     </>
                   )}
 
-                  {activeTab === 'cod' && (
-                    <Link
-                      href="/admin/finance/cod"
-                      className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-orange-600 text-center"
-                    >
-                      Buka Settlement COD
-                    </Link>
-                  )}
+                  {/* COD settlement handled via kasir "Setoran Driver" page */}
 
                   {activeTab === 'completed' && (o.Invoice?.payment_status === 'paid') && (
                       <button

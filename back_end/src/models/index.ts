@@ -29,6 +29,7 @@ import StockOpnameItem from './StockOpnameItem';
 import OrderAllocation from './OrderAllocation';
 import Retur from './Retur';
 import DriverDebtAdjustment from './DriverDebtAdjustment';
+import DriverBalanceAdjustment from './DriverBalanceAdjustment';
 import ReturHandover from './ReturHandover';
 import ReturHandoverItem from './ReturHandoverItem';
 import Account from './Account';
@@ -82,6 +83,12 @@ DriverDebtAdjustment.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice
 Invoice.hasMany(DriverDebtAdjustment, { foreignKey: 'invoice_id', as: 'DriverDebtAdjustments' });
 DriverDebtAdjustment.belongsTo(Retur, { foreignKey: 'retur_id', as: 'Retur' });
 Retur.hasOne(DriverDebtAdjustment, { foreignKey: 'retur_id', as: 'DriverDebtAdjustment' });
+
+// Driver Balance Adjustments (COD shortage/surplus)
+DriverBalanceAdjustment.belongsTo(User, { foreignKey: 'driver_id', as: 'Driver' });
+User.hasMany(DriverBalanceAdjustment, { foreignKey: 'driver_id', as: 'DriverBalanceAdjustments' });
+DriverBalanceAdjustment.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+User.hasMany(DriverBalanceAdjustment, { foreignKey: 'created_by', as: 'CreatedDriverBalanceAdjustments' });
 
 // Retur Handovers
 ReturHandover.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice' });
@@ -339,6 +346,7 @@ export {
     OrderAllocation,
     Retur,
     DriverDebtAdjustment,
+    DriverBalanceAdjustment,
     ReturHandover,
     ReturHandoverItem,
     Account,

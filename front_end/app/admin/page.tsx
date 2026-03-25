@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt, PackageCheck } from 'lucide-react';
+import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -18,11 +18,9 @@ import BalanceCard from '@/components/admin/finance/BalanceCard';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 
 type DashboardArRow = { amount_due?: number | string | null };
-type DashboardCodRow = { total_pending?: number | string | null };
 type DashboardProductRow = { stock_quantity?: number | string | null };
 type DashboardAuditRow = { status?: string | null };
 type DashboardReturRow = { status?: string | null; admin_response?: string | null };
-type DashboardReturHandoverRow = { status?: string | null };
 
 export default function AdminOverviewPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver']);
@@ -160,13 +158,15 @@ export default function AdminOverviewPage() {
         newWarehouseBadges['/admin/warehouse/retur'] = pendingReturActions;
       }
 
-      if (role === 'kasir' || role === 'admin_gudang' || role === 'super_admin') {
-        const handoversRes = await api.retur.getHandovers({ status: 'submitted' }).catch(() => ({ data: [] }));
-        const handovers = Array.isArray((handoversRes as any).data)
-          ? ((handoversRes as any).data as DashboardReturHandoverRow[])
-          : [];
-        const pendingHandovers = handovers.filter((h) => String(h?.status || '').toLowerCase() === 'submitted').length;
-        newWarehouseBadges['/admin/warehouse/retur-handovers'] = pendingHandovers;
+      if (role === 'kasir' || role === 'super_admin') {
+        const depositsRes = await api.admin.driverDeposit.getList().catch(() => ({ data: [] }));
+        const deposits = Array.isArray((depositsRes as any).data) ? ((depositsRes as any).data as any[]) : [];
+        const pendingTasks = deposits.reduce((sum, d) => {
+          const cod = Array.isArray(d?.cod_invoices_pending) ? d.cod_invoices_pending.length : 0;
+          const handovers = Array.isArray(d?.retur_handovers_pending) ? d.retur_handovers_pending.length : 0;
+          return sum + cod + handovers;
+        }, 0);
+        newWarehouseBadges['/admin/setoran-driver'] = pendingTasks;
       }
 
       if (!isMountedRef.current) return;
@@ -180,20 +180,14 @@ export default function AdminOverviewPage() {
       }));
 
       if (role === 'admin_finance' || role === 'super_admin') {
-        const [resCod, resExp] = await Promise.all([
-          api.admin.finance.getDriverCodList().catch(() => ({ data: [] })),
+        const [resExp] = await Promise.all([
           api.admin.finance.getExpenses({ status: 'requested', limit: 1 }).catch(() => ({ data: { total: 0 } })),
         ]);
-
-        let codCount = 0;
-        if (Array.isArray((resCod as any).data)) {
-          codCount = ((resCod as any).data as DashboardCodRow[]).filter((d) => Number((d as any).total_pending || 0) > 0).length;
-        }
 
         if (!isMountedRef.current) return;
         setFinanceStats({
           pendingVerify: Number(stats.waiting_admin_verification || 0),
-          pendingCod: codCount,
+          pendingCod: 0,
           pendingExpense: Number((resExp as any).data?.total || 0),
           cashBalance: 0,
         });
@@ -636,17 +630,17 @@ export default function AdminOverviewPage() {
 
           {financeCardBadges.codSettlement > 0 && (
             <Link
-              href="/admin/finance/cod"
+              href="/admin/setoran-driver"
               className="block rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm hover:border-amber-300"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Notifikasi COD</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Notifikasi Setoran Driver</p>
                   <p className="mt-1 text-sm font-black text-slate-900">
-                    {financeCardBadges.codSettlement} setoran COD menunggu diterima admin finance
+                    {financeCardBadges.codSettlement} item setoran driver menunggu diproses
                   </p>
                   <p className="mt-1 text-[11px] font-semibold text-amber-800">
-                    Driver sudah mencatat COD dari customer. Lanjutkan ke settlement COD untuk meminta setoran uang dari driver.
+                    Terima uang COD dan/atau barang retur driver dalam satu proses.
                   </p>
                 </div>
                 <div className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-black text-white">
@@ -674,31 +668,6 @@ export default function AdminOverviewPage() {
                   </div>
                   <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">
                     Review
-                  </div>
-                </div>
-              </Link>
-
-              {/* Task 2: Terima Setoran COD */}
-              <Link href="/admin/finance/cod" className="block relative bg-white border border-slate-100 rounded-2xl p-4 shadow-sm active:scale-95 transition-transform overflow-hidden group hover:border-emerald-300">
-                {financeCardBadges.codSettlement > 0 && (
-                  <span className="absolute top-3 right-3 bg-rose-600 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] px-1.5 flex items-center justify-center leading-none shadow-sm z-10 animate-bounce">
-                    {financeCardBadges.codSettlement}
-                  </span>
-                )}
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center group-hover:bg-amber-100 transition-colors">
-                    <Wallet size={24} />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-bold text-slate-900 text-sm">Terima Setoran COD</h4>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {financeCardBadges.codSettlement > 0
-                        ? `${financeCardBadges.codSettlement} order menunggu settlement`
-                        : 'Semua setoran beres'}
-                    </p>
-                  </div>
-                  <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-sm group-hover:bg-emerald-700 transition-colors">
-                    Settle
                   </div>
                 </div>
               </Link>
@@ -928,21 +897,21 @@ export default function AdminOverviewPage() {
   }
 
 
-  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
-  const quickActionCards = [
-    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
-    { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Setoran driver menunggu proses.', icon: Wallet, badge: financeCardBadges.codSettlement, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
-    { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
-    { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
+	  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
+	  const canAccessSetoranDriver = user?.role === 'kasir' || user?.role === 'super_admin';
+	  const quickActionCards = [
+	    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
+	    { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
+	    { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
+	    { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
     { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur pesanan gudang.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white' },
 	    { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
     { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white' },
     { href: '/admin/reports/stock-reduction', title: 'Pengurangan Stok', desc: 'Monitor stok keluar & export IPO.', icon: ShoppingCart, badge: 0, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
     { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
-    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
-    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
-    { href: '/admin/warehouse/retur-handovers', title: 'Retur Handover', desc: 'Terima retur driver per invoice.', icon: PackageCheck, badge: warehouseCardBadges['/admin/warehouse/retur-handovers'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
-  ];
+	    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
+	    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
+	  ].filter((item) => item.href !== '/admin/setoran-driver' || canAccessSetoranDriver);
   const featureCategories = [
 	    {
 	      group: 'Logistics & Inventory',
@@ -952,10 +921,10 @@ export default function AdminOverviewPage() {
 	        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
 	        { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
 	        { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
-        { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
-        { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
-        { href: '/admin/warehouse/retur-handovers', title: 'Retur Handover', desc: 'Terima retur driver (per invoice).', icon: PackageCheck, badge: warehouseCardBadges['/admin/warehouse/retur-handovers'] || 0 },
-        { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
+	        { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
+	        { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
+	        { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0 },
+	        { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
 	        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
 	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
 	        { href: '/admin/warehouse/vehicle-types', title: 'Jenis Kendaraan', desc: 'Master aplikasi kendaraan.', icon: Car },
@@ -994,10 +963,9 @@ export default function AdminOverviewPage() {
       group: 'Finance & Accounts',
       tone: 'text-amber-600 bg-amber-50 border-amber-100',
       menus: [
-        { href: '/admin/finance', title: 'FinanceHub', desc: 'Verifikasi dan pengeluaran.', icon: DollarSign },
-        { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi pembayaran transfer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment },
-        { href: '/admin/finance/cod', title: 'Settlement COD', desc: 'Terima setoran driver.', icon: Wallet, badge: financeCardBadges.codSettlement },
-        { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Klaim balik dan refund.', icon: RotateCcw, badge: financeCardBadges.refundRetur },
+	        { href: '/admin/finance', title: 'FinanceHub', desc: 'Verifikasi dan pengeluaran.', icon: DollarSign },
+	        { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi pembayaran transfer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment },
+	        { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Klaim balik dan refund.', icon: RotateCcw, badge: financeCardBadges.refundRetur },
         { href: '/admin/finance/biaya', title: 'Biaya Operasional', desc: 'Pengajuan dan pencairan.', icon: Clock, badge: financeStats.pendingExpense },
         { href: '/admin/finance/piutang', title: 'Piutang (AR)', desc: 'Monitor tagihan aktif.', icon: Wallet },
         { href: '/admin/finance/credit-note', title: 'Credit Note', desc: 'Koreksi nota kredit.', icon: FileText },
@@ -1168,17 +1136,17 @@ export default function AdminOverviewPage() {
 
       {financeCardBadges.codSettlement > 0 && (
         <Link
-          href="/admin/finance/cod"
+          href="/admin/setoran-driver"
           className="block rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 shadow-sm hover:border-amber-300"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-700">Notifikasi COD</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-700">Notifikasi Setoran Driver</p>
               <p className="mt-1 text-sm font-black text-slate-900">
-                {financeCardBadges.codSettlement} setoran COD menunggu diterima admin finance
+                {financeCardBadges.codSettlement} item setoran driver menunggu diproses
               </p>
               <p className="mt-1 text-[11px] font-semibold text-amber-800">
-                Driver sudah menyelesaikan COD dan membawa uang customer. Buka settlement COD untuk meminta setoran dari driver.
+                Terima uang COD dan/atau barang retur driver dalam satu proses.
               </p>
             </div>
             <div className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-black text-white">

@@ -216,6 +216,7 @@ import staffRoutes from './routes/staff';
 import stockOpnameRoutes from './routes/stockOpname';
 import allocationRoutes from './routes/allocation';
 import returRoutes from './routes/retur';
+import driverDepositRoutes from './routes/driverDeposit';
 import customerRoutes from './routes/customer';
 import shippingMethodRoutes from './routes/shippingMethod';
 import publicShippingMethodRoutes from './routes/publicShippingMethod';
@@ -244,6 +245,7 @@ app.use('/api/v1', procurementRoutes); // /api/v1/admin/procurement...
 app.use('/api/v1/inventory/audit', stockOpnameRoutes);
 app.use('/api/v1/allocation', allocationRoutes);
 app.use('/api/v1/retur', returRoutes);
+app.use('/api/v1/admin/driver-deposit', driverDepositRoutes);
 app.use('/api/v1/admin/customers', customerRoutes);
 app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
 app.use('/api/v1/shipping-methods', publicShippingMethodRoutes);

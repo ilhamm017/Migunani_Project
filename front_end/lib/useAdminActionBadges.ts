@@ -55,6 +55,11 @@ const toNumber = (value: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object') return null;
+  return value as Record<string, unknown>;
+};
+
 const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => {
   // Customer-action statuses (e.g. waiting_payment/debt_pending) are excluded from admin action badge.
   // Finance cares about invoices to issue, payment proofs to verify, and deliveries to complete.
@@ -96,11 +101,15 @@ const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => 
   return 0;
 };
 
-const countPendingCodSettlements = (rows: unknown): number => {
+const countPendingDriverDeposits = (rows: unknown): number => {
   if (!Array.isArray(rows)) return 0;
   return rows.reduce((acc, item) => {
-    const orders = Array.isArray((item as { orders?: unknown[] })?.orders) ? (item as { orders: unknown[] }).orders : [];
-    return acc + orders.length;
+    const rec = asRecord(item);
+    const codRaw = rec ? rec.cod_invoices_pending : null;
+    const handoversRaw = rec ? rec.retur_handovers_pending : null;
+    const cod = Array.isArray(codRaw) ? codRaw.length : 0;
+    const handovers = Array.isArray(handoversRaw) ? handoversRaw.length : 0;
+    return acc + cod + handovers;
   }, 0);
 };
 
@@ -144,24 +153,23 @@ export const useAdminActionBadges = ({
         .catch(() => ({} as DashboardStats));
 
       const needFinanceCounts = normalizedRole === 'admin_finance' || normalizedRole === 'super_admin';
-      const codPromise = needFinanceCounts
-        ? api.admin.finance.getDriverCodList().then((res) => res.data).catch(() => [])
+      const needDriverDepositCounts = normalizedRole === 'kasir' || normalizedRole === 'super_admin';
+      const driverDepositPromise = needDriverDepositCounts
+        ? api.admin.driverDeposit.getList().then((res) => res.data).catch(() => [])
         : Promise.resolve([]);
       const returPromise = needFinanceCounts
         ? api.retur.getAll({ retur_type: 'customer_request' }).then((res) => res.data).catch(() => [])
         : Promise.resolve([]);
 
-      const [stats, codRows, returRows] = await Promise.all([statsPromise, codPromise, returPromise]);
+      const [stats, driverDeposits, returRows] = await Promise.all([statsPromise, driverDepositPromise, returPromise]);
 
       const nextBadges: AdminActionBadges = {
         orderBadgeCount: resolveOrderBadgeCount(stats, normalizedRole),
-        financeCardBadges: needFinanceCounts
-          ? {
-            verifyPayment: toNumber(stats.waiting_admin_verification),
-            codSettlement: countPendingCodSettlements(codRows),
-            refundRetur: countPendingReturRefunds(returRows),
-          }
-          : ZERO_FINANCE_BADGES,
+        financeCardBadges: {
+          verifyPayment: needFinanceCounts ? toNumber(stats.waiting_admin_verification) : 0,
+          codSettlement: needDriverDepositCounts ? countPendingDriverDeposits(driverDeposits) : 0,
+          refundRetur: needFinanceCounts ? countPendingReturRefunds(returRows) : 0,
+        },
       };
 
       if (isMounted) {

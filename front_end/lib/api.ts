@@ -216,6 +216,18 @@ export const api = {
 
     // Admin
     admin: {
+        driverDeposit: {
+            getList: () => apiClient.get('/admin/driver-deposit'),
+            confirm: (payload: {
+                driver_id: string;
+                cod?: { invoice_ids: string[]; amount_received: number };
+                handovers?: Array<{
+                    handover_id: number;
+                    note?: string;
+                    items: Array<{ retur_id: string; qty_received: number }>;
+                }>;
+            }) => apiClient.post('/admin/driver-deposit/confirm', payload),
+        },
         customers: {
             search: (query: string, params?: { status?: 'all' | 'active' | 'banned'; limit?: number }) =>
                 apiClient.get('/admin/customers/search', { params: { search: query, ...params } }),

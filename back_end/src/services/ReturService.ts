@@ -1,5 +1,5 @@
 import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account, DriverDebtAdjustment } from '../models';
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import { JournalService } from './JournalService';
 import { emitReturStatusChanged } from '../utils/orderNotification';
 import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
@@ -145,9 +145,11 @@ export class ReturService {
             is_back_to_stock?: boolean;
             qty_received?: number;
         },
-        user: { id: string; role: string }
+        user: { id: string; role: string },
+        options?: { transaction?: Transaction }
     ) {
-        const t = await sequelize.transaction();
+        const externalTx = options?.transaction;
+        const t = externalTx || await sequelize.transaction();
         try {
             const adminAllowedStatuses = [
                 'approved',
@@ -317,7 +319,8 @@ export class ReturService {
                 const product = await Product.findByPk(retur.product_id, { transaction: t, lock: t.LOCK.UPDATE });
                 if (product) {
                     const oldStock = Number(product.stock_quantity);
-                    const returnQty = Number(retur.qty);
+                    const receivedQtyRaw = Number((retur as any).qty_received);
+                    const returnQty = Number.isFinite(receivedQtyRaw) ? Math.max(0, Math.trunc(receivedQtyRaw)) : Number(retur.qty);
                     await product.update({
                         stock_quantity: oldStock + returnQty
                     }, { transaction: t });
@@ -365,11 +368,15 @@ export class ReturService {
                 requestContext: 'retur_admin_status_changed'
             });
 
-            await t.commit();
+            if (!externalTx) {
+                await t.commit();
+            }
 
             return { retur, nextStatus };
         } catch (error) {
-            try { await t.rollback(); } catch { }
+            if (!externalTx) {
+                try { await t.rollback(); } catch { }
+            }
             throw error;
         }
     }
