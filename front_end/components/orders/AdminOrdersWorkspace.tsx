@@ -27,18 +27,19 @@ type CustomerGroup = {
   customer_id: string | null;
   customer_name: string;
   orders: AdminOrderListRow[];
-  counts: {
-    baru: number;
-    allocated: number;
-    backorder: number;
-    pembayaran: number;
-    gudang: number;
-    pengiriman: number;
-    selesai: number;
-  };
-};
+	  counts: {
+	    baru: number;
+	    allocated: number;
+	    backorder: number;
+	    pembayaran: number;
+	    gudang: number;
+	    checker: number;
+	    pengiriman: number;
+	    selesai: number;
+	  };
+	};
 
-type OrderSection = 'baru' | 'allocated' | 'backorder' | 'pembayaran' | 'gudang' | 'pengiriman' | 'selesai';
+type OrderSection = 'baru' | 'allocated' | 'backorder' | 'pembayaran' | 'gudang' | 'checker' | 'pengiriman' | 'selesai';
 type OrderSectionFilter = 'all' | OrderSection;
 
 type BackorderSnapshotItem = {
@@ -156,10 +157,10 @@ const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'checked', 'wa
 const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
 const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'ready_to_ship', 'partially_fulfilled', 'hold', 'delivered', 'completed']);
 const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;
-const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
-const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
-const ORDER_SECTION_OPTIONS_ALL: OrderSection[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
-const ORDER_SECTION_OPTIONS_WAREHOUSE: OrderSection[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'pengiriman', 'selesai'];
+const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
+const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
+const ORDER_SECTION_OPTIONS_ALL: OrderSection[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
+const ORDER_SECTION_OPTIONS_WAREHOUSE: OrderSection[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
 const CANCELABLE_ORDER_STATUSES = new Set([
   'pending',
   'waiting_invoice',
@@ -178,6 +179,7 @@ const getSectionFilterLabel = (filter: OrderSectionFilter) => {
   if (filter === 'backorder') return 'Backorder';
   if (filter === 'pembayaran') return 'Menunggu Bayar';
   if (filter === 'gudang') return 'Proses Gudang';
+  if (filter === 'checker') return 'Checker';
   if (filter === 'pengiriman') return 'Pengiriman';
   return 'Selesai';
 };
@@ -187,6 +189,7 @@ const getSectionLabel = (section: OrderSection) => {
   if (section === 'backorder') return 'Backorder';
   if (section === 'pembayaran') return 'Menunggu Pembayaran';
   if (section === 'gudang') return 'Proses Gudang';
+  if (section === 'checker') return 'Checker';
   if (section === 'pengiriman') return 'Pengiriman';
   return 'Selesai';
 };
@@ -246,6 +249,17 @@ const resolveWorkspaceShipmentStatus = (order: AdminOrderListRow, detail?: Order
     return normalizeOrderStatus(invoiceShipmentStatus);
   }
   return normalizeOrderStatus(order?.status);
+};
+
+const resolveWorkspaceCourierId = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
+  const invoice = detail?.Invoice || order?.Invoice || null;
+  const courierId = String(
+    (invoice as any)?.courier_id ||
+    (order as any)?.courier_id ||
+    (detail as any)?.courier_id ||
+    ''
+  ).trim();
+  return courierId;
 };
 const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
@@ -586,11 +600,11 @@ export default function AdminOrdersWorkspace({
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
   const sectionFilterOptions = useMemo<OrderSectionFilter[]>(
-    () => (warehouseCustomerFocusMode ? ['gudang', 'pengiriman'] : isWarehouseRole ? ORDER_FILTER_OPTIONS_WAREHOUSE : ORDER_FILTER_OPTIONS_ALL),
+    () => (warehouseCustomerFocusMode ? ['gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_FILTER_OPTIONS_WAREHOUSE : ORDER_FILTER_OPTIONS_ALL),
     [isWarehouseRole, warehouseCustomerFocusMode]
   );
   const sectionOptions = useMemo<OrderSection[]>(
-    () => (warehouseCustomerFocusMode ? ['gudang', 'pengiriman'] : isWarehouseRole ? ORDER_SECTION_OPTIONS_WAREHOUSE : ORDER_SECTION_OPTIONS_ALL),
+    () => (warehouseCustomerFocusMode ? ['gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_SECTION_OPTIONS_WAREHOUSE : ORDER_SECTION_OPTIONS_ALL),
     [isWarehouseRole, warehouseCustomerFocusMode]
   );
 
@@ -701,10 +715,12 @@ export default function AdminOrdersWorkspace({
   const classifyOrderSections = useCallback((order: AdminOrderListRow, detail?: OrderDetailResponse): OrderSection[] => {
     const rawStatus = String(order?.status || '');
     const normalizedStatus = resolveWorkspaceShipmentStatus(order, detail);
+    const courierId = resolveWorkspaceCourierId(order, detail);
     const isCompleted = COMPLETED_STATUSES.has(rawStatus);
     const isPayment = PAYMENT_STATUSES.has(rawStatus);
     const isWarehouse = WAREHOUSE_STATUSES.has(normalizedStatus);
     const isShipping = normalizedStatus === 'shipped';
+    const isCheckerStage = normalizedStatus === 'checked' || (normalizedStatus === 'ready_to_ship' && Boolean(courierId));
     const isBackorder = isOrderBackorder(order, detail, backorderIds);
     const isDelivered = normalizedStatus === 'delivered';
     const isPartiallyFulfilled = normalizedStatus === 'partially_fulfilled';
@@ -722,7 +738,7 @@ export default function AdminOrdersWorkspace({
     if (isPayment) sections.push('pembayaran');
     if (isShipping) sections.push('pengiriman');
     if (isAllocatedReady) sections.push('allocated');
-    if (isWarehouse) sections.push('gudang');
+    if (isWarehouse) sections.push(isCheckerStage ? 'checker' : 'gudang');
 
     if (sections.length === 0) sections.push('baru');
     return Array.from(new Set(sections));
@@ -754,7 +770,7 @@ export default function AdminOrdersWorkspace({
         customer_id: customerId,
         customer_name: name,
         orders: [],
-        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, pengiriman: 0, selesai: 0 },
+        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, checker: 0, pengiriman: 0, selesai: 0 },
       };
 
       const detail = orderDetails[String(order.id)];
@@ -768,8 +784,8 @@ export default function AdminOrdersWorkspace({
     });
 
     return Array.from(map.values()).sort((a, b) => {
-      const aCount = a.counts.baru + a.counts.allocated + a.counts.backorder + a.counts.pembayaran + a.counts.gudang + a.counts.pengiriman + a.counts.selesai;
-      const bCount = b.counts.baru + b.counts.allocated + b.counts.backorder + b.counts.pembayaran + b.counts.gudang + b.counts.pengiriman + b.counts.selesai;
+      const aCount = a.counts.baru + a.counts.allocated + a.counts.backorder + a.counts.pembayaran + a.counts.gudang + a.counts.checker + a.counts.pengiriman + a.counts.selesai;
+      const bCount = b.counts.baru + b.counts.allocated + b.counts.backorder + b.counts.pembayaran + b.counts.gudang + b.counts.checker + b.counts.pengiriman + b.counts.selesai;
       return bCount - aCount;
     });
   }, [orders, orderDetails, classifyOrderSections]);
@@ -804,6 +820,7 @@ export default function AdminOrdersWorkspace({
         acc.counts.backorder += group.counts.backorder;
         acc.counts.pembayaran += group.counts.pembayaran;
         acc.counts.gudang += group.counts.gudang;
+        acc.counts.checker += group.counts.checker;
         acc.counts.pengiriman += group.counts.pengiriman;
         acc.counts.selesai += group.counts.selesai;
         return acc;
@@ -813,15 +830,15 @@ export default function AdminOrdersWorkspace({
         customer_id: null,
         customer_name: 'Semua Customer',
         orders: [],
-        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, pengiriman: 0, selesai: 0 },
+        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, checker: 0, pengiriman: 0, selesai: 0 },
       }
     );
   }, [filteredCustomerGroups, forcedCustomerId, forcedCustomerKey]);
 
   const groupedOrders = useMemo(() => {
     const group = selectedGroup;
-    if (!group) return { baru: [], allocated: [], backorder: [], pembayaran: [], gudang: [], pengiriman: [], selesai: [] };
-    const result = { baru: [] as AdminOrderListRow[], allocated: [] as AdminOrderListRow[], backorder: [] as AdminOrderListRow[], pembayaran: [] as AdminOrderListRow[], gudang: [] as AdminOrderListRow[], pengiriman: [] as AdminOrderListRow[], selesai: [] as AdminOrderListRow[] };
+    if (!group) return { baru: [], allocated: [], backorder: [], pembayaran: [], gudang: [], checker: [], pengiriman: [], selesai: [] };
+    const result = { baru: [] as AdminOrderListRow[], allocated: [] as AdminOrderListRow[], backorder: [] as AdminOrderListRow[], pembayaran: [] as AdminOrderListRow[], gudang: [] as AdminOrderListRow[], checker: [] as AdminOrderListRow[], pengiriman: [] as AdminOrderListRow[], selesai: [] as AdminOrderListRow[] };
     const getRecencyTs = (order: AdminOrderListRow) => {
       const updatedTs = Date.parse(String(order?.updatedAt || ''));
       if (Number.isFinite(updatedTs)) return updatedTs;
@@ -873,6 +890,7 @@ export default function AdminOrdersWorkspace({
       backorder: groupedOrders.backorder.filter(matchOrder),
       pembayaran: groupedOrders.pembayaran.filter(matchOrder),
       gudang: groupedOrders.gudang.filter(matchOrder),
+      checker: groupedOrders.checker.filter(matchOrder),
       pengiriman: groupedOrders.pengiriman.filter(matchOrder),
       selesai: groupedOrders.selesai.filter(matchOrder),
     };
@@ -1086,7 +1104,7 @@ export default function AdminOrdersWorkspace({
 
   useEffect(() => {
     if (!selectedGroup) return;
-    const targetOrders = [...groupedOrders.baru, ...groupedOrders.allocated, ...groupedOrders.backorder, ...groupedOrders.pembayaran, ...groupedOrders.gudang, ...groupedOrders.selesai];
+    const targetOrders = [...groupedOrders.baru, ...groupedOrders.allocated, ...groupedOrders.backorder, ...groupedOrders.pembayaran, ...groupedOrders.gudang, ...groupedOrders.checker, ...groupedOrders.pengiriman, ...groupedOrders.selesai];
     const missingDetails = targetOrders.filter((order) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return false;
@@ -1161,7 +1179,7 @@ export default function AdminOrdersWorkspace({
         // ignore hard failure: card will fallback to allocation-based summary
       }
     })();
-  }, [selectedGroup, groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, orderDetails, invoiceDetailByInvoiceId, invoiceItemSummaryByInvoiceId]);
+  }, [selectedGroup, groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.checker, groupedOrders.pengiriman, groupedOrders.selesai, orderDetails, invoiceDetailByInvoiceId, invoiceItemSummaryByInvoiceId]);
 
   const visibleOrdersForInvoiceBoard = useMemo<AdminOrderListRow[]>(() => {
     if (orderSectionFilter === 'all') {
@@ -1181,7 +1199,7 @@ export default function AdminOrdersWorkspace({
 
   useEffect(() => {
     if (warehouseCustomerFocusMode) {
-      if (!['gudang', 'pengiriman'].includes(orderSectionFilter)) setOrderSectionFilter('gudang');
+      if (!['gudang', 'checker', 'pengiriman'].includes(orderSectionFilter)) setOrderSectionFilter('gudang');
       return;
     }
     if (!isWarehouseRole) return;
@@ -2035,17 +2053,6 @@ export default function AdminOrdersWorkspace({
     }
   };
 
-  const openDeliveryCheckModal = (invoiceId: string, invoiceTitle: string) => {
-    setDeliveryHandoverModal({
-      step: 'check',
-      invoiceId,
-      invoiceTitle,
-      note: '',
-      result: 'pass',
-      file: null,
-    });
-  };
-
   const openDeliveryHandoverModal = (invoiceId: string, invoiceTitle: string) => {
     setDeliveryHandoverModal({
       step: 'handover',
@@ -2827,6 +2834,7 @@ export default function AdminOrdersWorkspace({
                 <span className="px-2 py-1 rounded-full bg-cyan-100 text-cyan-700">Sedang Terkirim {selectedGroup?.counts.pengiriman || 0}</span>
                 <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Bayar {selectedGroup?.counts.pembayaran || 0}</span>
                 <span className="px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">Proses Gudang {selectedGroup?.counts.gudang || 0}</span>
+                <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-700">Checker {selectedGroup?.counts.checker || 0}</span>
               </div>
             )}
           </div>
@@ -3528,16 +3536,15 @@ export default function AdminOrdersWorkspace({
                                   Buka Verifikasi
                                 </Link>
                               )}
-                              {canManageWarehouseFlow && section === 'gudang' && card.invoiceId && (
+                              {canManageWarehouseFlow && section === 'checker' && card.invoiceId && (
                                 <div className="mt-2 flex flex-col items-end gap-2">
-                                  {card.hasReadyToShip && !card.hasChecked && !card.hasShipped && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openDeliveryCheckModal(card.invoiceId, card.invoiceTitle)}
+                                  {card.hasReadyToShip && card.courierId && !card.hasChecked && !card.hasShipped && (
+                                    <Link
+                                      href={`/admin/tracker-gudang/${encodeURIComponent(card.invoiceId)}`}
                                       className="rounded-xl bg-cyan-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-cyan-700 active:scale-95"
                                     >
-                                      Checker: Check
-                                    </button>
+                                      Mulai Checking
+                                    </Link>
                                   )}
                                   {card.hasChecked && !card.hasShipped && (
                                     <button
