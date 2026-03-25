@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Save } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
+import { notifyAlert } from '@/lib/notify';
 
 type TaxMode = 'pkp' | 'non_pkp';
 
@@ -54,10 +55,10 @@ export default function FinanceTaxSettingsPage() {
                 vat_percent: Number(vatPercent || 0),
                 pph_final_percent: Number(pphFinalPercent || 0)
             });
-            alert('Konfigurasi pajak berhasil disimpan');
+            notifyAlert('Konfigurasi pajak berhasil disimpan');
             await load();
         } catch (error: unknown) {
-            alert(getErrorMessage(error, 'Gagal menyimpan konfigurasi pajak'));
+            notifyAlert(getErrorMessage(error, 'Gagal menyimpan konfigurasi pajak'));
         } finally {
             setSaving(false);
         }

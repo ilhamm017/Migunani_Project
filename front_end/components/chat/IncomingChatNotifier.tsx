@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Bell, X } from 'lucide-react';
 import getSocket from '@/lib/socket';
 import { useAuthStore } from '@/store/authStore';
+import { notifyClose, notifyOpen } from '@/lib/notify';
 
 type IncomingChatEvent = {
     session_id?: string;
@@ -152,38 +153,56 @@ export default function IncomingChatNotifier() {
     if (!isAuthenticated || notices.length === 0) return null;
 
     return (
-        <div className="fixed top-20 right-4 z-[70] w-[min(92vw,360px)] space-y-2 pointer-events-none">
-            {notices.map((notice) => (
-                <div
-                    key={notice.id}
-                    className="pointer-events-auto rounded-xl border border-emerald-200 bg-white/95 shadow-lg backdrop-blur-sm p-3"
-                >
-                    <div className="flex items-start gap-3">
-                        <div className="h-8 w-8 shrink-0 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center justify-center">
-                            <Bell size={16} />
+        <button
+            type="button"
+            className="fixed top-20 right-4 z-[70] inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white/95 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-lg backdrop-blur-sm hover:bg-emerald-50"
+            onClick={() => {
+                notifyOpen({
+                    variant: 'info',
+                    title: 'Pesan Masuk',
+                    secondaryLabel: 'Bersihkan',
+                    primaryLabel: 'Tutup',
+                    onSecondary: () => setNotices([]),
+                    message: (
+                        <div className="space-y-2">
+                            {notices.map((notice) => (
+                                <div key={notice.id} className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white/70 p-3">
+                                    <div className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                                        <Bell size={16} />
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="min-w-0 flex-1 text-left"
+                                        onClick={() => {
+                                            router.push(notice.href);
+                                            dismissNotice(notice.id);
+                                            notifyClose();
+                                        }}
+                                    >
+                                        <p className="text-xs font-black text-slate-900 leading-tight">{notice.title}</p>
+                                        <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{notice.body}</p>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => dismissNotice(notice.id)}
+                                        className="h-8 w-8 rounded-2xl border border-slate-200 bg-white/70 text-slate-600 hover:bg-white inline-flex items-center justify-center"
+                                        aria-label="Hapus notifikasi"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            ))}
                         </div>
-                        <button
-                            onClick={() => {
-                                router.push(notice.href);
-                                dismissNotice(notice.id);
-                            }}
-                            className="text-left min-w-0 flex-1"
-                            type="button"
-                        >
-                            <p className="text-xs font-black text-slate-900 leading-tight">{notice.title}</p>
-                            <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{notice.body}</p>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => dismissNotice(notice.id)}
-                            className="h-6 w-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 inline-flex items-center justify-center"
-                            aria-label="Tutup notifikasi"
-                        >
-                            <X size={13} />
-                        </button>
-                    </div>
-                </div>
-            ))}
-        </div>
+                    ),
+                });
+            }}
+            aria-label="Buka notifikasi chat"
+        >
+            <Bell size={16} />
+            <span>Chat</span>
+            <span className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-emerald-600 px-1.5 text-[9px] font-black text-white leading-none">
+                {notices.length > 99 ? '99+' : notices.length}
+            </span>
+        </button>
     );
 }

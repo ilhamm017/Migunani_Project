@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt } from 'lucide-react';
+import { AlertTriangle, Bell, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyOpen } from '@/lib/notify';
 import { useAuthStore } from '@/store/authStore';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
@@ -579,21 +580,29 @@ export default function AdminOverviewPage() {
         {activeToast && (
           <button
             type="button"
-            onClick={dismissToast}
-            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Update Pesanan', message: activeToast });
+              dismissToast();
+            }}
+            className="fixed right-4 bottom-24 z-50 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-lg hover:bg-emerald-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
-            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+            <Bell size={16} />
+            <span>Update Pesanan</span>
+            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Ada notifikasi" />
           </button>
         )}
         {dashboardToast && (
           <button
             type="button"
-            onClick={dismissDashboardToast}
-            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Notifikasi', message: dashboardToast });
+              dismissDashboardToast();
+            }}
+            className="fixed right-4 bottom-40 z-50 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-lg hover:bg-slate-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
-            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+            <Bell size={16} />
+            <span>Notifikasi</span>
+            <span className="h-2 w-2 rounded-full bg-slate-600" aria-label="Ada notifikasi" />
           </button>
         )}
       </div>
@@ -748,21 +757,29 @@ export default function AdminOverviewPage() {
         {activeToast && (
           <button
             type="button"
-            onClick={dismissToast}
-            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Update Pesanan', message: activeToast });
+              dismissToast();
+            }}
+            className="fixed right-4 bottom-24 z-50 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-lg hover:bg-emerald-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
-            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+            <Bell size={16} />
+            <span>Update Pesanan</span>
+            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Ada notifikasi" />
           </button>
         )}
         {dashboardToast && (
           <button
             type="button"
-            onClick={dismissDashboardToast}
-            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Notifikasi', message: dashboardToast });
+              dismissDashboardToast();
+            }}
+            className="fixed right-4 bottom-40 z-50 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-lg hover:bg-slate-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
-            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+            <Bell size={16} />
+            <span>Notifikasi</span>
+            <span className="h-2 w-2 rounded-full bg-slate-600" aria-label="Ada notifikasi" />
           </button>
         )}
       </div>
@@ -875,21 +892,29 @@ export default function AdminOverviewPage() {
         {activeToast && (
           <button
             type="button"
-            onClick={dismissToast}
-            className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Update Pesanan', message: activeToast });
+              dismissToast();
+            }}
+            className="fixed right-4 bottom-24 z-50 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-lg hover:bg-emerald-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
-            <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+            <Bell size={16} />
+            <span>Update Pesanan</span>
+            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Ada notifikasi" />
           </button>
         )}
         {dashboardToast && (
           <button
             type="button"
-            onClick={dismissDashboardToast}
-            className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+            onClick={() => {
+              notifyOpen({ variant: 'info', title: 'Notifikasi', message: dashboardToast });
+              dismissDashboardToast();
+            }}
+            className="fixed right-4 bottom-40 z-50 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-lg hover:bg-slate-50"
           >
-            <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
-            <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+            <Bell size={16} />
+            <span>Notifikasi</span>
+            <span className="h-2 w-2 rounded-full bg-slate-600" aria-label="Ada notifikasi" />
           </button>
         )}
       </div>
@@ -1267,21 +1292,29 @@ export default function AdminOverviewPage() {
 	      {activeToast && (
 	        <button
 	          type="button"
-	          onClick={dismissToast}
-	          className="fixed right-4 bottom-24 z-50 max-w-[320px] rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-left shadow-lg"
+	          onClick={() => {
+	            notifyOpen({ variant: 'info', title: 'Update Pesanan', message: activeToast });
+	            dismissToast();
+	          }}
+	          className="fixed right-4 bottom-24 z-50 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-700 shadow-lg hover:bg-emerald-50"
 	        >
-	          <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Update Pesanan</p>
-	          <p className="text-xs font-semibold text-emerald-700 mt-1">{activeToast}</p>
+	          <Bell size={16} />
+	          <span>Update Pesanan</span>
+	          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Ada notifikasi" />
 	        </button>
 	      )}
 	      {dashboardToast && (
 	        <button
 	          type="button"
-	          onClick={dismissDashboardToast}
-	          className="fixed right-4 bottom-40 z-50 max-w-[320px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-lg"
+	          onClick={() => {
+	            notifyOpen({ variant: 'info', title: 'Notifikasi', message: dashboardToast });
+	            dismissDashboardToast();
+	          }}
+	          className="fixed right-4 bottom-40 z-50 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 shadow-lg hover:bg-slate-50"
 	        >
-	          <p className="text-[11px] font-black uppercase tracking-widest text-slate-600">Notifikasi</p>
-	          <p className="text-xs font-semibold text-slate-700 mt-1">{dashboardToast}</p>
+	          <Bell size={16} />
+	          <span>Notifikasi</span>
+	          <span className="h-2 w-2 rounded-full bg-slate-600" aria-label="Ada notifikasi" />
 	        </button>
 	      )}
 	    </div>

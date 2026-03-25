@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { toNumber } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type InventoryValueSummary = {
   total_valuation?: number;
@@ -29,7 +30,7 @@ export default function LaporanPersediaanPage() {
       });
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat data persediaan');
+      notifyAlert('Gagal memuat data persediaan');
     } finally {
       setLoading(false);
     }

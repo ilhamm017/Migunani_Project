@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 type JournalLine = {
     account_id: string;
@@ -78,8 +79,8 @@ export default function AdjustmentJournalPage() {
     const isBalanced = totalDebit === totalCredit && totalDebit > 0;
 
     const submit = async () => {
-        if (!description.trim()) return alert('Deskripsi wajib diisi');
-        if (!isBalanced) return alert('Debit dan Credit harus seimbang (Balance)');
+        if (!description.trim()) return notifyAlert('Deskripsi wajib diisi');
+        if (!isBalanced) return notifyAlert('Debit dan Credit harus seimbang (Balance)');
 
         const validLines = lines.filter(l => l.account_id).map(l => ({
             account_id: Number(l.account_id),
@@ -87,7 +88,7 @@ export default function AdjustmentJournalPage() {
             credit: Number(l.credit || 0)
         }));
 
-        if (validLines.length < 2) return alert('Minimal 2 akun');
+        if (validLines.length < 2) return notifyAlert('Minimal 2 akun');
 
         try {
             await api.admin.finance.createAdjustmentJournal({
@@ -95,12 +96,12 @@ export default function AdjustmentJournalPage() {
                 description,
                 lines: validLines
             });
-            alert('Jurnal Penyesuaian berhasil disimpan');
+            notifyAlert('Jurnal Penyesuaian berhasil disimpan');
             setDescription('');
             setLines([{ account_id: '', debit: '', credit: 0 }, { account_id: '', debit: 0, credit: '' }]);
         } catch (error: unknown) {
             console.error(error);
-            alert(`Gagal menyimpan: ${getErrorMessage(error, 'Terjadi kesalahan saat menyimpan jurnal')}`);
+            notifyAlert(`Gagal menyimpan: ${getErrorMessage(error, 'Terjadi kesalahan saat menyimpan jurnal')}`);
         }
     };
 

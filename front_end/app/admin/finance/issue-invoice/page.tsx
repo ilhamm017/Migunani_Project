@@ -10,6 +10,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { notifyAlert } from '@/lib/notify';
 
 type InvoiceCandidateOrder = {
   id: string;
@@ -116,7 +117,7 @@ export default function FinanceIssueInvoicePage() {
     } catch (error: unknown) {
       const err = error as ApiErrorWithMessage;
       console.error('Issue invoice failed:', error);
-      alert(err?.response?.data?.message || 'Gagal menerbitkan invoice.');
+      notifyAlert(err?.response?.data?.message || 'Gagal menerbitkan invoice.');
     } finally {
       setBusyId(null);
     }
@@ -131,7 +132,7 @@ export default function FinanceIssueInvoicePage() {
     } catch (error: unknown) {
       const err = error as ApiErrorWithMessage;
       console.error('Batch issue failed:', error);
-      alert(err?.response?.data?.message || 'Gagal menerbitkan invoice gabungan.');
+      notifyAlert(err?.response?.data?.message || 'Gagal menerbitkan invoice gabungan.');
     } finally {
       setBusyId(null);
     }

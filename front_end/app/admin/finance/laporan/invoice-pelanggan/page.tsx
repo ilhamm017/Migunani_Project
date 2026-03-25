@@ -8,6 +8,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import type { ArRow } from '@/app/admin/finance/piutang/arShared';
 import { toNumber } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 export default function LaporanInvoicePelangganPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
@@ -21,7 +22,7 @@ export default function LaporanInvoicePelangganPage() {
       setRows(Array.isArray(res.data) ? (res.data as ArRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat invoice customer');
+      notifyAlert('Gagal memuat invoice customer');
     } finally {
       setLoading(false);
     }

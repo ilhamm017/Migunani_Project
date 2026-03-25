@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
 import { AccountSelector } from '@/components/finance/AccountSelector';
 import Image from 'next/image';
+import { notifyAlert } from '@/lib/notify';
 
 export default function TransferDetailPage() {
     const router = useRouter();
@@ -27,14 +28,14 @@ export default function TransferDetailPage() {
     const handleApprove = () => {
         if (!confirm('Yakin verifikasi pembayaran ini? Jurnal akan otomatis dibuat.')) return;
         // API Call here
-        alert(`Approved to Account ${selectedAccount}`);
+        notifyAlert(`Approved to Account ${selectedAccount}`);
         router.push('/finance/transfers');
     };
 
     const handleReject = () => {
-        if (!rejectReason) return alert('Wajib isi alasan penolakan!');
+        if (!rejectReason) return notifyAlert('Wajib isi alasan penolakan!');
         // API Call here
-        alert(`Rejected: ${rejectReason}`);
+        notifyAlert(`Rejected: ${rejectReason}`);
         router.push('/finance/transfers');
     };
 

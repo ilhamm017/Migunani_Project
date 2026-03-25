@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ChevronLeft, MapPin, Plus, Home, Briefcase, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { notifyAlert } from '@/lib/notify';
 
 interface Address {
     label: string;
@@ -56,7 +57,7 @@ export default function AddressesPage() {
             setNewAddress('');
             setShowAddForm(false);
         } catch {
-            alert('Gagal menambah alamat');
+            notifyAlert('Gagal menambah alamat');
         }
     };
 
@@ -66,7 +67,7 @@ export default function AddressesPage() {
             await api.profile.updateAddresses(updated);
             setAddresses(updated);
         } catch {
-            alert('Gagal menghapus alamat');
+            notifyAlert('Gagal menghapus alamat');
         }
     };
 

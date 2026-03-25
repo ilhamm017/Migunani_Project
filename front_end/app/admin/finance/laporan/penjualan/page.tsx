@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type OrderRow = {
   id?: string;
@@ -41,7 +42,7 @@ export default function LaporanPenjualanPage() {
       setRows(Array.isArray(res.data?.orders) ? (res.data.orders as OrderRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan penjualan');
+      notifyAlert('Gagal memuat laporan penjualan');
     } finally {
       setLoading(false);
     }

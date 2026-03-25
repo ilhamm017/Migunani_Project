@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, DragEvent } from 'react';
 import { api } from '@/lib/api';
 import { Package, Clock, User, Hash, GripVertical, RefreshCw } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { notifyAlert } from '@/lib/notify';
 
 interface OrderCard {
     id: string;
@@ -217,10 +218,10 @@ export default function WarehouseKanbanPage() {
             }
             await api.admin.orderManagement.updateStatus(orderId, payload);
             setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: targetColumn } : o));
-            alert(`Status berhasil diupdate ke: ${targetColumn === 'shipped' ? 'Dikirim' : 'Siap Dikirim'}`);
+            notifyAlert(`Status berhasil diupdate ke: ${targetColumn === 'shipped' ? 'Dikirim' : 'Siap Dikirim'}`);
             void loadOrders();
         } catch {
-            alert('Gagal update status.');
+            notifyAlert('Gagal update status.');
         } finally {
             setUpdating(null);
         }
@@ -234,7 +235,7 @@ export default function WarehouseKanbanPage() {
     const confirmCourier = async () => {
         if (!courierModal) return;
         if (!selectedCourierId) {
-            alert('Pilih driver terlebih dahulu.');
+            notifyAlert('Pilih driver terlebih dahulu.');
             return;
         }
         const { orderId, target } = courierModal;
@@ -243,10 +244,10 @@ export default function WarehouseKanbanPage() {
             const apiStatus = STATUS_MAP_TO_API[target] || target;
             await api.admin.orderManagement.updateStatus(orderId, { status: apiStatus, courier_id: selectedCourierId });
             setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: target, courier_id: selectedCourierId } : o));
-            alert('Status berhasil diupdate ke: Dikirim');
+            notifyAlert('Status berhasil diupdate ke: Dikirim');
             void loadOrders();
         } catch {
-            alert('Gagal update status.');
+            notifyAlert('Gagal update status.');
         } finally {
             setUpdating(null);
             setCourierModal(null);

@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Save, CheckCircle, AlertTriangle, ScanLine } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 type ProductOption = {
     id: string;
@@ -79,7 +80,7 @@ export default function AuditDetailPage() {
             setSearch(''); // Optional: clear search
             void loadData(); // Refresh list
         } catch {
-            alert('Gagal menyimpan item audit');
+            notifyAlert('Gagal menyimpan item audit');
         }
     };
 
@@ -89,7 +90,7 @@ export default function AuditDetailPage() {
             await api.admin.inventory.finishAudit(id as string);
             router.push('/admin/warehouse/audit');
         } catch {
-            alert('Gagal menyelesaikan audit');
+            notifyAlert('Gagal menyelesaikan audit');
         }
     };
 

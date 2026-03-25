@@ -6,6 +6,7 @@ import { ArrowLeft } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { getDefaultMonthRange, toNumber } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type StockReductionSummary = {
   total_qty_reduced: number;
@@ -34,7 +35,7 @@ export default function LaporanKoreksiStokPage() {
       });
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat ringkasan koreksi stok');
+      notifyAlert('Gagal memuat ringkasan koreksi stok');
     } finally {
       setLoading(false);
     }

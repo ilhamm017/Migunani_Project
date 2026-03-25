@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type ExpenseItem = {
   id: string;
@@ -33,7 +34,7 @@ export default function LaporanBiayaPendapatanLainPage() {
       setRows(Array.isArray(res.data?.expenses) ? (res.data.expenses as ExpenseItem[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan biaya');
+      notifyAlert('Gagal memuat laporan biaya');
     } finally {
       setLoading(false);
     }

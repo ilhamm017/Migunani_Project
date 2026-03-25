@@ -7,6 +7,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import getSocket from '@/lib/socket';
 import { useAuthStore } from '@/store/authStore';
+import { notifyAlert } from '@/lib/notify';
 
 type ChatSessionRow = {
   id: string;
@@ -313,7 +314,7 @@ function DriverChatContent() {
       await loadSessions(undefined, selectedSessionId);
     } catch (error) {
       console.error('Error sending driver chat reply:', error);
-      alert('Gagal mengirim pesan.');
+      notifyAlert('Gagal mengirim pesan.');
     } finally {
       setSending(false);
     }

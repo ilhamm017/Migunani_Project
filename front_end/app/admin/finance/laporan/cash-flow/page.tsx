@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 type CashFlowData = {
     closing_balance: number;
@@ -41,7 +42,7 @@ export default function CashFlowPage() {
             });
         } catch (e) {
             console.error(e);
-            alert('Gagal memuat laporan');
+            notifyAlert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }

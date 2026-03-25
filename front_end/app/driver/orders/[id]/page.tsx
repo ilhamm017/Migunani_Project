@@ -10,6 +10,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import axios from 'axios';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
+import { notifyAlert } from '@/lib/notify';
 
 type StoredChecklistRow = {
   orderId?: string;
@@ -816,7 +817,7 @@ export default function DriverOrderDetailPage() {
   const submitIssue = async () => {
     const note = issueNote.trim();
     if (note.length < 5) {
-      alert('Catatan laporan minimal 5 karakter.');
+      notifyAlert('Catatan laporan minimal 5 karakter.');
       return;
     }
     const snapshotPrimaryOrderId = getActionTargetIds()[0] || primaryChecklistOrderId;
@@ -838,7 +839,7 @@ export default function DriverOrderDetailPage() {
       setLoading(true);
       const targetIds = getActionTargetIds();
       if (targetIds.length === 0) {
-        alert('Order invoice belum ditemukan.');
+        notifyAlert('Order invoice belum ditemukan.');
         return;
       }
       const results = await Promise.allSettled(
@@ -854,13 +855,13 @@ export default function DriverOrderDetailPage() {
       const successCount = targetIds.length - failedIds.length;
 
       if (successCount === 0) {
-        alert('Semua laporan gagal dikirim. Periksa koneksi lalu coba lagi.');
+        notifyAlert('Semua laporan gagal dikirim. Periksa koneksi lalu coba lagi.');
         return;
       }
 
       if (failedIds.length > 0) {
         setIsIssueOpen(false);
-        alert(`Sebagian laporan berhasil (${successCount}/${targetIds.length}). ${failedIds.length} order gagal diproses.`);
+        notifyAlert(`Sebagian laporan berhasil (${successCount}/${targetIds.length}). ${failedIds.length} order gagal diproses.`);
         return;
       }
 
@@ -869,7 +870,7 @@ export default function DriverOrderDetailPage() {
       setTimeout(() => router.push('/driver'), 1300);
     } catch (error) {
       console.error('Report issue failed:', error);
-      alert('Gagal melaporkan masalah.');
+      notifyAlert('Gagal melaporkan masalah.');
     } finally {
       setLoading(false);
     }

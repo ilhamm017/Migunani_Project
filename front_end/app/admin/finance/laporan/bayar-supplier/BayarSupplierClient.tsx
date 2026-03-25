@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type SupplierInvoiceRow = {
   id: number;
@@ -67,7 +68,7 @@ export default function BayarSupplierClient() {
       setAccounts(Array.isArray(acctRes.data) ? (acctRes.data as AccountNode[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat data bayar supplier');
+      notifyAlert('Gagal memuat data bayar supplier');
     } finally {
       setLoading(false);
     }
@@ -98,9 +99,9 @@ export default function BayarSupplierClient() {
   }, [selectedInvoice]);
 
   const onPay = useCallback(async () => {
-    if (!selectedInvoiceId) return alert('Pilih invoice supplier');
-    if (!accountId) return alert('Pilih akun pembayaran (Kas/Bank)');
-    if (!Number.isFinite(amount) || amount <= 0) return alert('Jumlah pembayaran tidak valid');
+    if (!selectedInvoiceId) return notifyAlert('Pilih invoice supplier');
+    if (!accountId) return notifyAlert('Pilih akun pembayaran (Kas/Bank)');
+    if (!Number.isFinite(amount) || amount <= 0) return notifyAlert('Jumlah pembayaran tidak valid');
     try {
       setBusyPay(true);
       await api.admin.finance.paySupplierInvoice({
@@ -113,7 +114,7 @@ export default function BayarSupplierClient() {
       setNote('');
     } catch (e: any) {
       console.error(e);
-      alert(e?.response?.data?.message || 'Gagal melakukan pembayaran supplier');
+      notifyAlert(e?.response?.data?.message || 'Gagal melakukan pembayaran supplier');
     } finally {
       setBusyPay(false);
     }

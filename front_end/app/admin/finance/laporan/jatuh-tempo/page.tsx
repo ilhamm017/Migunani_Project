@@ -8,6 +8,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import type { ArRow } from '@/app/admin/finance/piutang/arShared';
 import { toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type SupplierInvoiceRow = {
   id: number;
@@ -43,7 +44,7 @@ export default function LaporanJatuhTempoPage() {
       setArRows(Array.isArray(arRes.data) ? (arRes.data as ArRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan jatuh tempo');
+      notifyAlert('Gagal memuat laporan jatuh tempo');
     } finally {
       setLoading(false);
     }

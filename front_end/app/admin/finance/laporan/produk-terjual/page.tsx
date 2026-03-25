@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type ProductsSoldRow = {
   product_id?: string;
@@ -34,7 +35,7 @@ export default function LaporanProdukTerjualPage() {
       setRows(Array.isArray(res.data?.rows) ? (res.data.rows as ProductsSoldRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan produk terjual');
+      notifyAlert('Gagal memuat laporan produk terjual');
     } finally {
       setLoading(false);
     }

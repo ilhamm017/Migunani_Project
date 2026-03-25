@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { Plus } from 'lucide-react';
+import { notifyAlert } from '@/lib/notify';
 
 type ExpenseLabel = {
   id: number;
@@ -108,10 +109,10 @@ export default function FinanceExpensePage() {
         details: [{ key: '', value: '' }],
       }));
       await load();
-      alert('Biaya berhasil disimpan');
+      notifyAlert('Biaya berhasil disimpan');
     } catch (error) {
       console.error('Create expense failed:', error);
-      alert('Gagal menyimpan biaya.');
+      notifyAlert('Gagal menyimpan biaya.');
     }
   };
 
@@ -215,7 +216,7 @@ export default function FinanceExpensePage() {
                         load();
                       } catch (err) {
                         console.error(err);
-                        alert('Gagal approve');
+                        notifyAlert('Gagal approve');
                       }
                     }}
                     className="flex-1 bg-blue-600 text-white text-xs font-bold py-2 rounded-xl"
@@ -233,7 +234,7 @@ export default function FinanceExpensePage() {
                         load();
                       } catch (err) {
                         console.error(err);
-                        alert('Gagal bayar');
+                        notifyAlert('Gagal bayar');
                       }
                     }}
                     className="flex-1 bg-emerald-600 text-white text-xs font-bold py-2 rounded-xl shadow-lg shadow-emerald-100"

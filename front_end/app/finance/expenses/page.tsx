@@ -6,6 +6,7 @@ import { ArrowLeft, Wallet, Building2, Plus, Filter } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { AccountSelector } from '@/components/finance/AccountSelector';
+import { notifyAlert } from '@/lib/notify';
 
 type ExpenseStatus = 'requested' | 'approved' | 'paid';
 
@@ -39,7 +40,7 @@ export default function ExpensesPage() {
     const handlePay = () => {
         if (!selectedExpense) return;
         // API Call
-        alert(`Expense Paid from ${payAccount}`);
+        notifyAlert(`Expense Paid from ${payAccount}`);
         setIsPayMode(false);
         setSelectedExpense(null);
     };

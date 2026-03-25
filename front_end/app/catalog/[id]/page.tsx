@@ -10,6 +10,7 @@ import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency } from '@/lib/utils';
 import { normalizeProductImageUrl } from '@/lib/image';
+import { notifyAlert } from '@/lib/notify';
 
 interface ProductDetail {
   id: string;
@@ -125,7 +126,7 @@ export default function ProductDetailPage() {
       router.push('/cart');
     } catch (error) {
       console.error('Add to cart failed:', error);
-      alert('Gagal menambahkan ke keranjang.');
+      notifyAlert('Gagal menambahkan ke keranjang.');
     } finally {
       setAdding(false);
     }

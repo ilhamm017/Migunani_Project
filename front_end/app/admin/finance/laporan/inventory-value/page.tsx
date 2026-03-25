@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft, Package } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 type InventoryValueItem = {
     id: string;
@@ -52,7 +53,7 @@ export default function InventoryValuePage() {
             });
         } catch (e) {
             console.error(e);
-            alert('Gagal memuat laporan');
+            notifyAlert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }

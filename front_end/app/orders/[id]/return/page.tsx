@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Upload, Check } from 'lucide-react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/utils';
+import { notifyAlert } from '@/lib/notify';
 
 type OrderItemRow = {
     id: string;
@@ -64,11 +65,11 @@ export default function ReturnRequestPage() {
             }
 
             await api.retur.request(formData);
-            alert('Permintaan retur berhasil dikirim!');
+            notifyAlert('Permintaan retur berhasil dikirim!');
             router.push(`/orders/${id}`);
         } catch (error: unknown) {
             const err = error as ApiErrorWithMessage;
-            alert(err.response?.data?.message || 'Gagal mengirim permintaan retur');
+            notifyAlert(err.response?.data?.message || 'Gagal mengirim permintaan retur');
         } finally {
             setSubmitting(false);
         }

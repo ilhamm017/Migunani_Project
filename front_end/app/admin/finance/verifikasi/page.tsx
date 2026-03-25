@@ -9,7 +9,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
-import NotifyPopup, { type NotifyPopupVariant } from '@/components/ui/NotifyPopup';
+import { notifyOpen } from '@/lib/notify';
 
 type OrderInvoiceSummary = {
   id: string;
@@ -77,13 +77,6 @@ export default function FinanceVerifyPage() {
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [popup, setPopup] = useState<{
-    open: boolean;
-    title: string;
-    message?: string;
-    variant: NotifyPopupVariant;
-  }>({ open: false, title: '', message: '', variant: 'info' });
-
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
     try {
@@ -233,23 +226,18 @@ export default function FinanceVerifyPage() {
       setBusyId(id);
       await api.admin.finance.verifyPayment(id, action);
       await load();
-      setPopup({
-        open: true,
+      notifyOpen({
+        variant: 'success',
         title: action === 'approve' ? 'Approve berhasil' : 'Reject berhasil',
         message:
           action === 'approve'
             ? 'Pembayaran transfer sudah diverifikasi. Status invoice dan order terkait akan ikut ter-update.'
             : 'Pembayaran ditolak. Status invoice dan order terkait akan ikut ter-update.',
-        variant: 'success',
+        autoCloseMs: 1600,
       });
     } catch (error: unknown) {
       console.error('Action failed:', error);
-      setPopup({
-        open: true,
-        title: 'Gagal memproses',
-        message: getErrorMessage(error, 'Gagal memproses.'),
-        variant: 'error',
-      });
+      notifyOpen({ variant: 'error', title: 'Gagal memproses', message: getErrorMessage(error, 'Gagal memproses.') });
     } finally {
       setBusyId(null);
     }
@@ -257,13 +245,6 @@ export default function FinanceVerifyPage() {
 
   return (
     <div className="bg-slate-50 min-h-screen pb-24">
-      <NotifyPopup
-        open={popup.open}
-        title={popup.title}
-        message={popup.message}
-        variant={popup.variant}
-        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
-      />
       <div className="bg-white px-6 pb-4 pt-2 shadow-sm sticky top-0 z-40">
         <FinanceHeader title="Verifikasi Command" />
 

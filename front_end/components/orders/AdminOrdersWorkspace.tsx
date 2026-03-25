@@ -10,7 +10,7 @@ import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { useAuthStore } from '@/store/authStore';
-import NotifyPopup, { type NotifyPopupVariant } from '@/components/ui/NotifyPopup';
+import { notifyOpen, notifyAlert } from '@/lib/notify';
 import axios from 'axios';
 import type { AdminOrderListRow, InvoiceDetailResponse, OrderDetailResponse, ProductLite } from '@/lib/apiTypes';
 
@@ -568,12 +568,6 @@ export default function AdminOrdersWorkspace({
     saving: boolean;
     error: string;
   } | null>(null);
-  const [popup, setPopup] = useState<{
-    open: boolean;
-    title: string;
-    message?: string;
-    variant: NotifyPopupVariant;
-  }>({ open: false, title: '', message: '', variant: 'info' });
   const ordersRef = useRef<AdminOrderListRow[]>([]);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
@@ -980,7 +974,7 @@ export default function AdminOrdersWorkspace({
 
       const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
       if (orderItems.length === 0) {
-        alert('Order belum memiliki item.');
+        notifyAlert('Order belum memiliki item.');
         return;
       }
 
@@ -1019,7 +1013,7 @@ export default function AdminOrdersWorkspace({
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal memuat detail order.')
         : 'Gagal memuat detail order.';
-      alert(message);
+      notifyAlert(message);
     }
   }, [canEditPricing, orderDetails]);
 
@@ -1633,11 +1627,10 @@ export default function AdminOrdersWorkspace({
   const saveAllocationDraft = async (orderId: string, draft: Record<string, number>) => {
     const items = buildAllocationPayload(orderId, draft);
     if (items.length === 0) {
-      setPopup({
-        open: true,
+      notifyOpen({
+        variant: 'warning',
         title: 'Tidak ada alokasi valid',
         message: 'Isi qty alokasi minimal 1 item (dan pastikan tidak melebihi stok/permintaan).',
-        variant: 'warning',
       });
       return false;
     }
@@ -1685,11 +1678,11 @@ export default function AdminOrdersWorkspace({
         });
       }
       await loadOrders();
-      setPopup({
-        open: true,
+      notifyOpen({
+        variant: 'success',
         title: 'Alokasi tersimpan',
         message: 'Qty alokasi sudah tersimpan dan data order diperbarui.',
-        variant: 'success',
+        autoCloseMs: 1600,
       });
       return true;
     } catch (error: unknown) {
@@ -1697,12 +1690,7 @@ export default function AdminOrdersWorkspace({
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan alokasi.')
         : 'Gagal menyimpan alokasi.';
-      setPopup({
-        open: true,
-        title: 'Gagal menyimpan alokasi',
-        message,
-        variant: 'error',
-      });
+      notifyOpen({ variant: 'error', title: 'Gagal menyimpan alokasi', message });
       return false;
     } finally {
       setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
@@ -1737,7 +1725,7 @@ export default function AdminOrdersWorkspace({
         const message = axios.isAxiosError(error)
           ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan order.')
           : 'Gagal membatalkan order.';
-        alert(message);
+        notifyAlert(message);
       } finally {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
       }
@@ -1785,7 +1773,7 @@ export default function AdminOrdersWorkspace({
         const message = axios.isAxiosError(error)
           ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan backorder.')
           : 'Gagal membatalkan backorder.';
-        alert(message);
+        notifyAlert(message);
       } finally {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
       }
@@ -1802,7 +1790,7 @@ export default function AdminOrdersWorkspace({
         const message = axios.isAxiosError(error)
           ? String((error.response?.data as any)?.message || error.message || 'Gagal menerbitkan invoice.')
           : 'Gagal menerbitkan invoice.';
-        alert(message);
+        notifyAlert(message);
       } finally {
         setBusyInvoice(false);
       }
@@ -1846,11 +1834,10 @@ export default function AdminOrdersWorkspace({
       if (saved) {
         setAllocationConfirm(null);
       } else {
-        setPopup({
-          open: true,
+        notifyOpen({
+          variant: 'warning',
           title: 'Tidak ada top up valid',
           message: 'Tambah qty top up minimal 1 item lalu simpan kembali.',
-          variant: 'warning',
         });
       }
       return;
@@ -1936,7 +1923,7 @@ export default function AdminOrdersWorkspace({
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal memindahkan order ke indent.')
         : 'Gagal memindahkan order ke indent.';
-      alert(message);
+      notifyAlert(message);
     } finally {
       setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
     }
@@ -1961,18 +1948,18 @@ export default function AdminOrdersWorkspace({
     }>
   ) => {
     if (!selectedWarehouseCourierId) {
-      alert('Pilih driver terlebih dahulu.');
+      notifyAlert('Pilih driver terlebih dahulu.');
       return;
     }
     const selectedCards = cards.filter((card) => selectedWarehouseInvoiceGroups.includes(card.groupKey));
     if (selectedCards.length === 0) {
-      alert('Checklist minimal satu invoice atau order yang siap kirim.');
+      notifyAlert('Checklist minimal satu invoice atau order yang siap kirim.');
       return;
     }
 
     const selectedCourier = couriers.find((item) => item.id === selectedWarehouseCourierId);
     if (!selectedCourier) {
-      alert('Driver tidak ditemukan.');
+      notifyAlert('Driver tidak ditemukan.');
       return;
     }
 
@@ -2022,7 +2009,7 @@ export default function AdminOrdersWorkspace({
       setWarehouseAssignConfirm(null);
 
       if (failedCount > 0) {
-        alert(`Sebagian grup gagal dikirim (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
+        notifyAlert(`Sebagian grup gagal dikirim (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
       } else {
         // no-op
       }
@@ -2030,7 +2017,7 @@ export default function AdminOrdersWorkspace({
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal assign driver batch.')
         : 'Gagal assign driver batch.';
-      alert(message);
+      notifyAlert(message);
     } finally {
       setWarehouseBatchAssigning(false);
     }
@@ -2266,13 +2253,6 @@ export default function AdminOrdersWorkspace({
 
   return (
     <div className="p-5 pb-24 space-y-5">
-      <NotifyPopup
-        open={popup.open}
-        title={popup.title}
-        message={popup.message}
-        variant={popup.variant}
-        onClose={() => setPopup((prev) => ({ ...prev, open: false }))}
-      />
 		      {allocationConfirm && allocationConfirmMeta && (
 		        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
           <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">

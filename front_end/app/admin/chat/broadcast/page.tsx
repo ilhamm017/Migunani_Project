@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
+import { notifyAlert } from '@/lib/notify';
 
 export default function BroadcastPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
@@ -15,7 +16,7 @@ export default function BroadcastPage() {
   const sendBroadcast = () => {
     const row = { title, message, at: new Date().toISOString() };
     setHistory((prev) => [row, ...prev]);
-    alert('Broadcast tersimpan (MVP UI). Endpoint broadcast backend belum tersedia.');
+    notifyAlert('Broadcast tersimpan (MVP UI). Endpoint broadcast backend belum tersedia.');
   };
 
   return (

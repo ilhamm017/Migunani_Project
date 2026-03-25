@@ -5,6 +5,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { MessageSquare, Coins, Key, Loader2, QrCode, RefreshCw, Smartphone, LogOut, CheckCircle2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { notifyAlert } from '@/lib/notify';
 
 type WhatsAppStatusInfo = {
   pushname?: string;
@@ -63,7 +64,7 @@ export default function AdminSettingsPage() {
       // Wait a bit for initialization to start
       setTimeout(loadStatus, 2000);
     } catch {
-      alert('Gagal memulai koneksi WhatsApp');
+      notifyAlert('Gagal memulai koneksi WhatsApp');
     } finally {
       setLoading(false);
     }
@@ -76,7 +77,7 @@ export default function AdminSettingsPage() {
       await api.whatsapp.logout();
       setTimeout(loadStatus, 1000);
     } catch {
-      alert('Gagal memutus koneksi');
+      notifyAlert('Gagal memutus koneksi');
     } finally {
       setLoading(false);
     }

@@ -11,6 +11,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import axios from 'axios';
 import type { OrderDetailResponse } from '@/lib/apiTypes';
+import { notifyAlert } from '@/lib/notify';
 
 export default function OrderDetailPage() {
   const params = useParams();
@@ -189,7 +190,7 @@ export default function OrderDetailPage() {
         .map(i => ({ product_id: i.product_id, qty_missing: i.qty_missing }));
 
       if (itemsToReport.length === 0) {
-        alert('Pilih minimal satu barang yang kurang.');
+        notifyAlert('Pilih minimal satu barang yang kurang.');
         return;
       }
 
@@ -198,7 +199,7 @@ export default function OrderDetailPage() {
         items: itemsToReport,
         note: missingNote
       });
-      alert('Laporan barang kurang berhasil dikirim. Admin akan segera memverifikasi.');
+      notifyAlert('Laporan barang kurang berhasil dikirim. Admin akan segera memverifikasi.');
       setShowMissingModal(false);
       loadOrder(); // Refresh status/issues
     } catch (error: unknown) {
@@ -206,7 +207,7 @@ export default function OrderDetailPage() {
       const message = axios.isAxiosError(error)
         ? String((error.response?.data as any)?.message || error.message || 'Gagal mengirim laporan.')
         : 'Gagal mengirim laporan.';
-      alert(message);
+      notifyAlert(message);
     } finally {
       setSubmittingMissing(false);
     }

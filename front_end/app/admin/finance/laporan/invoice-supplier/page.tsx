@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type SupplierInvoiceRow = {
   id: number;
@@ -44,7 +45,7 @@ export default function LaporanInvoiceSupplierPage() {
       setRows(Array.isArray(res.data?.invoices) ? (res.data.invoices as SupplierInvoiceRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat invoice supplier');
+      notifyAlert('Gagal memuat invoice supplier');
     } finally {
       setLoading(false);
     }

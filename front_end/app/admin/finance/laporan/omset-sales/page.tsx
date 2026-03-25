@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type OrderRow = {
   id?: string;
@@ -39,7 +40,7 @@ export default function LaporanOmsetSalesPage() {
       setRows(Array.isArray(res.data?.orders) ? (res.data.orders as OrderRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan omzet sales');
+      notifyAlert('Gagal memuat laporan omzet sales');
     } finally {
       setLoading(false);
     }

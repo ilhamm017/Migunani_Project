@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { getDefaultMonthRange, toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type OrderVerifyRow = {
   id?: string;
@@ -39,7 +40,7 @@ export default function LaporanPembayaranPelangganPage() {
       setRows(Array.isArray(res.data?.orders) ? (res.data.orders as OrderVerifyRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat laporan pembayaran pelanggan');
+      notifyAlert('Gagal memuat laporan pembayaran pelanggan');
     } finally {
       setLoading(false);
     }

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
+import { notifyAlert } from '@/lib/notify';
 
 const getErrorMessage = (error: unknown, fallback: string) => {
     if (typeof error === 'object' && error !== null) {
@@ -42,9 +43,9 @@ export default function CreditNotePage() {
             });
             const id = Number(res?.data?.credit_note?.id || 0);
             setCreatedId(id || null);
-            alert('Credit note draft berhasil dibuat');
+            notifyAlert('Credit note draft berhasil dibuat');
         } catch (error: unknown) {
-            alert(getErrorMessage(error, 'Gagal membuat credit note'));
+            notifyAlert(getErrorMessage(error, 'Gagal membuat credit note'));
         } finally {
             setLoading(false);
         }
@@ -55,13 +56,13 @@ export default function CreditNotePage() {
             setLoading(true);
             const id = Number(postingId || createdId || 0);
             if (!id) {
-                alert('ID credit note wajib diisi');
+                notifyAlert('ID credit note wajib diisi');
                 return;
             }
             await api.admin.finance.postCreditNote(id, { pay_now: payNow });
-            alert('Credit note berhasil diposting');
+            notifyAlert('Credit note berhasil diposting');
         } catch (error: unknown) {
-            alert(getErrorMessage(error, 'Gagal posting credit note'));
+            notifyAlert(getErrorMessage(error, 'Gagal posting credit note'));
         } finally {
             setLoading(false);
         }

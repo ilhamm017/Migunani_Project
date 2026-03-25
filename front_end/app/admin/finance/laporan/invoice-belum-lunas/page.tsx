@@ -8,6 +8,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import type { ArRow } from '@/app/admin/finance/piutang/arShared';
 import { toNumber, toText } from '@/app/admin/finance/laporan/reportUtils';
+import { notifyAlert } from '@/lib/notify';
 
 type SupplierInvoiceRow = {
   id: number;
@@ -46,7 +47,7 @@ export default function LaporanInvoiceBelumLunasPage() {
       setApRows(Array.isArray(apRes.data?.invoices) ? (apRes.data.invoices as SupplierInvoiceRow[]) : []);
     } catch (e) {
       console.error(e);
-      alert('Gagal memuat gabungan invoice belum lunas');
+      notifyAlert('Gagal memuat gabungan invoice belum lunas');
     } finally {
       setLoading(false);
     }

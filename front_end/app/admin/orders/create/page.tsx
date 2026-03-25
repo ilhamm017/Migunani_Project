@@ -9,6 +9,7 @@ import { formatCurrency } from '@/lib/utils';
 import Image from 'next/image';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
+import { notifyOpen, notifyAlert } from '@/lib/notify';
 
 type ChatContextMessage = {
     id?: string;
@@ -62,13 +63,6 @@ type CartItem = {
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
 
-type SubmitPopupTone = 'success' | 'error' | 'info';
-type SubmitPopupState = {
-    tone: SubmitPopupTone;
-    title: string;
-    message: string;
-} | null;
-
 function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
@@ -79,37 +73,15 @@ function ManualOrderContent() {
     const isChatDrivenOrder = Boolean(chatSessionIdParam && customerIdParam);
     const canManageShippingConfig = ['super_admin', 'kasir'].includes(String(user?.role || ''));
     const canOverridePricing = ['super_admin', 'kasir'].includes(String(user?.role || '').trim());
-
-    const [submitPopup, setSubmitPopup] = useState<SubmitPopupState>(null);
-    const submitPopupTimerRef = useRef<number | null>(null);
     const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
 
-    const dismissSubmitPopup = useCallback(() => {
-        setSubmitPopup(null);
-        if (submitPopupTimerRef.current) {
-            window.clearTimeout(submitPopupTimerRef.current);
-            submitPopupTimerRef.current = null;
-        }
-    }, []);
-
-    const showSubmitPopup = useCallback((tone: SubmitPopupTone, title: string, message: string, ttlMs = 4500) => {
-        setSubmitPopup({ tone, title, message });
-        if (submitPopupTimerRef.current) {
-            window.clearTimeout(submitPopupTimerRef.current);
-        }
-        submitPopupTimerRef.current = window.setTimeout(() => {
-            setSubmitPopup(null);
-            submitPopupTimerRef.current = null;
-        }, ttlMs);
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            if (submitPopupTimerRef.current) {
-                window.clearTimeout(submitPopupTimerRef.current);
-                submitPopupTimerRef.current = null;
-            }
-        };
+    const showSubmitPopup = useCallback((tone: 'success' | 'error' | 'info', title: string, message: string, ttlMs = 1800) => {
+        notifyOpen({
+            variant: tone === 'success' ? 'success' : tone === 'error' ? 'error' : 'info',
+            title,
+            message,
+            ...(tone === 'error' ? {} : { autoCloseMs: Math.max(800, Math.min(2500, Number(ttlMs) || 1800)) }),
+        });
     }, []);
 
     // Customer Search State
@@ -231,16 +203,16 @@ function ManualOrderContent() {
                     setCustomers([]);
                     return;
                 }
-                alert('Customer tidak aktif. Order tidak bisa dibuat.');
+                notifyAlert('Customer tidak aktif. Order tidak bisa dibuat.');
             } catch (error: unknown) {
                 const statusCode = Number((error as { response?: { status?: unknown } })?.response?.status || 0);
                 if (statusCode === 404) {
                     if (isChatDrivenOrder) {
                         const resolved = await tryResolveCustomerFromChatSession();
                         if (resolved) return;
-                        alert('Customer pada sesi chat belum terdaftar. Tombol Buat Order hanya untuk customer terdaftar.');
+                        notifyAlert('Customer pada sesi chat belum terdaftar. Tombol Buat Order hanya untuk customer terdaftar.');
                     } else {
-                        alert('Customer tidak ditemukan.');
+                        notifyAlert('Customer tidak ditemukan.');
                     }
                     return;
                 }
@@ -1074,37 +1046,6 @@ function ManualOrderContent() {
                         </div>
                     )}
 
-                    {submitPopup && (
-                        <button
-                            type="button"
-                            onClick={dismissSubmitPopup}
-	                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,432px)] origin-bottom-right scale-[1.2] rounded-2xl border px-5 py-4 text-left shadow-lg ${submitPopup.tone === 'success'
-	                                ? 'border-emerald-300 bg-emerald-50'
-	                                : submitPopup.tone === 'error'
-	                                    ? 'border-rose-300 bg-rose-50'
-	                                    : 'border-slate-200 bg-white'
-	                                }`}
-	                        >
-	                            <p className={`text-[13px] font-black uppercase tracking-widest ${submitPopup.tone === 'success'
-	                                ? 'text-emerald-700'
-	                                : submitPopup.tone === 'error'
-	                                    ? 'text-rose-700'
-	                                    : 'text-slate-600'
-	                                }`}
-	                            >
-	                                {submitPopup.title}
-	                            </p>
-	                            <p className={`text-sm font-semibold mt-1 ${submitPopup.tone === 'success'
-	                                ? 'text-emerald-700'
-	                                : submitPopup.tone === 'error'
-	                                    ? 'text-rose-700'
-                                    : 'text-slate-700'
-                                }`}
-                            >
-                                {submitPopup.message}
-                            </p>
-                        </button>
-                    )}
 	        </div>
 	    );
 }

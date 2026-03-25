@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft, Download, Filter, Package, Users } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 interface BackorderSummary {
     total_items: number;
@@ -72,7 +73,7 @@ export default function BackorderReportPage() {
             setData(res.data);
         } catch (e) {
             console.error(e);
-            alert('Gagal memuat laporan');
+            notifyAlert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }
@@ -97,7 +98,7 @@ export default function BackorderReportPage() {
             window.URL.revokeObjectURL(url);
         } catch (e) {
             console.error(e);
-            alert('Gagal export Excel');
+            notifyAlert('Gagal export Excel');
         } finally {
             setExporting(false);
         }

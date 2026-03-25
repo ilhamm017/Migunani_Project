@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 import {
     ArrowLeft,
     CheckCircle2,
@@ -178,13 +179,13 @@ export default function DriverReturDetailPage() {
         try {
             setSubmitting(true);
             await api.driver.updateReturStatus(returId, nextStatus);
-            alert(nextStatus === 'picked_up'
+            notifyAlert(nextStatus === 'picked_up'
                 ? 'Pickup retur berhasil dikonfirmasi.'
                 : 'Penyerahan ke kasir berhasil dikonfirmasi.');
             await loadRetur();
         } catch (error: unknown) {
             console.error('Failed to update retur status:', error);
-            alert(getErrorMessage(error, 'Gagal memperbarui status tugas retur.'));
+            notifyAlert(getErrorMessage(error, 'Gagal memperbarui status tugas retur.'));
         } finally {
             setSubmitting(false);
         }

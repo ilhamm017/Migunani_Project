@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
+import { notifyAlert } from '@/lib/notify';
 import {
     PackageSearch,
     CheckCircle,
@@ -164,7 +165,7 @@ export default function WarehouseReturPage() {
             }
 
             await api.retur.updateStatus(id, payload);
-            alert('Status retur berhasil diperbarui');
+            notifyAlert('Status retur berhasil diperbarui');
             setSelectedRetur(null);
             setAdminResponse('');
             setCourierId('');
@@ -172,7 +173,7 @@ export default function WarehouseReturPage() {
             loadData();
         } catch (error: unknown) {
             const apiError = error as ApiErrorWithMessage;
-            alert('Gagal update: ' + (apiError.response?.data?.message || 'Error unknown'));
+            notifyAlert('Gagal update: ' + (apiError.response?.data?.message || 'Error unknown'));
         } finally {
             setSubmitting(false);
         }

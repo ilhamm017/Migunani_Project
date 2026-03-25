@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyAlert } from '@/lib/notify';
 
 type PnlSummary = {
   revenue?: number | string | null;
@@ -25,7 +26,7 @@ export default function FinancePnLPage() {
       setData(res.data);
     } catch (error) {
       console.error('Failed to load PnL:', error);
-      alert('Gagal mengambil data laba rugi.');
+      notifyAlert('Gagal mengambil data laba rugi.');
     }
   };
 

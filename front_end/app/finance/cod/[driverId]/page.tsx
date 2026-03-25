@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, CheckCircle, AlertTriangle, ChevronRight } from 'lucide-react';
 import { MoneyInput } from '@/components/finance/MoneyInput';
 import { AccountSelector } from '@/components/finance/AccountSelector';
+import { notifyAlert } from '@/lib/notify';
 // import { api } from '@/lib/api';
 
 const MOCK_INVOICES = [
@@ -35,16 +36,16 @@ export default function CodSettlementPage() {
     const isSurplus = diff > 0;
 
     const handleNext = () => {
-        if (step === 1 && selectedInvoices.length === 0) return alert('Pilih minimal satu invoice');
-        if (step === 2 && receivedAmount <= 0) return alert('Masukkan jumlah uang yang diterima');
+        if (step === 1 && selectedInvoices.length === 0) return notifyAlert('Pilih minimal satu invoice');
+        if (step === 2 && receivedAmount <= 0) return notifyAlert('Masukkan jumlah uang yang diterima');
         setStep(step + 1);
     };
 
     const handleSubmit = async () => {
-        if (isShortage && !note) return alert('Wajib isi catatan untuk selisih kurang!');
+        if (isShortage && !note) return notifyAlert('Wajib isi catatan untuk selisih kurang!');
 
         // await api.admin.finance.verifyDriverCod({...})
-        alert(`Settlement Berhasil! Masuk ke akun ${targetAccount}. Selisih: ${diff}`);
+        notifyAlert(`Settlement Berhasil! Masuk ke akun ${targetAccount}. Selisih: ${diff}`);
         router.push('/finance/cod');
     };
 

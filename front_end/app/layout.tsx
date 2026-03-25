@@ -7,6 +7,7 @@ import DriverBottomNav from "@/components/layout/DriverBottomNav";
 import WebChatWidget from "@/components/chat/WebChatWidget";
 import IncomingChatNotifier from "@/components/chat/IncomingChatNotifier";
 import HydrationProvider from "@/components/providers/HydrationProvider";
+import NotificationProvider from "@/components/providers/NotificationProvider";
 
 export const metadata: Metadata = {
   title: "Migunani Motor - Suku Cadang Motor Terpercaya",
@@ -35,15 +36,17 @@ export default function RootLayout({
     <html lang="id" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-slate-50 pb-24 [--admin-bottom-nav-height:5rem] font-sans text-slate-900 select-none">
         <HydrationProvider>
-          <Header />
-          <main>
-            {children}
-          </main>
-          <BottomNav />
-          <AdminBottomNav />
-          <DriverBottomNav />
-          <WebChatWidget />
-          <IncomingChatNotifier />
+          <NotificationProvider>
+            <Header />
+            <main>
+              {children}
+            </main>
+            <BottomNav />
+            <AdminBottomNav />
+            <DriverBottomNav />
+            <WebChatWidget />
+            <IncomingChatNotifier />
+          </NotificationProvider>
         </HydrationProvider>
       </body>
     </html>

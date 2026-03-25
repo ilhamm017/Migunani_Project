@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyAlert } from '@/lib/notify';
 
 type ExpenseLabel = {
   id: number;
@@ -50,7 +51,7 @@ export default function ExpenseLabelConfigPage() {
       await loadLabels();
     } catch (error) {
       console.error('Create label failed:', error);
-      alert('Gagal menambah label.');
+      notifyAlert('Gagal menambah label.');
     }
   };
 
@@ -81,7 +82,7 @@ export default function ExpenseLabelConfigPage() {
       await loadLabels();
     } catch (error) {
       console.error('Update label failed:', error);
-      alert('Gagal mengubah label.');
+      notifyAlert('Gagal mengubah label.');
     }
   };
 
@@ -94,7 +95,7 @@ export default function ExpenseLabelConfigPage() {
       await loadLabels();
     } catch (error) {
       console.error('Delete label failed:', error);
-      alert('Gagal menghapus label.');
+      notifyAlert('Gagal menghapus label.');
     }
   };
 

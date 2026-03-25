@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+import { notifyAlert } from '@/lib/notify';
 
 type ARAgingDetail = {
     id: string;
@@ -62,7 +63,7 @@ export default function ARAgingPage() {
             });
         } catch (e) {
             console.error(e);
-            alert('Gagal memuat laporan');
+            notifyAlert('Gagal memuat laporan');
         } finally {
             setLoading(false);
         }

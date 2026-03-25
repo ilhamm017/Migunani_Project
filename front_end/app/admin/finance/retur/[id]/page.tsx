@@ -4,6 +4,7 @@ import { useCallback, useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
+import { notifyAlert } from '@/lib/notify';
 import {
     ArrowLeft,
     Package,
@@ -103,7 +104,7 @@ export default function FinanceReturDetailPage() {
 
     const handleDisburse = async () => {
         if (!retur) {
-            alert('Data retur tidak ditemukan.');
+            notifyAlert('Data retur tidak ditemukan.');
             return;
         }
         if (!confirm('Apakah Anda yakin ingin mencairkan dana refund ini? Pastikan Anda sudah melakukan transfer ke customer.')) return;
@@ -111,12 +112,12 @@ export default function FinanceReturDetailPage() {
         try {
             setSubmitting(true);
             await api.retur.disburse(retur.id, 'Pencairan manual via admin finance');
-            alert('Pencairan dana berhasil dicatat!');
+            notifyAlert('Pencairan dana berhasil dicatat!');
             loadData(); // Refresh to see update
         } catch (error: unknown) {
             const apiError = error as ApiErrorWithMessage;
             console.error('Disburse failed:', error);
-            alert('Gagal mencairkan dana: ' + (apiError.response?.data?.message || 'Error unknown'));
+            notifyAlert('Gagal mencairkan dana: ' + (apiError.response?.data?.message || 'Error unknown'));
         } finally {
             setSubmitting(false);
         }
