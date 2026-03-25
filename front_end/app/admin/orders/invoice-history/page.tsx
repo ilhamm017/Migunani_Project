@@ -82,7 +82,7 @@ const formatInvoiceReference = (invoiceId: string, invoiceNumber: string) => {
 };
 
 function AdminCompletedInvoiceHistoryPageContent() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   const role = useAuthStore((state) => state.user?.role);
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<HistoryRow[]>([]);

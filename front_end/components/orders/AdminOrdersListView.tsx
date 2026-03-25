@@ -36,6 +36,7 @@ const STATUS_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'waiting_payment', label: 'Waiting Payment' },
   { key: 'waiting_admin_verification', label: 'Waiting Admin Verification' },
   { key: 'debt_pending', label: 'Utang Belum Lunas' },
+  { key: 'checked', label: 'Checked (Gudang)' },
   { key: 'shipped', label: 'Shipped' },
   { key: 'delivered', label: 'Delivered' },
   { key: 'completed', label: 'Completed' },
@@ -55,7 +56,7 @@ const TABS: Array<{ id: TabId; label: string }> = [
 const TAB_FILTERS: Record<TabId, { status: string; is_backorder?: string; exclude_backorder?: string }> = {
   baru_masuk: {
     // Customer-action statuses (waiting_payment/debt_pending) are intentionally excluded.
-    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,hold',
+    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,checked,hold',
     exclude_backorder: 'true',
   },
   selesai: {
@@ -63,7 +64,7 @@ const TAB_FILTERS: Record<TabId, { status: string; is_backorder?: string; exclud
   },
   backorder: {
     // Keep backorder badge focused on actionable admin statuses.
-    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,hold,partially_fulfilled,shipped,delivered',
+    status: 'pending,waiting_invoice,waiting_admin_verification,allocated,ready_to_ship,checked,hold,partially_fulfilled,shipped,delivered',
     is_backorder: 'true',
   },
 };

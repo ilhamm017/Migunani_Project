@@ -9,6 +9,7 @@ import { enqueueWhatsappNotification } from '../services/TransactionNotification
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../utils/invoiceNetTotals';
+import { recordOrderEvent } from '../utils/orderEvent';
 
 const toObjectOrEmpty = (value: unknown): Record<string, any> => {
     if (!value) return {};
@@ -309,7 +310,7 @@ export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) =>
 
     const paymentStatusAllowed = new Set(['unpaid', 'paid', 'cod_pending', 'draft']);
     const paymentMethodAllowed = new Set(['pending', 'transfer_manual', 'cod', 'cash_store']);
-    const shipmentStatusAllowed = new Set(['ready_to_ship', 'shipped', 'delivered', 'canceled']);
+    const shipmentStatusAllowed = new Set(['ready_to_ship', 'checked', 'shipped', 'delivered', 'canceled']);
     const sortAllowed = new Set([
         'createdAt_desc',
         'createdAt_asc',
@@ -695,40 +696,25 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
 
         const updatedOrderIds: string[] = [];
         for (const order of orders) {
-            // Only update if status is shippable
-            const shippableStatuses = ['ready_to_ship', 'allocated', 'hold', 'partially_fulfilled', 'waiting_payment'];
-            if (shippableStatuses.includes(order.status)) {
-                const prevStatus = order.status;
+            // Assigning driver should NOT mark shipped. Shipped is set at actual handover (checker step).
+            const assignableStatuses = ['ready_to_ship', 'checked', 'allocated', 'hold', 'partially_fulfilled', 'waiting_payment'];
+            if (!assignableStatuses.includes(String(order.status || ''))) continue;
 
-                await order.update({
-                    status: 'shipped',
-                    courier_id: courier.id
-                }, { transaction: t });
+            await order.update({
+                courier_id: courier.id
+            }, { transaction: t });
 
-                // Post Accounting
-                if (invoice.payment_method !== 'cod') {
-                    await AccountingPostingService.postGoodsOutForOrder(String(order.id), actorId, t, 'non_cod');
-                } else {
-                    await AccountingPostingService.postGoodsOutForOrder(String(order.id), actorId, t, 'cod');
-                }
+            await recordOrderEvent({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: invoiceId,
+                event_type: 'driver_assigned',
+                payload: { courier_id: courier.id },
+                actor_user_id: actorId,
+                actor_role: userRole
+            });
 
-                await emitOrderStatusChanged({
-                    order_id: String(order.id),
-                    from_status: prevStatus,
-                    to_status: 'shipped',
-                    source: String(order.source || 'web'),
-                    payment_method: String(invoice.payment_method || ''),
-                    courier_id: courier.id,
-                    triggered_by_role: userRole,
-                    target_roles: ['driver', 'customer', 'admin_finance'],
-                    target_user_ids: [courier.id]
-                }, {
-                    transaction: t,
-                    requestContext: `invoice_assign_driver:${invoiceId}:${order.id}`
-                });
-
-                updatedOrderIds.push(String(order.id));
-            }
+            updatedOrderIds.push(String(order.id));
         }
 
         if (updatedOrderIds.length === 0) {
@@ -742,10 +728,8 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('Tidak ada pesanan dalam invoice ini yang siap untuk dikirim.', 400);
         }
 
-        // Update Invoice status
+        // Update Invoice courier only (shipment_status unchanged)
         await invoice.update({
-            shipment_status: 'shipped',
-            shipped_at: new Date(),
             courier_id: courier.id
         }, { transaction: t });
 

@@ -17,6 +17,7 @@ type DashboardStats = {
   waiting_payment?: number | string;
   delivered?: number | string;
   ready_to_ship?: number | string;
+  checked?: number | string;
   waiting_admin_verification?: number | string;
   allocated?: number | string;
   partially_fulfilled?: number | string;
@@ -71,10 +72,11 @@ const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => 
     );
   }
   // Gudang cares about new orders to pick and ready items to ship
-  if (role === 'admin_gudang') {
+  if (role === 'admin_gudang' || role === 'checker_gudang') {
     return (
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
       toNumber(stats.hold)
@@ -90,6 +92,7 @@ const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => 
       toNumber(stats.pending) +
       toNumber(stats.waiting_invoice) +
       toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
       toNumber(stats.waiting_admin_verification) +
       toNumber(stats.delivered) +
       toNumber(stats.allocated) +

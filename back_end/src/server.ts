@@ -214,6 +214,7 @@ import stockOpnameRoutes from './routes/stockOpname';
 import allocationRoutes from './routes/allocation';
 import returRoutes from './routes/retur';
 import driverDepositRoutes from './routes/driverDeposit';
+import deliveryHandoverRoutes from './routes/deliveryHandover';
 import customerRoutes from './routes/customer';
 import shippingMethodRoutes from './routes/shippingMethod';
 import publicShippingMethodRoutes from './routes/publicShippingMethod';
@@ -243,6 +244,7 @@ app.use('/api/v1/inventory/audit', stockOpnameRoutes);
 app.use('/api/v1/allocation', allocationRoutes);
 app.use('/api/v1/retur', returRoutes);
 app.use('/api/v1/admin/driver-deposit', driverDepositRoutes);
+app.use('/api/v1/admin/delivery-handovers', deliveryHandoverRoutes);
 app.use('/api/v1/admin/customers', customerRoutes);
 app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
 app.use('/api/v1/shipping-methods', publicShippingMethodRoutes);
@@ -267,6 +269,7 @@ const ORDER_STATUS_ENUM_VALUES = [
     'waiting_invoice',
     'waiting_payment',
     'ready_to_ship',
+    'checked',
     'allocated',
     'partially_fulfilled',
     'debt_pending',
@@ -283,11 +286,32 @@ const ORDER_EVENT_TYPE_ENUM_VALUES = [
     'allocation_set',
     'invoice_issued',
     'invoice_item_billed',
+    'driver_assigned',
     'backorder_opened',
     'backorder_reallocated',
     'backorder_canceled',
     'order_pricing_adjusted',
+    'warehouse_checked',
+    'warehouse_handed_over',
     'order_status_changed'
+];
+
+const INVOICE_SHIPMENT_STATUS_ENUM_VALUES = [
+    'ready_to_ship',
+    'checked',
+    'shipped',
+    'delivered',
+    'canceled'
+];
+
+const USER_ROLE_ENUM_VALUES = [
+    'super_admin',
+    'admin_gudang',
+    'checker_gudang',
+    'admin_finance',
+    'kasir',
+    'driver',
+    'customer'
 ];
 
 const RETUR_STATUS_ENUM_VALUES = [
@@ -670,6 +694,78 @@ const ensureOrderEventTypeEnumReady = async () => {
     }
 };
 
+const ensureInvoiceShipmentStatusEnumReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
+    try {
+        const [rows] = await sequelize.query(
+            `SELECT COLUMN_TYPE AS columnType
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'invoices'
+               AND COLUMN_NAME = 'shipment_status'`
+        ) as any;
+
+        const col = rows?.[0];
+        if (!col) {
+            console.warn('Skip invoices.shipment_status enum update: column not found yet');
+            return;
+        }
+
+        const currentValues = parseEnumValuesFromColumnType(col.columnType);
+        const missingRequired = INVOICE_SHIPMENT_STATUS_ENUM_VALUES.filter((value) => !currentValues.includes(value));
+        if (missingRequired.length === 0) return;
+
+        const mergedValues = Array.from(new Set([...currentValues, ...INVOICE_SHIPMENT_STATUS_ENUM_VALUES]));
+        const enumValuesSql = mergedValues.map((value) => `'${value.replace(/'/g, "\\'")}'`).join(', ');
+        await sequelize.query(
+            `ALTER TABLE invoices
+             MODIFY COLUMN shipment_status ENUM(${enumValuesSql})
+             NOT NULL DEFAULT 'ready_to_ship'`
+        );
+        console.log(`Invoice shipment status enum updated: added [${missingRequired.join(', ')}]`);
+    } catch (error) {
+        console.error('Failed to ensure invoices.shipment_status enum values:', error);
+        throw error;
+    }
+};
+
+const ensureUserRoleEnumReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
+    try {
+        const [rows] = await sequelize.query(
+            `SELECT COLUMN_TYPE AS columnType
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'users'
+               AND COLUMN_NAME = 'role'`
+        ) as any;
+
+        const col = rows?.[0];
+        if (!col) {
+            console.warn('Skip users.role enum update: column not found yet');
+            return;
+        }
+
+        const currentValues = parseEnumValuesFromColumnType(col.columnType);
+        const missingRequired = USER_ROLE_ENUM_VALUES.filter((value) => !currentValues.includes(value));
+        if (missingRequired.length === 0) return;
+
+        const mergedValues = Array.from(new Set([...currentValues, ...USER_ROLE_ENUM_VALUES]));
+        const enumValuesSql = mergedValues.map((value) => `'${value.replace(/'/g, "\\'")}'`).join(', ');
+        await sequelize.query(
+            `ALTER TABLE users
+             MODIFY COLUMN role ENUM(${enumValuesSql})
+             NOT NULL DEFAULT 'customer'`
+        );
+        console.log(`User role enum updated: added [${missingRequired.join(', ')}]`);
+    } catch (error) {
+        console.error('Failed to ensure users.role enum values:', error);
+        throw error;
+    }
+};
+
 const normalizeWaitingPaymentOrders = async () => {
 	        try {
         const [updated] = await Order.update(
@@ -747,7 +843,9 @@ const startServer = async () => {
 		            await runStartupStep('Database sync', syncDatabaseWithRetry);
 		            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
 		            await runStartupStep('Ensure orders pricing override columns', ensureOrderPricingOverrideColumnsReady);
+		            await runStartupStep('Ensure users.role enum', ensureUserRoleEnumReady);
 		            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
+		            await runStartupStep('Ensure invoices.shipment_status enum', ensureInvoiceShipmentStatusEnumReady);
 		            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
 		            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
 		            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);

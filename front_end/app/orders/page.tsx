@@ -71,6 +71,7 @@ const getStatusLabel = (status: string, order?: OrderSummary) => {
         'waiting_invoice': 'Menunggu Invoice',
         'waiting_payment': 'Diproses',
         'ready_to_ship': 'Diproses',
+        'checked': 'Dicek Gudang',
         'allocated': 'Dialokasikan',
         'partially_fulfilled': 'Terkirim Sebagian',
         'debt_pending': 'Utang Belum Lunas',
@@ -89,6 +90,7 @@ const getStatusColor = (status: string) => {
     if (status === 'canceled') return 'bg-rose-500 text-white';
     if (['completed', 'delivered'].includes(status)) return 'bg-emerald-500 text-white';
     if (status === 'shipped') return 'bg-blue-500 text-white';
+    if (status === 'checked') return 'bg-cyan-500 text-white';
     if (status === 'partially_fulfilled') return 'bg-amber-500 text-white';
     if (['debt_pending', 'waiting_admin_verification'].includes(status)) return 'bg-indigo-500 text-white';
     if (status === 'pending') return 'bg-orange-500 text-white';

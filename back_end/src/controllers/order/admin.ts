@@ -282,6 +282,10 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             await t.rollback();
             throw new CustomError('Status order tidak valid', 400);
         }
+        if (userRole !== 'super_admin' && (nextStatus === 'checked' || nextStatus === 'shipped')) {
+            await t.rollback();
+            throw new CustomError('Gunakan fitur Checker/Handover untuk status checked/shipped agar track record tercatat.', 409);
+        }
 
         const order = await Order.findByPk(orderId, {
             transaction: t,
@@ -305,8 +309,6 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         //   waiting_invoice → ready_to_ship        (issueInvoice)
         //   shipped → delivered                     (completeDelivery)
         const ALLOWED_TRANSITIONS: Record<string, { roles: string[]; to: string[] }> = {
-            'ready_to_ship': { roles: ['admin_gudang'], to: ['shipped'] },
-            'hold': { roles: ['admin_gudang'], to: ['shipped'] },
             'delivered': { roles: ['admin_gudang', 'admin_finance'], to: ['completed'] },
         };
         const CANCELABLE_STATUSES = [
@@ -1153,6 +1155,7 @@ export const getDashboardStats = asyncWrapper(async (req: Request, res: Response
         waiting_invoice: 0,
         delivered: 0,
         ready_to_ship: 0,
+        checked: 0,
         shipped: 0,
         completed: 0,
         canceled: 0,

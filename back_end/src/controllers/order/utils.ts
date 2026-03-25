@@ -10,7 +10,7 @@ import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoi
 
 // --- Customer Endpoints ---
 export const DELIVERY_EMPLOYEE_ROLES = ['driver'] as const;
-export const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
+export const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'hold', 'waiting_admin_verification'] as const;
 export const ISSUE_SLA_HOURS = 24;
 export const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
 export type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
@@ -381,5 +381,4 @@ export const resolveEffectiveTierPricing = (
 
 
 // --- Admin Endpoints ---
-
 

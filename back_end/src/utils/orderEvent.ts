@@ -5,10 +5,13 @@ type OrderEventType =
     | 'allocation_set'
     | 'invoice_issued'
     | 'invoice_item_billed'
+    | 'driver_assigned'
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
     | 'order_pricing_adjusted'
+    | 'warehouse_checked'
+    | 'warehouse_handed_over'
     | 'order_status_changed';
 
 type RecordOrderEventInput = {

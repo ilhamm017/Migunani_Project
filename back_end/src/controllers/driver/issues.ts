@@ -39,7 +39,7 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             throw new CustomError('Order tidak ditemukan atau bukan tugas Anda', 404);
         }
 
-        if (!['ready_to_ship', 'shipped'].includes(String(order.status || '').toLowerCase())) {
+        if (!['ready_to_ship', 'checked', 'shipped'].includes(String(order.status || '').toLowerCase())) {
             await safeRollback();
             throw new CustomError('Laporan kekurangan hanya bisa dibuat pada order yang masih aktif dikirim.', 409);
         }

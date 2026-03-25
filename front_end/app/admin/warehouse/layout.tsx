@@ -7,7 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 
 export default function WarehouseDashboardLayout({ children }: { children: React.ReactNode }) {
-    const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
+    const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'kasir'], '/admin');
     const pathname = usePathname();
 
     const hasInternalPageScroll =

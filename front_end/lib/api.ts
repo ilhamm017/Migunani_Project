@@ -194,6 +194,17 @@ export const api = {
             apiClient.patch(`/invoices/${invoiceId}/assign-driver`, data),
     },
 
+    deliveryHandovers: {
+        check: (formData: FormData) =>
+            apiClient.post(`/admin/delivery-handovers/check`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            }),
+        latest: (invoiceId: string) =>
+            apiClient.get(`/admin/delivery-handovers/latest`, { params: { invoice_id: invoiceId } }),
+        handover: (handoverId: number | string) =>
+            apiClient.post(`/admin/delivery-handovers/${handoverId}/handover`, {}),
+    },
+
     // Allocation (Admin)
     allocation: {
         getPending: (params?: { scope?: 'shortage' | 'all' }) =>
@@ -645,14 +656,14 @@ export const api = {
                 name: string;
                 email?: string;
                 whatsapp_number: string;
-                role: 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver';
+                role: 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver';
                 password: string;
             }) => apiClient.post('/admin/staff', data),
             update: (id: string, data: {
                 name?: string;
                 email?: string;
                 whatsapp_number?: string;
-                role?: 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver';
+                role?: 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver';
                 status?: 'active' | 'banned';
                 password?: string;
             }) => apiClient.patch(`/admin/staff/${id}`, data),

@@ -24,7 +24,7 @@ interface InvoiceAttributes {
     shipping_method_code?: string | null;
     shipping_method_name?: string | null;
     courier_id?: string | null;
-    shipment_status?: 'ready_to_ship' | 'shipped' | 'delivered' | 'canceled';
+    shipment_status?: 'ready_to_ship' | 'checked' | 'shipped' | 'delivered' | 'canceled';
     shipped_at?: Date | null;
     delivered_at?: Date | null;
     delivery_proof_url?: string | null;
@@ -56,7 +56,7 @@ class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implem
     declare shipping_method_code: string | null;
     declare shipping_method_name: string | null;
     declare courier_id: string | null;
-    declare shipment_status: 'ready_to_ship' | 'shipped' | 'delivered' | 'canceled';
+    declare shipment_status: 'ready_to_ship' | 'checked' | 'shipped' | 'delivered' | 'canceled';
     declare shipped_at: Date | null;
     declare delivered_at: Date | null;
     declare delivery_proof_url: string | null;
@@ -167,7 +167,7 @@ Invoice.init(
             allowNull: true,
         },
         shipment_status: {
-            type: DataTypes.ENUM('ready_to_ship', 'shipped', 'delivered', 'canceled'),
+            type: DataTypes.ENUM('ready_to_ship', 'checked', 'shipped', 'delivered', 'canceled'),
             allowNull: false,
             defaultValue: 'ready_to_ship',
         },

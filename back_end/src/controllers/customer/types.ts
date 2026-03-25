@@ -2,6 +2,7 @@ export const OPEN_ORDER_STATUSES = [
     'pending',
     'waiting_invoice',
     'ready_to_ship',
+    'checked',
     'allocated',
     'partially_fulfilled',
     'debt_pending',

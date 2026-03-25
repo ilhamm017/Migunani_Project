@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { formatOrderStatusLabel, formatOrderStatusToastMessage, type OrderStatusChangedEvent } from '@/lib/orderStatusMeta';
 
-type SupportedRole = 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver';
+type SupportedRole = 'super_admin' | 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver';
 
 type PriorityCard = {
   id: string;
@@ -27,6 +27,7 @@ type DashboardStats = {
   waiting_payment?: number | string;
   delivered?: number | string;
   ready_to_ship?: number | string;
+  checked?: number | string;
   waiting_admin_verification?: number | string;
   allocated?: number | string;
   partially_fulfilled?: number | string;
@@ -37,8 +38,9 @@ type DashboardStats = {
 
 const MAX_EVENTS = 30;
 const ACTIONABLE_STATUSES_BY_ROLE: Record<Exclude<SupportedRole, 'driver'>, string[]> = {
-  super_admin: ['pending', 'waiting_invoice', 'ready_to_ship', 'waiting_admin_verification', 'delivered', 'allocated', 'partially_fulfilled', 'shipped', 'hold'],
-  admin_gudang: ['pending', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'hold'],
+  super_admin: ['pending', 'waiting_invoice', 'ready_to_ship', 'checked', 'waiting_admin_verification', 'delivered', 'allocated', 'partially_fulfilled', 'shipped', 'hold'],
+  admin_gudang: ['pending', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'hold'],
+  checker_gudang: ['pending', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'hold'],
   admin_finance: ['waiting_invoice', 'waiting_admin_verification', 'delivered'],
   kasir: ['pending'],
 };
@@ -50,7 +52,7 @@ const toNumber = (value: unknown): number => {
 
 const normalizeRole = (role?: string | null): SupportedRole | null => {
   const val = String(role || '').trim() as SupportedRole;
-  if (['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver'].includes(val)) {
+  if (['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir', 'driver'].includes(val)) {
     return val;
   }
   return null;
@@ -68,6 +70,17 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
     return (
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
+      toNumber(stats.allocated) +
+      toNumber(stats.partially_fulfilled) +
+      toNumber(stats.hold)
+    );
+  }
+  if (role === 'checker_gudang') {
+    return (
+      toNumber(stats.pending) +
+      toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
       toNumber(stats.hold)
@@ -81,6 +94,7 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
       toNumber(stats.pending) +
       toNumber(stats.waiting_invoice) +
       toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
       toNumber(stats.waiting_admin_verification) +
       toNumber(stats.delivered) +
       toNumber(stats.allocated) +

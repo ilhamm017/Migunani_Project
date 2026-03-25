@@ -6,7 +6,7 @@ interface OrderAttributes {
     customer_id?: string; // UUID
     customer_name?: string;
     source: 'web' | 'whatsapp';
-    status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
+    status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'checked' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
     payment_method?: 'transfer_manual' | 'cod' | 'cash_store' | null;
     total_amount: number;
     discount_amount: number;
@@ -34,7 +34,7 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     declare customer_id: string;
     declare customer_name: string;
     declare source: 'web' | 'whatsapp';
-    declare status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
+    declare status: 'pending' | 'waiting_invoice' | 'waiting_payment' | 'ready_to_ship' | 'checked' | 'allocated' | 'partially_fulfilled' | 'debt_pending' | 'shipped' | 'delivered' | 'completed' | 'canceled' | 'expired' | 'hold' | 'waiting_admin_verification';
     declare payment_method: 'transfer_manual' | 'cod' | 'cash_store' | null;
     declare total_amount: number;
     declare discount_amount: number;
@@ -77,7 +77,7 @@ Order.init(
             allowNull: false,
         },
         status: {
-            type: DataTypes.ENUM('pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'expired', 'hold', 'waiting_admin_verification'),
+            type: DataTypes.ENUM('pending', 'waiting_invoice', 'waiting_payment', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'debt_pending', 'shipped', 'delivered', 'completed', 'canceled', 'expired', 'hold', 'waiting_admin_verification'),
             defaultValue: 'pending',
         },
         payment_method: {

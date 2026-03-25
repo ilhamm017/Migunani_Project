@@ -141,9 +141,18 @@ type CourierOption = {
   name: string;
 };
 
+type DeliveryHandoverModalState = {
+  step: 'check' | 'handover';
+  invoiceId: string;
+  invoiceTitle: string;
+  note: string;
+  result: 'pass' | 'fail';
+  file: File | null;
+};
+
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
-const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'waiting_payment', 'processing', 'hold']);
+const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'checked', 'waiting_payment', 'processing', 'hold']);
 const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
 const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'ready_to_ship', 'partially_fulfilled', 'hold', 'delivered', 'completed']);
 const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -269,6 +278,7 @@ const shipmentStatusLabel = (raw: unknown) => {
   const status = String(raw || '').trim().toLowerCase();
   if (status === 'mixed') return 'Gabungan';
   if (status === 'ready_to_ship') return 'Siap Kirim';
+  if (status === 'checked') return 'Dicek (Keluar Gudang)';
   if (status === 'shipped') return 'Dikirim';
   if (status === 'delivered') return 'Terkirim';
   if (status === 'canceled') return 'Dibatalkan';
@@ -280,6 +290,7 @@ const shipmentStatusBadge = (raw: unknown) => {
   if (status === 'mixed') return 'bg-violet-100 text-violet-700 border-violet-200';
   if (status === 'delivered') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
   if (status === 'shipped') return 'bg-blue-100 text-blue-700 border-blue-200';
+  if (status === 'checked') return 'bg-cyan-100 text-cyan-700 border-cyan-200';
   if (status === 'ready_to_ship') return 'bg-indigo-100 text-indigo-700 border-indigo-200';
   if (status === 'canceled') return 'bg-rose-100 text-rose-700 border-rose-200';
   if (status === 'hold') return 'bg-violet-100 text-violet-700 border-violet-200';
@@ -511,20 +522,21 @@ export default function AdminOrdersWorkspace({
   initialSection,
   initialFocusOrderId,
 }: AdminOrdersWorkspaceProps) {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   const { user } = useAuthStore();
   const normalizedRole = String(user?.role || '').trim();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const hasRenderableAccess = isAuthenticated && ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
+  const hasRenderableAccess = isAuthenticated && ['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
   const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canEditPricing = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canMoveToIndentAction = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
-  const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
+  const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang', 'checker_gudang'].includes(normalizedRole), [normalizedRole]);
   const isFinanceRole = useMemo(() => normalizedRole === 'admin_finance', [normalizedRole]);
-  const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang', [normalizedRole]);
+  const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang' || normalizedRole === 'checker_gudang', [normalizedRole]);
+  const canAssignDriverWarehouse = useMemo(() => normalizedRole === 'admin_gudang' || normalizedRole === 'super_admin', [normalizedRole]);
   type OrderDetailsMap = Record<string, OrderDetailResponse | undefined>;
   type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
   type PricingEditorItem = {
@@ -556,6 +568,8 @@ export default function AdminOrdersWorkspace({
   const [allocationConfirm, setAllocationConfirm] = useState<AllocationConfirmState | null>(null);
   const [backorderCancelReason, setBackorderCancelReason] = useState('');
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
+  const [deliveryHandoverModal, setDeliveryHandoverModal] = useState<DeliveryHandoverModalState | null>(null);
+  const [deliveryHandoverBusy, setDeliveryHandoverBusy] = useState(false);
   const [selectedWarehouseCourierId, setSelectedWarehouseCourierId] = useState('');
   const [selectedWarehouseInvoiceGroups, setSelectedWarehouseInvoiceGroups] = useState<string[]>([]);
   const [warehouseBatchAssigning, setWarehouseBatchAssigning] = useState(false);
@@ -2009,9 +2023,7 @@ export default function AdminOrdersWorkspace({
       setWarehouseAssignConfirm(null);
 
       if (failedCount > 0) {
-        notifyAlert(`Sebagian grup gagal dikirim (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
-      } else {
-        // no-op
+        notifyAlert(`Sebagian grup gagal ditugaskan ke driver (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
       }
     } catch (error: unknown) {
       const message = axios.isAxiosError(error)
@@ -2020,6 +2032,63 @@ export default function AdminOrdersWorkspace({
       notifyAlert(message);
     } finally {
       setWarehouseBatchAssigning(false);
+    }
+  };
+
+  const openDeliveryCheckModal = (invoiceId: string, invoiceTitle: string) => {
+    setDeliveryHandoverModal({
+      step: 'check',
+      invoiceId,
+      invoiceTitle,
+      note: '',
+      result: 'pass',
+      file: null,
+    });
+  };
+
+  const openDeliveryHandoverModal = (invoiceId: string, invoiceTitle: string) => {
+    setDeliveryHandoverModal({
+      step: 'handover',
+      invoiceId,
+      invoiceTitle,
+      note: '',
+      result: 'pass',
+      file: null,
+    });
+  };
+
+  const submitDeliveryHandoverModal = async () => {
+    if (!deliveryHandoverModal) return;
+    if (!deliveryHandoverModal.invoiceId) return;
+    setDeliveryHandoverBusy(true);
+    try {
+      if (deliveryHandoverModal.step === 'check') {
+        const formData = new FormData();
+        formData.append('invoice_id', deliveryHandoverModal.invoiceId);
+        if (deliveryHandoverModal.note) formData.append('note', deliveryHandoverModal.note);
+        formData.append('result', deliveryHandoverModal.result);
+        if (deliveryHandoverModal.file) formData.append('evidence', deliveryHandoverModal.file);
+        await api.deliveryHandovers.check(formData);
+        notifyOpen({ variant: 'success', title: 'Berhasil', message: 'Checking tersimpan.' });
+      } else {
+        const latest = await api.deliveryHandovers.latest(deliveryHandoverModal.invoiceId);
+        const handoverId = Number((latest.data as any)?.handover?.id || 0);
+        if (!handoverId) {
+          notifyAlert('Handover tidak ditemukan untuk invoice ini.');
+          return;
+        }
+        await api.deliveryHandovers.handover(handoverId);
+        notifyOpen({ variant: 'success', title: 'Berhasil', message: 'Handover berhasil. Status menjadi shipped.' });
+      }
+      setDeliveryHandoverModal(null);
+      await loadOrders();
+    } catch (error: unknown) {
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal memproses checker/handover.')
+        : 'Gagal memproses checker/handover.';
+      notifyAlert(message);
+    } finally {
+      setDeliveryHandoverBusy(false);
     }
   };
 
@@ -3125,7 +3194,7 @@ export default function AdminOrdersWorkspace({
                 const list = filteredGroupedOrders[section] as AdminOrderListRow[];
                 if (list.length === 0) return null;
                 const isWarehouseCompactView = isWarehouseRole || (canManageWarehouseFlow && ['gudang', 'pengiriman'].includes(section));
-                const canUseWarehouseChecklist = canManageWarehouseFlow;
+                const canUseWarehouseChecklist = canAssignDriverWarehouse;
                 const isFinanceCompactView = isFinanceRole && ['pembayaran', 'gudang', 'pengiriman', 'selesai'].includes(section);
                 const isInvoiceCompactView = isWarehouseCompactView || isFinanceCompactView;
                 if (isInvoiceCompactView) {
@@ -3265,6 +3334,10 @@ export default function AdminOrdersWorkspace({
                         const rowId = String(row?.id || '');
                         return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
                       });
+                      const hasChecked = bucket.orders.some((row) => {
+                        const rowId = String(row?.id || '');
+                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'checked';
+                      });
                       const readyToShipOrderIds = bucket.orders
                         .filter((row) => {
                           const rowId = String(row?.id || '');
@@ -3284,6 +3357,7 @@ export default function AdminOrdersWorkspace({
                         bucket.orders[0] ||
                         null;
                       const primaryOrderId = String(primaryOrder?.id || '');
+                      const courierId = String((primaryOrder as any)?.Invoice?.courier_id || (primaryOrder as any)?.courier_id || '').trim();
                       const statusLabel = statusSet.size <= 1 ? (Array.from(statusSet)[0] || '-') : `${statusSet.size} status`;
                       const actionLabel = isFinanceCompactView
                         ? 'Lihat Detail Invoice'
@@ -3332,6 +3406,10 @@ export default function AdminOrdersWorkspace({
                         allocatedSkuCount: allocatedSkuSet.size,
                         readyToShipOrderIds,
                         primaryOrderId,
+                        courierId,
+                        hasReadyToShip,
+                        hasChecked,
+                        hasShipped,
                         actionLabel,
                         paymentMethodLabel,
                         paymentStatusLabel,
@@ -3449,6 +3527,35 @@ export default function AdminOrdersWorkspace({
                                 <Link href="/admin/finance/verifikasi" className="inline-block mt-1 text-[10px] font-bold text-blue-700">
                                   Buka Verifikasi
                                 </Link>
+                              )}
+                              {canManageWarehouseFlow && section === 'gudang' && card.invoiceId && (
+                                <div className="mt-2 flex flex-col items-end gap-2">
+                                  {card.hasReadyToShip && !card.hasChecked && !card.hasShipped && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openDeliveryCheckModal(card.invoiceId, card.invoiceTitle)}
+                                      className="rounded-xl bg-cyan-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-cyan-700 active:scale-95"
+                                    >
+                                      Checker: Check
+                                    </button>
+                                  )}
+                                  {card.hasChecked && !card.hasShipped && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!card.courierId) {
+                                          notifyAlert('Invoice belum ditugaskan ke driver.');
+                                          return;
+                                        }
+                                        openDeliveryHandoverModal(card.invoiceId, card.invoiceTitle);
+                                      }}
+                                      className="rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-blue-700 active:scale-95 disabled:opacity-50"
+                                      disabled={deliveryHandoverBusy || !card.courierId}
+                                    >
+                                      Handover: Set Shipped
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
                           </div>
@@ -4396,6 +4503,108 @@ export default function AdminOrdersWorkspace({
           )}
         </div>
       </div>
+      {deliveryHandoverModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400">
+                  {deliveryHandoverModal.step === 'check' ? 'Checker - Checking' : 'Checker - Handover'}
+                </p>
+                <p className="text-sm font-black text-slate-900">{deliveryHandoverModal.invoiceTitle}</p>
+                <p className="text-[11px] text-slate-500">{deliveryHandoverModal.invoiceId}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => (deliveryHandoverBusy ? null : setDeliveryHandoverModal(null))}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold text-slate-600 disabled:opacity-50"
+                disabled={deliveryHandoverBusy}
+              >
+                Tutup
+              </button>
+            </div>
+
+            {deliveryHandoverModal.step === 'check' && (
+              <div className="mt-3 space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex items-center gap-2 text-[11px] font-bold text-slate-700">
+                    <input
+                      type="radio"
+                      name="delivery-check-result"
+                      value="pass"
+                      checked={deliveryHandoverModal.result === 'pass'}
+                      onChange={() => setDeliveryHandoverModal((prev) => (prev ? { ...prev, result: 'pass' } : prev))}
+                    />
+                    Lolos (pass)
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[11px] font-bold text-slate-700">
+                    <input
+                      type="radio"
+                      name="delivery-check-result"
+                      value="fail"
+                      checked={deliveryHandoverModal.result === 'fail'}
+                      onChange={() => setDeliveryHandoverModal((prev) => (prev ? { ...prev, result: 'fail' } : prev))}
+                    />
+                    Ada selisih (fail → HOLD)
+                  </label>
+                </div>
+                <textarea
+                  value={deliveryHandoverModal.note}
+                  onChange={(e) => setDeliveryHandoverModal((prev) => (prev ? { ...prev, note: e.target.value } : prev))}
+                  placeholder="Catatan checker (wajib kalau fail)"
+                  className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm outline-none"
+                  rows={3}
+                />
+                <div>
+                  <p className="text-[11px] font-bold text-slate-600 mb-1">Foto evidence (opsional)</p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      setDeliveryHandoverModal((prev) => (prev ? { ...prev, file: f } : prev));
+                    }}
+                    className="block w-full text-[11px]"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  Catatan: item snapshot akan disimpan otomatis dari invoice. (UI per-item akan ditambahkan bila diperlukan.)
+                </p>
+              </div>
+            )}
+
+            {deliveryHandoverModal.step === 'handover' && (
+              <div className="mt-3">
+                <p className="text-[11px] text-slate-600">
+                  Tindakan ini akan mengubah status invoice/order menjadi <span className="font-black">shipped</span> dan posting goods-out.
+                </p>
+              </div>
+            )}
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeliveryHandoverModal(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-black uppercase tracking-wider text-slate-700 disabled:opacity-50"
+                disabled={deliveryHandoverBusy}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitDeliveryHandoverModal()}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                disabled={
+                  deliveryHandoverBusy ||
+                  (deliveryHandoverModal.step === 'check' && deliveryHandoverModal.result === 'fail' && !String(deliveryHandoverModal.note || '').trim())
+                }
+              >
+                {deliveryHandoverBusy ? 'Memproses...' : (deliveryHandoverModal.step === 'check' ? 'Simpan Checking' : 'Konfirmasi Handover')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

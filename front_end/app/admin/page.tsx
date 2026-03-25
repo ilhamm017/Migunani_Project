@@ -24,11 +24,11 @@ type DashboardAuditRow = { status?: string | null };
 type DashboardReturRow = { status?: string | null; admin_response?: string | null };
 
 export default function AdminOverviewPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir', 'driver']);
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuthStore();
-  const canUseOrderNotifications = ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || ''));
+  const canUseOrderNotifications = ['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'].includes(String(user?.role || ''));
   const canUseChatUnread = canUseChatUnreadByRole(user?.role);
   const chatUnreadCount = useChatUnreadCount({ enabled: !!allowed && canUseChatUnread, userId: user?.id });
 

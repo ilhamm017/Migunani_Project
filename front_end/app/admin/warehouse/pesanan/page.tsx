@@ -17,6 +17,8 @@ interface OrderCard {
     payment_method?: string;
     courier_id?: string | null;
     courier_name?: string | null;
+    invoice_id?: string | null;
+    invoice_number?: string | null;
 }
 
 interface KanbanColumn {
@@ -43,6 +45,12 @@ interface OrderApiRow {
     Courier?: {
         id?: string;
         name?: string;
+    } | null;
+    Invoice?: {
+        id?: string;
+        invoice_number?: string;
+        courier_id?: string | null;
+        shipment_status?: string | null;
     } | null;
     User?: {
         name?: string;
@@ -72,6 +80,15 @@ const KANBAN_COLUMNS: KanbanColumn[] = [
         dotColor: 'bg-purple-500',
     },
     {
+        key: 'checked',
+        label: 'Dicek (Keluar Gudang)',
+        color: 'text-cyan-700',
+        bgColor: 'bg-cyan-50',
+        borderColor: 'border-cyan-200',
+        headerBg: 'bg-cyan-100',
+        dotColor: 'bg-cyan-500',
+    },
+    {
         key: 'shipped',
         label: 'Dalam Pengiriman',
         color: 'text-emerald-700',
@@ -85,6 +102,7 @@ const KANBAN_COLUMNS: KanbanColumn[] = [
 // Map kanban column keys to API statuses
 const STATUS_MAP_TO_API: Record<string, string> = {
     ready_to_ship: 'ready_to_ship',
+    checked: 'checked',
     shipped: 'shipped',
 };
 
@@ -104,7 +122,7 @@ export default function WarehouseKanbanPage() {
         try {
             if (!silent) setLoading(true);
             // Fetch orders for each relevant status
-            const statuses = ['ready_to_ship', 'shipped'];
+            const statuses = ['ready_to_ship', 'checked', 'shipped'];
             const results = await Promise.all(
                 statuses.map(status =>
                     api.admin.orderManagement.getAll({ status, limit: 50 })
@@ -123,8 +141,10 @@ export default function WarehouseKanbanPage() {
                 status: order.status === 'waiting_payment' ? 'ready_to_ship' : String(order.status || ''),
                 created_at: String(order.createdAt || order.created_at || ''),
                 payment_method: order.payment_method,
-                courier_id: order.courier_id || order.Courier?.id || null,
+                courier_id: order.Invoice?.courier_id || order.courier_id || order.Courier?.id || null,
                 courier_name: order.Courier?.name || null,
+                invoice_id: order.Invoice?.id ? String(order.Invoice.id) : null,
+                invoice_number: order.Invoice?.invoice_number ? String(order.Invoice.invoice_number) : null,
             }));
 
             setOrders(allOrders);
@@ -202,6 +222,12 @@ export default function WarehouseKanbanPage() {
             return;
         }
 
+        if ((targetColumn === 'checked' || targetColumn === 'shipped') && !order.invoice_id) {
+            notifyAlert('Order ini belum punya invoice. Terbitkan invoice dulu sebelum checker/handover.');
+            setDraggedOrder(null);
+            return;
+        }
+
         if (targetColumn === 'shipped' && !order.courier_id) {
             setCourierModal({ orderId, target: targetColumn });
             setSelectedCourierId('');
@@ -211,17 +237,28 @@ export default function WarehouseKanbanPage() {
 
         setUpdating(orderId);
         try {
-            const apiStatus = STATUS_MAP_TO_API[targetColumn] || targetColumn;
-            const payload: UpdateStatusPayload = { status: apiStatus };
-            if (targetColumn === 'shipped' && order.courier_id) {
-                payload.courier_id = order.courier_id;
+            if (targetColumn === 'checked') {
+                const formData = new FormData();
+                formData.append('invoice_id', String(order.invoice_id));
+                formData.append('result', 'pass');
+                await api.deliveryHandovers.check(formData);
+                notifyAlert('Checker: status menjadi checked.');
+            } else if (targetColumn === 'shipped') {
+                const latest = await api.deliveryHandovers.latest(String(order.invoice_id));
+                const handoverId = Number((latest.data as any)?.handover?.id || 0);
+                if (!handoverId) {
+                    notifyAlert('Handover tidak ditemukan. Lakukan checking dulu.');
+                    return;
+                }
+                await api.deliveryHandovers.handover(handoverId);
+                notifyAlert('Handover: status menjadi shipped.');
+            } else {
+                notifyAlert('Gunakan flow checker untuk perubahan status ini.');
             }
-            await api.admin.orderManagement.updateStatus(orderId, payload);
-            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: targetColumn } : o));
-            notifyAlert(`Status berhasil diupdate ke: ${targetColumn === 'shipped' ? 'Dikirim' : 'Siap Dikirim'}`);
             void loadOrders();
-        } catch {
-            notifyAlert('Gagal update status.');
+        } catch (error: unknown) {
+            const message = (error as any)?.response?.data?.message || 'Gagal memproses checker/handover.';
+            notifyAlert(String(message));
         } finally {
             setUpdating(null);
         }
@@ -241,13 +278,25 @@ export default function WarehouseKanbanPage() {
         const { orderId, target } = courierModal;
         setUpdating(orderId);
         try {
-            const apiStatus = STATUS_MAP_TO_API[target] || target;
-            await api.admin.orderManagement.updateStatus(orderId, { status: apiStatus, courier_id: selectedCourierId });
-            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: target, courier_id: selectedCourierId } : o));
-            notifyAlert('Status berhasil diupdate ke: Dikirim');
+            const order = orders.find((o) => o.id === orderId);
+            if (!order?.invoice_id) {
+                notifyAlert('Invoice tidak ditemukan untuk order ini.');
+                return;
+            }
+            // Assign driver at invoice level, then handover (set shipped)
+            await api.invoices.assignDriver(String(order.invoice_id), { courier_id: selectedCourierId });
+            const latest = await api.deliveryHandovers.latest(String(order.invoice_id));
+            const handoverId = Number((latest.data as any)?.handover?.id || 0);
+            if (!handoverId) {
+                notifyAlert('Handover tidak ditemukan. Lakukan checking dulu.');
+                return;
+            }
+            await api.deliveryHandovers.handover(handoverId);
+            notifyAlert('Driver ditugaskan & handover berhasil (shipped).');
             void loadOrders();
-        } catch {
-            notifyAlert('Gagal update status.');
+        } catch (error: unknown) {
+            const message = (error as any)?.response?.data?.message || 'Gagal memproses assign driver/handover.';
+            notifyAlert(String(message));
         } finally {
             setUpdating(null);
             setCourierModal(null);

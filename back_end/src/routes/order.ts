@@ -18,11 +18,11 @@ router.get('/:id', authenticateToken, OrderController.getOrderDetails);
 router.post('/:id/proof', authenticateToken, uploadPaymentProofMiddleware, OrderController.uploadPaymentProof);
 
 // Admin Routes
-router.get('/admin/stats', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getDashboardStats);
-router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getAllOrders);
-router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getDeliveryEmployees);
-router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.updateOrderStatus);
+router.get('/admin/stats', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getDashboardStats);
+router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getAllOrders);
+router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getDeliveryEmployees);
+router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.updateOrderStatus);
 router.patch('/admin/:id/pricing', authenticateToken, authorizeRoles('super_admin', 'kasir'), OrderController.updateOrderPricing);
-router.post('/admin/:id/move-to-indent', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.moveOrderToIndent);
+router.post('/admin/:id/move-to-indent', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.moveOrderToIndent);
 
 export default router;

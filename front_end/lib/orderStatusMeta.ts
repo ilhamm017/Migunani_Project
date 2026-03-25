@@ -17,6 +17,7 @@ const STATUS_LABELS: Record<string, string> = {
   waiting_payment: 'Menunggu Pembayaran',
   waiting_admin_verification: 'Menunggu Verifikasi Admin',
   ready_to_ship: 'Siap Dikirim',
+  checked: 'Sudah Dicek',
   allocated: 'Dialokasikan',
   partially_fulfilled: 'Terpenuhi Sebagian',
   debt_pending: 'Utang Belum Lunas',
@@ -39,4 +40,3 @@ export const formatOrderStatusToastMessage = (event: OrderStatusChangedEvent): s
   const statusLabel = formatOrderStatusLabel(event.to_status);
   return `Pesanan #${shortOrderId} pindah ke ${statusLabel}, perlu aksi Anda.`;
 };
-

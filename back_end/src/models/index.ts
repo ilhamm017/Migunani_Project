@@ -33,6 +33,8 @@ import DriverDebtAdjustment from './DriverDebtAdjustment';
 import DriverBalanceAdjustment from './DriverBalanceAdjustment';
 import ReturHandover from './ReturHandover';
 import ReturHandoverItem from './ReturHandoverItem';
+import DeliveryHandover from './DeliveryHandover';
+import DeliveryHandoverItem from './DeliveryHandoverItem';
 import Account from './Account';
 import Journal from './Journal';
 import JournalLine from './JournalLine';
@@ -103,6 +105,19 @@ ReturHandover.hasMany(ReturHandoverItem, { foreignKey: 'handover_id', as: 'Items
 ReturHandoverItem.belongsTo(ReturHandover, { foreignKey: 'handover_id', as: 'Handover' });
 ReturHandoverItem.belongsTo(Retur, { foreignKey: 'retur_id', as: 'Retur' });
 Retur.hasOne(ReturHandoverItem, { foreignKey: 'retur_id', as: 'HandoverItem' });
+
+// Delivery Handovers (Outbound)
+DeliveryHandover.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice' });
+Invoice.hasMany(DeliveryHandover, { foreignKey: 'invoice_id', as: 'DeliveryHandovers' });
+DeliveryHandover.belongsTo(User, { foreignKey: 'courier_id', as: 'Driver' });
+User.hasMany(DeliveryHandover, { foreignKey: 'courier_id', as: 'DeliveryHandoversAsDriver' });
+DeliveryHandover.belongsTo(User, { foreignKey: 'checker_id', as: 'Checker' });
+User.hasMany(DeliveryHandover, { foreignKey: 'checker_id', as: 'DeliveryHandoversAsChecker' });
+
+DeliveryHandover.hasMany(DeliveryHandoverItem, { foreignKey: 'handover_id', as: 'Items' });
+DeliveryHandoverItem.belongsTo(DeliveryHandover, { foreignKey: 'handover_id', as: 'Handover' });
+DeliveryHandoverItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(DeliveryHandoverItem, { foreignKey: 'product_id', as: 'DeliveryHandoverItems' });
 
 // User & Auth
 User.hasOne(CustomerProfile, { foreignKey: 'user_id' });
@@ -355,6 +370,8 @@ export {
     DriverBalanceAdjustment,
     ReturHandover,
     ReturHandoverItem,
+    DeliveryHandover,
+    DeliveryHandoverItem,
     Account,
     Journal,
     JournalLine,

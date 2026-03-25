@@ -124,7 +124,7 @@ const getOrderItemSuppliedQty = (orderData: unknown, invoiceData: unknown, itemI
 };
 
 export default function AdminInvoiceDetailPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   const { user } = useAuthStore();
   const params = useParams();
   const router = useRouter();

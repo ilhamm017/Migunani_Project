@@ -30,7 +30,7 @@ const formatRemaining = (dueAt: string | Date | null | undefined): string => {
 };
 
 export default function AdminIssueOrdersPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   type IssueOrderRow = {
     id: string;
     customer_name?: string;

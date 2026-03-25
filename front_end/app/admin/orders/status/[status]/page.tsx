@@ -8,6 +8,7 @@ import AdminOrdersListView from '@/components/orders/AdminOrdersListView';
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
   ready_to_ship: 'Siap Dikirim',
+  checked: 'Dicek Gudang',
   waiting_admin_verification: 'Waiting Admin Verification',
   debt_pending: 'Utang Belum Lunas',
   shipped: 'Shipped',
@@ -18,7 +19,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default function AdminOrdersByStatusPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   const params = useParams();
   const router = useRouter();
   const status = String(params?.status || '');

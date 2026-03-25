@@ -108,6 +108,13 @@ export default function OrderDetailPage() {
         className: 'text-emerald-700 bg-emerald-50'
       };
     }
+    if (status === 'checked') {
+      return {
+        icon: CheckCircle2,
+        label: 'checked (Dicek Gudang)',
+        className: 'text-cyan-700 bg-cyan-50'
+      };
+    }
     if (status === 'allocated') {
       return {
         icon: CheckCircle2,
@@ -534,7 +541,7 @@ export default function OrderDetailPage() {
             const sentQtyRaw = Number(allocatedQtyByItemId[String(item?.id || '')] || 0);
 
             // Check if status implies allocation has happened
-            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'delivered', 'completed'].includes(orderStatus);
+            const isAllocatedStatus = ['allocated', 'partially_fulfilled', 'waiting_invoice', 'ready_to_ship', 'checked', 'processing', 'shipped', 'delivered', 'completed'].includes(orderStatus);
             const isDeliveredStatus = ['delivered', 'completed'].includes(orderStatus);
             const isShippingStatus = orderStatus === 'shipped';
             const sentQty = (isDeliveredStatus && !hasAnyAllocationData && sentQtyRaw <= 0)

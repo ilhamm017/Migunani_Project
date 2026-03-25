@@ -24,7 +24,7 @@ type CustomerOrderCard = {
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
 // `waiting_invoice` means the order already passed "new order" stage and is waiting to be invoiced/handled.
-const WAREHOUSE_STATUSES = new Set(['allocated', 'waiting_invoice', 'ready_to_ship', 'processing', 'shipped', 'hold', 'waiting_payment']);
+const WAREHOUSE_STATUSES = new Set(['allocated', 'waiting_invoice', 'ready_to_ship', 'checked', 'processing', 'shipped', 'hold', 'waiting_payment']);
 const BACKORDER_FALLBACK_STATUSES = new Set(['partially_fulfilled', 'hold']);
 
 const normalizeOrderStatus = (raw: unknown) => {
@@ -70,12 +70,12 @@ const getCustomerCardPriority = (card: CustomerOrderCard) => {
 };
 
 export default function AdminOrdersPage() {
-  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_gudang', 'admin_finance']);
+  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_gudang', 'checker_gudang', 'admin_finance']);
   const { isAuthenticated, user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [customerQuery, setCustomerQuery] = useState('');
   const [orders, setOrders] = useState<unknown[]>([]);
-  const hasRenderableAccess = isAuthenticated && ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(String(user?.role || ''));
+  const hasRenderableAccess = isAuthenticated && ['super_admin', 'kasir', 'admin_gudang', 'checker_gudang', 'admin_finance'].includes(String(user?.role || ''));
 
   const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);

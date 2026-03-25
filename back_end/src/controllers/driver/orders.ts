@@ -32,7 +32,7 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
         } else {
             // Default: Show only actionable or pending tasks.
             // Exclude 'completed' to avoid showing history in active task counts/badges.
-            whereClause.status = { [Op.in]: ['ready_to_ship', 'shipped', 'delivered'] };
+            whereClause.status = { [Op.in]: ['ready_to_ship', 'checked', 'shipped', 'delivered'] };
         }
 
         if (startDate || endDate) {

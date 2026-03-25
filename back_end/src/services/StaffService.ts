@@ -3,7 +3,7 @@ import { Op } from 'sequelize';
 import { User } from '../models';
 import { getWhatsappLookupCandidates, normalizeWhatsappNumber } from '../utils/whatsappNumber';
 
-const STAFF_ROLES = ['admin_gudang', 'admin_finance', 'kasir', 'driver'] as const;
+const STAFF_ROLES = ['admin_gudang', 'checker_gudang', 'admin_finance', 'kasir', 'driver'] as const;
 
 export class StaffService {
     static normalizeText = (value: unknown): string => {
@@ -63,7 +63,7 @@ export class StaffService {
         const rawPassword = StaffService.normalizeText(payload?.password);
 
         if (!name || !role || !STAFF_ROLES.includes(role)) {
-            throw new Error('Field wajib: name dan role (admin_gudang/admin_finance/kasir/driver)');
+            throw new Error('Field wajib: name dan role (admin_gudang/checker_gudang/admin_finance/kasir/driver)');
         }
         if (!whatsappNumber) {
             throw new Error('Nomor WhatsApp wajib dan harus valid');

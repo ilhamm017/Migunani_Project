@@ -7,7 +7,7 @@ interface UserAttributes {
     email?: string | null;
     password?: string | null;
     whatsapp_number: string;
-    role: 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
+    role: 'super_admin' | 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     status: 'active' | 'banned';
     debt: number;
 }
@@ -21,7 +21,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
     declare email: string | null;
     declare password: string | null;
     declare whatsapp_number: string;
-    declare role: 'super_admin' | 'admin_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
+    declare role: 'super_admin' | 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     declare status: 'active' | 'banned';
     declare debt: number;
 
@@ -58,7 +58,7 @@ User.init(
             unique: true,
         },
         role: {
-            type: DataTypes.ENUM('super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver', 'customer'),
+            type: DataTypes.ENUM('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir', 'driver', 'customer'),
             defaultValue: 'customer',
         },
         status: {
