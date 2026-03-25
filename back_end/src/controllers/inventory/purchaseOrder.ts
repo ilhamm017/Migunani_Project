@@ -33,6 +33,12 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('Supplier tidak ditemukan', 404);
         }
 
+        const toMoney2 = (v: unknown) => {
+            const n = Number(v || 0);
+            if (!Number.isFinite(n)) return 0;
+            return Math.round(n * 100) / 100;
+        };
+
         let computedTotalCost = 0;
         for (const item of items) {
             const qty = Number(item?.qty);
@@ -47,9 +53,22 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
             }
 
             const unitCostInput = Number(item?.unit_cost);
+            const expectedUnitCost = toMoney2((product as any).base_price || 0);
             const normalizedUnitCost = Number.isFinite(unitCostInput) && unitCostInput >= 0
-                ? unitCostInput
-                : Number((product as any).base_price || 0);
+                ? toMoney2(unitCostInput)
+                : expectedUnitCost;
+
+            if (toMoney2(normalizedUnitCost) <= 0) {
+                await t.rollback();
+                throw new CustomError(`Modal/unit_cost wajib > 0 untuk produk ${String((product as any).sku || productId)}. Isi unit_cost saat inbound atau lengkapi base_price di master produk.`, 400);
+            }
+
+            const costNote = String(item?.cost_note ?? '').trim();
+            if (toMoney2(normalizedUnitCost) !== toMoney2(expectedUnitCost) && !costNote) {
+                await t.rollback();
+                throw new CustomError(`Alasan selisih harga wajib diisi untuk produk ${String((product as any).sku || productId)}`, 400);
+            }
+
             computedTotalCost += qty * normalizedUnitCost;
         }
 
@@ -73,17 +92,22 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
             }
 
             const unitCostInput = Number(item?.unit_cost);
+            const expectedUnitCost = toMoney2((product as any).base_price || 0);
             const normalizedUnitCost = Number.isFinite(unitCostInput) && unitCostInput >= 0
-                ? unitCostInput
-                : Number((product as any).base_price || 0);
+                ? toMoney2(unitCostInput)
+                : expectedUnitCost;
+            const costNoteRaw = String(item?.cost_note ?? '').trim();
+            const costNote = costNoteRaw ? costNoteRaw : null;
 
             await PurchaseOrderItem.create({
                 purchase_order_id: po.id,
                 product_id: productId,
                 qty: qty,
+                expected_unit_cost: expectedUnitCost,
                 unit_cost: normalizedUnitCost,
                 total_cost: qty * normalizedUnitCost,
-                received_qty: 0
+                received_qty: 0,
+                cost_note: toMoney2(normalizedUnitCost) !== toMoney2(expectedUnitCost) ? costNote : null
             }, { transaction: t });
             createdCount += 1;
         }
@@ -208,12 +232,19 @@ export const verifyInboundStep2AndPost = asyncWrapper(async (req: Request, res: 
                 transaction: t
             });
 
+            const expectedUnitCost = Number((poItem as any)?.expected_unit_cost ?? product.base_price ?? 0);
+            const actualUnitCost = Number(poItem.unit_cost || product.base_price || 0);
+            const varianceNote = Number.isFinite(expectedUnitCost) && Number.isFinite(actualUnitCost) && Math.round(expectedUnitCost * 100) !== Math.round(actualUnitCost * 100)
+                ? ` (cost ${actualUnitCost} vs exp ${expectedUnitCost})`
+                : '';
+            const costReason = String((poItem as any)?.cost_note || '').trim();
+
             await StockMutation.create({
                 product_id: productId,
                 type: 'in',
                 qty: delta,
                 reference_id: `INB-${po.id}`,
-                note: `Inbound verified #${po.id}`
+                note: `Inbound verified #${po.id}${varianceNote}${costReason ? ` - ${costReason}` : ''}`
             }, { transaction: t });
 
             postedCount += 1;
@@ -495,5 +526,87 @@ export const receivePurchaseOrder = asyncWrapper(async (req: Request, res: Respo
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
         throw new CustomError('Error receiving PO', 500);
+    }
+});
+
+export const updateInboundItemCosts = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const id = String(req.params.id || '').trim();
+        const items = req.body?.items;
+        if (!Array.isArray(items) || items.length <= 0) {
+            await t.rollback();
+            throw new CustomError('items wajib diisi (minimal 1 barang)', 400);
+        }
+
+        const po = await PurchaseOrder.findByPk(id, {
+            include: [{ model: PurchaseOrderItem, as: 'Items' }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!po) {
+            await t.rollback();
+            throw new CustomError('Purchase Order not found', 404);
+        }
+
+        if (po.status !== 'pending' || po.verified1_at) {
+            await t.rollback();
+            throw new CustomError('Hanya draft inbound (sebelum Verifikasi 1) yang bisa diubah modalnya', 409);
+        }
+
+        const toMoney2 = (v: unknown) => {
+            const n = Number(v || 0);
+            if (!Number.isFinite(n)) return 0;
+            return Math.round(n * 100) / 100;
+        };
+
+        const poItems = Array.isArray((po as any).Items) ? ((po as any).Items as any[]) : [];
+        const itemByProduct = new Map<string, any>();
+        poItems.forEach((it: any) => itemByProduct.set(String(it.product_id), it));
+
+        for (const patchItem of items) {
+            const productId = String(patchItem?.product_id ?? '').trim();
+            if (!productId) continue;
+            const poItem = itemByProduct.get(productId);
+            if (!poItem) continue;
+
+            const unitCostInput = Number(patchItem?.unit_cost);
+            if (!Number.isFinite(unitCostInput) || unitCostInput <= 0) {
+                await t.rollback();
+                throw new CustomError(`unit_cost wajib > 0 untuk product_id ${productId}`, 400);
+            }
+
+            const normalizedUnitCost = toMoney2(unitCostInput);
+            let expectedUnitCost = toMoney2((poItem as any)?.expected_unit_cost ?? 0);
+            if (expectedUnitCost <= 0) {
+                const product = await Product.findByPk(productId, { transaction: t });
+                expectedUnitCost = toMoney2((product as any)?.base_price ?? 0);
+                if (expectedUnitCost > 0) {
+                    await poItem.update({ expected_unit_cost: expectedUnitCost }, { transaction: t });
+                }
+            }
+            const costNoteRaw = String(patchItem?.cost_note ?? '').trim();
+            if (toMoney2(normalizedUnitCost) !== toMoney2(expectedUnitCost) && !costNoteRaw) {
+                await t.rollback();
+                throw new CustomError(`Alasan selisih harga wajib diisi untuk product_id ${productId}`, 400);
+            }
+
+            await poItem.update({
+                unit_cost: normalizedUnitCost,
+                total_cost: Number(poItem.qty || 0) * normalizedUnitCost,
+                cost_note: toMoney2(normalizedUnitCost) !== toMoney2(expectedUnitCost) ? costNoteRaw : null
+            }, { transaction: t });
+        }
+
+        const updatedItems = await PurchaseOrderItem.findAll({ where: { purchase_order_id: po.id }, transaction: t });
+        const newTotal = updatedItems.reduce((sum, it) => sum + (Number(it.total_cost || 0)), 0);
+        await po.update({ total_cost: Number(toMoney2(newTotal)) }, { transaction: t });
+
+        await t.commit();
+        res.json({ message: 'Modal inbound berhasil diperbarui', total_cost: po.total_cost });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error updating inbound item costs', 500);
     }
 });

@@ -382,6 +382,8 @@ export const api = {
             getInboundById: (id: string) => apiClient.get(`/admin/inventory/inbound/${id}`),
             exportInboundXlsx: (id: string) =>
                 apiClient.get(`/admin/inventory/inbound/${id}/export-xlsx`, { responseType: 'blob' }),
+            updateInboundItemCosts: (id: string, data: { items: Array<{ product_id: string; unit_cost: number; cost_note?: string }> }) =>
+                apiClient.patch(`/admin/inventory/inbound/${id}/items-cost`, data),
             verifyInboundStep1: (id: string) => apiClient.patch(`/admin/inventory/inbound/${id}/verify-1`, {}),
             verifyInboundStep2: (id: string) => apiClient.patch(`/admin/inventory/inbound/${id}/verify-2`, {}),
             receiveInbound: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>

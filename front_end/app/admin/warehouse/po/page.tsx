@@ -465,7 +465,7 @@ export default function SupplierPreorderCreatePage() {
                     <input
                       value={restockSearch}
                       onChange={(e) => setRestockSearch(e.target.value)}
-                      placeholder="Cari SKU / nama produk..."
+                      placeholder="Cari (stok menipis)..."
                       className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
                     />
                   </div>
@@ -572,7 +572,7 @@ export default function SupplierPreorderCreatePage() {
                     <input
                       value={backorderSearch}
                       onChange={(e) => setBackorderSearch(e.target.value)}
-                      placeholder="Cari SKU / nama produk..."
+                      placeholder="Cari (backorder)..."
                       className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
                     />
                   </div>
@@ -638,43 +638,43 @@ export default function SupplierPreorderCreatePage() {
                 </div>
               </>
             )}
-          </div>
 
-          <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
-            <h3 className="font-bold text-slate-900 mb-3">Tambah Produk Manual</h3>
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Cari SKU / nama produk (min 2 huruf)..."
-                className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
-              />
-            </div>
-            <div className="mt-3 max-h-64 overflow-y-auto pr-1 space-y-2">
-              {searching ? (
-                <div className="text-sm text-slate-500">Mencari...</div>
-              ) : productResults.length === 0 ? (
-                <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
-              ) : (
-                productResults.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => upsertItem(p, 1)}
-                    className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
-                        <div className="font-black text-slate-900 truncate">{p.name}</div>
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <h3 className="font-bold text-slate-900 mb-3">Cari Produk (Tambah Manual)</h3>
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  placeholder="Cari SKU / nama produk (min 2 huruf)..."
+                  className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
+                />
+              </div>
+              <div className="mt-3 max-h-64 overflow-y-auto pr-1 space-y-2">
+                {searching ? (
+                  <div className="text-sm text-slate-500">Mencari...</div>
+                ) : productResults.length === 0 ? (
+                  <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
+                ) : (
+                  productResults.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => upsertItem(p, 1)}
+                      className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
+                          <div className="font-black text-slate-900 truncate">{p.name}</div>
+                        </div>
+                        <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
+                          <Plus size={14} /> Tambah
+                        </span>
                       </div>
-                      <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
-                        <Plus size={14} /> Tambah
-                      </span>
-                    </div>
-                  </button>
-                ))
-              )}
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -682,4 +682,3 @@ export default function SupplierPreorderCreatePage() {
     </div>
   );
 }
-

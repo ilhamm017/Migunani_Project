@@ -41,7 +41,7 @@ export default function InboundCreatePage() {
 
   const [supplierId, setSupplierId] = useState('');
 
-  const [items, setItems] = useState<Array<{ product: ProductRow; qty: number; unit_cost: string }>>([]);
+  const [items, setItems] = useState<Array<{ product: ProductRow; qty: number; unit_cost: string; cost_note: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -117,7 +117,9 @@ export default function InboundCreatePage() {
         next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
         return next;
       }
-      return [...prev, { product, qty: 1, unit_cost: '' }];
+      const basePrice = Number(product.base_price || 0);
+      const initialUnitCost = Number.isFinite(basePrice) && basePrice > 0 ? String(basePrice) : '';
+      return [...prev, { product, qty: 1, unit_cost: initialUnitCost, cost_note: '' }];
     });
   };
 
@@ -130,6 +132,7 @@ export default function InboundCreatePage() {
         product_id: it.product.id,
         qty: Math.max(1, Number(it.qty || 1)),
         ...(Number.isFinite(unitCostNum) && unitCostNum >= 0 ? { unit_cost: unitCostNum } : {}),
+        ...(it.cost_note.trim() ? { cost_note: it.cost_note.trim() } : {}),
       };
     });
   }, [items]);
@@ -141,6 +144,30 @@ export default function InboundCreatePage() {
     }
     if (items.length === 0) {
       setErrorMessage('Masukkan minimal satu barang.');
+      return;
+    }
+    const missingCost = items.find((it) => {
+      const expected = Number(it.product.base_price || 0);
+      const unitCostNum = Number(it.unit_cost);
+      const hasActual = it.unit_cost.trim().length > 0 && Number.isFinite(unitCostNum) && unitCostNum > 0;
+      const hasExpected = Number.isFinite(expected) && expected > 0;
+      return !hasActual && !hasExpected;
+    });
+    if (missingCost) {
+      setErrorMessage(`Modal belum terisi untuk SKU ${missingCost.product.sku}. Isi Unit Cost atau lengkapi Base Price di master produk.`);
+      return;
+    }
+    const invalidReason = items.find((it) => {
+      const expected = Number(it.product.base_price || 0);
+      const unitCostNum = Number(it.unit_cost);
+      const hasActual = it.unit_cost.trim().length > 0 && Number.isFinite(unitCostNum) && unitCostNum >= 0;
+      if (!hasActual) return false;
+      const expected2 = Math.round(expected * 100) / 100;
+      const actual2 = Math.round(unitCostNum * 100) / 100;
+      return expected2 !== actual2 && !it.cost_note.trim();
+    });
+    if (invalidReason) {
+      setErrorMessage(`Alasan selisih harga wajib diisi untuk SKU ${invalidReason.product.sku}.`);
       return;
     }
 
@@ -259,7 +286,7 @@ export default function InboundCreatePage() {
               </div>
             ) : (
               <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2">
-                {items.map((it) => (
+            {items.map((it) => (
                   <div key={it.product.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -293,10 +320,53 @@ export default function InboundCreatePage() {
                           value={it.unit_cost}
                           onChange={(e) => setItems((prev) => prev.map((p) => p.product.id === it.product.id ? { ...p, unit_cost: e.target.value } : p))}
                           className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                          placeholder={`default: ${Number(it.product.base_price || 0)}`}
+                          placeholder={Number(it.product.base_price || 0) > 0 ? `default: ${Number(it.product.base_price || 0)}` : 'wajib diisi (base price kosong)'}
                         />
                       </div>
                     </div>
+
+                    {(() => {
+                      const expected = Number(it.product.base_price || 0);
+                      const unitCostNum = Number(it.unit_cost);
+                      const hasActual = it.unit_cost.trim().length > 0 && Number.isFinite(unitCostNum) && unitCostNum >= 0;
+                      const expected2 = Math.round(expected * 100) / 100;
+                      const actual2 = hasActual ? Math.round(unitCostNum * 100) / 100 : expected2;
+                      const diff = Math.round((actual2 - expected2) * 100) / 100;
+                      const isDifferent = hasActual && expected2 !== actual2;
+                      return (
+                        <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-3">
+                          <div className="grid grid-cols-3 gap-2 text-xs">
+                            <div>
+                              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Modal DB (Expected)</div>
+                              <div className="font-black text-slate-700">Rp {expected2.toLocaleString()}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Actual</div>
+                              <div className="font-black text-slate-700">Rp {actual2.toLocaleString()}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Selisih</div>
+                              <div className={`font-black ${diff < 0 ? 'text-emerald-700' : diff > 0 ? 'text-rose-700' : 'text-slate-700'}`}>
+                                Rp {diff.toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+
+                          {isDifferent && (
+                            <div className="mt-3">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Alasan Selisih (Wajib)</label>
+                              <textarea
+                                value={it.cost_note}
+                                onChange={(e) => setItems((prev) => prev.map((p) => p.product.id === it.product.id ? { ...p, cost_note: e.target.value } : p))}
+                                rows={2}
+                                className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                placeholder="contoh: cuci gudang / beli dari orang lain / promo"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -433,4 +503,3 @@ export default function InboundCreatePage() {
     </div>
   );
 }
-

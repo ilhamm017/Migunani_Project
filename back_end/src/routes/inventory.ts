@@ -66,6 +66,7 @@ router.get('/admin/inventory/inbound/:id', authenticateToken, authorizeRoles('su
 router.get('/admin/inventory/inbound/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.exportPurchaseOrderExcel);
 router.get('/admin/inventory/inbound', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrders);
 router.post('/admin/inventory/inbound', authenticateToken, authorizeRoles('super_admin'), InventoryController.createPurchaseOrder);
+router.patch('/admin/inventory/inbound/:id/items-cost', authenticateToken, authorizeRoles('super_admin'), InventoryController.updateInboundItemCosts);
 router.patch('/admin/inventory/inbound/:id/verify-1', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep1);
 router.patch('/admin/inventory/inbound/:id/verify-2', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep2AndPost);
 router.patch('/admin/inventory/inbound/:id/receive', authenticateToken, authorizeRoles('super_admin'), InventoryController.receivePurchaseOrder);
@@ -78,6 +79,7 @@ router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin
 router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrderById);
 router.get('/admin/inventory/po/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.exportPurchaseOrderExcel);
 router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin'), InventoryController.createPurchaseOrder);
+router.patch('/admin/inventory/po/:id/items-cost', authenticateToken, authorizeRoles('super_admin'), InventoryController.updateInboundItemCosts);
 router.patch('/admin/inventory/po/:id/verify-1', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep1);
 router.patch('/admin/inventory/po/:id/verify-2', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep2AndPost);
 router.patch('/admin/inventory/po/:id/receive', authenticateToken, authorizeRoles('super_admin'), InventoryController.receivePurchaseOrder);

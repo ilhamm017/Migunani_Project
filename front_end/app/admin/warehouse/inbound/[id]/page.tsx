@@ -21,9 +21,11 @@ interface POItem {
     purchase_order_id: string;
     product_id: string;
     qty: number;
+    expected_unit_cost?: number | string | null;
     unit_cost: number;
     total_cost: number;
     received_qty: number;
+    cost_note?: string | null;
     Product?: {
         id: string;
         sku: string;
@@ -59,6 +61,9 @@ export default function POReceivePage() {
     const [isExporting, setIsExporting] = useState(false);
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+    const [confirm, setConfirm] = useState<{ open: boolean; action: 'verify1' | 'verify2' | null }>({ open: false, action: null });
+    const [costEditor, setCostEditor] = useState<{ open: boolean }>({ open: false });
+    const [costRows, setCostRows] = useState<Array<{ product_id: string; sku: string; name: string; expected: number; unit_cost: string; cost_note: string }>>([]);
 
     const loadPO = useCallback(async () => {
         if (!id) return;
@@ -66,6 +71,15 @@ export default function POReceivePage() {
             setLoading(true);
             const res = await api.admin.inventory.getInboundById(id as string);
             setPo(res.data);
+            const items = (res.data?.Items || []) as POItem[];
+            setCostRows(items.map((item) => ({
+                product_id: String(item.product_id),
+                sku: String(item.Product?.sku || item.product_id || '-'),
+                name: String(item.Product?.name || '-'),
+                expected: Number(item.expected_unit_cost ?? 0),
+                unit_cost: String(item.unit_cost ?? ''),
+                cost_note: String(item.cost_note || ''),
+            })));
         } catch (error) {
             console.error('Failed to load PO', error);
             setMessage('Gagal memuat detail inbound.');
@@ -174,6 +188,8 @@ export default function POReceivePage() {
     const isPOClosed = po.status === 'received' || po.status === 'canceled';
     const canVerify1 = po.status === 'pending' && !po.verified1_at;
     const canVerify2 = po.status === 'partially_received' && !po.verified2_at;
+    const totalQty = po.Items?.reduce((acc, item) => acc + Number(item.qty || 0), 0) || 0;
+    const canEditCost = po.status === 'pending' && !po.verified1_at;
 
     return (
         <div className="warehouse-page w-full max-w-none lg:h-full lg:overflow-hidden overflow-y-auto">
@@ -208,9 +224,20 @@ export default function POReceivePage() {
                         )}
                         Ekstrak XLSX
                     </button>
+                    {canEditCost && (
+                        <button
+                            onClick={() => setCostEditor({ open: true })}
+                            disabled={isSaving}
+                            className="rounded-2xl bg-white border border-slate-200 text-slate-900 text-sm font-black px-5 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all shadow-sm active:scale-95"
+                            title="Perbaiki modal/unit cost sebelum verifikasi"
+                        >
+                            <Save size={18} />
+                            Edit Modal
+                        </button>
+                    )}
                     {canVerify1 && (
                         <button
-                            onClick={onVerify1}
+                            onClick={() => setConfirm({ open: true, action: 'verify1' })}
                             disabled={isSaving}
                             className="rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-amber-600 transition-all shadow-lg active:scale-95"
                         >
@@ -224,7 +251,7 @@ export default function POReceivePage() {
                     )}
                     {canVerify2 && (
                         <button
-                            onClick={onVerify2AndPost}
+                            onClick={() => setConfirm({ open: true, action: 'verify2' })}
                             disabled={isSaving}
                             className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all shadow-lg active:scale-95"
                         >
@@ -345,6 +372,43 @@ export default function POReceivePage() {
                                             <span className="text-sm font-black text-slate-700">Rp {Number(item.unit_cost || 0).toLocaleString()}</span>
                                         </div>
                                     </div>
+
+                                    {(() => {
+                                        const expected = Number(item.expected_unit_cost ?? 0);
+                                        const actual = Number(item.unit_cost ?? 0);
+                                        const expected2 = Math.round(expected * 100) / 100;
+                                        const actual2 = Math.round(actual * 100) / 100;
+                                        const diff = Math.round((actual2 - expected2) * 100) / 100;
+                                        const hasVariance = expected2 !== actual2;
+                                        const note = String(item.cost_note || '').trim();
+                                        if (!hasVariance && !note) return null;
+                                        return (
+                                            <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-3">
+                                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                                    <div>
+                                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Expected</div>
+                                                        <div className="font-black text-slate-700">Rp {expected2.toLocaleString()}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Actual</div>
+                                                        <div className="font-black text-slate-700">Rp {actual2.toLocaleString()}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Selisih</div>
+                                                        <div className={`font-black ${diff < 0 ? 'text-emerald-700' : diff > 0 ? 'text-rose-700' : 'text-slate-700'}`}>
+                                                            Rp {diff.toLocaleString()}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {note && (
+                                                    <div className="mt-2 text-xs text-slate-600">
+                                                        <span className="font-black text-slate-500 uppercase tracking-wider text-[10px] mr-2">Alasan</span>
+                                                        <span className="font-semibold">{note}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
 
                                 {isPOClosed && item.received_qty >= item.qty && (
@@ -357,6 +421,192 @@ export default function POReceivePage() {
                     </div>
                 </div>
             </div>
+
+            {confirm.open && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    <button
+                        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+                        onClick={() => !isSaving && setConfirm({ open: false, action: null })}
+                        aria-label="Tutup"
+                    />
+
+                    <div className="relative w-full max-w-lg rounded-[28px] bg-white border border-slate-200 shadow-2xl overflow-hidden">
+                        <div className="p-6">
+                            <div className="flex items-start gap-3">
+                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${confirm.action === 'verify2' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-amber-50 border-amber-100 text-amber-700'}`}>
+                                    {confirm.action === 'verify2' ? <CheckCircle2 size={22} /> : <Save size={22} />}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="text-lg font-black text-slate-900">
+                                        {confirm.action === 'verify2' ? 'Konfirmasi Verifikasi 2 + Posting' : 'Konfirmasi Verifikasi 1'}
+                                    </h3>
+                                    <p className="text-sm text-slate-600 mt-1 font-medium">
+                                        {confirm.action === 'verify2'
+                                            ? 'Tindakan ini akan mem-posting stok ke gudang untuk seluruh item yang belum diposting.'
+                                            : 'Tindakan ini menandai draft sebagai Verified 1 (belum menambah stok).'}
+                                    </p>
+                                    <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
+                                        <div className="flex items-center justify-between">
+                                            <span className="font-bold text-slate-500">Inbound</span>
+                                            <span className="font-black font-mono">#{po.id.split('-')[0].toUpperCase()}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between mt-1">
+                                            <span className="font-bold text-slate-500">Supplier</span>
+                                            <span className="font-black">{po.Supplier?.name || '-'}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between mt-1">
+                                            <span className="font-bold text-slate-500">Total Qty</span>
+                                            <span className="font-black">{totalQty} Pcs</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="px-6 pb-6 flex gap-2 justify-end">
+                            <button
+                                onClick={() => setConfirm({ open: false, action: null })}
+                                disabled={isSaving}
+                                className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-5 py-3 hover:bg-slate-50 disabled:opacity-50 transition-all"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    if (confirm.action === 'verify1') await onVerify1();
+                                    if (confirm.action === 'verify2') await onVerify2AndPost();
+                                    setConfirm({ open: false, action: null });
+                                }}
+                                disabled={isSaving}
+                                className={`rounded-2xl text-white text-sm font-black px-6 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 transition-all ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-amber-600'}`}
+                            >
+                                {isSaving ? (
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                ) : (
+                                    <CheckCircle2 size={18} />
+                                )}
+                                Ya, Lanjutkan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {costEditor.open && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+                    <button
+                        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+                        onClick={() => !isSaving && setCostEditor({ open: false })}
+                        aria-label="Tutup"
+                    />
+                    <div className="relative w-full max-w-3xl rounded-[28px] bg-white border border-slate-200 shadow-2xl overflow-hidden">
+                        <div className="p-6 border-b border-slate-100">
+                            <h3 className="text-lg font-black text-slate-900">Edit Modal / Unit Cost</h3>
+                            <p className="text-sm text-slate-600 mt-1 font-medium">
+                                Isi modal aktual. Jika berbeda dari expected, alasan wajib diisi.
+                            </p>
+                        </div>
+                        <div className="p-6 max-h-[70vh] overflow-y-auto space-y-3">
+                            {costRows.map((row) => {
+                                const expected2 = Math.round(Number(row.expected || 0) * 100) / 100;
+                                const unitCostNum = Number(row.unit_cost);
+                                const actual2 = Number.isFinite(unitCostNum) ? Math.round(unitCostNum * 100) / 100 : 0;
+                                const hasActual = row.unit_cost.trim().length > 0 && Number.isFinite(unitCostNum) && unitCostNum > 0;
+                                const isDifferent = hasActual && expected2 !== actual2;
+                                return (
+                                    <div key={row.product_id} className="rounded-3xl border border-slate-200 bg-white p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{row.sku}</div>
+                                                <div className="font-black text-slate-900 truncate">{row.name}</div>
+                                            </div>
+                                            <div className="text-xs text-slate-600 font-bold">
+                                                Expected: Rp {expected2.toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Unit Cost Actual (Wajib &gt; 0)</label>
+                                                <input
+                                                    value={row.unit_cost}
+                                                    onChange={(e) => setCostRows((prev) => prev.map((p) => p.product_id === row.product_id ? { ...p, unit_cost: e.target.value } : p))}
+                                                    className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                                    placeholder="contoh: 8000"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Alasan Selisih (Wajib jika beda)</label>
+                                                <input
+                                                    value={row.cost_note}
+                                                    onChange={(e) => setCostRows((prev) => prev.map((p) => p.product_id === row.product_id ? { ...p, cost_note: e.target.value } : p))}
+                                                    className={`w-full mt-1 bg-slate-50 border rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isDifferent && !row.cost_note.trim() ? 'border-rose-300' : 'border-slate-200'}`}
+                                                    placeholder={isDifferent ? 'contoh: cuci gudang' : 'opsional'}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="px-6 pb-6 flex gap-2 justify-end">
+                            <button
+                                onClick={() => setCostEditor({ open: false })}
+                                disabled={isSaving}
+                                className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-5 py-3 hover:bg-slate-50 disabled:opacity-50 transition-all"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const invalid = costRows.find((r) => {
+                                        const unitCostNum = Number(r.unit_cost);
+                                        if (!Number.isFinite(unitCostNum) || unitCostNum <= 0) return true;
+                                        const expected2 = Math.round(Number(r.expected || 0) * 100) / 100;
+                                        const actual2 = Math.round(unitCostNum * 100) / 100;
+                                        const isDifferent = expected2 !== actual2;
+                                        return isDifferent && !r.cost_note.trim();
+                                    });
+                                    if (invalid) {
+                                        setMessageType('error');
+                                        setMessage(`Alasan selisih wajib diisi untuk SKU ${invalid.sku}.`);
+                                        return;
+                                    }
+
+                                    setIsSaving(true);
+                                    setMessage('');
+                                    try {
+                                        await api.admin.inventory.updateInboundItemCosts(po.id, {
+                                            items: costRows.map((r) => ({
+                                                product_id: r.product_id,
+                                                unit_cost: Number(r.unit_cost),
+                                                ...(r.cost_note.trim() ? { cost_note: r.cost_note.trim() } : {}),
+                                            })),
+                                        });
+                                        setMessageType('success');
+                                        setMessage('Modal inbound berhasil diperbarui.');
+                                        setCostEditor({ open: false });
+                                        await loadPO();
+                                    } catch (error: unknown) {
+                                        const err = error as { response?: { data?: { message?: string } } };
+                                        setMessageType('error');
+                                        setMessage(err?.response?.data?.message || 'Gagal update modal inbound.');
+                                    } finally {
+                                        setIsSaving(false);
+                                    }
+                                }}
+                                disabled={isSaving}
+                                className="rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-800 transition-all"
+                            >
+                                {isSaving ? (
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                ) : (
+                                    <Save size={18} />
+                                )}
+                                Simpan Perubahan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
