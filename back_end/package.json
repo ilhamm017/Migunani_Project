@@ -24,7 +24,8 @@
     "test:notification-softfail": "ts-node src/scripts/regression_notification_softfail.ts",
     "test:boundary-read": "ts-node src/scripts/regression_boundary_read.ts",
     "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
-    "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts"
+    "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts",
+    "purge:customer-transactions": "ts-node src/scripts/purge_customer_transactions.ts"
   },
   "keywords": [],
   "author": "",
