@@ -12,6 +12,7 @@ import Order from './Order';
 import OrderItem from './OrderItem';
 import Invoice from './Invoice';
 import InvoiceItem from './InvoiceItem';
+import InvoiceCostOverride from './InvoiceCostOverride';
 import OrderIssue from './OrderIssue';
 import OrderEvent from './OrderEvent';
 import ChatSession from './ChatSession';
@@ -175,6 +176,10 @@ Product.hasMany(OrderAllocation, { foreignKey: 'product_id' });
 
 Order.hasOne(Invoice, { foreignKey: 'order_id' });
 Invoice.belongsTo(Order, { foreignKey: 'order_id' });
+Invoice.hasMany(InvoiceCostOverride, { foreignKey: 'invoice_id', as: 'CostOverrides' });
+InvoiceCostOverride.belongsTo(Invoice, { foreignKey: 'invoice_id' });
+InvoiceCostOverride.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(InvoiceCostOverride, { foreignKey: 'product_id', as: 'InvoiceCostOverrides' });
 Invoice.hasMany(CreditNote, { foreignKey: 'invoice_id', as: 'CreditNotes' });
 CreditNote.belongsTo(Invoice, { foreignKey: 'invoice_id' });
 CreditNote.hasMany(CreditNoteLine, { foreignKey: 'credit_note_id', as: 'Lines' });
@@ -329,6 +334,7 @@ export {
     OrderItem,
     Invoice,
     InvoiceItem,
+    InvoiceCostOverride,
     OrderIssue,
     OrderEvent,
     ChatSession,

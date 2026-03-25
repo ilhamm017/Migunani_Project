@@ -1,4 +1,5 @@
 export * from './invoice';
+export * from './invoiceCostOverride';
 export * from './payment';
 export * from './expense';
 export * from './expenseLabel';

@@ -520,6 +520,15 @@ export const api = {
                 apiClient.patch(`/admin/finance/orders/${orderId}/verify`, { action }),
             getAR: () => apiClient.get('/admin/finance/ar'),
             getARById: (invoiceId: string) => apiClient.get(`/admin/finance/ar/${invoiceId}`),
+            getInvoiceCostOverrides: (invoiceId: string) =>
+                apiClient.get(`/admin/finance/invoices/${invoiceId}/cost-overrides`),
+            updateInvoiceCostOverrides: (
+                invoiceId: string,
+                data: {
+                    reason: string;
+                    overrides: Array<{ product_id: string; unit_cost_override: number | null }>;
+                }
+            ) => apiClient.put(`/admin/finance/invoices/${invoiceId}/cost-overrides`, data),
             getPnL: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/pnl', { params }),
             getBalanceSheet: (params?: { asOfDate?: string }) =>

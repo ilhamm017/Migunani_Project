@@ -7,6 +7,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { ArRow, paymentMethodLabel, paymentStatusLabel, sourceLabel } from '../arShared';
+import { useAuthStore } from '@/store/authStore';
 
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'object' && error !== null) {
@@ -20,6 +21,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 
 export default function FinanceARDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_finance', 'kasir']);
+  const role = useAuthStore((state) => state.user?.role);
   const params = useParams();
   const invoiceId = String(params?.invoiceId || '');
 
@@ -73,6 +75,14 @@ export default function FinanceARDetailPage() {
           ← Kembali ke daftar piutang
         </Link>
         <div className="flex-1" />
+        {role === 'super_admin' && (
+          <Link
+            href={`/admin/finance/invoices/hpp/${row.id}`}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-700 px-4 py-2 text-xs font-bold hover:bg-slate-50"
+          >
+            Atur HPP
+          </Link>
+        )}
         <Link
           href={`/invoices/${row.id}/print`}
           className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold shadow-lg shadow-slate-200"

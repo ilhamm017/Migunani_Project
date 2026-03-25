@@ -7,6 +7,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { useAuthStore } from '@/store/authStore';
 
 type HistoryRow = {
   groupKey: string;
@@ -82,6 +83,7 @@ const formatInvoiceReference = (invoiceId: string, invoiceNumber: string) => {
 
 function AdminCompletedInvoiceHistoryPageContent() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
+  const role = useAuthStore((state) => state.user?.role);
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -272,6 +274,11 @@ function AdminCompletedInvoiceHistoryPageContent() {
                   {row.invoiceId ? (
                     <Link href={`/admin/orders/${row.invoiceId}`} className="text-emerald-700 hover:text-emerald-800">
                       Lihat Detail Invoice
+                    </Link>
+                  ) : null}
+                  {role === 'super_admin' && row.invoiceId ? (
+                    <Link href={`/admin/finance/invoices/hpp/${row.invoiceId}`} className="text-slate-700 hover:text-slate-900">
+                      Atur HPP
                     </Link>
                   ) : null}
                   <span className="text-slate-500">Order: {row.orderIds.slice(0, 3).map((id) => `#${id.slice(-8).toUpperCase()}`).join(', ')}{row.orderIds.length > 3 ? ` +${row.orderIds.length - 3}` : ''}</span>

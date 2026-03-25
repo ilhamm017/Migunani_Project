@@ -900,7 +900,7 @@ export default function AdminOverviewPage() {
 	  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
 	  const canAccessSetoranDriver = user?.role === 'kasir' || user?.role === 'super_admin';
     const canAccessRiwayatSetoranDriver = canAccessSetoranDriver;
-	  const quickActionCards = [
+	  let quickActionCards = [
 	    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
 	    { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
       { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0, tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white' },
@@ -913,7 +913,20 @@ export default function AdminOverviewPage() {
     { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
 	    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
 	    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
-	  ].filter((item) => {
+	  ];
+
+    if (user?.role === 'super_admin') {
+      quickActionCards.push({
+        href: '/admin/finance/invoices/hpp',
+        title: 'Override HPP Invoice',
+        desc: 'Koreksi harga beli per invoice.',
+        icon: Settings,
+        badge: 0,
+        tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white'
+      });
+    }
+
+    quickActionCards = quickActionCards.filter((item) => {
       if (item.href === '/admin/setoran-driver') return canAccessSetoranDriver;
       if (item.href === '/admin/riwayat-setoran-driver') return canAccessRiwayatSetoranDriver;
       return true;

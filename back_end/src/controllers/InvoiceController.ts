@@ -42,7 +42,7 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
             {
                 model: InvoiceItem,
                 as: 'Items',
-                attributes: ['id', 'qty', 'unit_price', 'line_total', 'order_item_id'],
+                attributes: ['id', 'qty', 'unit_price', 'unit_cost', 'line_total', 'order_item_id'],
                 include: [
                     {
                         model: OrderItem,
@@ -168,7 +168,10 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
             if (!item.OrderItem || typeof item.OrderItem !== 'object') return item;
             const nextOrderItem = { ...item.OrderItem };
             delete (nextOrderItem as any).pricing_snapshot;
-            return { ...item, OrderItem: nextOrderItem };
+            const nextItem = { ...item, OrderItem: nextOrderItem };
+            delete (nextItem as any).unit_cost;
+            delete (nextItem as any).unit_cost_override;
+            return nextItem;
         });
     }
 
