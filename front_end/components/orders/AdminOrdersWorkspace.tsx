@@ -251,6 +251,15 @@ const resolveWorkspaceShipmentStatus = (order: AdminOrderListRow, detail?: Order
   return normalizeOrderStatus(order?.status);
 };
 
+const normalizeUuid = (raw: unknown): string => {
+  const val = String(raw ?? '').trim();
+  const lowered = val.toLowerCase();
+  if (!val) return '';
+  if (['null', 'undefined', 'none', '-'].includes(lowered)) return '';
+  const uuidV4ish = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidV4ish.test(val) ? val : '';
+};
+
 const resolveWorkspaceCourierId = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
   const courierId = String(
@@ -259,7 +268,7 @@ const resolveWorkspaceCourierId = (order: AdminOrderListRow, detail?: OrderDetai
     (detail as any)?.courier_id ||
     ''
   ).trim();
-  return courierId;
+  return normalizeUuid(courierId);
 };
 const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
@@ -3366,13 +3375,13 @@ export default function AdminOrdersWorkspace({
                         null;
                       const primaryOrderId = String(primaryOrder?.id || '');
                       const primaryOrderDetail = primaryOrderId ? orderDetails[primaryOrderId] : undefined;
-                      const courierId = String(
+                      const courierId = normalizeUuid(String(
                         (invoiceDetail as any)?.courier_id ||
                         (primaryOrderDetail as any)?.Invoice?.courier_id ||
                         (primaryOrder as any)?.Invoice?.courier_id ||
                         (primaryOrder as any)?.courier_id ||
                         ''
-                      ).trim();
+                      ).trim());
                       const statusLabel = statusSet.size <= 1 ? (Array.from(statusSet)[0] || '-') : `${statusSet.size} status`;
                       const actionLabel = isFinanceCompactView
                         ? 'Lihat Detail Invoice'
