@@ -4,7 +4,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bell, User, Wallet, MapPin, Phone, Package, ChevronRight, RotateCcw, HandCoins, MessageCircle, ClipboardList, Truck, ClipboardCheck, Search } from 'lucide-react';
+import { Bell, User, Wallet, MapPin, Package, ChevronRight, RotateCcw, MessageCircle, ClipboardList, Truck, Search, HandCoins, Phone } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { notifyOpen } from '@/lib/notify';
@@ -28,22 +28,6 @@ const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
   if (Array.isArray(invoiceData?.InvoiceItems)) return invoiceData.InvoiceItems as any[];
   if (Array.isArray(invoiceData?.Items)) return invoiceData.Items as any[];
   return [];
-};
-
-const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
-const getChecklistStatus = (scopeId: string): 'not_checked' | 'mismatch' | 'ready' => {
-  if (typeof window === 'undefined' || !scopeId) return 'not_checked';
-  const raw = sessionStorage.getItem(checklistScopeStorageKey(scopeId));
-  if (!raw) return 'not_checked';
-  try {
-    const parsed = JSON.parse(raw);
-    const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-    if (rows.length === 0) return 'not_checked';
-    const hasMismatch = rows.some((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0));
-    return hasMismatch ? 'mismatch' : 'ready';
-  } catch {
-    return 'not_checked';
-  }
 };
 
 export default function DriverTaskPage() {
@@ -212,7 +196,6 @@ export default function DriverTaskPage() {
           activeOrderCount,
           totalAmount,
           statusLabel,
-          checklistStatus: getChecklistStatus(targetId),
         };
       })
       .sort((a, b) => {
@@ -241,16 +224,12 @@ export default function DriverTaskPage() {
     });
   }, [deliveryCards, search]);
 
-  const readyDeliveryCards = useMemo(
-    () => filteredDeliveryCards.filter((card) => card.checklistStatus === 'ready' && card.activeOrderCount > 0),
-    [filteredDeliveryCards]
-  );
-  const pendingChecklistCount = useMemo(
-    () => filteredDeliveryCards.filter(card => card.checklistStatus !== 'ready').length,
+  const activeDeliveryCards = useMemo(
+    () => filteredDeliveryCards.filter((card) => card.activeOrderCount > 0),
     [filteredDeliveryCards]
   );
 
-  const remainingDeliveryCount = readyDeliveryCards.filter((card) => card.activeOrderCount > 0).length;
+  const remainingDeliveryCount = activeDeliveryCards.length;
   const remainingPickupCount = canMonitorReturTasks
     ? returs.filter((r) => !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())).length
     : 0;
@@ -390,53 +369,28 @@ export default function DriverTaskPage() {
               placeholder="Cari invoice, customer, alamat, order ID, atau barang"
               className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white"
             />
-          </div>
-        </div>
+	        </div>
+	      </div>
 
-        {pendingChecklistCount > 0 && (
-          <div className="bg-amber-50 border-2 border-amber-200 rounded-[24px] p-5 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="bg-amber-100 p-2 rounded-xl text-amber-600">
-                <ClipboardCheck size={20} />
-              </div>
-              <div className="flex-1">
-                <p className="text-xs font-black text-amber-700 uppercase tracking-widest">Lakukan Checklist</p>
-                <p className="text-[11px] font-semibold text-amber-600 mt-1">
-                  Ada {pendingChecklistCount} invoice yang perlu dicek barangnya sebelum muncul di daftar tugas.
-                </p>
-              </div>
-              <Link
-                href="/driver/precheck"
-                className="px-4 py-2 bg-amber-600 text-white text-[10px] font-black uppercase rounded-xl"
-              >
-                Ke Checklist
-              </Link>
-            </div>
-          </div>
-        )}
+	        <div className="flex items-center justify-between px-1">
+	            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Misi Pengiriman ({activeDeliveryCards.length} Invoice)</h2>
+	          </div>
 
-        <div className="flex items-center justify-between px-1">
-            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Misi Pengiriman ({readyDeliveryCards.length} Invoice Ready)</h2>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3">
-          {readyDeliveryCards.length === 0 && (
-            <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
-              <Package size={40} className="mx-auto text-slate-200 mb-3" />
-              <p className="text-sm font-bold text-slate-400 italic">
-                {search.trim() ? 'Tidak ada tugas yang cocok dengan pencarian ini.' : 'Belum ada tugas yang siap dikirim.'}
-              </p>
-              {!search.trim() && pendingChecklistCount > 0 && (
-                <p className="text-[11px] text-slate-400 mt-2">Selesaikan checklist terlebih dahulu agar tugas muncul di sini.</p>
-              )}
-            </div>
-          )}
-          {readyDeliveryCards.map((card) => {
-            return (
-              <div
-                key={card.groupKey}
-                className="group bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm hover:shadow-lg hover:border-emerald-200 transition-all"
-              >
+	          <div className="grid grid-cols-1 gap-3">
+	          {activeDeliveryCards.length === 0 && (
+	            <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
+	              <Package size={40} className="mx-auto text-slate-200 mb-3" />
+	              <p className="text-sm font-bold text-slate-400 italic">
+	                {search.trim() ? 'Tidak ada tugas yang cocok dengan pencarian ini.' : 'Belum ada tugas yang siap dikirim.'}
+	              </p>
+	            </div>
+	          )}
+	          {activeDeliveryCards.map((card) => {
+	            return (
+	              <div
+	                key={card.groupKey}
+	                className="group bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm hover:shadow-lg hover:border-emerald-200 transition-all"
+	              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-0.5">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Invoice</p>

@@ -98,7 +98,7 @@ export default function AdminOverviewPage() {
       if (role === 'admin_finance') {
         actionableCount = Number(stats.waiting_admin_verification || 0) + Number(stats.delivered || 0);
       } else if (role === 'admin_gudang') {
-        actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.hold || 0);
+        actionableCount = Number(stats.ready_to_ship || 0) + Number(stats.checked || 0) + Number(stats.hold || 0);
       } else if (role === 'kasir') {
         actionableCount = pendingAllocCount + Number(stats.waiting_invoice || 0);
       } else {
@@ -106,6 +106,7 @@ export default function AdminOverviewPage() {
           pendingAllocCount +
           Number(stats.waiting_invoice || 0) +
           Number(stats.ready_to_ship || 0) +
+          Number(stats.checked || 0) +
           Number(stats.waiting_admin_verification || 0) +
           Number(stats.delivered || 0) +
           Number(stats.allocated || 0) +
@@ -132,6 +133,7 @@ export default function AdminOverviewPage() {
         const processingOrders = Number((processingRes as any)?.data?.total || 0);
         const allocatedOrders = Number((allocatedRes as any)?.data?.total || 0);
         const readyToShipOrders = Number(stats.ready_to_ship || 0);
+        const checkedOrders = Number(stats.checked || 0);
 
         const products = Array.isArray((productsRes as any)?.data?.products) ? ((productsRes as any).data.products as DashboardProductRow[]) : [];
         outOfStockCount = products.filter((p) => Number(p.stock_quantity || 0) <= 0).length;
@@ -141,10 +143,11 @@ export default function AdminOverviewPage() {
 
         Object.assign(newWarehouseBadges, {
           '/admin/warehouse/allocation': pendingAllocCount,
-          '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders,
+          '/admin/warehouse/pesanan': processingOrders + allocatedOrders + readyToShipOrders + checkedOrders,
           '/admin/warehouse/helper': processingOrders,
           '/admin/warehouse/audit': openAuditCount,
           '/admin/warehouse/driver-issues': Number(stats.hold || 0),
+          '/admin/tracker-gudang': readyToShipOrders + checkedOrders,
         });
       }
 
@@ -921,24 +924,24 @@ export default function AdminOverviewPage() {
     );
   }
 
-
-	  const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
-	  const canAccessSetoranDriver = user?.role === 'kasir' || user?.role === 'super_admin';
+    const compactCurrency = new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 });
+    const canAccessSetoranDriver = user?.role === 'kasir' || user?.role === 'super_admin';
     const canAccessRiwayatSetoranDriver = canAccessSetoranDriver;
-	  let quickActionCards = [
-	    { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
-	    { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
+    let quickActionCards = [
+      { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
+      { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
       { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0, tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white' },
-	    { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
-	    { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
-    { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur pesanan gudang.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white' },
-	    { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
-    { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white' },
-    { href: '/admin/reports/stock-reduction', title: 'Pengurangan Stok', desc: 'Monitor stok keluar & export IPO.', icon: ShoppingCart, badge: 0, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
-    { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
-	    { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
-	    { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
-	  ];
+      { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
+      { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
+      { href: '/admin/warehouse/pesanan', title: 'Tracker Gudang', desc: 'Checking & handover (checked→shipped).', icon: UserCheck, badge: warehouseCardBadges['/admin/tracker-gudang'] || 0, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
+      { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur pesanan gudang.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white' },
+      { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
+      { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0, tone: 'bg-rose-100 text-rose-700 group-hover:bg-rose-700 group-hover:text-white' },
+      { href: '/admin/reports/stock-reduction', title: 'Pengurangan Stok', desc: 'Monitor stok keluar & export IPO.', icon: ShoppingCart, badge: 0, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
+      { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
+      { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
+      { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
+    ];
 
     if (user?.role === 'super_admin') {
       quickActionCards.push({
@@ -956,32 +959,33 @@ export default function AdminOverviewPage() {
       if (item.href === '/admin/riwayat-setoran-driver') return canAccessRiwayatSetoranDriver;
       return true;
     });
-  const featureCategories = [
-	    {
-	      group: 'Logistics & Inventory',
-	      tone: 'text-blue-600 bg-blue-50 border-blue-100',
-	      menus: [
-	        { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
-	        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
-	        { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
-	        { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
-	        { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
-	        { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
-	        { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0 },
+    const featureCategories = [
+      {
+        group: 'Logistics & Inventory',
+        tone: 'text-blue-600 bg-blue-50 border-blue-100',
+        menus: [
+          { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
+          { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
+          { href: '/admin/warehouse/pesanan', title: 'Tracker Gudang', desc: 'Checking & handover (checked→shipped).', icon: UserCheck, badge: warehouseCardBadges['/admin/tracker-gudang'] || 0 },
+          { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
+          { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
+          { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
+          { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
+          { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0 },
           { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran Driver', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0 },
-	        { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
-	        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
-	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
-	        { href: '/admin/warehouse/vehicle-types', title: 'Jenis Kendaraan', desc: 'Master aplikasi kendaraan.', icon: Car },
-	        { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
-	        { href: '/admin/warehouse/inbound', title: 'Inbound Gudang', desc: 'Terima stok fisik & verifikasi.', icon: ShoppingCart },
-	        { href: '/admin/warehouse/inbound/history', title: 'Riwayat Inbound', desc: 'History inbound gudang.', icon: Clock },
-	        { href: '/admin/warehouse/po', title: 'PO (PreOrder Supplier)', desc: 'Rekap order ke supplier.', icon: ShoppingCart },
-	        { href: '/admin/warehouse/po/history', title: 'Riwayat PO', desc: 'History preorder supplier.', icon: Clock },
-	        { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
-	      ]
-	    },
-    {
+          { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
+          { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
+          { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
+          { href: '/admin/warehouse/vehicle-types', title: 'Jenis Kendaraan', desc: 'Master aplikasi kendaraan.', icon: Car },
+          { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
+          { href: '/admin/warehouse/inbound', title: 'Inbound Gudang', desc: 'Terima stok fisik & verifikasi.', icon: ShoppingCart },
+          { href: '/admin/warehouse/inbound/history', title: 'Riwayat Inbound', desc: 'History inbound gudang.', icon: Clock },
+          { href: '/admin/warehouse/po', title: 'PO (PreOrder Supplier)', desc: 'Rekap order ke supplier.', icon: ShoppingCart },
+          { href: '/admin/warehouse/po/history', title: 'Riwayat PO', desc: 'History preorder supplier.', icon: Clock },
+          { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
+        ]
+      },
+      {
       group: 'Sales & Customer',
       tone: 'text-emerald-600 bg-emerald-50 border-emerald-100',
       menus: [

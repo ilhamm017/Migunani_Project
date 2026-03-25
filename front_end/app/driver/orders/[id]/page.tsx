@@ -5,21 +5,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Camera, ClipboardCheck, MessageCircle, Send, Upload, Coins, CreditCard, Undo2 } from 'lucide-react';
+import { ArrowLeft, Camera, MessageCircle, Send, Upload, Coins, CreditCard, Undo2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import axios from 'axios';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 import { notifyAlert } from '@/lib/notify';
-
-type StoredChecklistRow = {
-  orderId?: string;
-  orderIds?: string[];
-  productName?: string;
-  expectedQty?: number;
-  actualQty?: number;
-  note?: string;
-};
 
 type PaymentMethodConfirmState = {
   step: 1 | 2;
@@ -37,8 +28,6 @@ const formatCurrency = (value: unknown) =>
   `Rp ${Number(value || 0).toLocaleString('id-ID')}`;
 const isOrderDoneStatus = (raw: unknown) =>
   ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
-const checklistScopeStorageKey = (scopeId: string) => `driver-checklist-scope-${scopeId}`;
-const legacyChecklistStorageKey = (orderId: string) => `driver-checklist-${orderId}`;
 const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
@@ -100,12 +89,7 @@ export default function DriverOrderDetailPage() {
   const [isIssueOpen, setIsIssueOpen] = useState(false);
   const [issueNote, setIssueNote] = useState('');
   const [issuePhoto, setIssuePhoto] = useState<File | null>(null);
-  const [checklistRows, setChecklistRows] = useState<StoredChecklistRow[]>([]);
   const [issueSubmitted, setIssueSubmitted] = useState(false);
-  const [checklistState, setChecklistState] = useState<{ exists: boolean; mismatchCount: number; savedAt?: string }>({
-    exists: false,
-    mismatchCount: 0,
-  });
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentProof, setPaymentProof] = useState<File | null>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
@@ -266,81 +250,6 @@ export default function DriverOrderDetailPage() {
       .filter(Boolean);
     return ids.length > 0 ? ids : groupedOrderIds;
   }, [groupedOrderIds, groupedOrders]);
-
-  useEffect(() => {
-    if (!allowed || groupedOrderIds.length === 0 || typeof window === 'undefined') {
-      setChecklistState({ exists: false, mismatchCount: 0 });
-      setChecklistRows([]);
-      return;
-    }
-
-    const scopeId =
-      resolvedInvoiceId
-      || normalizeInvoiceRef(groupedOrders[0]?.invoice_id || groupedOrders[0]?.Invoice?.id)
-      || groupedOrderIds[0]
-      || '';
-
-    if (scopeId) {
-      const scopedRaw = sessionStorage.getItem(checklistScopeStorageKey(scopeId));
-      if (scopedRaw) {
-        try {
-          const scopedParsed = JSON.parse(scopedRaw);
-          const rows = Array.isArray(scopedParsed?.rows) ? scopedParsed.rows : [];
-          const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
-          setChecklistRows(rows);
-          setChecklistState({
-            exists: rows.length > 0,
-            mismatchCount,
-            savedAt: scopedParsed?.savedAt,
-          });
-          return;
-        } catch (error) {
-          console.error('Failed to parse invoice checklist state:', error);
-        }
-      }
-    }
-
-    // Fallback legacy: merge checklist lama per-order.
-    const mergedRows: StoredChecklistRow[] = [];
-    let totalMismatch = 0;
-    let latestSavedAt: string | undefined;
-    let existsCount = 0;
-    groupedOrderIds.forEach((currentOrderId) => {
-      const raw = sessionStorage.getItem(legacyChecklistStorageKey(currentOrderId));
-      if (!raw) return;
-      try {
-        const parsed = JSON.parse(raw);
-        const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-        const mismatchCount = rows.filter((row: any) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)).length;
-        rows.forEach((row: any) => {
-          mergedRows.push({
-            ...(row as any),
-            orderId: currentOrderId,
-          });
-        });
-        totalMismatch += mismatchCount;
-        if (parsed?.savedAt) {
-          const savedAtText = String(parsed.savedAt);
-          if (!latestSavedAt || savedAtText > latestSavedAt) latestSavedAt = savedAtText;
-        }
-        existsCount += 1;
-      } catch (error) {
-        console.error('Failed to parse legacy checklist state:', error);
-      }
-    });
-
-    setChecklistRows(mergedRows);
-    setChecklistState({
-      exists: existsCount === groupedOrderIds.length && groupedOrderIds.length > 0,
-      mismatchCount: totalMismatch,
-      savedAt: latestSavedAt,
-    });
-  }, [allowed, groupedOrderIds, groupedOrders, resolvedInvoiceId]);
-
-  const mismatchRows = useMemo(
-    () => checklistRows.filter((row) => Number(row?.actualQty || 0) !== Number(row?.expectedQty || 0)),
-    [checklistRows]
-  );
   const invoiceContext = useMemo(() => {
     const invoiceRows = groupedOrders.map((row) => getOrderInvoicePayload(row));
     const invoiceId = normalizeInvoiceRef(invoiceDetail?.id) || resolvedInvoiceId
@@ -441,8 +350,6 @@ export default function DriverOrderDetailPage() {
     if (resolvedFromOrderId) return `ORD-${resolvedFromOrderId.slice(-8).toUpperCase()}`;
     return `ORD-${orderId.slice(-8).toUpperCase()}`;
   }, [invoiceContext.invoiceId, invoiceContext.invoiceNumber, orderId, resolvedFromOrderId]);
-  const primaryChecklistOrderId = groupedOrderIds[0] || resolvedFromOrderId || orderId;
-  const checklistScopeId = (invoiceContext.invoiceId || primaryChecklistOrderId || '').trim();
 
   if (!allowed) return null;
 
@@ -464,8 +371,6 @@ export default function DriverOrderDetailPage() {
   const paymentAmountValue = paymentAmount.trim() ? Number(paymentAmount) : undefined;
   const paymentAmountValid = paymentAmountValue === undefined || Number.isFinite(paymentAmountValue);
   const paymentMethodLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
-  const missingChecklist = !checklistState.exists;
-  const hasChecklistMismatch = checklistState.exists && checklistState.mismatchCount > 0;
   const missingProof = !proof;
   const missingCodPaymentRecord = isCod && !paymentRecorded && !isFullReturnNoCash;
   const missingReturHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
@@ -477,7 +382,7 @@ export default function DriverOrderDetailPage() {
   const codStatusHint = isFullReturnNoCash
     ? 'Customer mengembalikan semua barang, jadi tidak ada transaksi uang. Langkah selanjutnya: serahkan barang retur ke Admin/Kasir.'
     : paymentRecorded
-      ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut checklist dan bukti kirim.'
+      ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut upload bukti kirim.'
       : 'Jika invoice COD ini masih belum tercatat, driver dapat konfirmasi penerimaan uang customer di sini.';
   const codProofHint = isFullReturnNoCash
     ? 'Bukti COD dinonaktifkan karena tidak ada transaksi uang.'
@@ -492,7 +397,7 @@ export default function DriverOrderDetailPage() {
   const codCompletionHint = isFullReturnNoCash
     ? 'Retur penuh: tidak ada transaksi uang. Pastikan retur sudah diajukan lalu serahkan barang ke Admin/Kasir.'
     : paymentRecorded
-      ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah checklist dan bukti kirim lengkap.'
+      ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah bukti foto pengiriman lengkap.'
       : 'Invoice COD ini masih belum tercatat. Konfirmasi penerimaan COD terlebih dahulu sebelum selesai.';
   const codBlockingHint = (paymentRecorded || isFullReturnNoCash)
     ? ''
@@ -820,20 +725,6 @@ export default function DriverOrderDetailPage() {
       notifyAlert('Catatan laporan minimal 5 karakter.');
       return;
     }
-    const snapshotPrimaryOrderId = getActionTargetIds()[0] || primaryChecklistOrderId;
-
-    const snapshot = {
-      order_id: snapshotPrimaryOrderId,
-      invoice_id: invoiceContext.invoiceId || resolvedInvoiceId || null,
-      mismatch_total: mismatchRows.length,
-      rows: mismatchRows.map((row) => ({
-        order_id: row.orderId || row.orderIds?.[0] || snapshotPrimaryOrderId,
-        product_name: row.productName || 'Produk',
-        expected_qty: Number(row.expectedQty || 0),
-        actual_qty: Number(row.actualQty || 0),
-        note: String(row.note || '').trim() || null,
-      })),
-    };
 
     try {
       setLoading(true);
@@ -845,7 +736,6 @@ export default function DriverOrderDetailPage() {
       const results = await Promise.allSettled(
         targetIds.map((id) => api.driver.reportIssue(id, {
           note,
-          checklist_snapshot: JSON.stringify(snapshot),
           evidence: issuePhoto,
         }))
       );
@@ -877,8 +767,6 @@ export default function DriverOrderDetailPage() {
   };
 
   const canComplete = !!proof
-    && checklistState.exists
-    && checklistState.mismatchCount === 0
     && !loading
     && (!isCod || paymentRecorded || isFullReturnNoCash)
     && !missingReturHandover;
@@ -1670,40 +1558,9 @@ export default function DriverOrderDetailPage() {
             </Link>
           ) : null}
 
-          <div className="rounded-[24px] border border-emerald-200 bg-emerald-50/40 p-4 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Checklist Invoice</p>
-              <span className={`inline-flex px-2 py-0.5 rounded-full border text-[10px] font-black uppercase ${
-                !checklistState.exists
-                  ? 'bg-amber-100 text-amber-700 border-amber-200'
-                  : checklistState.mismatchCount > 0
-                    ? 'bg-rose-100 text-rose-700 border-rose-200'
-                    : 'bg-emerald-100 text-emerald-700 border-emerald-200'
-              }`}>
-                {!checklistState.exists
-                  ? 'Belum Dicek'
-                  : checklistState.mismatchCount > 0
-                    ? `Selisih ${checklistState.mismatchCount}`
-                    : 'Checklist OK'}
-              </span>
-            </div>
-            {checklistState.savedAt && (
-              <p className="text-[10px] text-emerald-700">
-                Terakhir disimpan: {new Date(checklistState.savedAt).toLocaleString('id-ID')}
-              </p>
-            )}
-            <Link
-              href={`/driver/orders/${encodeURIComponent(checklistScopeId || primaryChecklistOrderId)}/checklist`}
-              className="w-full py-3 bg-white border-2 border-emerald-200 text-emerald-700 rounded-2xl font-black text-xs uppercase inline-flex items-center justify-center gap-2"
-            >
-              <ClipboardCheck size={16} />
-              Buka Checklist Invoice
-            </Link>
-          </div>
-
           {isFullReturnNoCash ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-700">
-              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Serahkan barang retur ke Admin/Kasir lalu lanjutkan konfirmasi selesai setelah checklist dan bukti foto lengkap.
+              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Serahkan barang retur ke Admin/Kasir lalu lanjutkan konfirmasi selesai setelah bukti foto lengkap.
             </div>
           ) : isCod && !paymentRecorded ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
@@ -1719,13 +1576,11 @@ export default function DriverOrderDetailPage() {
             </div>
           )}
 
-          {(missingChecklist || hasChecklistMismatch || missingProof || missingCodPaymentRecord || missingReturHandover) && (
+          {(missingProof || missingCodPaymentRecord || missingReturHandover) && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600 space-y-1">
               <p className="uppercase text-[10px] tracking-widest text-slate-400">Belum Bisa Selesai</p>
               {missingCodPaymentRecord && <p>{codBlockingHint}</p>}
               {missingReturHandover && <p>Retur delivery belum diserahkan ke gudang. Klik tombol Serahkan di kartu Serah-Terima Gudang.</p>}
-              {missingChecklist && <p>Checklist belum disimpan. Buka checklist lalu klik Simpan.</p>}
-              {hasChecklistMismatch && <p>Checklist masih ada selisih. Perbaiki atau laporkan terlebih dahulu.</p>}
               {missingProof && <p>Upload bukti foto pengiriman (bukan bukti pembayaran).</p>}
             </div>
           )}
