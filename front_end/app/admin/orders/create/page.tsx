@@ -598,9 +598,9 @@ function ManualOrderContent() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left Column: Selection */}
-                <div className="lg:col-span-2 space-y-6">
+	            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+	                {/* Left Column: Selection */}
+	                <div className="order-2 lg:order-2 lg:col-span-1 space-y-6">
 
                     {/* Customer Selection */}
                     {!isChatDrivenOrder ? (
@@ -739,8 +739,8 @@ function ManualOrderContent() {
 
                 </div>
 
-                {/* Right Column: Cart Summary */}
-                <div className="space-y-6">
+	                {/* Right Column (Lebih luas): Cart Summary */}
+	                <div className="order-1 lg:order-1 lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
                         <h2 className="font-bold text-slate-900 mb-4">Ringkasan Pesanan</h2>
 
