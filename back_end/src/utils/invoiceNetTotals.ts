@@ -152,11 +152,14 @@ export const computeInvoiceNetTotals = async (
     newItemsSubtotal = round2(newItemsSubtotal);
 
     const shippingFeeTotal = round2(Number(plain?.shipping_fee_total || 0));
+    const isFullReturnAllItems = oldItemsSubtotal > 0.01 && newItemsSubtotal <= 0.01;
+    // Policy: if customer returns all items, shipping is waived (hangus for company).
+    const effectiveShippingFeeTotal = isFullReturnAllItems ? 0 : shippingFeeTotal;
     const oldDiscount = round2(Number(plain?.discount_amount || 0));
     const ratio = oldItemsSubtotal > 0 ? (newItemsSubtotal / oldItemsSubtotal) : 0;
     const newDiscount = round2(Math.min(newItemsSubtotal, Math.max(0, oldDiscount * ratio)));
 
-    const subtotalBase = round2(Math.max(0, newItemsSubtotal - newDiscount + shippingFeeTotal));
+    const subtotalBase = round2(Math.max(0, newItemsSubtotal - newDiscount + effectiveShippingFeeTotal));
     const taxMode = plain?.tax_mode_snapshot === 'pkp' ? 'pkp' : 'non_pkp';
     const taxPercent = Number(plain?.tax_percent || 0);
     let taxAmount = 0;
@@ -182,7 +185,7 @@ export const computeInvoiceNetTotals = async (
         new_items_subtotal: newItemsSubtotal,
         old_discount_amount: oldDiscount,
         new_discount_amount: newDiscount,
-        shipping_fee_total: shippingFeeTotal,
+        shipping_fee_total: effectiveShippingFeeTotal,
         tax_mode_snapshot: taxMode,
         tax_percent: taxPercent,
         tax_amount: taxAmount,

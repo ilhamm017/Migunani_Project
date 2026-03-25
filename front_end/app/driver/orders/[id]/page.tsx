@@ -233,11 +233,26 @@ export default function DriverOrderDetailPage() {
   useEffect(() => {
     const net = Number((invoiceDetail as any)?.delivery_return_summary?.net_total || 0);
     const gross = Number(invoiceDetail?.total || 0);
+    const newSubtotal = Number((invoiceDetail as any)?.delivery_return_summary?.new_items_subtotal ?? Number.NaN);
+    const oldSubtotal = Number((invoiceDetail as any)?.delivery_return_summary?.old_items_subtotal ?? Number.NaN);
+    const hasFullReturnItems = Number.isFinite(oldSubtotal) && oldSubtotal > 0.01 && Number.isFinite(newSubtotal) && newSubtotal <= 0.01;
+    const returs = Array.isArray((invoiceDetail as any)?.delivery_returs) ? ((invoiceDetail as any).delivery_returs as any[]) : [];
+    if (returs.length > 0 && hasFullReturnItems) {
+      setPaymentAmount('0');
+      return;
+    }
     const next = Number.isFinite(net) && net > 0 ? net : gross;
     if (Number.isFinite(next) && next > 0) {
       setPaymentAmount(String(next));
     }
-  }, [invoiceDetail?.id, invoiceDetail?.total, (invoiceDetail as any)?.delivery_return_summary?.net_total]);
+  }, [
+    invoiceDetail?.id,
+    invoiceDetail?.total,
+    (invoiceDetail as any)?.delivery_return_summary?.net_total,
+    (invoiceDetail as any)?.delivery_return_summary?.new_items_subtotal,
+    (invoiceDetail as any)?.delivery_return_summary?.old_items_subtotal,
+    (invoiceDetail as any)?.delivery_returs,
+  ]);
 
   const groupedOrderIds = useMemo(
     () => groupedOrders.map((row) => String(row?.id || '').trim()).filter(Boolean),
@@ -407,6 +422,7 @@ export default function DriverOrderDetailPage() {
   const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
   const deliveryNetTotal = Number(deliveryReturnSummary?.net_total || 0);
   const deliveryReturnTotal = Number(deliveryReturnSummary?.return_total || 0);
+  const deliveryOldItemsSubtotal = Number(deliveryReturnSummary?.old_items_subtotal ?? Number.NaN);
   const deliveryNewItemsSubtotal = Number(deliveryReturnSummary?.new_items_subtotal ?? Number.NaN);
   const existingDeliveryReturs = Array.isArray((invoiceDetail as any)?.delivery_returs) ? ((invoiceDetail as any).delivery_returs as any[]) : [];
   const hasExistingDeliveryRetur = existingDeliveryReturs.length > 0;
@@ -432,7 +448,12 @@ export default function DriverOrderDetailPage() {
   const activePaymentMethod = paymentMethod || invoiceContext.invoicePaymentMethod;
   const isCod = activePaymentMethod === 'cod';
   const paymentRecorded = isCod && ['cod_pending', 'paid'].includes(String(invoiceContext.invoicePaymentStatus || ''));
-  const isFullReturnNoCash = isCod
+  const isAllItemsReturned = hasExistingDeliveryRetur
+    && Number.isFinite(deliveryOldItemsSubtotal)
+    && deliveryOldItemsSubtotal > 0.01
+    && Number.isFinite(deliveryNewItemsSubtotal)
+    && deliveryNewItemsSubtotal <= 0.01;
+  const isFullReturnNoCash = isAllItemsReturned
     && hasExistingDeliveryRetur
     && (
       (Number.isFinite(deliveryNewItemsSubtotal) && deliveryNewItemsSubtotal <= 0.01)
@@ -745,6 +766,10 @@ export default function DriverOrderDetailPage() {
   };
 
   const handlePaymentMethodChange = async (nextMethod: 'cod' | 'transfer_manual') => {
+    if (isFullReturnNoCash) {
+      setPaymentMethodMessage('Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Tidak perlu memilih metode pembayaran. Serahkan barang retur ke Admin/Kasir.');
+      return;
+    }
     if (paymentMethodLocked || paymentMethodLoading || nextMethod === activePaymentMethod) return;
     setPaymentMethodConfirm({
       step: 1,
@@ -1502,18 +1527,24 @@ export default function DriverOrderDetailPage() {
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Opsi Pembayaran</p>
               <p className="text-sm font-black text-slate-900">Pilih metode pembayaran customer.</p>
             </div>
-            {paymentMethodLocked && (
+            {(paymentMethodLocked || isFullReturnNoCash) && (
               <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-slate-100 text-slate-600">
                 Terkunci
               </span>
             )}
           </div>
 
+          {isFullReturnNoCash && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-700">
+              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Driver cukup bawa barang retur untuk diserahkan ke Admin/Kasir.
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <button
               type="button"
               onClick={() => handlePaymentMethodChange('cod')}
-              disabled={paymentMethodLocked || paymentMethodLoading}
+              disabled={paymentMethodLocked || paymentMethodLoading || isFullReturnNoCash}
               className={`rounded-2xl border px-4 py-3 text-left space-y-1 transition-all ${activePaymentMethod === 'cod'
                 ? 'border-emerald-300 bg-emerald-50'
                 : 'border-slate-200 bg-white hover:border-emerald-200'}`}
@@ -1527,7 +1558,7 @@ export default function DriverOrderDetailPage() {
             <button
               type="button"
               onClick={() => handlePaymentMethodChange('transfer_manual')}
-              disabled={paymentMethodLocked || paymentMethodLoading}
+              disabled={paymentMethodLocked || paymentMethodLoading || isFullReturnNoCash}
               className={`rounded-2xl border px-4 py-3 text-left space-y-1 transition-all ${activePaymentMethod === 'transfer_manual'
                 ? 'border-blue-300 bg-blue-50'
                 : 'border-slate-200 bg-white hover:border-blue-200'}`}
@@ -1669,17 +1700,19 @@ export default function DriverOrderDetailPage() {
             </Link>
           </div>
 
-          {isCod && !paymentRecorded && (
+          {isFullReturnNoCash ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-700">
+              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Serahkan barang retur ke Admin/Kasir lalu lanjutkan konfirmasi selesai setelah checklist dan bukti foto lengkap.
+            </div>
+          ) : isCod && !paymentRecorded ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
               {codCompletionHint}
             </div>
-          )}
-          {isCod && paymentRecorded && (
+          ) : isCod && paymentRecorded ? (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[11px] font-bold text-emerald-700">
               {codCompletionHint}
             </div>
-          )}
-          {!isCod && (
+          ) : (
             <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-[11px] font-bold text-blue-700">
               Pembayaran transfer akan ditangani finance.
             </div>

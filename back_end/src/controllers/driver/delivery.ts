@@ -8,6 +8,7 @@ import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATU
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 
 export const completeDelivery = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -28,6 +29,9 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
 
         const paymentMethod = String(invoice.payment_method || '').toLowerCase();
         const paymentStatus = String(invoice.payment_status || '').toLowerCase();
+        const computedTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
+        const computedNetTotal = Number(computedTotals?.net_total || 0);
+        const isZeroDue = Number.isFinite(computedNetTotal) && computedNetTotal <= 0.01;
         const affectedOrderIds: string[] = [];
 
         for (const order of contextOrders) {
@@ -51,7 +55,9 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
                 : 0;
 
             let nextOrderStatus =
-                (paymentMethod === 'cod' && paymentStatus === 'cod_pending')
+                isZeroDue
+                    ? 'completed'
+                    : (paymentMethod === 'cod' && paymentStatus === 'cod_pending')
                     || (paymentMethod === 'transfer_manual' && paymentStatus === 'paid')
                     || (paymentMethod === 'cash_store' && paymentStatus === 'paid')
                     ? 'completed'
@@ -91,6 +97,16 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
                 transaction: t,
                 requestContext: 'driver_complete_delivery_status_changed'
             });
+        }
+
+        if (isZeroDue && paymentStatus !== 'paid') {
+            await invoice.update({
+                payment_status: 'paid',
+                amount_paid: 0,
+                change_amount: 0,
+                verified_at: new Date(),
+                verified_by: null,
+            }, { transaction: t });
         }
 
         await invoice.update({
