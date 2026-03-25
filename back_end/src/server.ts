@@ -571,6 +571,39 @@ const ensureOrderPricingOverrideColumnsReady = async () => {
     }
 };
 
+const ensureDeliveryHandoverItemEvidenceColumnsReady = async () => {
+    const tableName = 'delivery_handover_items';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const requiredColumns = ['evidence_url'] as const;
+    const missing: string[] = [];
+    for (const columnName of requiredColumns) {
+        const ok = await columnExists(tableName, columnName);
+        if (!ok) missing.push(columnName);
+    }
+
+    if (missing.length === 0) return;
+
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Applying targeted ALTER TABLE...`);
+
+    const addColumn = async (columnName: string, sqlType: string) => {
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${sqlType}`
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_FIELDNAME') return;
+            throw error;
+        }
+    };
+
+    if (missing.includes('evidence_url')) {
+        await addColumn('evidence_url', 'VARCHAR(255) NULL AFTER `note`');
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -584,6 +617,7 @@ const syncDatabaseWithRetry = async () => {
         await ensureInboundCostVarianceColumnsReady();
         await ensureReturHandoverDebtSnapshotColumnsReady();
         await ensureCodSettlementAuditColumnsReady();
+        await ensureDeliveryHandoverItemEvidenceColumnsReady();
         return;
     }
 
@@ -597,6 +631,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureInboundCostVarianceColumnsReady();
             await ensureReturHandoverDebtSnapshotColumnsReady();
             await ensureCodSettlementAuditColumnsReady();
+            await ensureDeliveryHandoverItemEvidenceColumnsReady();
             return;
         } catch (error) {
             lastError = error;
@@ -613,6 +648,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureInboundCostVarianceColumnsReady();
             await ensureReturHandoverDebtSnapshotColumnsReady();
             await ensureCodSettlementAuditColumnsReady();
+            await ensureDeliveryHandoverItemEvidenceColumnsReady();
             return;
         }
     }

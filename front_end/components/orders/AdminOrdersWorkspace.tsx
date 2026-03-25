@@ -3520,7 +3520,7 @@ export default function AdminOrdersWorkspace({
                             <div className="text-right">
                               <p className="text-[11px] text-slate-500">{card.statusLabel}</p>
                               <p className="text-sm font-black text-slate-900">{formatCurrency(card.totalAmount)}</p>
-                              {(card.invoiceId || card.primaryOrderId) && (
+                              {(card.invoiceId || card.primaryOrderId) && section !== 'checker' && (
                                 <Link
                                   href={`/admin/orders/${card.invoiceId || card.primaryOrderId}`}
                                   className={`mt-1 text-[10px] font-black uppercase transition-all ${card.actionLabel.includes('Tunjuk Driver')

@@ -1,13 +1,20 @@
 import { Router } from 'express';
 import { authenticateToken, authorizeRoles } from '../middleware/authMiddleware';
 import * as DeliveryHandoverController from '../controllers/DeliveryHandoverController';
-import { createImageUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
+import { createFieldsUploadMiddleware, createMultiFieldImageUpload } from '../utils/uploadPolicy';
 
 const router = Router();
 
-const evidenceUpload = createImageUpload('delivery_handovers', 'evidence');
-const uploadEvidenceMiddleware = createSingleUploadMiddleware(evidenceUpload, {
-    fieldName: 'evidence',
+const upload = createMultiFieldImageUpload(
+    'delivery_handovers',
+    { evidence: 'evidence', item_evidences: 'item' },
+    21
+);
+const uploadEvidenceMiddleware = createFieldsUploadMiddleware(upload, {
+    fields: [
+        { name: 'evidence', maxCount: 1 },
+        { name: 'item_evidences', maxCount: 20 },
+    ],
     sizeExceededMessage: 'Ukuran foto terlalu besar (maksimal 5MB).',
     fallbackMessage: 'Upload foto gagal diproses.'
 });

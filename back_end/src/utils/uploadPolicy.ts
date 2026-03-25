@@ -72,6 +72,33 @@ export const createImageUpload = (folderName: string, prefix: string) => multer(
     }
 });
 
+export const createMultiFieldImageUpload = (
+    folderName: string,
+    prefixByField: Record<string, string>,
+    maxFiles = 10
+) => multer({
+    storage: multer.diskStorage({
+        destination: (req, _file, cb) => {
+            const userId = normalizeSafeFilenamePart(String(req.user?.id || 'anonymous'));
+            const dest = path.join('uploads', userId || 'anonymous', folderName);
+            ensureDirectory(dest);
+            cb(null, dest);
+        },
+        filename: (_req, file, cb) => {
+            const field = String(file?.fieldname || '').trim();
+            const prefix = prefixByField[field] || prefixByField['*'] || 'upload';
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            const extension = normalizeExtension(file.originalname);
+            cb(null, `${prefix}-${uniqueSuffix}${extension}`);
+        }
+    }),
+    fileFilter: imageFileFilter,
+    limits: {
+        fileSize: MAX_UPLOAD_SIZE_BYTES,
+        files: maxFiles,
+    }
+});
+
 type AttachmentUploadOptions = {
     folderName: string;
     prefix: string;
@@ -136,6 +163,32 @@ export const createSingleUploadMiddleware = (
         upload.single(options.fieldName)(req, res, (err) => {
             if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
                 return res.status(400).json({ message: options.sizeExceededMessage });
+            }
+            if (err instanceof Error) {
+                return res.status(400).json({ message: err.message || options.fallbackMessage });
+            }
+            return next();
+        });
+    };
+};
+
+type FieldsUploadMiddlewareOptions = {
+    fields: Array<{ name: string; maxCount: number }>;
+    sizeExceededMessage: string;
+    fallbackMessage: string;
+};
+
+export const createFieldsUploadMiddleware = (
+    upload: multer.Multer,
+    options: FieldsUploadMiddlewareOptions
+) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+        upload.fields(options.fields)(req, res, (err) => {
+            if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ message: options.sizeExceededMessage });
+            }
+            if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
+                return res.status(400).json({ message: 'Terlalu banyak file yang diupload.' });
             }
             if (err instanceof Error) {
                 return res.status(400).json({ message: err.message || options.fallbackMessage });

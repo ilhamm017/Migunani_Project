@@ -41,6 +41,22 @@ const parseItemsFromBody = (raw: unknown): RawHandoverItemInput[] => {
     return [];
 };
 
+const parseEvidenceMap = (raw: unknown): Record<string, number> => {
+    if (!raw) return {};
+    if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw as any;
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (!trimmed) return {};
+        try {
+            const parsed = JSON.parse(trimmed);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as any : {};
+        } catch {
+            return {};
+        }
+    }
+    return {};
+};
+
 const resolveCheckResult = (raw: unknown): 'pass' | 'fail' => {
     const value = normalizeText(raw).toLowerCase();
     if (value === 'fail' || value === 'failed') return 'fail';
@@ -55,7 +71,19 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
         const invoiceId = normalizeText(req.body?.invoice_id);
         const note = normalizeText(req.body?.note) || null;
         const checkResult = resolveCheckResult(req.body?.result);
-        const file = (req as any).file as Express.Multer.File | undefined;
+        const files = (req as any).files as Record<string, Express.Multer.File[]> | undefined;
+        const headerEvidence = ((req as any).file as Express.Multer.File | undefined)
+            || (Array.isArray(files?.evidence) ? files?.evidence?.[0] : undefined);
+        const itemEvidenceFiles = Array.isArray(files?.item_evidences) ? files?.item_evidences : [];
+        const evidenceMapRaw = parseEvidenceMap(req.body?.item_evidence_map);
+        const evidenceIndexByProductId = new Map<string, number>();
+        Object.entries(evidenceMapRaw || {}).forEach(([productId, idx]) => {
+            const key = normalizeText(productId);
+            const index = Number(idx);
+            if (!key) return;
+            if (!Number.isFinite(index) || index < 0) return;
+            evidenceIndexByProductId.set(key, Math.trunc(index));
+        });
 
         if (!invoiceId) throw new CustomError('invoice_id wajib diisi', 400);
         const actorId = String(req.user?.id || '').trim() || null;
@@ -136,6 +164,7 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
 
         const shouldFail = checkResult === 'fail' || hasMismatch;
         const courierId = invoice.courier_id ? String(invoice.courier_id) : null;
+        if (!courierId) throw new CustomError('Invoice belum ditugaskan ke driver.', 409);
         const handover = await DeliveryHandover.create({
             invoice_id: invoiceId,
             courier_id: courierId,
@@ -144,7 +173,7 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
             checked_at: new Date(),
             handed_over_at: null,
             note,
-            evidence_url: file ? file.path : null,
+            evidence_url: headerEvidence ? headerEvidence.path : null,
         }, { transaction: t });
 
         await DeliveryHandoverItem.bulkCreate(
@@ -155,6 +184,12 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
                 qty_checked: row.qty_checked,
                 condition: row.condition,
                 note: row.note,
+                evidence_url: (() => {
+                    const evidenceIndex = evidenceIndexByProductId.get(row.product_id);
+                    if (evidenceIndex === undefined) return null;
+                    const f = itemEvidenceFiles[evidenceIndex];
+                    return f?.path ? String(f.path) : null;
+                })(),
             })),
             { transaction: t }
         );
@@ -223,7 +258,7 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
                     .filter(Boolean)
                     .join('\n')
                     .trim() || null;
-                const evidenceUrl = file ? file.path : null;
+                const evidenceUrl = headerEvidence ? headerEvidence.path : null;
                 if (existing) {
                     await existing.update({
                         note: mergedNote || existing.note,

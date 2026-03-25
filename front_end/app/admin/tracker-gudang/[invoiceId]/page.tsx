@@ -20,6 +20,7 @@ type CheckRow = {
   qty_checked: number;
   condition: Condition;
   note: string;
+  evidence: File | null;
 };
 
 const normalizeText = (value: unknown) => String(value || '').trim();
@@ -55,13 +56,14 @@ const buildExpectedRows = (invoice: InvoiceDetailResponse | null): CheckRow[] =>
       qty_checked: 0,
       condition: 'ok' as const,
       note: '',
+      evidence: null,
     };
     prev.qty_expected += qty;
     map.set(productId, prev);
   });
 
   return Array.from(map.values())
-    .map((row) => ({ ...row, qty_checked: row.qty_expected }))
+    .map((row) => ({ ...row, qty_checked: row.qty_expected, evidence: null }))
     .sort((a, b) => b.qty_expected - a.qty_expected);
 };
 
@@ -135,18 +137,34 @@ export default function TrackerGudangCheckPage() {
       payload.append('invoice_id', invoiceId);
       if (trimmedNote) payload.append('note', trimmedNote);
       payload.append('result', effectiveResult);
-      payload.append('items', JSON.stringify(rows.map((r) => ({
+      const itemEvidenceFiles: File[] = [];
+      const itemEvidenceMap: Record<string, number> = {};
+
+      payload.append('items', JSON.stringify(rows.map((r) => {
+        if (r.evidence) {
+          const idx = itemEvidenceFiles.length;
+          itemEvidenceFiles.push(r.evidence);
+          itemEvidenceMap[r.product_id] = idx;
+        }
+        return {
         product_id: r.product_id,
         qty_checked: r.qty_checked,
         condition: r.condition,
         note: r.note.trim() || null,
-      }))));
+        };
+      })));
+
+      if (Object.keys(itemEvidenceMap).length > 0) {
+        payload.append('item_evidence_map', JSON.stringify(itemEvidenceMap));
+      }
+      itemEvidenceFiles.forEach((file) => payload.append('item_evidences', file));
       if (evidence) payload.append('evidence', evidence);
 
       const res = await api.deliveryHandovers.check(payload);
       const message = String((res.data as any)?.message || 'Checking tersimpan.');
       notifyOpen({ variant: effectiveResult === 'pass' ? 'success' : 'warning', title: 'Checker', message });
       setEvidence(null);
+      setRows((prev) => prev.map((row) => ({ ...row, evidence: null })));
       if (effectiveResult === 'fail' && !trimmedNote) {
         notifyAlert('Disarankan isi catatan agar jelas mismatch/masalahnya.');
       }
@@ -369,6 +387,27 @@ export default function TrackerGudangCheckPage() {
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none"
                         disabled={busy}
                       />
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] font-bold text-slate-600">
+                          Foto item (opsional){row.evidence ? `: ${row.evidence.name}` : ''}
+                        </p>
+                        <div className="relative">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0] || null;
+                              setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, evidence: file } : r)));
+                            }}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            disabled={busy}
+                          />
+                          <span className="inline-flex items-center justify-center rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 border border-slate-200">
+                            Upload Foto
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -405,4 +444,3 @@ export default function TrackerGudangCheckPage() {
     </div>
   );
 }
-

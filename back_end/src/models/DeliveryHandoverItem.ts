@@ -11,9 +11,10 @@ interface DeliveryHandoverItemAttributes {
     qty_checked: number;
     condition: DeliveryHandoverItemCondition;
     note: string | null;
+    evidence_url: string | null;
 }
 
-interface DeliveryHandoverItemCreationAttributes extends Optional<DeliveryHandoverItemAttributes, 'id' | 'note'> { }
+interface DeliveryHandoverItemCreationAttributes extends Optional<DeliveryHandoverItemAttributes, 'id' | 'note' | 'evidence_url'> { }
 
 class DeliveryHandoverItem extends Model<DeliveryHandoverItemAttributes, DeliveryHandoverItemCreationAttributes> implements DeliveryHandoverItemAttributes {
     declare id: number;
@@ -23,6 +24,7 @@ class DeliveryHandoverItem extends Model<DeliveryHandoverItemAttributes, Deliver
     declare qty_checked: number;
     declare condition: DeliveryHandoverItemCondition;
     declare note: string | null;
+    declare evidence_url: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -60,6 +62,10 @@ DeliveryHandoverItem.init(
             type: DataTypes.TEXT,
             allowNull: true,
         },
+        evidence_url: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
     },
     {
         sequelize,
@@ -72,4 +78,3 @@ DeliveryHandoverItem.init(
 );
 
 export default DeliveryHandoverItem;
-
