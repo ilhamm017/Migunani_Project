@@ -482,8 +482,10 @@ function ManualOrderContent() {
 		
 		        if (!confirm('Buat pesanan ini?')) return;
 
-	        setSubmitting(true);
-	        try {
+                showSubmitPopup('info', 'Memproses', 'Membuat pesanan...');
+
+		        setSubmitting(true);
+		        try {
 	            const orderReason = orderOverrideReason.trim();
 	            const payload: Parameters<typeof api.orders.checkout>[0] = {
 	                customer_id: selectedCustomer.id, // Only works if admin
@@ -533,7 +535,7 @@ function ManualOrderContent() {
 	            );
 	            window.setTimeout(() => {
 	                router.push('/admin/orders');
-	            }, 700);
+	            }, 1700);
 	        } catch (error: unknown) {
 	            console.error(error);
 	            showSubmitPopup(
@@ -886,11 +888,12 @@ function ManualOrderContent() {
 	                            <span className="font-bold text-slate-600">Total</span>
 	                            <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
 	                        </div>
-		                        <button
-		                            onClick={handleSubmit}
-		                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
-		                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-		                        >
+			                        <button
+                                        type="button"
+			                            onClick={handleSubmit}
+			                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
+			                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+			                        >
 		                            {submitting ? 'Memproses...' : (
 		                                <>
 		                                    <Check size={18} /> Buat Pesanan
