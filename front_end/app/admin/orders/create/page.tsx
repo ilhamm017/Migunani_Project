@@ -1078,26 +1078,26 @@ function ManualOrderContent() {
                         <button
                             type="button"
                             onClick={dismissSubmitPopup}
-                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,360px)] rounded-xl border px-4 py-3 text-left shadow-lg ${submitPopup.tone === 'success'
-                                ? 'border-emerald-300 bg-emerald-50'
-                                : submitPopup.tone === 'error'
-                                    ? 'border-rose-300 bg-rose-50'
-                                    : 'border-slate-200 bg-white'
-                                }`}
-                        >
-                            <p className={`text-[11px] font-black uppercase tracking-widest ${submitPopup.tone === 'success'
-                                ? 'text-emerald-700'
-                                : submitPopup.tone === 'error'
-                                    ? 'text-rose-700'
-                                    : 'text-slate-600'
-                                }`}
-                            >
-                                {submitPopup.title}
-                            </p>
-                            <p className={`text-xs font-semibold mt-1 ${submitPopup.tone === 'success'
-                                ? 'text-emerald-700'
-                                : submitPopup.tone === 'error'
-                                    ? 'text-rose-700'
+	                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,432px)] rounded-2xl border px-5 py-4 text-left shadow-lg ${submitPopup.tone === 'success'
+	                                ? 'border-emerald-300 bg-emerald-50'
+	                                : submitPopup.tone === 'error'
+	                                    ? 'border-rose-300 bg-rose-50'
+	                                    : 'border-slate-200 bg-white'
+	                                }`}
+	                        >
+	                            <p className={`text-[13px] font-black uppercase tracking-widest ${submitPopup.tone === 'success'
+	                                ? 'text-emerald-700'
+	                                : submitPopup.tone === 'error'
+	                                    ? 'text-rose-700'
+	                                    : 'text-slate-600'
+	                                }`}
+	                            >
+	                                {submitPopup.title}
+	                            </p>
+	                            <p className={`text-sm font-semibold mt-1 ${submitPopup.tone === 'success'
+	                                ? 'text-emerald-700'
+	                                : submitPopup.tone === 'error'
+	                                    ? 'text-rose-700'
                                     : 'text-slate-700'
                                 }`}
                             >
