@@ -29,3 +29,14 @@ COPY --from=builder /app/next.config.ts ./next.config.ts
 
 EXPOSE 3000
 CMD ["npm", "run", "start"]
+
+FROM node:20-bookworm-slim AS dev
+WORKDIR /app
+ENV NODE_ENV=development
+
+COPY package*.json ./
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+EXPOSE 3500
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3500"]

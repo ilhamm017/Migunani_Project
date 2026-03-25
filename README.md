@@ -45,6 +45,24 @@ Akses:
 - Backend API: `http://localhost:5000`
 - MySQL: `localhost:3306`
 
+### Opsi C - Dev di Docker (hot reload tanpa rebuild terus-menerus)
+
+Cocok kalau kamu ingin tetap coding di host, tapi backend/frontend jalan di container (auto reload).
+
+```bash
+cp .env.example .env
+
+# pertama kali (atau saat dependency/Dockerfile berubah)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+# berikutnya cukup:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+Catatan:
+- Rebuild hanya perlu kalau `Dockerfile`, `docker-compose*.yml`, `package*.json`, atau dependency berubah.
+- Mode dev ini membuat service `seed` menjadi no-op supaya tidak mengubah schema saat kamu coding.
+
 ### Opsi B - Dev Lokal + MySQL Docker (direkomendasikan saat coding)
 
 Cocok untuk hot reload backend/frontend di mesin lokal.

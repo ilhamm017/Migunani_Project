@@ -1,0 +1,43 @@
+services:
+  seed:
+    build:
+      context: ./back_end
+      dockerfile: Dockerfile
+      target: deps
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "[seed] skipped in dev (docker-compose.dev.yml)"
+        exit 0
+
+  back_end:
+    build:
+      context: ./back_end
+      dockerfile: Dockerfile
+      target: dev
+    depends_on:
+      - mysql
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./back_end:/app
+      - /app/node_modules
+
+  front_end:
+    build:
+      context: ./front_end
+      dockerfile: Dockerfile
+      target: dev
+    depends_on:
+      - back_end
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./front_end:/app
+      - /app/node_modules
+      - frontend_next_cache:/app/.next
+
+volumes:
+  frontend_next_cache:
