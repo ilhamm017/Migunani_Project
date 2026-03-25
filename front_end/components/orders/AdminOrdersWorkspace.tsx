@@ -3201,7 +3201,7 @@ export default function AdminOrdersWorkspace({
                 const label = getSectionLabel(section);
                 const list = filteredGroupedOrders[section] as AdminOrderListRow[];
                 if (list.length === 0) return null;
-                const isWarehouseCompactView = isWarehouseRole || (canManageWarehouseFlow && ['gudang', 'pengiriman'].includes(section));
+	                const isWarehouseCompactView = isWarehouseRole || (canManageWarehouseFlow && ['gudang', 'checker', 'pengiriman'].includes(section));
                 const canUseWarehouseChecklist = canAssignDriverWarehouse;
                 const isFinanceCompactView = isFinanceRole && ['pembayaran', 'gudang', 'pengiriman', 'selesai'].includes(section);
                 const isInvoiceCompactView = isWarehouseCompactView || isFinanceCompactView;
