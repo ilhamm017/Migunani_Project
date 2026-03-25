@@ -10,6 +10,27 @@ import { AccountingPostingService } from '../services/AccountingPostingService';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
 
+const toObjectOrEmpty = (value: unknown): Record<string, any> => {
+    if (!value) return {};
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return {};
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, any>;
+        } catch { }
+        return {};
+    }
+    if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+    return {};
+};
+
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return n;
+};
+
 export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response) => {
     const invoiceId = String(req.params.id || '').trim();
     if (!invoiceId) {
@@ -25,7 +46,7 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
                 include: [
                     {
                         model: OrderItem,
-                        attributes: ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder'],
+                        attributes: ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'pricing_snapshot'],
                         include: [{ model: Product, attributes: ['name', 'sku', 'unit'] }]
                     }
                 ]
@@ -39,6 +60,7 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
 
     const user = req.user!;
     const userRole = String(user?.role || '');
+    const isAdminRole = ['super_admin', 'admin_finance', 'kasir', 'admin_gudang'].includes(userRole);
     if (userRole === 'customer') {
         const customerId = String(invoice.getDataValue('customer_id') || '');
         if (!customerId || customerId !== String(user.id)) {
@@ -107,7 +129,7 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
     });
     const orderIds = Array.from(orderIdSet);
 
-    const invoiceItems = items.map((item: any) => {
+    let invoiceItems: any[] = items.map((item: any) => {
         const orderItem = item?.OrderItem || null;
         const orderItemId = String(item?.order_item_id || orderItem?.id || '').trim();
         const orderedQty = Number(orderItem?.ordered_qty_original || orderItem?.qty || item?.qty || 0);
@@ -125,6 +147,63 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
             canceled_backorder_qty: canceledBackorderQty,
         };
     });
+
+    if (!isAdminRole) {
+        invoiceItems = invoiceItems.map((item: any) => {
+            if (!item || typeof item !== 'object') return item;
+            if (!item.OrderItem || typeof item.OrderItem !== 'object') return item;
+            const nextOrderItem = { ...item.OrderItem };
+            delete (nextOrderItem as any).pricing_snapshot;
+            return { ...item, OrderItem: nextOrderItem };
+        });
+    }
+
+    if (isAdminRole) {
+        const orderNotesById = new Map<string, string | null>();
+        if (orderIds.length > 0) {
+            const relatedOrders = await Order.findAll({
+                where: { id: { [Op.in]: orderIds } },
+                attributes: ['id', 'pricing_override_note']
+            });
+            relatedOrders.forEach((row: any) => {
+                orderNotesById.set(String(row?.id || ''), row?.pricing_override_note ? String(row.pricing_override_note) : null);
+            });
+        }
+
+        invoiceItems = invoiceItems.map((item: any) => {
+            const orderItem = item?.OrderItem || null;
+            const pricingSnapshot = toObjectOrEmpty(orderItem?.pricing_snapshot);
+            const baselineRaw = pricingSnapshot?.computed_unit_price ?? pricingSnapshot?.computedUnitPrice ?? null;
+            const finalUnitPrice = toFiniteNumberOrNull(item?.unit_price) ?? 0;
+            const baselineUnitPrice = toFiniteNumberOrNull(baselineRaw) ?? finalUnitPrice;
+            const qty = Math.max(0, Number(item?.qty || 0));
+            const diffPerUnit = Math.round((baselineUnitPrice - finalUnitPrice) * 100) / 100;
+            const diffTotal = Math.round(diffPerUnit * qty * 100) / 100;
+
+            const override = toObjectOrEmpty(pricingSnapshot?.override);
+            const history = Array.isArray(pricingSnapshot?.override_history) ? pricingSnapshot.override_history : [];
+            const lastHistory = history.length > 0 ? toObjectOrEmpty(history[history.length - 1]) : {};
+            const reasonItem = String(override?.reason || lastHistory?.reason || '').trim() || null;
+            const actorUserId = override?.actor_user_id ?? lastHistory?.actor_user_id ?? null;
+            const actorRole = override?.actor_role ?? lastHistory?.actor_role ?? null;
+
+            const orderId = String(orderItem?.order_id || '').trim();
+            const reasonOrder = orderId ? (orderNotesById.get(orderId) ?? null) : null;
+
+            return {
+                ...item,
+                baseline_unit_price: baselineUnitPrice,
+                final_unit_price: finalUnitPrice,
+                price_diff_per_unit: diffPerUnit,
+                price_diff_total: diffTotal,
+                override_reason_item: reasonItem,
+                override_reason_order: reasonOrder,
+                override_actor: (actorUserId || actorRole)
+                    ? { actor_user_id: actorUserId ? String(actorUserId) : null, actor_role: actorRole ? String(actorRole) : null }
+                    : null
+            };
+        });
+    }
 
     const customerId = String(plain?.customer_id || '');
     const customer = customerId

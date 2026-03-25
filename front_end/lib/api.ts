@@ -123,12 +123,18 @@ export const api = {
         checkout: (data: {
             from_cart?: boolean;
             payment_method?: 'transfer_manual' | 'cod' | 'cash_store';
-            items?: Array<{ product_id: string; qty: number }>;
+            items?: Array<{
+                product_id: string;
+                qty: number;
+                unit_price_override?: number;
+                unit_price_override_reason?: string;
+            }>;
             customer_id?: string; // Optional for admin manual order
             shipping_method_code?: string;
             promo_code?: string;
             shipping_address?: string;
             customer_note?: string;
+            price_override_reason?: string;
         }) => apiClient.post('/orders/checkout', data),
         getMyOrders: (params?: { page?: number; limit?: number; status?: string; include_collectible_total?: string }) =>
             apiClient.get('/orders/my-orders', { params }),
@@ -344,6 +350,10 @@ export const api = {
                 issue_note?: string;
                 resolution_note?: string;
             }) => apiClient.patch(`/orders/admin/${id}/status`, data),
+            updatePricing: (id: string, data: {
+                items: Array<{ order_item_id: string; unit_price_override: number; reason?: string }>;
+                reason?: string;
+            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
             moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
         },
         inventory: {

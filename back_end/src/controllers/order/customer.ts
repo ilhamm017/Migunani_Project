@@ -25,6 +25,26 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
 
     const orders = await Order.findAndCountAll({
         where: whereClause,
+        attributes: [
+            'id',
+            'customer_id',
+            'customer_name',
+            'source',
+            'status',
+            'payment_method',
+            'total_amount',
+            'discount_amount',
+            'shipping_method_code',
+            'shipping_method_name',
+            'shipping_fee',
+            'shipping_address',
+            'customer_note',
+            'courier_id',
+            'expiry_date',
+            'delivery_proof_url',
+            'createdAt',
+            'updatedAt'
+        ],
         include: [
             { model: Retur, attributes: ['id', 'status'] },
             { model: OrderItem, attributes: ['qty', 'ordered_qty_original', 'qty_canceled_backorder'] },
@@ -118,6 +138,37 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         ? ['name', 'sku', 'unit']
         : ['name', 'sku', 'unit', 'stock_quantity', 'allocated_quantity'];
 
+    const orderAttributes = userRole === 'customer'
+        ? [
+            'id',
+            'customer_id',
+            'customer_name',
+            'source',
+            'status',
+            'payment_method',
+            'total_amount',
+            'discount_amount',
+            'shipping_method_code',
+            'shipping_method_name',
+            'shipping_fee',
+            'shipping_address',
+            'customer_note',
+            'courier_id',
+            'expiry_date',
+            'delivery_proof_url',
+            'createdAt',
+            'updatedAt',
+            'stock_released',
+            'parent_order_id',
+            'goods_out_posted_at',
+            'goods_out_posted_by',
+        ]
+        : undefined;
+
+    const orderItemAttributes = userRole === 'customer'
+        ? ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'price_at_purchase']
+        : ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'price_at_purchase', 'cost_at_purchase', 'pricing_snapshot'];
+
     let targetOrderId = orderId;
     const directOrder = await Order.findOne({
         where: whereClause,
@@ -135,11 +186,12 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         where: userRole === 'customer'
             ? { id: targetOrderId, customer_id: userId }
             : { id: targetOrderId },
+        ...(orderAttributes ? { attributes: orderAttributes } : {}),
         include: [
             { model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number', 'email'] },
             { model: User, as: 'Courier', attributes: ['id', 'name', 'role', 'whatsapp_number'] },
             { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
-            { model: OrderItem, include: [{ model: Product, attributes: productAttributes }] },
+            { model: OrderItem, attributes: orderItemAttributes, include: [{ model: Product, attributes: productAttributes }] },
             { model: OrderAllocation, as: 'Allocations' },
             { model: Order, as: 'Children' },
             { model: Retur }

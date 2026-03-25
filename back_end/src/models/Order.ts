@@ -10,6 +10,7 @@ interface OrderAttributes {
     payment_method?: 'transfer_manual' | 'cod' | 'cash_store' | null;
     total_amount: number;
     discount_amount: number;
+    pricing_override_note?: string | null;
     shipping_method_code?: string | null;
     shipping_method_name?: string | null;
     shipping_fee?: number | null;
@@ -37,6 +38,7 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     declare payment_method: 'transfer_manual' | 'cod' | 'cash_store' | null;
     declare total_amount: number;
     declare discount_amount: number;
+    declare pricing_override_note: string | null;
     declare shipping_method_code: string | null;
     declare shipping_method_name: string | null;
     declare shipping_fee: number | null;
@@ -89,6 +91,10 @@ Order.init(
         discount_amount: {
             type: DataTypes.DECIMAL(15, 2),
             defaultValue: 0,
+        },
+        pricing_override_note: {
+            type: DataTypes.TEXT,
+            allowNull: true,
         },
         shipping_method_code: {
             type: DataTypes.STRING,

@@ -276,7 +276,18 @@ const ORDER_STATUS_ENUM_VALUES = [
     'canceled',
     'expired',
     'hold',
-    'waiting_admin_verification'
+	'waiting_admin_verification'
+];
+
+const ORDER_EVENT_TYPE_ENUM_VALUES = [
+    'allocation_set',
+    'invoice_issued',
+    'invoice_item_billed',
+    'backorder_opened',
+    'backorder_reallocated',
+    'backorder_canceled',
+    'order_pricing_adjusted',
+    'order_status_changed'
 ];
 
 const RETUR_STATUS_ENUM_VALUES = [
@@ -495,8 +506,44 @@ const ensureOrderStatusEnumReady = async () => {
     }
 };
 
-const normalizeWaitingPaymentOrders = async () => {
+const ensureOrderEventTypeEnumReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
     try {
+        const [rows] = await sequelize.query(
+            `SELECT COLUMN_TYPE AS columnType
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'order_events'
+               AND COLUMN_NAME = 'event_type'`
+        ) as any;
+
+        const col = rows?.[0];
+        if (!col) {
+            console.warn('Skip order_events.event_type enum update: column not found yet');
+            return;
+        }
+
+        const currentValues = parseEnumValuesFromColumnType(col.columnType);
+        const missingRequired = ORDER_EVENT_TYPE_ENUM_VALUES.filter((value) => !currentValues.includes(value));
+        if (missingRequired.length === 0) return;
+
+        const mergedValues = Array.from(new Set([...currentValues, ...ORDER_EVENT_TYPE_ENUM_VALUES]));
+        const enumValuesSql = mergedValues.map((value) => `'${value.replace(/'/g, "\\'")}'`).join(', ');
+        await sequelize.query(
+            `ALTER TABLE order_events
+             MODIFY COLUMN event_type ENUM(${enumValuesSql})
+             NOT NULL`
+        );
+        console.log(`Order events enum updated: added [${missingRequired.join(', ')}]`);
+    } catch (error) {
+        console.error('Failed to ensure order_events.event_type enum values:', error);
+        throw error;
+    }
+};
+
+const normalizeWaitingPaymentOrders = async () => {
+	        try {
         const [updated] = await Order.update(
             { status: 'ready_to_ship', expiry_date: null },
             { where: { status: 'waiting_payment' } }
@@ -569,14 +616,15 @@ const startServer = async () => {
             schemaLock = await acquireSchemaLock(sequelize);
             console.log(`[SchemaLock] Acquired '${schemaLock.lockName}'`);
 
-            await runStartupStep('Database sync', syncDatabaseWithRetry);
-            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
-            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
-            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
-            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
-            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
-            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
-        } catch (error: any) {
+	            await runStartupStep('Database sync', syncDatabaseWithRetry);
+	            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
+	            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
+	            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+	            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
+	            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
+	            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
+	            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
+	        } catch (error: any) {
             if (error instanceof SchemaLockError && error.code === 'SCHEMA_LOCK_TIMEOUT') {
                 throw new Error(
                     `Schema lock busy. Another schema operation is running. (${error.message})`

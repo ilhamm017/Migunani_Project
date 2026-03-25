@@ -894,6 +894,250 @@ export const reportMissingItem = asyncWrapper(async (req: Request, res: Response
     }
 });
 
+const round2 = (value: number) => Math.round(Number(value || 0) * 100) / 100;
+
+const toObjectOrEmpty = (value: unknown): Record<string, any> => {
+    if (!value) return {};
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return {};
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, any>;
+        } catch { }
+        return {};
+    }
+    if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+    return {};
+};
+
+const getSnapshotNumber = (snapshot: any, ...keys: string[]): number | null => {
+    for (const key of keys) {
+        const raw = snapshot?.[key];
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+};
+
+export const updateOrderPricing = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const userRole = String(req.user?.role || '').trim();
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = userRole || null;
+
+        if (!['super_admin', 'kasir'].includes(userRole)) {
+            await t.rollback();
+            throw new CustomError('Tidak memiliki akses', 403);
+        }
+
+        const orderId = String(req.params.id || '').trim();
+        if (!orderId) {
+            await t.rollback();
+            throw new CustomError('Order id wajib diisi', 400);
+        }
+
+        const itemsRaw = req.body?.items;
+        if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) {
+            await t.rollback();
+            throw new CustomError('Items wajib diisi', 400);
+        }
+        const orderReason = typeof req.body?.reason === 'string' ? String(req.body.reason).trim() : '';
+
+        const requestedItems = itemsRaw.map((row: any) => ({
+            order_item_id: String(row?.order_item_id || '').trim(),
+            unit_price_override: Number(row?.unit_price_override),
+            reason: typeof row?.reason === 'string' ? String(row.reason).trim() : ''
+        }));
+
+        if (requestedItems.some((row) => !row.order_item_id)) {
+            await t.rollback();
+            throw new CustomError('order_item_id tidak valid', 400);
+        }
+        if (requestedItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
+            await t.rollback();
+            throw new CustomError('Harga deal tidak valid', 400);
+        }
+
+        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!order) {
+            await t.rollback();
+            throw new CustomError('Order tidak ditemukan', 404);
+        }
+
+        const currentStatus = String(order.status || '').trim().toLowerCase();
+        const PRE_INVOICE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
+        if (!PRE_INVOICE_STATUSES.has(currentStatus)) {
+            await t.rollback();
+            throw new CustomError(`Harga nego hanya bisa diubah sebelum invoice, status saat ini '${currentStatus}'.`, 409);
+        }
+
+        const existingInvoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+        if (existingInvoice) {
+            await t.rollback();
+            throw new CustomError('Harga nego tidak bisa diubah karena invoice sudah terbit.', 409);
+        }
+
+        const orderItemIds = Array.from(new Set(requestedItems.map((row) => row.order_item_id))).filter(Boolean);
+        const orderItems = await OrderItem.findAll({
+            where: { id: { [Op.in]: orderItemIds }, order_id: orderId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (orderItems.length !== orderItemIds.length) {
+            await t.rollback();
+            throw new CustomError('Sebagian item order tidak ditemukan atau tidak sesuai order.', 400);
+        }
+
+        const byId = new Map(orderItems.map((row: any) => [String(row.id), row]));
+        let deltaTotal = 0;
+        const changes: any[] = [];
+        const nowIso = new Date().toISOString();
+
+        for (const reqItem of requestedItems) {
+            const row = byId.get(reqItem.order_item_id);
+            if (!row) continue;
+
+            const oldUnit = round2(Number(row.price_at_purchase || 0));
+            const newUnit = round2(Number(reqItem.unit_price_override || 0));
+            const qty = Math.max(0, Number(row.qty || 0));
+            const cost = round2(Number(row.cost_at_purchase || 0));
+
+            if (newUnit <= 0 || !Number.isFinite(newUnit)) {
+                await t.rollback();
+                throw new CustomError('Harga deal tidak valid', 400);
+            }
+
+            if (userRole === 'kasir' && Number.isFinite(cost) && newUnit < cost) {
+                await t.rollback();
+                throw new CustomError('Kasir tidak boleh menurunkan harga di bawah modal', 400);
+            }
+
+            const snapshot = toObjectOrEmpty((row as any).pricing_snapshot);
+            const baseline = round2(getSnapshotNumber(snapshot, 'computed_unit_price', 'computedUnitPrice') ?? oldUnit);
+
+            // Negotiation is intended to lower price, not raise it.
+            if (newUnit > baseline) {
+                await t.rollback();
+                throw new CustomError('Harga deal tidak boleh lebih tinggi dari harga normal', 400);
+            }
+
+            const itemReason = reqItem.reason || orderReason || '';
+            const overrideEntry = {
+                unit_price: newUnit,
+                reason: itemReason ? itemReason : null,
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                at: nowIso
+            };
+
+            const history = Array.isArray(snapshot.override_history) ? snapshot.override_history : [];
+            history.push({
+                ...overrideEntry,
+                prev_unit_price: oldUnit
+            });
+
+            const nextSnapshot = {
+                ...snapshot,
+                computed_unit_price: baseline,
+                final_unit_price: newUnit,
+                override: overrideEntry,
+                override_history: history
+            };
+
+            const lineDelta = round2((newUnit - oldUnit) * qty);
+            deltaTotal = round2(deltaTotal + lineDelta);
+            changes.push({
+                order_item_id: String(row.id),
+                product_id: String(row.product_id || ''),
+                qty,
+                before_unit_price: oldUnit,
+                after_unit_price: newUnit,
+                baseline_unit_price: baseline,
+                delta_total: lineDelta,
+                reason: overrideEntry.reason
+            });
+
+            await row.update({
+                price_at_purchase: newUnit,
+                pricing_snapshot: nextSnapshot
+            }, { transaction: t });
+        }
+
+        const prevTotal = round2(Number(order.total_amount || 0));
+        const prevDiscount = round2(Number(order.discount_amount || 0));
+        const nextTotal = Math.max(0, round2(prevTotal + deltaTotal));
+        const nextDiscount = Math.max(0, round2(prevDiscount - deltaTotal));
+
+        const prevPoints = Math.floor(Math.max(0, prevTotal) / 1000);
+        const nextPoints = Math.floor(Math.max(0, nextTotal) / 1000);
+        const pointsDelta = nextPoints - prevPoints;
+
+        const pricingNoteUpdate = orderReason ? orderReason : null;
+        await order.update({
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+            ...(pricingNoteUpdate !== null ? { pricing_override_note: pricingNoteUpdate } : {})
+        }, { transaction: t });
+
+        const customerId = String((order as any).customer_id || '').trim();
+        if (customerId && pointsDelta !== 0) {
+            const profile = await CustomerProfile.findOne({
+                where: { user_id: customerId },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            if (profile) {
+                const currentPoints = Number((profile as any).points || 0);
+                const updatedPoints = Math.max(0, currentPoints + pointsDelta);
+                await profile.update({ points: updatedPoints }, { transaction: t });
+            } else if (pointsDelta > 0) {
+                await CustomerProfile.create({
+                    user_id: customerId,
+                    tier: 'regular',
+                    credit_limit: 0,
+                    points: pointsDelta,
+                    saved_addresses: []
+                }, { transaction: t });
+            }
+        }
+
+        await recordOrderEvent({
+            transaction: t,
+            order_id: orderId,
+            event_type: 'order_pricing_adjusted',
+            actor_user_id: actorId,
+            actor_role: actorRole,
+            reason: orderReason || null,
+            payload: {
+                before: { total_amount: prevTotal, discount_amount: prevDiscount },
+                after: { total_amount: nextTotal, discount_amount: nextDiscount },
+                delta: { total_amount: deltaTotal, points_delta: pointsDelta },
+                items: changes
+            }
+        });
+
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'admin_order_pricing_adjusted_refresh_badges'
+        });
+
+        await t.commit();
+        res.json({
+            message: 'Harga nego berhasil diperbarui',
+            order_id: orderId,
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+            points_delta: pointsDelta
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        throw error;
+    }
+});
+
 export const getDashboardStats = asyncWrapper(async (req: Request, res: Response) => {
     const counts = await Order.findAll({
         attributes: [

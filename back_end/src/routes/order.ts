@@ -22,6 +22,7 @@ router.get('/admin/stats', authenticateToken, authorizeRoles('super_admin', 'adm
 router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getAllOrders);
 router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.getDeliveryEmployees);
 router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.updateOrderStatus);
+router.patch('/admin/:id/pricing', authenticateToken, authorizeRoles('super_admin', 'kasir'), OrderController.updateOrderPricing);
 router.post('/admin/:id/move-to-indent', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.moveOrderToIndent);
 
 export default router;

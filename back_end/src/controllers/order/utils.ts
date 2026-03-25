@@ -14,7 +14,12 @@ export const ORDER_STATUS_OPTIONS = ['pending', 'waiting_invoice', 'ready_to_shi
 export const ISSUE_SLA_HOURS = 24;
 export const ALLOWED_PAYMENT_METHODS = ['transfer_manual', 'cod', 'cash_store'] as const;
 export type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
-export type NormalizedCheckoutItem = { product_id: string; qty: number };
+export type NormalizedCheckoutItem = {
+    product_id: string;
+    qty: number;
+    unit_price_override?: number;
+    unit_price_override_reason?: string | null;
+};
 export type CheckoutShippingMethod = { code: string; name: string; fee: number };
 
 export const GENERIC_CUSTOMER_NAMES = new Set([
@@ -156,9 +161,22 @@ export const normalizeCheckoutItems = (value: unknown): NormalizedCheckoutItem[]
         if (!productId) return null;
         if (!Number.isInteger(qty) || qty <= 0) return null;
 
+        const overrideRaw = item.unit_price_override;
+        const override = overrideRaw === undefined || overrideRaw === null || overrideRaw === ''
+            ? undefined
+            : Number(overrideRaw);
+        if (override !== undefined) {
+            if (!Number.isFinite(override) || override <= 0) return null;
+        }
+
+        const reasonRaw = item.unit_price_override_reason;
+        const reason = typeof reasonRaw === 'string' ? reasonRaw.trim() : '';
+
         normalized.push({
             product_id: productId,
-            qty
+            qty,
+            ...(override !== undefined ? { unit_price_override: override } : {}),
+            unit_price_override_reason: reason ? reason : null
         });
     }
 
@@ -363,6 +381,5 @@ export const resolveEffectiveTierPricing = (
 
 
 // --- Admin Endpoints ---
-
 
 

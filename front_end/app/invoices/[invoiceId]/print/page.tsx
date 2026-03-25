@@ -18,6 +18,12 @@ type InvoiceItem = {
   previously_allocated_qty?: number;
   unit_price?: number;
   line_total?: number;
+  baseline_unit_price?: number;
+  final_unit_price?: number;
+  price_diff_per_unit?: number;
+  price_diff_total?: number;
+  override_reason_item?: string | null;
+  override_reason_order?: string | null;
   OrderItem?: {
     id?: string;
     order_id?: string;
@@ -84,8 +90,15 @@ function InvoicePrintPageContent() {
   const { invoiceId } = useParams();
   const searchParams = useSearchParams();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
   const [detail, setDetail] = useState<InvoiceDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showAdminDiff, setShowAdminDiff] = useState(false);
+
+  const isAdminRole = useMemo(() => {
+    const role = String(user?.role || '').trim();
+    return ['super_admin', 'kasir', 'admin_finance', 'admin_gudang'].includes(role);
+  }, [user?.role]);
 
   const load = useCallback(async () => {
     if (!isAuthenticated || !invoiceId) {
@@ -277,7 +290,20 @@ function InvoicePrintPageContent() {
 
                 <div className="mt-6 border border-slate-200 rounded-2xl overflow-hidden">
                   <div className="bg-slate-900 text-white px-4 py-3">
-                    <p className="text-xs font-bold uppercase tracking-[0.2em]">Rincian Barang</p>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em]">Rincian Barang</p>
+                      {isAdminRole ? (
+                        <label className="inline-flex items-center gap-2 text-[10px] font-bold text-white/80">
+                          <input
+                            type="checkbox"
+                            checked={showAdminDiff}
+                            onChange={(e) => setShowAdminDiff(e.target.checked)}
+                            className="h-4 w-4 accent-emerald-500"
+                          />
+                          Tampilkan selisih harga (Admin)
+                        </label>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-xs">
@@ -339,6 +365,65 @@ function InvoicePrintPageContent() {
                     </table>
                   </div>
                 </div>
+
+                {isAdminRole && showAdminDiff ? (
+                  <div className="mt-4 border border-emerald-200 rounded-2xl overflow-hidden">
+                    <div className="bg-emerald-50 px-4 py-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-800">Selisih Harga (Admin)</p>
+                      <p className="text-[11px] text-emerald-700 mt-1">
+                        Selisih dihitung dari baseline (harga normal saat order dibuat) dikurangi harga final invoice.
+                      </p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-white text-emerald-800 uppercase tracking-wider text-[10px]">
+                          <tr>
+                            <th className="px-4 py-3 text-left">Produk</th>
+                            <th className="px-4 py-3 text-right">Qty</th>
+                            <th className="px-4 py-3 text-right">Baseline</th>
+                            <th className="px-4 py-3 text-right">Final</th>
+                            <th className="px-4 py-3 text-right">Selisih/Unit</th>
+                            <th className="px-4 py-3 text-right">Selisih Total</th>
+                            <th className="px-4 py-3 text-left">Keterangan</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {items.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="px-4 py-6 text-center text-emerald-700/70">
+                                Tidak ada item di invoice ini.
+                              </td>
+                            </tr>
+                          ) : (
+                            items.map((item, idx: number) => {
+                              const product = item.OrderItem?.Product || {};
+                              const qty = Number(item.invoice_qty ?? item.qty ?? 0);
+                              const baseline = Number(item.baseline_unit_price ?? item.final_unit_price ?? item.unit_price ?? 0);
+                              const finalPrice = Number(item.final_unit_price ?? item.unit_price ?? 0);
+                              const diffPer = Number(item.price_diff_per_unit ?? (baseline - finalPrice));
+                              const diffTotal = Number(item.price_diff_total ?? (diffPer * qty));
+                              const reason = String(item.override_reason_item || item.override_reason_order || '').trim() || '-';
+                              return (
+                                <tr key={`diff-${String(item.id || item.OrderItem?.id || idx)}`} className="border-t border-emerald-100 bg-white">
+                                  <td className="px-4 py-3">
+                                    <p className="font-semibold text-slate-900">{String(product.name || 'Produk')}</p>
+                                    <p className="text-[10px] text-slate-500">SKU: {String(product.sku || '-')}</p>
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-slate-700">{qty}</td>
+                                  <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(baseline)}</td>
+                                  <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(finalPrice)}</td>
+                                  <td className="px-4 py-3 text-right font-semibold text-emerald-800">{formatCurrency(diffPer)}</td>
+                                  <td className="px-4 py-3 text-right font-black text-emerald-900">{formatCurrency(diffTotal)}</td>
+                                  <td className="px-4 py-3 text-slate-700">{reason}</td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr] gap-4">
                   <div className="rounded-2xl border border-slate-200 p-4">

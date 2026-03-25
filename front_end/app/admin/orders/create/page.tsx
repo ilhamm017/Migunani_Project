@@ -48,6 +48,7 @@ type ProductOption = {
     image_url?: string;
     stock_quantity?: number | string;
     price?: number | string;
+    base_price?: number | string;
     varian_harga?: unknown;
 };
 
@@ -55,6 +56,8 @@ type CartItem = {
     product_id: string;
     product: ProductOption;
     qty: number;
+    unit_price_override?: number | null;
+    unit_price_override_reason?: string;
 };
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
@@ -68,6 +71,7 @@ function ManualOrderContent() {
     const chatSessionIdParam = searchParams.get('chatSessionId') || '';
     const isChatDrivenOrder = Boolean(chatSessionIdParam && customerIdParam);
     const canManageShippingConfig = ['super_admin', 'kasir'].includes(String(user?.role || ''));
+    const canOverridePricing = ['super_admin', 'kasir'].includes(String(user?.role || '').trim());
 
     // Customer Search State
     const [customerSearch, setCustomerSearch] = useState('');
@@ -84,6 +88,7 @@ function ManualOrderContent() {
     const [cart, setCart] = useState<CartItem[]>([]);
     const [paymentMethod, setPaymentMethod] = useState<PaymentMethodUi>('cash_store');
     const [submitting, setSubmitting] = useState(false);
+    const [orderOverrideReason, setOrderOverrideReason] = useState('');
     const [prefillingCustomer, setPrefillingCustomer] = useState(false);
     const [chatContextLoading, setChatContextLoading] = useState(false);
     const [chatContextMessages, setChatContextMessages] = useState<ChatContextMessage[]>([]);
@@ -334,20 +339,28 @@ function ManualOrderContent() {
             return Math.max(0, Math.round((normalizedBasePrice * (1 - discountPct / 100)) * 100) / 100);
         }
 
-        return normalizedBasePrice;
-    };
+	        return normalizedBasePrice;
+	    };
 
-    const addToCart = (product: ProductOption) => {
-        setCart(prev => {
-            const existing = prev.find(item => item.product_id === product.id);
-            if (existing) {
-                return prev.map(item => item.product_id === product.id ? { ...item, qty: item.qty + 1 } : item);
-            }
-            return [...prev, { product_id: product.id, product, qty: 1 }];
-        });
-        setProductSearch('');
-        setProducts([]);
-    };
+	    const getDealUnitPrice = (item: CartItem) => {
+	        const overrideRaw = item?.unit_price_override;
+	        const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
+	        if (Number.isFinite(override) && override > 0) return Math.max(0, override);
+	        return Math.max(0, getProductPrice(item.product));
+	    };
+	
+	    const addToCart = (product: ProductOption) => {
+	        setCart(prev => {
+	            const existing = prev.find(item => item.product_id === product.id);
+	            if (existing) {
+	                return prev.map(item => item.product_id === product.id ? { ...item, qty: item.qty + 1 } : item);
+	            }
+	            const baseline = getProductPrice(product);
+	            return [...prev, { product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '' }];
+	        });
+	        setProductSearch('');
+	        setProducts([]);
+	    };
 
     const removeFromCart = (productId: string) => {
         setCart(prev => prev.filter(item => item.product_id !== productId));
@@ -363,9 +376,9 @@ function ManualOrderContent() {
         }));
     };
 
-    const calculateSubtotal = () => {
-        return cart.reduce((sum, item) => sum + (getProductPrice(item.product) * item.qty), 0);
-    };
+	    const calculateSubtotal = () => {
+	        return cart.reduce((sum, item) => sum + (getDealUnitPrice(item) * item.qty), 0);
+	    };
 
     const selectedShippingMethod = shippingMethods.find((item) => item.code === shippingMethodCode) || null;
     const shippingFee = Number(selectedShippingMethod?.fee || 0);
@@ -411,23 +424,47 @@ function ManualOrderContent() {
         }
     };
 
-    const handleSubmit = async () => {
-        if (!selectedCustomer) return alert('Pilih customer terlebih dahulu');
-        if (selectedCustomer.status !== 'active') return alert('Customer sedang diblokir');
-        if (cart.length === 0) return alert('Keranjang kosong');
-        if (shippingMethods.length > 0 && !shippingMethodCode) return alert('Pilih jenis pengiriman terlebih dahulu');
+	    const handleSubmit = async () => {
+	        if (!selectedCustomer) return alert('Pilih customer terlebih dahulu');
+	        if (selectedCustomer.status !== 'active') return alert('Customer sedang diblokir');
+	        if (cart.length === 0) return alert('Keranjang kosong');
+	        if (shippingMethods.length > 0 && !shippingMethodCode) return alert('Pilih jenis pengiriman terlebih dahulu');
 
-        if (!confirm('Buat pesanan ini?')) return;
+	        if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
+	            const invalid = cart.find((item) => {
+	                const deal = getDealUnitPrice(item);
+	                const costRaw = Number(item?.product?.base_price);
+	                if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
+	                return deal < costRaw;
+	            });
+	            if (invalid) {
+	                return alert('Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
+	            }
+	        }
+	
+	        if (!confirm('Buat pesanan ini?')) return;
 
-        setSubmitting(true);
-        try {
-            const payload: Parameters<typeof api.orders.checkout>[0] = {
-                customer_id: selectedCustomer.id, // Only works if admin
-                items: cart.map(item => ({ product_id: item.product.id, qty: item.qty })),
-                shipping_method_code: shippingMethodCode || undefined,
-                from_cart: false,
-                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {})
-            };
+	        setSubmitting(true);
+	        try {
+	            const orderReason = orderOverrideReason.trim();
+	            const payload: Parameters<typeof api.orders.checkout>[0] = {
+	                customer_id: selectedCustomer.id, // Only works if admin
+	                items: cart.map(item => {
+	                    const baseline = Math.max(0, getProductPrice(item.product));
+	                    const deal = Math.max(0, getDealUnitPrice(item));
+	                    const itemReason = String(item.unit_price_override_reason || '').trim();
+	                    return {
+	                        product_id: item.product.id,
+	                        qty: item.qty,
+	                        ...(canOverridePricing && deal > 0 && deal < baseline ? { unit_price_override: deal } : {}),
+	                        ...(canOverridePricing && itemReason ? { unit_price_override_reason: itemReason } : {})
+	                    };
+	                }),
+	                shipping_method_code: shippingMethodCode || undefined,
+	                from_cart: false,
+	                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {}),
+	                ...(canOverridePricing && orderReason ? { price_override_reason: orderReason } : {})
+	            };
 
             await api.orders.checkout(payload);
             alert('Pesanan berhasil dibuat!');
@@ -713,20 +750,57 @@ function ManualOrderContent() {
                                     <ShoppingCart size={48} className="mx-auto mb-2 opacity-20" />
                                     <p>Belum ada produk dipilih</p>
                                 </div>
-                            ) : (
-                                cart.map(item => (
-                                    <div key={item.product_id} className="flex gap-3 relative group">
-                                        <div className="flex-1">
-                                            <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.product.name}</p>
-                                            <p className="text-xs text-slate-500">
-                                                {formatCurrency(getProductPrice(item.product))} x {item.qty}
-                                            </p>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <button onClick={() => updateQty(item.product_id, -1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">-</button>
-                                            <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
-                                            <button onClick={() => updateQty(item.product_id, 1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">+</button>
-                                        </div>
+	                            ) : (
+	                                cart.map(item => (
+	                                    <div key={item.product_id} className="flex gap-3 relative group">
+	                                        <div className="flex-1">
+	                                            <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.product.name}</p>
+	                                            <div className="mt-1 space-y-1">
+	                                                <p className="text-xs text-slate-500">
+	                                                    Harga normal {formatCurrency(getProductPrice(item.product))} x {item.qty}
+	                                                </p>
+	                                                {canOverridePricing ? (
+	                                                    <div className="flex flex-wrap items-center gap-2">
+	                                                        <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
+	                                                        <input
+	                                                            type="number"
+	                                                            min={0}
+	                                                            value={Number(item.unit_price_override ?? getProductPrice(item.product)) || 0}
+	                                                            onChange={(e) => {
+	                                                                const raw = e.target.value;
+	                                                                const next = raw === '' ? null : Number(raw);
+	                                                                setCart((prev) => prev.map((row) => row.product_id === item.product_id
+	                                                                    ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
+	                                                                    : row));
+	                                                            }}
+	                                                            className="w-28 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+	                                                        />
+	                                                        <input
+	                                                            type="text"
+	                                                            placeholder="Keterangan (opsional)"
+	                                                            value={String(item.unit_price_override_reason || '')}
+	                                                            onChange={(e) => {
+	                                                                const next = e.target.value;
+	                                                                setCart((prev) => prev.map((row) => row.product_id === item.product_id
+	                                                                    ? { ...row, unit_price_override_reason: next }
+	                                                                    : row));
+	                                                            }}
+	                                                            className="flex-1 min-w-[140px] rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+	                                                        />
+	                                                    </div>
+	                                                ) : null}
+	                                                {canOverridePricing ? (
+	                                                    <p className="text-[10px] text-slate-500">
+	                                                        Dipakai: <span className="font-bold">{formatCurrency(getDealUnitPrice(item))}</span> per item
+	                                                    </p>
+	                                                ) : null}
+	                                            </div>
+	                                        </div>
+	                                        <div className="flex items-center gap-2">
+	                                            <button onClick={() => updateQty(item.product_id, -1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">-</button>
+	                                            <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
+	                                            <button onClick={() => updateQty(item.product_id, 1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">+</button>
+	                                        </div>
                                         <button
                                             onClick={() => removeFromCart(item.product_id)}
                                             className="text-rose-500 hover:text-rose-700 p-1"
@@ -736,13 +810,25 @@ function ManualOrderContent() {
                                     </div>
                                 ))
                             )}
-                        </div>
+	                        </div>
 
-                        <div className="pt-4 border-t border-slate-100 space-y-4">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
-                                <select
-                                    value={paymentMethod}
+	                        <div className="pt-4 border-t border-slate-100 space-y-4">
+	                            {canOverridePricing ? (
+	                                <div>
+	                                    <label className="block text-xs font-bold text-slate-500 mb-1">Keterangan Nego (Opsional)</label>
+	                                    <textarea
+	                                        value={orderOverrideReason}
+	                                        onChange={(e) => setOrderOverrideReason(e.target.value)}
+	                                        className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm"
+	                                        rows={2}
+	                                        placeholder="Mis: harga khusus untuk kenalan / diskon nego..."
+	                                    />
+	                                </div>
+	                            ) : null}
+	                            <div>
+	                                <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
+	                                <select
+	                                    value={paymentMethod}
                                     onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodUi)}
                                     className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
                                 >

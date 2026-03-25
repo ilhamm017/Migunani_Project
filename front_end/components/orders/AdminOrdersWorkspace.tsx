@@ -518,6 +518,7 @@ export default function AdminOrdersWorkspace({
   const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
+  const canEditPricing = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canMoveToIndentAction = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
@@ -525,6 +526,15 @@ export default function AdminOrdersWorkspace({
   const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang', [normalizedRole]);
   type OrderDetailsMap = Record<string, OrderDetailResponse | undefined>;
   type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
+  type PricingEditorItem = {
+    order_item_id: string;
+    product_name: string;
+    sku: string;
+    qty: number;
+    baseline_unit_price: number;
+    current_unit_price: number;
+    cost_at_purchase: number | null;
+  };
 
   const [orders, setOrders] = useState<AdminOrderListRow[]>([]);
   const [backorderIds, setBackorderIds] = useState<Set<string>>(new Set());
@@ -549,6 +559,14 @@ export default function AdminOrdersWorkspace({
   const [selectedWarehouseInvoiceGroups, setSelectedWarehouseInvoiceGroups] = useState<string[]>([]);
   const [warehouseBatchAssigning, setWarehouseBatchAssigning] = useState(false);
   const [warehouseAssignConfirm, setWarehouseAssignConfirm] = useState<WarehouseAssignConfirmState | null>(null);
+  const [pricingEditor, setPricingEditor] = useState<{
+    orderId: string;
+    orderReason: string;
+    items: PricingEditorItem[];
+    drafts: Record<string, { unit_price_override: string; reason: string }>;
+    saving: boolean;
+    error: string;
+  } | null>(null);
   const ordersRef = useRef<AdminOrderListRow[]>([]);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
@@ -921,6 +939,135 @@ export default function AdminOrdersWorkspace({
     });
     void loadOrderDetails([order]);
   }, [loadOrderDetails]);
+
+  const openPricingEditor = useCallback(async (orderIdRaw: string) => {
+    const orderId = String(orderIdRaw || '').trim();
+    if (!orderId) return;
+    if (!canEditPricing) return;
+
+    const toFinite = (value: unknown) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    };
+    const toObjectOrEmpty = (value: unknown): Record<string, any> => {
+      if (!value) return {};
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return {};
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, any>;
+        } catch { }
+        return {};
+      }
+      if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+      return {};
+    };
+
+    try {
+      const cached = orderDetails[orderId];
+      const detail = cached || (await api.orders.getOrderById(orderId)).data;
+      if (!cached && detail && typeof detail === 'object') {
+        setOrderDetails((prev) => ({ ...prev, [orderId]: detail }));
+      }
+
+      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+      if (orderItems.length === 0) {
+        alert('Order belum memiliki item.');
+        return;
+      }
+
+      const items: PricingEditorItem[] = orderItems.map((row: any) => {
+        const snapshot = toObjectOrEmpty(row?.pricing_snapshot);
+        const baseline = toFinite(snapshot?.computed_unit_price ?? snapshot?.computedUnitPrice) ?? toFinite(row?.price_at_purchase) ?? 0;
+        const current = toFinite(row?.price_at_purchase) ?? 0;
+        const cost = toFinite(row?.cost_at_purchase);
+        const product = row?.Product || {};
+        return {
+          order_item_id: String(row?.id || ''),
+          product_name: String(product?.name || 'Produk'),
+          sku: String(product?.sku || '-'),
+          qty: Math.max(0, Number(row?.qty || 0)),
+          baseline_unit_price: Math.max(0, baseline),
+          current_unit_price: Math.max(0, current),
+          cost_at_purchase: cost !== null ? Math.max(0, cost) : null,
+        };
+      }).filter((row: PricingEditorItem) => Boolean(row.order_item_id));
+
+      const drafts: Record<string, { unit_price_override: string; reason: string }> = {};
+      items.forEach((row) => {
+        drafts[row.order_item_id] = { unit_price_override: String(row.current_unit_price || 0), reason: '' };
+      });
+
+      setPricingEditor({
+        orderId,
+        orderReason: String((detail as any)?.pricing_override_note || '').trim(),
+        items,
+        drafts,
+        saving: false,
+        error: ''
+      });
+    } catch (error: unknown) {
+      console.error('Failed to open pricing editor:', error);
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal memuat detail order.')
+        : 'Gagal memuat detail order.';
+      alert(message);
+    }
+  }, [canEditPricing, orderDetails]);
+
+  const savePricingEditor = useCallback(async () => {
+    if (!pricingEditor) return;
+    if (!canEditPricing) return;
+
+    const orderId = pricingEditor.orderId;
+    const toFinite = (value: unknown) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const payloadItems = pricingEditor.items.map((item) => {
+      const draft = pricingEditor.drafts[item.order_item_id];
+      const unitPrice = toFinite(draft?.unit_price_override);
+      return {
+        order_item_id: item.order_item_id,
+        unit_price_override: unitPrice ?? 0,
+        ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
+      };
+    });
+
+    if (payloadItems.some((row) => !row.order_item_id)) {
+      setPricingEditor((prev) => prev ? { ...prev, error: 'Order item tidak valid.' } : prev);
+      return;
+    }
+    if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
+      setPricingEditor((prev) => prev ? { ...prev, error: 'Harga deal harus > 0.' } : prev);
+      return;
+    }
+
+    setPricingEditor((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
+    try {
+      const reason = pricingEditor.orderReason.trim();
+      await api.admin.orderManagement.updatePricing(orderId, {
+        items: payloadItems,
+        ...(reason ? { reason } : {})
+      });
+      await loadOrders();
+
+      try {
+        const refreshed = await api.orders.getOrderById(orderId);
+        setOrderDetails((prev) => ({ ...prev, [orderId]: refreshed.data }));
+      } catch { }
+
+      setPricingEditor(null);
+    } catch (error: unknown) {
+      console.error('Failed to save pricing editor:', error);
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan harga nego.')
+        : 'Gagal menyimpan harga nego.';
+      setPricingEditor((prev) => prev ? { ...prev, saving: false, error: message } : prev);
+    }
+  }, [pricingEditor, canEditPricing, loadOrders]);
 
   useEffect(() => {
     if (!selectedGroup) return;
@@ -2091,8 +2238,8 @@ export default function AdminOrdersWorkspace({
 
   return (
     <div className="p-5 pb-24 space-y-5">
-      {allocationConfirm && allocationConfirmMeta && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+	      {allocationConfirm && allocationConfirmMeta && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
           <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
             <div className="border-b border-slate-200 px-5 pb-4 pt-5">
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">
@@ -2321,9 +2468,124 @@ export default function AdminOrdersWorkspace({
             </div>
           </div>
         </div>
-      )}
-      {warehouseAssignConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+	      )}
+	      {pricingEditor && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+	          <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+	            <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+	              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Harga Nego</p>
+	              <h3 className="mt-2 text-lg font-black text-slate-900">Edit harga deal sebelum invoice</h3>
+	              <p className="mt-1 text-xs text-slate-500">Order #{pricingEditor.orderId}</p>
+	            </div>
+
+	            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+	              <div>
+	                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Keterangan Nego (Opsional)</label>
+	                <textarea
+	                  value={pricingEditor.orderReason}
+	                  onChange={(e) => setPricingEditor((prev) => prev ? { ...prev, orderReason: e.target.value } : prev)}
+	                  rows={2}
+	                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+	                  placeholder="Mis: harga khusus kenalan / diskon nego..."
+	                />
+	                <p className="mt-1 text-[11px] text-slate-500">
+	                  Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).
+	                </p>
+	              </div>
+
+	              {pricingEditor.error ? (
+	                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+	                  {pricingEditor.error}
+	                </div>
+	              ) : null}
+
+	              <div className="space-y-2">
+	                {pricingEditor.items.map((row) => {
+	                  const draft = pricingEditor.drafts[row.order_item_id];
+	                  return (
+	                    <div key={row.order_item_id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+	                      <div className="flex flex-wrap items-start justify-between gap-3">
+	                        <div className="min-w-0">
+	                          <p className="text-xs font-black text-slate-900 truncate">{row.product_name}</p>
+	                          <p className="text-[10px] text-slate-500 truncate">SKU {row.sku} • Qty {row.qty}</p>
+	                          <p className="mt-1 text-[10px] text-slate-500">
+	                            Baseline {formatCurrency(row.baseline_unit_price)} • Saat ini {formatCurrency(row.current_unit_price)}
+	                            {row.cost_at_purchase !== null ? ` • Modal ${formatCurrency(row.cost_at_purchase)}` : ''}
+	                          </p>
+	                        </div>
+	                        <div className="flex flex-col items-end gap-2">
+	                          <div className="flex items-center gap-2">
+	                            <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
+	                            <input
+	                              type="number"
+	                              min={0}
+	                              value={draft?.unit_price_override ?? ''}
+	                              onChange={(e) => {
+	                                const value = e.target.value;
+	                                setPricingEditor((prev) => {
+	                                  if (!prev) return prev;
+	                                  return {
+	                                    ...prev,
+	                                    drafts: {
+	                                      ...prev.drafts,
+	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', reason: '' }), unit_price_override: value }
+	                                    }
+	                                  };
+	                                });
+	                              }}
+	                              className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+	                            />
+	                          </div>
+	                          <input
+	                            type="text"
+	                            placeholder="Keterangan item (opsional)"
+	                            value={draft?.reason ?? ''}
+	                            onChange={(e) => {
+	                              const value = e.target.value;
+	                              setPricingEditor((prev) => {
+	                                if (!prev) return prev;
+	                                return {
+	                                  ...prev,
+	                                  drafts: {
+	                                    ...prev.drafts,
+	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', reason: '' }), reason: value }
+	                                  }
+	                                };
+	                              });
+	                            }}
+	                            className="w-60 max-w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+	                          />
+	                        </div>
+	                      </div>
+	                    </div>
+	                  );
+	                })}
+	              </div>
+	            </div>
+
+	            <div className="border-t border-slate-200 bg-white px-5 py-4 flex flex-wrap items-center justify-end gap-2">
+	              <button
+	                type="button"
+	                onClick={() => setPricingEditor(null)}
+	                disabled={pricingEditor.saving}
+	                className="btn-3d rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-bold text-slate-700 disabled:opacity-50"
+	              >
+	                Batal
+	              </button>
+	              <button
+	                type="button"
+	                onClick={() => void savePricingEditor()}
+	                disabled={pricingEditor.saving}
+	                className="btn-3d rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+	              >
+	                {pricingEditor.saving ? 'Menyimpan...' : 'Simpan Harga'}
+	              </button>
+	            </div>
+	          </div>
+	        </div>
+	      )}
+	      {warehouseAssignConfirm && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
           <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
             <div className="border-b border-slate-200 px-5 pb-4 pt-5">
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600">Verifikasi Tunjuk Driver</p>
@@ -3581,22 +3843,35 @@ export default function AdminOrdersWorkspace({
                               {showInvoiceableAmount && (
                                 <p className="text-[10px] font-bold text-emerald-700">Nilai siap invoice</p>
                               )}
-                              {canOpenWarehouseAction && (
-                                <Link
-                                  href={`/admin/orders/${warehouseTargetId}`}
-                                  className={`mt-1 text-[10px] font-black uppercase transition-all ${warehouseActionLabel.includes('Tunjuk Driver')
-                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
-                                    : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
-                                    }`}
-                                >
-                                  {warehouseActionLabel}
-                                </Link>
-                              )}
-                              {!canOpenWarehouseAction && canManageWarehouseFlow && orderStatus === 'ready_to_ship' && invoiceGroupCount > 1 && (
-                                <p className="mt-1 text-[10px] text-amber-600">
-                                  Invoice gabungan ({invoiceGroupCount} order), proses dari invoice (ref order #{invoicePrimaryOrderDisplayId}).
-                                </p>
-                              )}
+	                              {canOpenWarehouseAction && (
+	                                <Link
+	                                  href={`/admin/orders/${warehouseTargetId}`}
+	                                  className={`mt-1 text-[10px] font-black uppercase transition-all ${warehouseActionLabel.includes('Tunjuk Driver')
+	                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
+	                                    : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
+	                                    }`}
+	                                >
+	                                  {warehouseActionLabel}
+	                                </Link>
+	                              )}
+	                              {canEditPricing
+	                                && !invoiceId
+	                                && !invoiceNumber
+	                                && ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(String(rawOrderStatus || '').trim().toLowerCase())
+	                                && (
+	                                  <button
+	                                    type="button"
+	                                    onClick={() => void openPricingEditor(String(order.id))}
+	                                    className="btn-3d mt-1 inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
+	                                  >
+	                                    Harga Nego
+	                                  </button>
+	                                )}
+	                              {!canOpenWarehouseAction && canManageWarehouseFlow && orderStatus === 'ready_to_ship' && invoiceGroupCount > 1 && (
+	                                <p className="mt-1 text-[10px] text-amber-600">
+	                                  Invoice gabungan ({invoiceGroupCount} order), proses dari invoice (ref order #{invoicePrimaryOrderDisplayId}).
+	                                </p>
+	                              )}
                             </div>
                           </div>
                           {detail && totals.orderedQty > 0 && (

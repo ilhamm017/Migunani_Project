@@ -13,6 +13,7 @@ interface OrderEventAttributes {
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
+    | 'order_pricing_adjusted'
     | 'order_status_changed';
     payload: unknown | null;
     reason?: string | null;
@@ -35,6 +36,7 @@ class OrderEvent extends Model<OrderEventAttributes, OrderEventCreationAttribute
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
+    | 'order_pricing_adjusted'
     | 'order_status_changed';
     declare payload: unknown | null;
     declare reason: string | null;
@@ -73,6 +75,7 @@ OrderEvent.init(
                 'backorder_opened',
                 'backorder_reallocated',
                 'backorder_canceled',
+                'order_pricing_adjusted',
                 'order_status_changed'
             ),
             allowNull: false,

@@ -29,17 +29,22 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id; // Authenticated user
         const userRole = req.user!.role;
-        const { items, payment_method, from_cart, customer_id, source, shipping_method_code, promo_code, shipping_address, customer_note } = req.body;
+        const { items, payment_method, from_cart, customer_id, source, shipping_method_code, promo_code, shipping_address, customer_note, price_override_reason } = req.body;
         // items: [{ product_id, qty }]
         // payment_method: 'transfer_manual' | 'cod'
         // from_cart: boolean
         // source: 'web' | 'whatsapp'
         // promo_code: string
 
+        const isAdminOrderCreator = ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(userRole);
         let targetCustomerId = userId;
-        if (['super_admin', 'admin_gudang', 'admin_finance', 'kasir'].includes(userRole) && customer_id) {
+        if (isAdminOrderCreator && customer_id) {
             targetCustomerId = customer_id;
         }
+        const canOverridePriceOnManualOrder = ['super_admin', 'kasir'].includes(userRole) && Boolean(customer_id);
+        const orderLevelOverrideReason = (canOverridePriceOnManualOrder && typeof price_override_reason === 'string')
+            ? String(price_override_reason).trim()
+            : '';
 
         const useCart = from_cart === true || String(from_cart || '').toLowerCase() === 'true';
         const requestedPaymentMethod = typeof payment_method === 'string'
@@ -72,7 +77,7 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                 throw new CustomError('Cart is empty', 400);
             }
 
-            // Map CartItems to standard items format
+            // Map CartItems to standard items format (no price override from cart)
             finalItems = cart.CartItems.map((ci: any) => ({
                 product_id: ci.product_id,
                 qty: Number(ci.qty)
@@ -134,11 +139,45 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             // Calculate Price (Snapshot)
             const basePrice = Number(product.price);
             const pricing = resolveEffectiveTierPricing(basePrice, String(userTier || 'regular'), product.varian_harga, (product as any).Category);
-            const priceAtPurchase = pricing.finalPrice;
+            const computedUnitPrice = pricing.finalPrice;
 
             const costAtPurchase = Number(product.base_price);
-            const subtotal = priceAtPurchase * item.qty;
-            const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - priceAtPurchase) * item.qty) * 100) / 100);
+            const overrideUnitPrice = (canOverridePriceOnManualOrder && typeof (item as any)?.unit_price_override === 'number')
+                ? Number((item as any).unit_price_override)
+                : null;
+            const itemReasonRaw = typeof (item as any)?.unit_price_override_reason === 'string'
+                ? String((item as any).unit_price_override_reason).trim()
+                : '';
+            const effectiveReason = itemReasonRaw || orderLevelOverrideReason || null;
+
+            let finalUnitPrice = computedUnitPrice;
+            let overridePayload: any = null;
+            if (overrideUnitPrice !== null) {
+                if (!Number.isFinite(overrideUnitPrice) || overrideUnitPrice <= 0) {
+                    await t.rollback();
+                    throw new CustomError('Harga deal tidak valid', 400);
+                }
+                // Negotiation is intended to lower price, not raise it.
+                if (overrideUnitPrice > computedUnitPrice) {
+                    await t.rollback();
+                    throw new CustomError('Harga deal tidak boleh lebih tinggi dari harga normal', 400);
+                }
+                if (userRole === 'kasir' && Number.isFinite(costAtPurchase) && overrideUnitPrice < costAtPurchase) {
+                    await t.rollback();
+                    throw new CustomError('Kasir tidak boleh menurunkan harga di bawah modal', 400);
+                }
+                finalUnitPrice = overrideUnitPrice;
+                overridePayload = {
+                    unit_price: overrideUnitPrice,
+                    reason: effectiveReason,
+                    actor_user_id: String(req.user?.id || ''),
+                    actor_role: String(req.user?.role || ''),
+                    at: new Date().toISOString()
+                };
+            }
+
+            const subtotal = finalUnitPrice * item.qty;
+            const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - finalUnitPrice) * item.qty) * 100) / 100);
 
             totalAmount += subtotal;
             totalDiscountAmount += lineDiscount;
@@ -146,7 +185,7 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             orderItemsData.push({
                 product_id: product.id,
                 qty: item.qty,
-                price_at_purchase: priceAtPurchase,
+                price_at_purchase: finalUnitPrice,
                 cost_at_purchase: costAtPurchase,
                 pricing_snapshot: {
                     tier: String(userTier || 'regular'),
@@ -154,7 +193,11 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                     discount_pct: pricing.discountPct,
                     discount_source: pricing.discountSource,
                     category_id: Number((product as any).category_id || 0) || null,
-                    category_name: String((product as any)?.Category?.name || '').trim() || null
+                    category_name: String((product as any)?.Category?.name || '').trim() || null,
+                    computed_unit_price: computedUnitPrice,
+                    final_unit_price: finalUnitPrice,
+                    override: overridePayload,
+                    override_history: overridePayload ? [overridePayload] : []
                 }
             });
         }
@@ -246,6 +289,7 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             payment_method: resolvedPaymentMethod,
             total_amount: totalAmount,
             discount_amount: totalDiscountAmount,
+            pricing_override_note: orderLevelOverrideReason || null,
             expiry_date: expiryDate,
             stock_released: false,
             shipping_method_code: selectedShippingMethod?.code || null,

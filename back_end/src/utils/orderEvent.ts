@@ -8,6 +8,7 @@ type OrderEventType =
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
+    | 'order_pricing_adjusted'
     | 'order_status_changed';
 
 type RecordOrderEventInput = {
@@ -40,4 +41,3 @@ export const recordOrderEvent = async (input: RecordOrderEventInput) => {
         transaction: input.transaction
     });
 };
-
