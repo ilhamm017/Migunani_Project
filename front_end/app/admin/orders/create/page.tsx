@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal } from 'lucide-react';
@@ -62,6 +62,13 @@ type CartItem = {
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
 
+type SubmitPopupTone = 'success' | 'error' | 'info';
+type SubmitPopupState = {
+    tone: SubmitPopupTone;
+    title: string;
+    message: string;
+} | null;
+
 function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
@@ -72,6 +79,37 @@ function ManualOrderContent() {
     const isChatDrivenOrder = Boolean(chatSessionIdParam && customerIdParam);
     const canManageShippingConfig = ['super_admin', 'kasir'].includes(String(user?.role || ''));
     const canOverridePricing = ['super_admin', 'kasir'].includes(String(user?.role || '').trim());
+
+    const [submitPopup, setSubmitPopup] = useState<SubmitPopupState>(null);
+    const submitPopupTimerRef = useRef<number | null>(null);
+
+    const dismissSubmitPopup = useCallback(() => {
+        setSubmitPopup(null);
+        if (submitPopupTimerRef.current) {
+            window.clearTimeout(submitPopupTimerRef.current);
+            submitPopupTimerRef.current = null;
+        }
+    }, []);
+
+    const showSubmitPopup = useCallback((tone: SubmitPopupTone, title: string, message: string, ttlMs = 4500) => {
+        setSubmitPopup({ tone, title, message });
+        if (submitPopupTimerRef.current) {
+            window.clearTimeout(submitPopupTimerRef.current);
+        }
+        submitPopupTimerRef.current = window.setTimeout(() => {
+            setSubmitPopup(null);
+            submitPopupTimerRef.current = null;
+        }, ttlMs);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (submitPopupTimerRef.current) {
+                window.clearTimeout(submitPopupTimerRef.current);
+                submitPopupTimerRef.current = null;
+            }
+        };
+    }, []);
 
     // Customer Search State
     const [customerSearch, setCustomerSearch] = useState('');
@@ -86,7 +124,7 @@ function ManualOrderContent() {
 
     // Cart State
     const [cart, setCart] = useState<CartItem[]>([]);
-    const [paymentMethod, setPaymentMethod] = useState<PaymentMethodUi>('cash_store');
+    const [paymentMethod, setPaymentMethod] = useState<PaymentMethodUi>('follow_driver');
     const [submitting, setSubmitting] = useState(false);
     const [orderOverrideReason, setOrderOverrideReason] = useState('');
     const [prefillingCustomer, setPrefillingCustomer] = useState(false);
@@ -424,25 +462,25 @@ function ManualOrderContent() {
         }
     };
 
-	    const handleSubmit = async () => {
-	        if (!selectedCustomer) return alert('Pilih customer terlebih dahulu');
-	        if (selectedCustomer.status !== 'active') return alert('Customer sedang diblokir');
-	        if (cart.length === 0) return alert('Keranjang kosong');
-	        if (shippingMethods.length > 0 && !shippingMethodCode) return alert('Pilih jenis pengiriman terlebih dahulu');
+		    const handleSubmit = async () => {
+		        if (!selectedCustomer) return showSubmitPopup('error', 'Gagal', 'Pilih customer terlebih dahulu');
+		        if (selectedCustomer.status !== 'active') return showSubmitPopup('error', 'Gagal', 'Customer sedang diblokir');
+		        if (cart.length === 0) return showSubmitPopup('error', 'Gagal', 'Keranjang kosong');
+		        if (shippingMethods.length > 0 && !shippingMethodCode) return showSubmitPopup('error', 'Gagal', 'Pilih jenis pengiriman terlebih dahulu');
 
-	        if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
-	            const invalid = cart.find((item) => {
-	                const deal = getDealUnitPrice(item);
-	                const costRaw = Number(item?.product?.base_price);
+		        if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
+		            const invalid = cart.find((item) => {
+		                const deal = getDealUnitPrice(item);
+		                const costRaw = Number(item?.product?.base_price);
 	                if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
 	                return deal < costRaw;
-	            });
-	            if (invalid) {
-	                return alert('Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
-	            }
-	        }
-	
-	        if (!confirm('Buat pesanan ini?')) return;
+		            });
+		            if (invalid) {
+		                return showSubmitPopup('error', 'Tidak Diizinkan', 'Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
+		            }
+		        }
+		
+		        if (!confirm('Buat pesanan ini?')) return;
 
 	        setSubmitting(true);
 	        try {
@@ -466,21 +504,52 @@ function ManualOrderContent() {
 	                ...(canOverridePricing && orderReason ? { price_override_reason: orderReason } : {})
 	            };
 
-            await api.orders.checkout(payload);
-            alert('Pesanan berhasil dibuat!');
-            router.push('/admin/orders');
-        } catch (error: unknown) {
-            console.error(error);
-            alert((error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Gagal membuat pesanan');
-        } finally {
-            setSubmitting(false);
-        }
-    };
+	            const res = await api.orders.checkout(payload);
+	            const created = (res?.data || {}) as {
+	                order_id?: string;
+	                total_amount?: number | string;
+	                shipping_method_name?: string | null;
+	            };
+	            const orderId = String(created.order_id || '').trim();
+	            const totalCreated = Number(created.total_amount || 0);
+	            const shippingName = String(created.shipping_method_name || '').trim();
+	            const itemCount = cart.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+
+	            const headlineParts = [
+	                orderId ? `Order #${orderId}` : null,
+	                selectedCustomer?.name ? String(selectedCustomer.name) : null,
+	            ].filter(Boolean);
+	            const detailParts = [
+	                itemCount > 0 ? `${itemCount} item` : null,
+	                Number.isFinite(totalCreated) && totalCreated > 0 ? `Total ${formatCurrency(totalCreated)}` : null,
+	                shippingName ? `Kirim: ${shippingName}` : null,
+	            ].filter(Boolean);
+
+	            showSubmitPopup(
+	                'success',
+	                headlineParts.length > 0 ? headlineParts.join(' • ') : 'Berhasil',
+	                detailParts.length > 0 ? detailParts.join(' • ') : 'Pesanan berhasil dibuat!',
+	                2200
+	            );
+	            window.setTimeout(() => {
+	                router.push('/admin/orders');
+	            }, 700);
+	        } catch (error: unknown) {
+	            console.error(error);
+	            showSubmitPopup(
+	                'error',
+	                'Gagal',
+	                (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Gagal membuat pesanan'
+	            );
+	        } finally {
+	            setSubmitting(false);
+	        }
+	    };
 
     if (!allowed) return null;
 
-    return (
-        <div className="p-6 space-y-6">
+	    return (
+	        <div className="p-6 space-y-6">
             <div className="flex items-center gap-4">
                 <Link href="/admin/orders" className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
                     <ArrowLeft size={20} />
@@ -598,151 +667,156 @@ function ManualOrderContent() {
                 </div>
             )}
 
-	            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-	                {/* Left Column: Selection */}
-	                <div className="order-2 lg:order-2 lg:col-span-1 space-y-6">
+		            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+		                {/* Left Column: Selection (digabung jadi 1 card) */}
+		                <div className="order-2 lg:order-2 lg:col-span-1">
+		                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+		                        <div className="space-y-6">
+		                            {/* Customer Selection */}
+		                            {!isChatDrivenOrder ? (
+		                                <div className="space-y-4">
+		                                    <h2 className="font-bold text-slate-900 flex items-center gap-2">
+		                                        <UserIcon size={18} /> Pilih Pelanggan
+		                                    </h2>
 
-                    {/* Customer Selection */}
-                    {!isChatDrivenOrder ? (
-                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-                            <h2 className="font-bold text-slate-900 flex items-center gap-2">
-                                <UserIcon size={18} /> Pilih Pelanggan
-                            </h2>
+		                                    {!selectedCustomer ? (
+		                                        <div className="relative">
+		                                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+		                                            <input
+		                                                type="text"
+		                                                placeholder="Cari nama, WA, atau email..."
+		                                                className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+		                                                value={customerSearch}
+		                                                onChange={(e) => setCustomerSearch(e.target.value)}
+		                                                disabled={prefillingCustomer}
+		                                            />
+		                                            {prefillingCustomer && (
+		                                                <p className="text-xs text-slate-500 mt-2 ml-2">Memuat customer dari halaman sebelumnya...</p>
+		                                            )}
+		                                            {customers.length > 0 && (
+		                                                <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
+		                                                    {customers.map(c => (
+		                                                        <div
+		                                                            key={c.id}
+		                                                            className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-0"
+		                                                            onClick={() => {
+		                                                                setSelectedCustomer(c);
+		                                                                setCustomerSearch('');
+		                                                                setCustomers([]);
+		                                                            }}
+		                                                        >
+		                                                            <p className="font-bold text-slate-900">{c.name}</p>
+		                                                            <div className="flex gap-3 text-xs text-slate-500">
+		                                                                <span>{c.whatsapp_number}</span>
+		                                                                <span className="capitalize px-2 py-0.5 bg-slate-100 rounded-full text-slate-600">
+		                                                                    Tier: {c.CustomerProfile?.tier || 'Regular'}
+		                                                                </span>
+		                                                            </div>
+		                                                        </div>
+		                                                    ))}
+		                                                </div>
+		                                            )}
+		                                        </div>
+		                                    ) : (
+		                                        <div className="flex items-center justify-between bg-blue-50 p-4 rounded-xl border border-blue-100">
+		                                            <div>
+		                                                <p className="font-bold text-blue-900">{selectedCustomer.name}</p>
+		                                                <p className="text-sm text-blue-700">{selectedCustomer.whatsapp_number}</p>
+		                                                <span className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded-full border border-blue-200 mt-1 inline-block capitalize">
+		                                                    Tier: {selectedCustomer.CustomerProfile?.tier || 'Regular'}
+		                                                </span>
+		                                            </div>
+		                                            <button
+		                                                onClick={() => setSelectedCustomer(null)}
+		                                                className="text-blue-700 hover:text-blue-900 text-sm font-bold"
+		                                            >
+		                                                Ganti
+		                                            </button>
+		                                        </div>
+		                                    )}
+		                                </div>
+		                            ) : (
+		                                <div className="space-y-3">
+		                                    <h2 className="font-bold text-slate-900 flex items-center gap-2">
+		                                        <UserIcon size={18} /> Pelanggan Dari Sesi Chat
+		                                    </h2>
+		                                    {prefillingCustomer && !selectedCustomer ? (
+		                                        <p className="text-sm text-slate-500">Memuat data pelanggan dari sesi chat...</p>
+		                                    ) : selectedCustomer ? (
+		                                        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+		                                            <p className="font-bold text-blue-900">{selectedCustomer.name}</p>
+		                                            <p className="text-sm text-blue-700">{selectedCustomer.whatsapp_number}</p>
+		                                            <span className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded-full border border-blue-200 mt-1 inline-block capitalize">
+		                                                Tier: {selectedCustomer.CustomerProfile?.tier || 'Regular'}
+		                                            </span>
+		                                        </div>
+		                                    ) : (
+		                                        <p className="text-sm text-rose-600">
+		                                            Customer pada sesi chat belum tersedia. Kembali ke inbox chat untuk cek akun customer.
+		                                        </p>
+		                                    )}
+		                                </div>
+		                            )}
 
-                            {!selectedCustomer ? (
-                                <div className="relative">
-                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                                    <input
-                                        type="text"
-                                        placeholder="Cari nama, WA, atau email..."
-                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        value={customerSearch}
-                                        onChange={(e) => setCustomerSearch(e.target.value)}
-                                        disabled={prefillingCustomer}
-                                    />
-                                    {prefillingCustomer && (
-                                        <p className="text-xs text-slate-500 mt-2 ml-2">Memuat customer dari halaman sebelumnya...</p>
-                                    )}
-                                    {customers.length > 0 && (
-                                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
-                                            {customers.map(c => (
-                                                <div
-                                                    key={c.id}
-                                                    className="p-3 hover:bg-blue-50 cursor-pointer border-b last:border-0"
-                                                    onClick={() => {
-                                                        setSelectedCustomer(c);
-                                                        setCustomerSearch('');
-                                                        setCustomers([]);
-                                                    }}
-                                                >
-                                                    <p className="font-bold text-slate-900">{c.name}</p>
-                                                    <div className="flex gap-3 text-xs text-slate-500">
-                                                        <span>{c.whatsapp_number}</span>
-                                                        <span className="capitalize px-2 py-0.5 bg-slate-100 rounded-full text-slate-600">
-                                                            Tier: {c.CustomerProfile?.tier || 'Regular'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            ) : (
-                                <div className="flex items-center justify-between bg-blue-50 p-4 rounded-xl border border-blue-100">
-                                    <div>
-                                        <p className="font-bold text-blue-900">{selectedCustomer.name}</p>
-                                        <p className="text-sm text-blue-700">{selectedCustomer.whatsapp_number}</p>
-                                        <span className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded-full border border-blue-200 mt-1 inline-block capitalize">
-                                            Tier: {selectedCustomer.CustomerProfile?.tier || 'Regular'}
-                                        </span>
-                                    </div>
-                                    <button
-                                        onClick={() => setSelectedCustomer(null)}
-                                        className="text-blue-700 hover:text-blue-900 text-sm font-bold"
-                                    >
-                                        Ganti
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-3">
-                            <h2 className="font-bold text-slate-900 flex items-center gap-2">
-                                <UserIcon size={18} /> Pelanggan Dari Sesi Chat
-                            </h2>
-                            {prefillingCustomer && !selectedCustomer ? (
-                                <p className="text-sm text-slate-500">Memuat data pelanggan dari sesi chat...</p>
-                            ) : selectedCustomer ? (
-                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                                    <p className="font-bold text-blue-900">{selectedCustomer.name}</p>
-                                    <p className="text-sm text-blue-700">{selectedCustomer.whatsapp_number}</p>
-                                    <span className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded-full border border-blue-200 mt-1 inline-block capitalize">
-                                        Tier: {selectedCustomer.CustomerProfile?.tier || 'Regular'}
-                                    </span>
-                                </div>
-                            ) : (
-                                <p className="text-sm text-rose-600">
-                                    Customer pada sesi chat belum tersedia. Kembali ke inbox chat untuk cek akun customer.
-                                </p>
-                            )}
-                        </div>
-                    )}
+		                            <div className="h-px bg-slate-200" />
 
-	                    {/* Product Selection */}
-	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-                        <h2 className="font-bold text-slate-900 flex items-center gap-2">
-                            <ShoppingCart size={18} /> Tambah Produk
-                        </h2>
-                        <div className="relative">
-                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                            <input
-                                type="text"
-                                placeholder="Cari produk (nama/sku)..."
-                                className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                value={productSearch}
-                                onChange={(e) => setProductSearch(e.target.value)}
-                                disabled={!selectedCustomer}
-                            />
-                            {products.length > 0 && (
-                                <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
-                                    {products.map(p => (
-                                        <div
-                                            key={p.id}
-                                            className="p-3 hover:bg-slate-50 cursor-pointer border-b last:border-0 flex justify-between items-center"
-                                            onClick={() => addToCart(p)}
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                {p.image_url && (
-                                                    <Image src={p.image_url} alt={p.name || 'Produk'} width={40} height={40} className="rounded-lg object-cover" />
-                                                )}
-                                                <div>
-                                                    <p className="font-bold text-slate-900">{p.name}</p>
-                                                    <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
-                                                </div>
-                                            </div>
-                                            <p className="font-bold text-blue-600">
-                                                {formatCurrency(getProductPrice(p))}
-                                            </p>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                            {!selectedCustomer && (
-                                <p className="text-xs text-amber-600 mt-2 ml-2">
-                                    {isChatDrivenOrder
-                                        ? 'Menunggu data customer dari sesi chat agar harga tier bisa dipakai.'
-                                        : 'Pilih pelanggan dulu untuk melihat harga sesuai tier.'}
-                                </p>
-                            )}
-	                        </div>
-	                    </div>
+		                            {/* Product Selection */}
+		                            <div className="space-y-4">
+		                                <h2 className="font-bold text-slate-900 flex items-center gap-2">
+		                                    <ShoppingCart size={18} /> Tambah Produk
+		                                </h2>
+		                                <div className="relative">
+		                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+		                                    <input
+		                                        type="text"
+		                                        placeholder="Cari produk (nama/sku)..."
+		                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+		                                        value={productSearch}
+		                                        onChange={(e) => setProductSearch(e.target.value)}
+		                                        disabled={!selectedCustomer}
+		                                    />
+		                                    {products.length > 0 && (
+		                                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
+		                                            {products.map(p => (
+		                                                <div
+		                                                    key={p.id}
+		                                                    className="p-3 hover:bg-slate-50 cursor-pointer border-b last:border-0 flex justify-between items-center"
+		                                                    onClick={() => addToCart(p)}
+		                                                >
+		                                                    <div className="flex items-center gap-3">
+		                                                        {p.image_url && (
+		                                                            <Image src={p.image_url} alt={p.name || 'Produk'} width={40} height={40} className="rounded-lg object-cover" />
+		                                                        )}
+		                                                        <div>
+		                                                            <p className="font-bold text-slate-900">{p.name}</p>
+		                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
+		                                                        </div>
+		                                                    </div>
+		                                                    <p className="font-bold text-blue-600">
+		                                                        {formatCurrency(getProductPrice(p))}
+		                                                    </p>
+		                                                </div>
+		                                            ))}
+		                                        </div>
+		                                    )}
+		                                    {!selectedCustomer && (
+		                                        <p className="text-xs text-amber-600 mt-2 ml-2">
+		                                            {isChatDrivenOrder
+		                                                ? 'Menunggu data customer dari sesi chat agar harga tier bisa dipakai.'
+		                                                : 'Pilih pelanggan dulu untuk melihat harga sesuai tier.'}
+		                                        </p>
+		                                    )}
+		                                </div>
+		                            </div>
 
-	                    {/* Payment & Summary (Admin-only pricing note lives here) */}
-	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-	                        {canOverridePricing ? (
-	                            <div>
-	                                <label className="block text-xs font-bold text-slate-500 mb-1">Keterangan Nego (Opsional)</label>
-	                                <textarea
+		                            <div className="h-px bg-slate-200" />
+
+		                            {/* Payment & Summary (Admin-only pricing note lives here) */}
+		                            <div className="space-y-4">
+		                        {canOverridePricing ? (
+		                            <div>
+		                                <label className="block text-xs font-bold text-slate-500 mb-1">Keterangan Nego (Opsional)</label>
+		                                <textarea
 	                                    value={orderOverrideReason}
 	                                    onChange={(e) => setOrderOverrideReason(e.target.value)}
 	                                    className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm"
@@ -812,24 +886,25 @@ function ManualOrderContent() {
 	                            <span className="font-bold text-slate-600">Total</span>
 	                            <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
 	                        </div>
-	                        <button
-	                            onClick={handleSubmit}
-	                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
-	                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-	                        >
-	                            {submitting ? 'Memproses...' : (
-	                                <>
-	                                    <Check size={18} /> Buat Pesanan
-	                                </>
-	                            )}
-	                        </button>
-	                    </div>
+		                        <button
+		                            onClick={handleSubmit}
+		                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
+		                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+		                        >
+		                            {submitting ? 'Memproses...' : (
+		                                <>
+		                                    <Check size={18} /> Buat Pesanan
+		                                </>
+		                            )}
+		                        </button>
+		                            </div>
+		                        </div>
+		                    </div>
+		                </div>
 	
-	                </div>
-
-	                {/* Right Column (Lebih luas): Cart Summary */}
-	                <div className="order-1 lg:order-1 lg:col-span-2 space-y-6">
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
+		                {/* Right Column (Lebih luas): Cart Summary */}
+		                <div className="order-1 lg:order-1 lg:col-span-2 space-y-6">
+	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
                         <h2 className="font-bold text-slate-900 mb-4">Ringkasan Pesanan</h2>
 
 	                        <div className="flex-1 overflow-y-auto space-y-3 mb-4">
@@ -844,16 +919,16 @@ function ManualOrderContent() {
 	                                        <div className="flex-1">
 	                                            <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.product.name}</p>
 	                                            <div className="mt-1 space-y-1">
-	                                                <p className="text-xs text-slate-500">
-	                                                    Harga normal {formatCurrency(getProductPrice(item.product))} x {item.qty}
-	                                                </p>
-	                                                {canOverridePricing ? (
-	                                                    <div className="flex flex-wrap items-center gap-2">
-	                                                        <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
-	                                                        <input
-	                                                            type="number"
-	                                                            min={0}
-	                                                            value={Number(item.unit_price_override ?? getProductPrice(item.product)) || 0}
+		                                                <p className="text-sm text-slate-500">
+		                                                    Harga normal {formatCurrency(getProductPrice(item.product))} x {item.qty}
+		                                                </p>
+		                                                {canOverridePricing ? (
+		                                                    <div className="flex flex-wrap items-center gap-2">
+		                                                        <label className="text-xs font-bold text-slate-500">Harga deal</label>
+		                                                        <input
+		                                                            type="number"
+		                                                            min={0}
+		                                                            value={Number(item.unit_price_override ?? getProductPrice(item.product)) || 0}
 	                                                            onChange={(e) => {
 	                                                                const raw = e.target.value;
 	                                                                const next = raw === '' ? null : Number(raw);
@@ -861,11 +936,11 @@ function ManualOrderContent() {
 	                                                                    ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
 	                                                                    : row));
 	                                                            }}
-	                                                            className="w-28 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-	                                                        />
-	                                                        <input
-	                                                            type="text"
-	                                                            placeholder="Keterangan (opsional)"
+		                                                            className="w-36 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-right"
+		                                                        />
+		                                                        <input
+		                                                            type="text"
+		                                                            placeholder="Keterangan (opsional)"
 	                                                            value={String(item.unit_price_override_reason || '')}
 	                                                            onChange={(e) => {
 	                                                                const next = e.target.value;
@@ -873,15 +948,15 @@ function ManualOrderContent() {
 	                                                                    ? { ...row, unit_price_override_reason: next }
 	                                                                    : row));
 	                                                            }}
-	                                                            className="flex-1 min-w-[140px] rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
-	                                                        />
-	                                                    </div>
-	                                                ) : null}
-	                                                {canOverridePricing ? (
-	                                                    <p className="text-[10px] text-slate-500">
-	                                                        Dipakai: <span className="font-bold">{formatCurrency(getDealUnitPrice(item))}</span> per item
-	                                                    </p>
-	                                                ) : null}
+		                                                            className="flex-1 min-w-[180px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm"
+		                                                        />
+		                                                    </div>
+		                                                ) : null}
+		                                                {canOverridePricing ? (
+		                                                    <p className="text-xs text-slate-500">
+		                                                        Dipakai: <span className="font-bold">{formatCurrency(getDealUnitPrice(item))}</span> per item
+		                                                    </p>
+		                                                ) : null}
 	                                            </div>
 	                                        </div>
 	                                        <div className="flex items-center gap-2">
@@ -898,12 +973,44 @@ function ManualOrderContent() {
                                     </div>
                                 ))
 	                            )}
-		                        </div>
-	                    </div>
-	                </div>
-	            </div>
-        </div>
-    );
+			                        </div>
+		                    </div>
+		                </div>
+		            </div>
+
+                    {submitPopup && (
+                        <button
+                            type="button"
+                            onClick={dismissSubmitPopup}
+                            className={`fixed right-4 bottom-24 z-50 w-[min(92vw,360px)] rounded-xl border px-4 py-3 text-left shadow-lg ${submitPopup.tone === 'success'
+                                ? 'border-emerald-300 bg-emerald-50'
+                                : submitPopup.tone === 'error'
+                                    ? 'border-rose-300 bg-rose-50'
+                                    : 'border-slate-200 bg-white'
+                                }`}
+                        >
+                            <p className={`text-[11px] font-black uppercase tracking-widest ${submitPopup.tone === 'success'
+                                ? 'text-emerald-700'
+                                : submitPopup.tone === 'error'
+                                    ? 'text-rose-700'
+                                    : 'text-slate-600'
+                                }`}
+                            >
+                                {submitPopup.title}
+                            </p>
+                            <p className={`text-xs font-semibold mt-1 ${submitPopup.tone === 'success'
+                                ? 'text-emerald-700'
+                                : submitPopup.tone === 'error'
+                                    ? 'text-rose-700'
+                                    : 'text-slate-700'
+                                }`}
+                            >
+                                {submitPopup.message}
+                            </p>
+                        </button>
+                    )}
+	        </div>
+	    );
 }
 
 export default function ManualOrderPage() {
