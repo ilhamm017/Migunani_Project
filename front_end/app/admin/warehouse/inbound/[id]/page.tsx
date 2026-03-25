@@ -203,6 +203,9 @@ export default function POReceivePage() {
     const totalQty = po.Items?.reduce((acc, item) => acc + Number(item.qty || 0), 0) || 0;
     const canEditCost = po.status === 'pending' && !po.verified1_at;
     const itemsCount = Array.isArray(po.Items) ? po.Items.length : 0;
+    const inboundTotalCost = Array.isArray(po.Items)
+        ? po.Items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unit_cost || 0)), 0)
+        : 0;
     const varianceSummary = (() => {
         const items = Array.isArray(po.Items) ? po.Items : [];
         let varianceCount = 0;
@@ -356,6 +359,10 @@ export default function POReceivePage() {
                                 <span className="text-xs font-bold text-slate-400">Verifikasi 2 / Posting</span>
                                 <span className="text-sm font-bold text-slate-700">{po.verified2_at ? new Date(po.verified2_at).toLocaleString('id-ID') : '-'}</span>
                             </div>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-400">Total Modal Inbound</span>
+                                <span className="text-lg font-black text-slate-900 leading-tight">Rp {Number(inboundTotalCost || 0).toLocaleString()}</span>
+                            </div>
                         </div>
                     </div>
 
@@ -422,6 +429,12 @@ export default function POReceivePage() {
                                         <div className="bg-slate-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
                                             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Modal</span>
                                             <span className="text-sm font-black text-slate-700">Rp {Number(item.unit_cost || 0).toLocaleString()}</span>
+                                        </div>
+                                        <div className="bg-slate-50 rounded-2xl px-3 py-1.5 flex flex-col items-center">
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Total Modal</span>
+                                            <span className="text-sm font-black text-slate-900">
+                                                Rp {Number((Number(item.qty || 0) * Number(item.unit_cost || 0)) || 0).toLocaleString()}
+                                            </span>
                                         </div>
                                     </div>
 
@@ -507,6 +520,10 @@ export default function POReceivePage() {
                             <div className="flex items-center justify-between">
                                 <span className="font-bold text-slate-500">Total Qty</span>
                                 <span className="font-black">{totalQty} Pcs</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-500">Total Modal</span>
+                                <span className="font-black">Rp {Number(inboundTotalCost || 0).toLocaleString()}</span>
                             </div>
                             {confirm.action === 'verify2' && (
                                 <div className="flex items-center justify-between">

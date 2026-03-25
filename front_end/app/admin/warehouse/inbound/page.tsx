@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, History as HistoryIcon, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
+import { AlertTriangle, Camera, History as HistoryIcon, Package, Plus, Save, Search, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 
@@ -53,6 +53,12 @@ export default function InboundCreatePage() {
   const [scanning, setScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
   const scanInputRef = useRef<HTMLInputElement | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanLoopRef = useRef<number | null>(null);
+  const lastCameraScanRef = useRef<{ value: string; at: number }>({ value: '', at: 0 });
 
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newSku, setNewSku] = useState('');
@@ -128,8 +134,8 @@ export default function InboundCreatePage() {
     });
   }, []);
 
-  const doScan = useCallback(async () => {
-    const code = scanCode.trim();
+  const scanAndAdd = useCallback(async (codeRaw: string) => {
+    const code = String(codeRaw || '').trim();
     if (!code) return;
     try {
       setScanning(true);
@@ -137,17 +143,127 @@ export default function InboundCreatePage() {
       const res = await api.admin.inventory.scanBySku(code);
       const product = res.data as ProductRow;
       addProductToItems(product);
-      setScanCode('');
       setScanMessage(`Ditambahkan: ${product.sku} - ${product.name}`);
-      requestAnimationFrame(() => scanInputRef.current?.focus());
+      setTimeout(() => setScanMessage(''), 2500);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
       setScanMessage(err?.response?.data?.message || 'Gagal scan SKU/barcode.');
-      requestAnimationFrame(() => scanInputRef.current?.focus());
     } finally {
       setScanning(false);
     }
-  }, [addProductToItems, scanCode]);
+  }, [addProductToItems]);
+
+  const doScan = useCallback(async () => {
+    const code = scanCode.trim();
+    if (!code) return;
+    try {
+      await scanAndAdd(code);
+      setScanCode('');
+      requestAnimationFrame(() => scanInputRef.current?.focus());
+    } catch (error: unknown) {
+      requestAnimationFrame(() => scanInputRef.current?.focus());
+    }
+  }, [scanAndAdd, scanCode]);
+
+  const stopCamera = useCallback(() => {
+    try {
+      if (scanLoopRef.current) {
+        window.clearTimeout(scanLoopRef.current);
+        scanLoopRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    } catch { }
+  }, []);
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopCamera();
+      setCameraError('');
+      return;
+    }
+
+    let isCancelled = false;
+    const start = async () => {
+      try {
+        setCameraError('');
+        if (typeof window === 'undefined') return;
+        if (!(window as any).BarcodeDetector) {
+          setCameraError('Browser ini belum mendukung scan kamera. Gunakan Chrome/Edge terbaru, atau gunakan scanner (input field).');
+          return;
+        }
+
+        const video = videoRef.current;
+        if (!video) return;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false,
+        });
+        if (isCancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        video.srcObject = stream;
+        await video.play().catch(() => { });
+
+        const detector = new (window as any).BarcodeDetector({
+          formats: ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code'],
+        });
+
+        const loop = async () => {
+          if (isCancelled) return;
+          const v = videoRef.current;
+          if (!v) return;
+
+          try {
+            if (v.readyState >= 2) {
+              const barcodes = await detector.detect(v);
+              const rawValue = String(barcodes?.[0]?.rawValue || '').trim();
+              if (rawValue) {
+                const now = Date.now();
+                const last = lastCameraScanRef.current;
+                if (last.value !== rawValue || now - last.at > 2000) {
+                  lastCameraScanRef.current = { value: rawValue, at: now };
+                  setCameraOpen(false);
+                  stopCamera();
+                  setScanCode(rawValue);
+                  void scanAndAdd(rawValue);
+                  requestAnimationFrame(() => scanInputRef.current?.focus());
+                  return;
+                }
+              }
+            }
+          } catch (e) {
+            // keep scanning; some browsers intermittently throw while focusing
+            console.warn('Camera scan detect error', e);
+          }
+
+          scanLoopRef.current = window.setTimeout(loop, 250);
+        };
+
+        void loop();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e || 'Unknown error');
+        setCameraError(`Gagal akses kamera: ${msg}`);
+        stopCamera();
+      }
+    };
+
+    void start();
+
+    return () => {
+      isCancelled = true;
+      stopCamera();
+    };
+  }, [cameraOpen, scanAndAdd, stopCamera]);
 
   const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.product.id !== productId));
 
@@ -462,6 +578,16 @@ export default function InboundCreatePage() {
                   <Search size={18} />
                   Scan
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(true)}
+                  disabled={scanning}
+                  className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all"
+                  title="Scan pakai kamera (preview kecil)"
+                >
+                  <Camera size={18} />
+                  Kamera
+                </button>
               </form>
               {scanMessage && (
                 <div className="mt-2 text-xs font-bold text-slate-700">
@@ -472,6 +598,50 @@ export default function InboundCreatePage() {
                 Mendukung input <span className="font-black">SKU</span> atau <span className="font-black">barcode</span>.
               </div>
             </div>
+
+            {cameraOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-xl overflow-hidden">
+                  <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-slate-400">Scan Kamera</p>
+                      <p className="text-sm font-black text-slate-900">Arahkan kamera ke barcode</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraOpen(false);
+                        stopCamera();
+                        requestAnimationFrame(() => scanInputRef.current?.focus());
+                      }}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                      aria-label="Tutup"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    {cameraError ? (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+                        {cameraError}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-slate-200 bg-black overflow-hidden">
+                        <video
+                          ref={videoRef}
+                          className="w-full h-64 object-cover"
+                          muted
+                          playsInline
+                        />
+                      </div>
+                    )}
+                    <div className="mt-3 text-[11px] text-slate-500 font-medium">
+                      Preview dibuat kecil (tidak full screen). Barcode terdeteksi otomatis.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {showCreateProduct && (
               <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
