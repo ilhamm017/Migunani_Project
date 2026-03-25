@@ -518,7 +518,8 @@ export default function AdminOrdersWorkspace({
   const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
-  const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
+  const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
+  const canMoveToIndentAction = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang'].includes(normalizedRole), [normalizedRole]);
   const isFinanceRole = useMemo(() => normalizedRole === 'admin_finance', [normalizedRole]);
   const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang', [normalizedRole]);
@@ -533,6 +534,7 @@ export default function AdminOrdersWorkspace({
   const [orderSectionFilter, setOrderSectionFilter] = useState<OrderSectionFilter>(initialSection || 'baru');
   const [orderDetails, setOrderDetails] = useState<OrderDetailsMap>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [orderDetailErrors, setOrderDetailErrors] = useState<Record<string, string>>({});
   const [allocationDrafts, setAllocationDrafts] = useState<Record<string, Record<string, number>>>({});
   const [backorderHistoryByOrderId, setBackorderHistoryByOrderId] = useState<Record<string, BackorderSnapshot[]>>({});
   const [backorderTopupDrafts, setBackorderTopupDrafts] = useState<Record<string, Record<string, number>>>({});
@@ -848,21 +850,77 @@ export default function AdminOrdersWorkspace({
     if (validOrders.length === 0) return;
     setDetailsLoading(true);
     try {
-      const responses = await Promise.all(
+      const results = await Promise.allSettled(
         validOrders.map((order) => api.orders.getOrderById(String(order.id)))
       );
+
       const nextMap: Record<string, OrderDetailResponse> = {};
-      responses.forEach((res) => {
-        const order = res.data;
-        if (order?.id) nextMap[String(order.id)] = order;
+      const nextErrors: Record<string, string> = {};
+      const successfulIds = new Set<string>();
+
+      results.forEach((result, index) => {
+        const requestedId = String(validOrders[index]?.id || '').trim();
+        if (!requestedId) return;
+
+        if (result.status === 'fulfilled') {
+          const detail = result.value?.data as any;
+          const resolvedId = String(detail?.id || '').trim();
+          if (resolvedId) {
+            nextMap[resolvedId] = detail;
+            // Also map by requested ID (handles cases where user clicked invoice ID, etc.)
+            nextMap[requestedId] = detail;
+            successfulIds.add(requestedId);
+            successfulIds.add(resolvedId);
+          } else {
+            nextErrors[requestedId] = 'Detail order kosong atau tidak valid.';
+          }
+          return;
+        }
+
+        const err = result.reason as unknown;
+        const message = axios.isAxiosError(err)
+          ? String((err.response?.data as any)?.message || err.message || 'Gagal memuat detail order.')
+          : 'Gagal memuat detail order.';
+        nextErrors[requestedId] = message;
       });
-      setOrderDetails((prev) => ({ ...prev, ...nextMap }));
-    } catch (error) {
-      console.error('Failed to load order detail:', error);
+
+      if (Object.keys(nextMap).length > 0) {
+        setOrderDetails((prev) => ({ ...prev, ...nextMap }));
+      }
+      if (successfulIds.size > 0) {
+        setOrderDetailErrors((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          successfulIds.forEach((id) => {
+            if (!next[id]) return;
+            delete next[id];
+            changed = true;
+          });
+          return changed ? next : prev;
+        });
+      }
+      if (Object.keys(nextErrors).length > 0) {
+        setOrderDetailErrors((prev) => ({ ...prev, ...nextErrors }));
+      }
+      if (Object.keys(nextErrors).length > 0) {
+        console.error('Failed to load some order details:', nextErrors);
+      }
     } finally {
       setDetailsLoading(false);
     }
   }, []);
+
+  const retryLoadOrderDetail = useCallback((order: AdminOrderListRow) => {
+    const orderId = String(order?.id || '').trim();
+    if (!orderId) return;
+    setOrderDetailErrors((prev) => {
+      if (!prev[orderId]) return prev;
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
+    void loadOrderDetails([order]);
+  }, [loadOrderDetails]);
 
   useEffect(() => {
     if (!selectedGroup) return;
@@ -870,10 +928,11 @@ export default function AdminOrdersWorkspace({
     const missingDetails = targetOrders.filter((order) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return false;
+      if (orderDetailErrors[orderId]) return false;
       return !orderDetails[orderId];
     });
     void loadOrderDetails(missingDetails);
-  }, [groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, selectedGroup, orderDetails, loadOrderDetails]);
+  }, [groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, selectedGroup, orderDetails, orderDetailErrors, loadOrderDetails]);
 
   useEffect(() => {
     const detailEntries = Object.entries(orderDetails);
@@ -2222,31 +2281,30 @@ export default function AdminOrdersWorkspace({
               </div>
             </div>
 
-            <div className="border-t border-slate-200 bg-white px-5 py-4">
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAllocationConfirm(null)}
-                  className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600"
-                >
-                  Batal
-                </button>
-                {allocationConfirm.step === 2 && (
-                  <button
-                    type="button"
-                    onClick={() => setAllocationConfirm({ orderId: allocationConfirm.orderId, step: 1, action: allocationConfirm.action })}
-                    data-no-3d="true"
-                    className={`rounded-xl px-4 py-2 text-[11px] font-bold ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'border border-rose-200 bg-rose-50 text-rose-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}
-                  >
-                    Kembali
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void handleConfirmAllocationStep()}
-                  disabled={allocationConfirm.action === 'cancel_backorder' && allocationConfirm.step === 1 && !backorderCancelReason.trim()}
-                  className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-600' : 'bg-emerald-600'}`}
-                >
+	            <div className="border-t border-slate-200 bg-white px-5 py-4">
+	              <div className="flex flex-wrap items-center justify-end gap-2">
+	                <button
+	                  type="button"
+	                  onClick={() => setAllocationConfirm(null)}
+	                  className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600"
+	                >
+	                  Batal
+	                </button>
+	                {allocationConfirm.step === 2 && (
+	                  <button
+	                    type="button"
+	                    onClick={() => setAllocationConfirm({ orderId: allocationConfirm.orderId, step: 1, action: allocationConfirm.action })}
+	                    className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-bold ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'border border-rose-200 bg-rose-50 text-rose-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}
+	                  >
+	                    Kembali
+	                  </button>
+	                )}
+	                <button
+	                  type="button"
+	                  onClick={() => void handleConfirmAllocationStep()}
+	                  disabled={allocationConfirm.action === 'cancel_backorder' && allocationConfirm.step === 1 && !backorderCancelReason.trim()}
+	                  className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-600' : 'bg-emerald-600'}`}
+	                >
                   {allocationConfirm.step === 1
                     ? 'Lanjut Verifikasi'
                     : allocationConfirm.action === 'cancel_order'
@@ -2357,21 +2415,20 @@ export default function AdminOrdersWorkspace({
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <div className="space-y-3">
-          {forcedCustomerId && (
-            <Link
-              href="/admin/orders"
-              data-no-3d="true"
-              className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              Kembali ke daftar customer
-            </Link>
-          )}
-          <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex items-center gap-2">
-            <Users size={16} className="text-slate-400" />
-            <p className="text-xs text-slate-600">
-              {forcedCustomerId
+	      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+	        <div className="space-y-3">
+	          {forcedCustomerId && (
+	            <Link
+	              href="/admin/orders"
+	              className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+	            >
+	              Kembali ke daftar customer
+	            </Link>
+	          )}
+	          <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex items-center gap-2">
+	            <Users size={16} className="text-slate-400" />
+	            <p className="text-xs text-slate-600">
+	              {forcedCustomerId
                 ? `Customer ${selectedGroup?.customer_name || forcedCustomerName || forcedCustomerId}`
                 : `Scope Customer (${filteredCustomerGroups.length}/${customerGroups.length})`}
             </p>
@@ -3237,7 +3294,7 @@ export default function AdminOrdersWorkspace({
                         .filter(Boolean) as Array<{ product_id: string; sku: string; name: string; shortageQty: number }>;
                       const indentQty = indentCandidates.reduce((sum, row) => sum + Number(row.shortageQty || 0), 0);
                       const canMoveToIndent =
-                        canAllocate &&
+                        canMoveToIndentAction &&
                         isAllocationEditable &&
                         !allocationBusy &&
                         !allocationDirty &&
@@ -3640,6 +3697,58 @@ export default function AdminOrdersWorkspace({
                                 >
                                   Tinjau Detail
                                 </Link>
+                              </div>
+                            </div>
+                          )}
+
+                          {showInlineOrderDetailPanel && section !== 'selesai' && !detail && canViewAllocation && (
+                            <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="space-y-1">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Detail order belum termuat</p>
+                                  <p className="text-[11px] text-amber-700">
+                                    {orderDetailErrors[String(order.id)]
+                                      ? `Gagal memuat detail: ${orderDetailErrors[String(order.id)]}`
+                                      : detailsLoading
+                                        ? 'Sedang memuat detail order...'
+                                        : 'Detail order belum tersedia. Coba muat ulang.'}
+                                  </p>
+                                  <p className="text-[10px] text-amber-700/80">
+                                    Tanpa detail order, tombol alokasi/indent bisa tidak muncul. Jika masih gagal, kemungkinan data order bermasalah di server.
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => retryLoadOrderDetail(order)}
+                                    disabled={detailsLoading}
+                                    className="btn-3d rounded-lg border border-amber-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-amber-700 disabled:opacity-50"
+                                  >
+                                    Muat Ulang
+                                  </button>
+                                  {canMoveToIndentAction &&
+                                    ALLOCATION_EDITABLE_STATUSES.has(rawOrderStatus) &&
+                                    !allocationBusy &&
+                                    !isBackorder &&
+                                    (Array.isArray((order as any)?.Allocations)
+                                      ? (order as any).Allocations.reduce((sum: number, row: any) => sum + Number(row?.allocated_qty || 0), 0)
+                                      : 0) <= 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleMoveToIndent(String(order.id))}
+                                        disabled={allocationBusy}
+                                        className="btn-3d rounded-lg bg-indigo-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                                      >
+                                        Pindahkan ke Indent
+                                      </button>
+                                    )}
+                                  <Link
+                                    href={`/admin/orders/${order.id}`}
+                                    className="btn-3d inline-flex items-center rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white"
+                                  >
+                                    Buka Detail
+                                  </Link>
+                                </div>
                               </div>
                             </div>
                           )}

@@ -30,6 +30,15 @@ const io = new Server(httpServer, {
     }
 });
 
+// Prevent API responses from being revalidated as 304 (axios treats 304 as error),
+// and avoid stale admin dashboards due to browser caching.
+app.disable('etag');
+app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    next();
+});
+
 // Socket contract:
 // - admin:refresh_badges => trigger badge refresh on admin surfaces
 // - order:status_changed => order workflow notification across roles
