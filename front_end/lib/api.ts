@@ -218,6 +218,14 @@ export const api = {
     admin: {
         driverDeposit: {
             getList: () => apiClient.get('/admin/driver-deposit'),
+            getHistory: (params?: {
+                driver_id?: string;
+                from?: string;
+                to?: string;
+                include_status?: 'all' | 'submitted' | 'received' | string;
+                limit?: number;
+                offset?: number;
+            }) => apiClient.get('/admin/driver-deposit/history', { params }),
             confirm: (payload: {
                 driver_id: string;
                 cod?: { invoice_ids: string[]; amount_received: number };

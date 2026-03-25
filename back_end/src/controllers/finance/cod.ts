@@ -396,6 +396,7 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
 
         const previousDebt = Number(driver.debt || 0);
 
+        let settlementRow: any = null;
         if (invoices.length > 0) {
             // New logic: Find pending CodCollections for these invoices
             const invoiceIds = invoices.map(i => i.id);
@@ -414,9 +415,14 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             const settlement = await CodSettlement.create({
                 driver_id: driver_id,
                 total_amount: received,
+                total_expected: totalExpected,
+                diff_amount: diff,
+                driver_debt_before: previousDebt,
+                invoice_ids_json: JSON.stringify(invoiceIds.map((value) => String(value))),
                 received_by: verifierId,
                 settled_at: new Date()
             }, { transaction: t });
+            settlementRow = settlement;
             settlementId = String(settlement.id);
             settledAtIso = settlement.settled_at ? new Date(settlement.settled_at).toISOString() : new Date().toISOString();
             settledInvoiceIds = invoiceIds.map((value) => String(value));
@@ -526,6 +532,9 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
         const exposure = await calculateDriverCodExposure(String(driver_id), { transaction: t });
         const newDebt = exposure.exposure;
         await driver.update({ debt: newDebt }, { transaction: t });
+        if (settlementRow) {
+            await settlementRow.update({ driver_debt_after: newDebt }, { transaction: t });
+        }
 
         if (finalizedOrderResults.length > 0) {
             for (const result of finalizedOrderResults) {

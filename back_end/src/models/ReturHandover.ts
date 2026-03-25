@@ -10,9 +10,11 @@ interface ReturHandoverAttributes {
     received_at?: Date | null;
     received_by?: string | null; // UUID
     note?: string | null;
+    driver_debt_before?: number | null;
+    driver_debt_after?: number | null;
 }
 
-interface ReturHandoverCreationAttributes extends Optional<ReturHandoverAttributes, 'id' | 'status' | 'submitted_at' | 'received_at' | 'received_by' | 'note'> { }
+interface ReturHandoverCreationAttributes extends Optional<ReturHandoverAttributes, 'id' | 'status' | 'submitted_at' | 'received_at' | 'received_by' | 'note' | 'driver_debt_before' | 'driver_debt_after'> { }
 
 class ReturHandover extends Model<ReturHandoverAttributes, ReturHandoverCreationAttributes> implements ReturHandoverAttributes {
     declare id: number;
@@ -23,6 +25,8 @@ class ReturHandover extends Model<ReturHandoverAttributes, ReturHandoverCreation
     declare received_at: Date | null;
     declare received_by: string | null;
     declare note: string | null;
+    declare driver_debt_before: number | null;
+    declare driver_debt_after: number | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -65,6 +69,14 @@ ReturHandover.init(
             type: DataTypes.TEXT,
             allowNull: true,
         },
+        driver_debt_before: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+        },
+        driver_debt_after: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+        },
     },
     {
         sequelize,
@@ -79,4 +91,3 @@ ReturHandover.init(
 );
 
 export default ReturHandover;
-

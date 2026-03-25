@@ -307,6 +307,196 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
     return res.json(response);
 });
 
+export const getDriverDepositHistory = asyncWrapper(async (req: Request, res: Response) => {
+    const driverId = typeof req.query?.driver_id === 'string' ? req.query.driver_id.trim() : '';
+    const rawFrom = typeof req.query?.from === 'string' ? req.query.from.trim() : '';
+    const rawTo = typeof req.query?.to === 'string' ? req.query.to.trim() : '';
+    const includeStatus = typeof req.query?.include_status === 'string' ? req.query.include_status.trim().toLowerCase() : 'all';
+    const limit = Math.max(1, Math.min(200, Number(req.query?.limit || 50) || 50));
+    const offset = Math.max(0, Number(req.query?.offset || 0) || 0);
+
+    const now = new Date();
+    const defaultFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const parsedFrom = rawFrom ? new Date(rawFrom) : defaultFrom;
+    const parsedTo = rawTo ? new Date(rawTo) : now;
+    const from = Number.isFinite(parsedFrom.getTime()) ? parsedFrom : defaultFrom;
+    const to = Number.isFinite(parsedTo.getTime()) ? parsedTo : now;
+
+    const settlementWhere: any = {
+        settled_at: { [Op.between]: [from, to] }
+    };
+    if (driverId) settlementWhere.driver_id = driverId;
+
+    const handoverWhere: any = {};
+    if (driverId) handoverWhere.driver_id = driverId;
+    if (includeStatus === 'submitted' || includeStatus === 'received') {
+        handoverWhere.status = includeStatus;
+    }
+    handoverWhere[Op.or] = [
+        { submitted_at: { [Op.between]: [from, to] } },
+        { received_at: { [Op.between]: [from, to] } },
+    ];
+
+    const codSettlements = await CodSettlement.findAll({
+        where: settlementWhere,
+        include: [
+            { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+            { model: User, as: 'Receiver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+        ],
+        order: [['settled_at', 'DESC'], ['id', 'DESC']],
+        limit,
+        offset,
+    });
+
+    const handovers = await ReturHandover.findAll({
+        where: handoverWhere,
+        include: [
+            { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+            { model: User, as: 'Receiver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+            {
+                model: ReturHandoverItem,
+                as: 'Items',
+                include: [{
+                    model: Retur,
+                    as: 'Retur',
+                    attributes: ['id', 'qty', 'qty_received', 'status', 'retur_type', 'product_id'],
+                    include: [{ model: Product, attributes: ['id', 'name', 'sku', 'unit'] }]
+                }]
+            }
+        ],
+        order: [[sequelize.literal('COALESCE(received_at, submitted_at)'), 'DESC'], ['id', 'DESC']],
+        limit,
+        offset,
+    });
+
+    const safeParseInvoiceIds = (value: unknown): string[] => {
+        if (typeof value !== 'string' || !value.trim()) return [];
+        try {
+            const parsed = JSON.parse(value);
+            if (!Array.isArray(parsed)) return [];
+            return parsed.map((x) => String(x || '').trim()).filter(Boolean);
+        } catch {
+            return [];
+        }
+    };
+
+    const settlementIds = codSettlements.map((s: any) => Number(s.id)).filter((x) => Number.isFinite(x) && x > 0);
+    const settlementInvoiceIdsBySettlementId = new Map<number, string[]>();
+
+    codSettlements.forEach((s: any) => {
+        const ids = safeParseInvoiceIds(s.invoice_ids_json);
+        if (ids.length > 0) settlementInvoiceIdsBySettlementId.set(Number(s.id), ids);
+    });
+
+    const missingLinkSettlementIds = settlementIds.filter((id) => !(settlementInvoiceIdsBySettlementId.get(id)?.length));
+    if (missingLinkSettlementIds.length > 0) {
+        const rows = await CodCollection.findAll({
+            where: { settlement_id: { [Op.in]: missingLinkSettlementIds } },
+            attributes: ['settlement_id', 'invoice_id'],
+        });
+        rows.forEach((row: any) => {
+            const sid = Number(row?.settlement_id);
+            const invId = String(row?.invoice_id || '').trim();
+            if (!Number.isFinite(sid) || sid <= 0 || !invId) return;
+            const bucket = settlementInvoiceIdsBySettlementId.get(sid) || [];
+            bucket.push(invId);
+            settlementInvoiceIdsBySettlementId.set(sid, bucket);
+        });
+    }
+
+    const allInvoiceIds = Array.from(new Set(
+        Array.from(settlementInvoiceIdsBySettlementId.values()).flat().map((x) => String(x || '').trim()).filter(Boolean)
+    ));
+    const invoices = allInvoiceIds.length > 0
+        ? await Invoice.findAll({
+            where: { id: { [Op.in]: allInvoiceIds } },
+            attributes: ['id', 'invoice_number', 'customer_id'],
+        })
+        : [];
+    const invoiceById = new Map<string, any>();
+    invoices.forEach((inv: any) => invoiceById.set(String(inv.id), inv));
+
+    const customerIds = Array.from(new Set(
+        invoices.map((inv: any) => String(inv.customer_id || '').trim()).filter(Boolean)
+    ));
+    const customers = customerIds.length > 0
+        ? await User.findAll({ where: { id: { [Op.in]: customerIds } }, attributes: ['id', 'name'] })
+        : [];
+    const customerById = new Map<string, any>();
+    customers.forEach((u: any) => customerById.set(String(u.id), u));
+
+    const cod = codSettlements.map((s: any) => {
+        const sid = Number(s.id);
+        const invIds = settlementInvoiceIdsBySettlementId.get(sid) || [];
+        const invoiceRows = invIds.map((invId) => {
+            const inv = invoiceById.get(invId);
+            const custId = inv ? String(inv.customer_id || '').trim() : '';
+            const cust = custId ? customerById.get(custId) : null;
+            return {
+                invoice_id: invId,
+                invoice_number: inv ? String(inv.invoice_number || '') : '',
+                customer: cust ? { id: String(cust.id), name: String(cust.name || '') } : null,
+            };
+        });
+        return {
+            id: sid,
+            settled_at: s.settled_at ? new Date(s.settled_at).toISOString() : null,
+            driver: (s as any).Driver ? (s as any).Driver.get({ plain: true }) : null,
+            receiver: (s as any).Receiver ? (s as any).Receiver.get({ plain: true }) : null,
+            total_expected: toNumber((s as any).total_expected),
+            amount_received: toNumber((s as any).total_amount),
+            diff_amount: toNumber((s as any).diff_amount),
+            driver_debt_before: toNumber((s as any).driver_debt_before),
+            driver_debt_after: toNumber((s as any).driver_debt_after),
+            invoices: invoiceRows,
+        };
+    });
+
+    const handoverRows = handovers.map((h: any) => {
+        const items = Array.isArray(h?.Items) ? h.Items : [];
+        return {
+            id: Number(h.id),
+            invoice_id: String(h.invoice_id || ''),
+            status: String(h.status || ''),
+            submitted_at: h.submitted_at ? new Date(h.submitted_at).toISOString() : null,
+            received_at: h.received_at ? new Date(h.received_at).toISOString() : null,
+            driver: (h as any).Driver ? (h as any).Driver.get({ plain: true }) : null,
+            receiver: (h as any).Receiver ? (h as any).Receiver.get({ plain: true }) : null,
+            note: typeof h.note === 'string' ? h.note : null,
+            driver_debt_before: toNumber((h as any).driver_debt_before),
+            driver_debt_after: toNumber((h as any).driver_debt_after),
+            items: items.map((it: any) => {
+                const retur = it?.Retur;
+                const product = retur?.Product;
+                return {
+                    retur_id: String(it?.retur_id || retur?.id || ''),
+                    qty: toNumber(retur?.qty),
+                    qty_received: Number.isFinite(Number(retur?.qty_received)) ? Math.trunc(Number(retur.qty_received)) : null,
+                    product: product ? {
+                        id: String(product.id || ''),
+                        name: String(product.name || ''),
+                        sku: String(product.sku || ''),
+                        unit: String(product.unit || ''),
+                    } : null
+                };
+            })
+        };
+    });
+
+    return res.json({
+        meta: {
+            driver_id: driverId || null,
+            from: from.toISOString(),
+            to: to.toISOString(),
+            include_status: includeStatus,
+            limit,
+            offset,
+        },
+        cod_settlements: cod,
+        retur_handovers: handoverRows,
+    });
+});
+
 export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Response) => {
     const actor = { id: String(req.user!.id), role: String(req.user!.role) };
     const driverId = String(req.body?.driver_id || '').trim();
@@ -410,7 +600,8 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     status: 'received',
                     received_at: new Date(),
                     received_by: actor.id,
-                    note: note || (handover as any).note || null
+                    note: note || (handover as any).note || null,
+                    driver_debt_before: driverDebtBefore,
                 }, { transaction: t });
 
                 processedHandoverIds.push(handoverId);
@@ -498,6 +689,10 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             const settlement = await CodSettlement.create({
                 driver_id: driverId,
                 total_amount: amountReceived,
+                total_expected: totalExpected,
+                diff_amount: codDiff,
+                driver_debt_before: driverDebtBefore,
+                invoice_ids_json: JSON.stringify(invoiceIds),
                 received_by: actor.id,
                 settled_at: new Date()
             }, { transaction: t });
@@ -598,6 +793,15 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             // Recompute driver debt snapshot
             const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
             await driver.update({ debt: exposure.exposure }, { transaction: t });
+            const driverDebtAfter = toNumber((driver as any).debt);
+
+            await settlement.update({ driver_debt_after: driverDebtAfter }, { transaction: t });
+            if (processedHandoverIds.length > 0) {
+                await ReturHandover.update(
+                    { driver_debt_after: driverDebtAfter },
+                    { where: { id: { [Op.in]: processedHandoverIds } }, transaction: t }
+                );
+            }
 
             for (const row of finalizedOrderResults) {
                 await emitOrderStatusChanged({
@@ -622,7 +826,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                 total_expected: totalExpected,
                 amount_received: amountReceived,
                 driver_debt_before: driverDebtBefore,
-                driver_debt_after: toNumber((driver as any).debt),
+                driver_debt_after: driverDebtAfter,
                 settled_at: new Date().toISOString(),
                 triggered_by_role: actor.role,
                 target_roles: ['kasir', 'super_admin', 'driver'],
@@ -635,6 +839,13 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             // even without COD, handover completion can change debt exposure via adjustments
             const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
             await driver.update({ debt: exposure.exposure }, { transaction: t });
+            const driverDebtAfter = toNumber((driver as any).debt);
+            if (processedHandoverIds.length > 0) {
+                await ReturHandover.update(
+                    { driver_debt_after: driverDebtAfter },
+                    { where: { id: { [Op.in]: processedHandoverIds } }, transaction: t }
+                );
+            }
         }
 
         await emitAdminRefreshBadges({ transaction: t, requestContext: 'admin_driver_deposit_refresh_badges' } as any);
