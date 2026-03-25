@@ -176,8 +176,8 @@ export default function InvoiceHppOverridePage() {
     };
   }, [grouped, inputs]);
 
-  const save = async () => {
-    if (!invoiceId) return;
+  const buildChangesPayload = () => {
+    if (!invoiceId) return null;
     const trimmedReason = reason.trim();
     if (!trimmedReason) {
       notifyOpen({
@@ -185,7 +185,7 @@ export default function InvoiceHppOverridePage() {
         title: 'Reason wajib diisi',
         message: 'Isi alasan koreksi untuk kebutuhan audit dan deskripsi jurnal.',
       });
-      return;
+      return null;
     }
 
     const changes: Array<{ product_id: string; unit_cost_override: number | null }> = [];
@@ -213,18 +213,22 @@ export default function InvoiceHppOverridePage() {
         message: 'Ubah salah satu nilai override atau hapus override yang ada, lalu simpan kembali.',
         autoCloseMs: 1400,
       });
-      return;
+      return null;
     }
 
+    return { reason: trimmedReason, overrides: changes };
+  };
+
+  const performSave = async (payload: { reason: string; overrides: Array<{ product_id: string; unit_cost_override: number | null }> }) => {
     try {
       setSaving(true);
       setError('');
       const res = await api.admin.finance.updateInvoiceCostOverrides(invoiceId, {
-        reason: trimmedReason,
-        overrides: changes,
+        reason: payload.reason,
+        overrides: payload.overrides,
       });
-      const payload = (res as any)?.data || {};
-      const effective: OverrideRow[] = Array.isArray(payload?.effective_overrides) ? payload.effective_overrides : [];
+      const responsePayload = (res as any)?.data || {};
+      const effective: OverrideRow[] = Array.isArray(responsePayload?.effective_overrides) ? responsePayload.effective_overrides : [];
       const nextMap = new Map<string, number>();
       effective.forEach((row) => {
         const productId = String(row.product_id || '').trim();
@@ -235,8 +239,8 @@ export default function InvoiceHppOverridePage() {
       const nextInputs: Record<string, string> = {};
       nextMap.forEach((cost, productId) => (nextInputs[productId] = String(cost)));
       setInputs(nextInputs);
-      setLastJournal(payload?.journal || null);
-      const j = payload?.journal as { posted?: boolean; journal_id?: number; delta_hpp?: number } | null;
+      setLastJournal(responsePayload?.journal || null);
+      const j = responsePayload?.journal as { posted?: boolean; journal_id?: number; delta_hpp?: number } | null;
       notifyOpen({
         variant: 'success',
         title: 'Override tersimpan',
@@ -257,6 +261,54 @@ export default function InvoiceHppOverridePage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const confirmSave = () => {
+    if (saving) return;
+    const payload = buildChangesPayload();
+    if (!payload) return;
+
+    notifyOpen({
+      variant: 'warning',
+      title: 'Verifikasi 1/2',
+      primaryLabel: 'Lanjut',
+      secondaryLabel: 'Batal',
+      message: (
+        <div className="space-y-2">
+          <p>
+            Kamu akan menyimpan override HPP untuk invoice ini dan sistem akan mem-posting jurnal koreksi (akun 5100 vs 1300) bila ada selisih.
+          </p>
+          <div className="text-xs font-semibold text-slate-700">
+            <div>Produk berubah: <span className="font-black">{payload.overrides.length}</span></div>
+            <div>Preview delta HPP: <span className="font-black">{formatCurrency(Number(preview.delta || 0))}</span></div>
+            <div>Reason: <span className="font-black">{payload.reason}</span></div>
+          </div>
+          <p className="text-xs text-slate-600">
+            Lanjut hanya jika sudah yakin. Jika salah, koreksinya harus dengan jurnal berikutnya.
+          </p>
+        </div>
+      ),
+      onPrimary: () => {
+        notifyOpen({
+          variant: 'warning',
+          title: 'Verifikasi 2/2',
+          primaryLabel: 'Ya, Simpan & Post',
+          secondaryLabel: 'Kembali',
+          message: (
+            <div className="space-y-2">
+              <p className="text-sm font-black text-slate-900">Konfirmasi akhir</p>
+              <p className="text-sm text-slate-700">
+                Sistem akan mem-posting jurnal koreksi untuk invoice ini sesuai target delta terbaru.
+              </p>
+              <div className="text-xs font-semibold text-slate-700">
+                Delta HPP: <span className="font-black">{formatCurrency(Number(preview.delta || 0))}</span>
+              </div>
+            </div>
+          ),
+          onPrimary: () => void performSave(payload),
+        });
+      },
+    });
   };
 
   if (!allowed) return null;
@@ -292,7 +344,7 @@ export default function InvoiceHppOverridePage() {
         <div className="flex-1" />
         <button
           type="button"
-          onClick={save}
+          onClick={confirmSave}
           disabled={saving}
           className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-black disabled:opacity-50"
         >

@@ -6,7 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import Link from 'next/link';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyOpen } from '@/lib/notify';
 
 type JournalLine = {
     account_id: string;
@@ -37,6 +37,7 @@ export default function AdjustmentJournalPage() {
     const [accounts, setAccounts] = useState<AccountOption[]>([]);
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [description, setDescription] = useState('');
+    const [submitting, setSubmitting] = useState(false);
     const [lines, setLines] = useState<JournalLine[]>([
         { account_id: '', debit: '', credit: 0 },
         { account_id: '', debit: 0, credit: '' }
@@ -78,7 +79,7 @@ export default function AdjustmentJournalPage() {
     const totalCredit = lines.reduce((sum, l) => sum + Number(l.credit || 0), 0);
     const isBalanced = totalDebit === totalCredit && totalDebit > 0;
 
-    const submit = async () => {
+    const buildPayload = () => {
         if (!description.trim()) return notifyAlert('Deskripsi wajib diisi');
         if (!isBalanced) return notifyAlert('Debit dan Credit harus seimbang (Balance)');
 
@@ -89,12 +90,16 @@ export default function AdjustmentJournalPage() {
         }));
 
         if (validLines.length < 2) return notifyAlert('Minimal 2 akun');
+        return { date, description, lines: validLines };
+    };
 
+    const submit = async (payload: { date: string; description: string; lines: Array<{ account_id: number; debit: number; credit: number }> }) => {
         try {
+            setSubmitting(true);
             await api.admin.finance.createAdjustmentJournal({
-                date,
-                description,
-                lines: validLines
+                date: payload.date,
+                description: payload.description,
+                lines: payload.lines
             });
             notifyAlert('Jurnal Penyesuaian berhasil disimpan');
             setDescription('');
@@ -102,7 +107,52 @@ export default function AdjustmentJournalPage() {
         } catch (error: unknown) {
             console.error(error);
             notifyAlert(`Gagal menyimpan: ${getErrorMessage(error, 'Terjadi kesalahan saat menyimpan jurnal')}`);
+        } finally {
+            setSubmitting(false);
         }
+    };
+
+    const confirmSubmit = () => {
+        if (submitting) return;
+        const payload = buildPayload();
+        if (!payload) return;
+
+        notifyOpen({
+            variant: 'warning',
+            title: 'Verifikasi 1/2',
+            primaryLabel: 'Lanjut',
+            secondaryLabel: 'Batal',
+            message: (
+                <div className="space-y-2">
+                    <p>Kamu akan menyimpan Jurnal Penyesuaian.</p>
+                    <div className="text-xs font-semibold text-slate-700">
+                        <div>Tanggal: <span className="font-black">{payload.date}</span></div>
+                        <div>Total Debit/Credit: <span className="font-black">{totalDebit.toLocaleString()}</span></div>
+                        <div>Baris: <span className="font-black">{payload.lines.length}</span></div>
+                    </div>
+                    <div className="text-xs text-slate-600 line-clamp-3">
+                        Deskripsi: <span className="font-semibold">{payload.description}</span>
+                    </div>
+                </div>
+            ),
+            onPrimary: () => {
+                notifyOpen({
+                    variant: 'warning',
+                    title: 'Verifikasi 2/2',
+                    primaryLabel: 'Ya, Simpan Jurnal',
+                    secondaryLabel: 'Kembali',
+                    message: (
+                        <div className="space-y-2">
+                            <p className="text-sm font-black text-slate-900">Konfirmasi akhir</p>
+                            <p className="text-sm text-slate-700">
+                                Pastikan akun, debit/credit, dan tanggal sudah benar.
+                            </p>
+                        </div>
+                    ),
+                    onPrimary: () => void submit(payload),
+                });
+            },
+        });
     };
 
     if (!allowed) return null;
@@ -209,12 +259,12 @@ export default function AdjustmentJournalPage() {
                     </div>
 
                     <button
-                        onClick={submit}
-                        disabled={!isBalanced}
+                        onClick={confirmSubmit}
+                        disabled={!isBalanced || submitting}
                         className={`w-full py-3 rounded-xl font-bold text-sm transition-all ${isBalanced ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/30' : 'bg-slate-700 text-slate-400 cursor-not-allowed'
                             }`}
                     >
-                        {isBalanced ? 'Simpan Jurnal' : 'Balance Tidak Seimbang'}
+                        {submitting ? 'Menyimpan...' : isBalanced ? 'Simpan Jurnal' : 'Balance Tidak Seimbang'}
                     </button>
                 </div>
             </div>
