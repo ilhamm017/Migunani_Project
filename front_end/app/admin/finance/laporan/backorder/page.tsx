@@ -31,9 +31,11 @@ interface BackorderTopCustomer {
 interface BackorderDetailItem {
     id: string;
     product_name: string;
+    sku?: string;
     customer_name: string;
     type: 'preorder' | 'backorder' | string;
     qty: number;
+    price?: number;
     total_value: number;
     order_id?: string;
     date?: string;
@@ -53,6 +55,7 @@ export default function BackorderReportPage() {
     const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
+    const [selectedProduct, setSelectedProduct] = useState<BackorderTopProduct | null>(null);
 
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
@@ -107,6 +110,22 @@ export default function BackorderReportPage() {
     useEffect(() => {
         if (allowed) load();
     }, [allowed, load]);
+
+    const selectedProductDetails = useMemo(() => {
+        if (!data || !selectedProduct) return [];
+        const sku = String(selectedProduct.sku || '').trim();
+        if (!sku) return [];
+        return (Array.isArray(data.details) ? data.details : []).filter((row) => String(row.sku || '').trim() === sku);
+    }, [data, selectedProduct]);
+
+    useEffect(() => {
+        if (!selectedProduct) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setSelectedProduct(null);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [selectedProduct]);
 
     if (!allowed) return null;
 
@@ -164,6 +183,82 @@ export default function BackorderReportPage() {
                     <div className="text-center py-10 text-slate-400">Loading...</div>
                 ) : data ? (
                     <>
+                        {selectedProduct ? (
+                            <div className="fixed inset-0 z-50">
+                                <button
+                                    type="button"
+                                    className="absolute inset-0 bg-black/30"
+                                    aria-label="Tutup"
+                                    onClick={() => setSelectedProduct(null)}
+                                />
+                                <div
+                                    role="dialog"
+                                    aria-modal="true"
+                                    className="absolute bottom-0 left-0 right-0 max-h-[80vh] overflow-auto rounded-t-3xl bg-white p-5 shadow-2xl"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                                Customer Pemesan
+                                            </p>
+                                            <h3 className="mt-1 font-black text-slate-900 truncate">{selectedProduct.name}</h3>
+                                            <p className="text-[11px] text-slate-500 font-mono">{selectedProduct.sku}</p>
+                                            <p className="text-[11px] text-slate-500 mt-1">
+                                                {selectedProductDetails.length} item (periode filter)
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedProduct(null)}
+                                            className="shrink-0 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                                        >
+                                            Tutup
+                                        </button>
+                                    </div>
+
+                                    <div className="mt-4 space-y-2">
+                                        {selectedProductDetails.length === 0 ? (
+                                            <div className="text-sm text-slate-400 py-6 text-center">
+                                                Tidak ada detail untuk produk ini pada periode filter.
+                                            </div>
+                                        ) : (
+                                            selectedProductDetails.map((row) => (
+                                                <div key={row.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            {row.order_id ? (
+                                                                <Link
+                                                                    href={`/admin/orders/${row.order_id}`}
+                                                                    className="font-bold text-slate-900 hover:underline truncate inline-block"
+                                                                >
+                                                                    {row.customer_name}
+                                                                </Link>
+                                                            ) : (
+                                                                <p className="font-bold text-slate-900 truncate">{row.customer_name}</p>
+                                                            )}
+                                                            <p className="text-[10px] text-slate-500 mt-0.5">
+                                                                Order: {row.order_id ? String(row.order_id).slice(-8) : '-'} •{' '}
+                                                                {row.date ? new Date(row.date).toLocaleDateString() : '-'}
+                                                            </p>
+                                                            <span
+                                                                className={`mt-1 inline-block text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${row.type === 'preorder' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}
+                                                            >
+                                                                {row.type}
+                                                            </span>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="font-black text-slate-900">x{row.qty}</p>
+                                                            <p className="text-[10px] text-slate-500 font-bold">{formatCurrency(row.total_value)}</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null}
+
                         {/* Summary Cards */}
                         <div className="grid grid-cols-2 gap-3">
                             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
@@ -198,16 +293,22 @@ export default function BackorderReportPage() {
                             </div>
                             <div className="space-y-3">
                                 {data.top_products?.map((p, idx: number) => (
-                                    <div key={idx} className="flex items-center justify-between">
+                                    <button
+                                        key={idx}
+                                        type="button"
+                                        onClick={() => setSelectedProduct(p)}
+                                        className="w-full flex items-center justify-between text-left rounded-xl p-2 -m-2 hover:bg-slate-50 active:scale-[0.99] transition"
+                                    >
                                         <div className="min-w-0 flex-1 mr-4">
                                             <p className="text-sm font-bold text-slate-900 truncate">{p.name}</p>
                                             <p className="text-[10px] text-slate-400 font-mono">{p.sku}</p>
+                                            <p className="text-[10px] text-slate-400">Tap untuk lihat customer</p>
                                         </div>
                                         <div className="text-right">
                                             <p className="text-sm font-black text-rose-600">x{p.qty}</p>
                                             <p className="text-[10px] text-slate-400">{formatCurrency(p.value)}</p>
                                         </div>
-                                    </div>
+                                    </button>
                                 ))}
                             </div>
                         </div>
@@ -243,7 +344,16 @@ export default function BackorderReportPage() {
                                         <div className="flex justify-between items-start mb-2">
                                             <div>
                                                 <h4 className="font-bold text-slate-900 text-sm">{item.product_name}</h4>
-                                                <p className="text-[10px] text-slate-400 mb-1">{item.customer_name}</p>
+                                                {item.order_id ? (
+                                                    <Link
+                                                        href={`/admin/orders/${item.order_id}`}
+                                                        className="text-[10px] text-slate-500 mb-1 inline-block hover:underline"
+                                                    >
+                                                        {item.customer_name}
+                                                    </Link>
+                                                ) : (
+                                                    <p className="text-[10px] text-slate-400 mb-1">{item.customer_name}</p>
+                                                )}
                                                 <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${item.type === 'preorder' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
                                                     {item.type}
                                                 </span>
