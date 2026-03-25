@@ -1078,7 +1078,7 @@ function ManualOrderContent() {
                         <button
                             type="button"
                             onClick={dismissSubmitPopup}
-	                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,432px)] rounded-2xl border px-5 py-4 text-left shadow-lg ${submitPopup.tone === 'success'
+	                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,432px)] origin-bottom-right scale-[1.2] rounded-2xl border px-5 py-4 text-left shadow-lg ${submitPopup.tone === 'success'
 	                                ? 'border-emerald-300 bg-emerald-50'
 	                                : submitPopup.tone === 'error'
 	                                    ? 'border-rose-300 bg-rose-50'

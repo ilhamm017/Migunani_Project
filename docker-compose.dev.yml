@@ -34,6 +34,8 @@ services:
       - back_end
     environment:
       NODE_ENV: development
+      # Allow accessing Next dev server via this host without cross-origin warnings/blocks.
+      NEXT_ALLOWED_DEV_ORIGINS: store.randompulse.my.id
     volumes:
       - ./front_end:/app
       - /app/node_modules

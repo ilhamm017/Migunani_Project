@@ -10,7 +10,15 @@ const frontendRoot = fs.existsSync(path.join(frontendFromRepoRoot, "app"))
 const backendApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const backendOrigin = backendApiBase.replace(/\/api\/v1\/?$/, "");
 
+const allowedDevOriginsFromEnv = (process.env.NEXT_ALLOWED_DEV_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean);
+
 const nextConfig: NextConfig = {
+  ...(allowedDevOriginsFromEnv.length
+    ? { allowedDevOrigins: allowedDevOriginsFromEnv }
+    : {}),
   turbopack: {
     root: frontendRoot,
   },
