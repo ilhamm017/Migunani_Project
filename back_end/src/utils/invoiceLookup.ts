@@ -62,6 +62,39 @@ export const findOrderIdsByInvoiceId = async (
     return Array.from(ids);
 };
 
+export const findOrderIdsByInvoiceIds = async (
+    invoiceIds: string[],
+    options?: { transaction?: Transaction }
+): Promise<Map<string, string[]>> => {
+    const uniqueIds = Array.from(new Set((invoiceIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+    const result = new Map<string, Set<string>>();
+    uniqueIds.forEach((id) => result.set(id, new Set<string>()));
+    if (uniqueIds.length === 0) return new Map<string, string[]>();
+
+    const invoiceItems = await InvoiceItem.findAll({
+        where: { invoice_id: { [Op.in]: uniqueIds } },
+        attributes: ['invoice_id'],
+        include: [{ model: OrderItem, attributes: ['order_id'] }],
+        transaction: options?.transaction
+    });
+
+    (invoiceItems as any[]).forEach((row: any) => {
+        const invoiceId = String(row?.invoice_id || '').trim();
+        if (!invoiceId) return;
+        const orderId = String(row?.OrderItem?.order_id || '').trim();
+        if (!orderId) return;
+        const bucket = result.get(invoiceId) || new Set<string>();
+        bucket.add(orderId);
+        result.set(invoiceId, bucket);
+    });
+
+    const flattened = new Map<string, string[]>();
+    result.forEach((set, invoiceId) => {
+        flattened.set(invoiceId, Array.from(set));
+    });
+    return flattened;
+};
+
 export const attachInvoicesToOrders = async (
     orders: any[],
     options?: { transaction?: Transaction }

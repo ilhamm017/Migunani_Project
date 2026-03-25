@@ -267,6 +267,14 @@ export default function CustomerInvoicesPage() {
           </Link>
         </div>
 
+        <Link
+          href="/invoices/all"
+          className="block rounded-2xl border border-slate-200 bg-white p-4 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50"
+        >
+          Lihat Semua Invoice (Gabungan)
+          <p className="mt-1 text-xs font-semibold text-slate-500">Termasuk yang aktif dan yang sudah selesai, dengan filter lengkap.</p>
+        </Link>
+
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div className="bg-rose-50 border border-rose-100 rounded-xl p-3">

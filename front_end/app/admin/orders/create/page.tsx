@@ -513,7 +513,7 @@ function ManualOrderContent() {
 			        try {
 		            const orderReason = orderOverrideReason.trim();
 		            const payload: Parameters<typeof api.orders.checkout>[0] = {
-	                customer_id: selectedCustomer.id, // Only works if admin
+	                ...(selectedCustomer?.id ? { customer_id: selectedCustomer.id } : {}), // Only works if admin
 	                items: cart.map(item => {
 	                    const baseline = Math.max(0, getProductPrice(item.product));
 	                    const deal = Math.max(0, getDealUnitPrice(item));

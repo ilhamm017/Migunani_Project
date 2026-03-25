@@ -204,6 +204,14 @@ export default function CustomerCompletedInvoicesPage() {
           </div>
         </div>
 
+        <Link
+          href="/invoices/all"
+          className="block rounded-2xl border border-slate-200 bg-white p-4 text-sm font-black text-slate-900 shadow-sm hover:bg-slate-50"
+        >
+          Lihat Semua Invoice (Gabungan)
+          <p className="mt-1 text-xs font-semibold text-slate-500">Filter lengkap untuk menampilkan seluruh invoice Anda.</p>
+        </Link>
+
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">

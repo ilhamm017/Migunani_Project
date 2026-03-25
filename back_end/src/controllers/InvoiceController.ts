@@ -3,12 +3,12 @@ import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, sequelize
 import { Op } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
-import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
+import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderIdsByInvoiceIds } from '../utils/invoiceLookup';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
 import { enqueueWhatsappNotification } from '../services/TransactionNotificationOutboxService';
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
-import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
+import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../utils/invoiceNetTotals';
 
 const toObjectOrEmpty = (value: unknown): Record<string, any> => {
     if (!value) return {};
@@ -62,9 +62,23 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
     const userRole = String(user?.role || '');
     const isAdminRole = ['super_admin', 'admin_finance', 'kasir', 'admin_gudang'].includes(userRole);
     if (userRole === 'customer') {
-        const customerId = String(invoice.getDataValue('customer_id') || '');
-        if (!customerId || customerId !== String(user.id)) {
+        const customerId = String(invoice.getDataValue('customer_id') || '').trim();
+        const userId = String(user.id || '').trim();
+        if (!userId) {
             throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
+        }
+        if (!customerId || customerId !== userId) {
+            const orderIds = await findOrderIdsByInvoiceId(invoiceId);
+            if (orderIds.length === 0) {
+                throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
+            }
+            const linked = await Order.findOne({
+                where: { id: { [Op.in]: orderIds }, customer_id: userId },
+                attributes: ['id']
+            });
+            if (!linked) {
+                throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
+            }
         }
     } else if (userRole === 'driver') {
         const orderIds = await findOrderIdsByInvoiceId(invoiceId);
@@ -211,7 +225,12 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
             where: { id: customerId },
             attributes: ['id', 'name', 'email', 'whatsapp_number']
         })
-        : null;
+        : userRole === 'customer'
+            ? await User.findOne({
+                where: { id: String(user.id) },
+                attributes: ['id', 'name', 'email', 'whatsapp_number']
+            })
+            : null;
 
     const deliveryReturs = orderIds.length > 0
         ? await Retur.findAll({
@@ -236,6 +255,235 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         customer: customer ? customer.get({ plain: true }) : null,
         delivery_returs: deliveryReturs.map((r: any) => r.get({ plain: true })),
         delivery_return_summary: deliveryReturnSummary
+    });
+});
+
+const parseCsvList = (raw: unknown): string[] =>
+    String(raw || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+const parseTriBool = (raw: unknown): boolean | null => {
+    const value = String(raw || '').trim().toLowerCase();
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return null;
+};
+
+const parseDateOrNull = (raw: unknown, opts?: { endOfDay?: boolean }): Date | null => {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const date = dateOnly ? new Date(`${value}T00:00:00.000Z`) : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    if (opts?.endOfDay && dateOnly) {
+        return new Date(`${value}T23:59:59.999Z`);
+    }
+    return date;
+};
+
+export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) => {
+    const user = req.user!;
+    const userRole = String(user?.role || '');
+    if (userRole !== 'customer') {
+        throw new CustomError('Tidak memiliki akses ke invoice customer.', 403);
+    }
+
+    const userId = String(user.id || '').trim();
+    if (!userId) {
+        throw new CustomError('Tidak memiliki akses ke invoice customer.', 403);
+    }
+
+    const page = Math.max(1, Number((req.query as any)?.page || 1) || 1);
+    const rawLimit = Number((req.query as any)?.limit || 20) || 20;
+    const limit = Math.min(100, Math.max(1, rawLimit));
+    const offset = (page - 1) * limit;
+
+    const q = String((req.query as any)?.q || '').trim();
+    const stage = String((req.query as any)?.stage || 'all').trim().toLowerCase();
+    const includeCollectibleTotals = String((req.query as any)?.include_collectible_total || 'true') === 'true';
+
+    const paymentStatusAllowed = new Set(['unpaid', 'paid', 'cod_pending', 'draft']);
+    const paymentMethodAllowed = new Set(['pending', 'transfer_manual', 'cod', 'cash_store']);
+    const shipmentStatusAllowed = new Set(['ready_to_ship', 'shipped', 'delivered', 'canceled']);
+    const sortAllowed = new Set([
+        'createdAt_desc',
+        'createdAt_asc',
+        'total_desc',
+        'total_asc',
+        'expiry_desc',
+        'expiry_asc'
+    ]);
+
+    const payment_status = parseCsvList((req.query as any)?.payment_status).filter((v) => paymentStatusAllowed.has(v));
+    const payment_method = parseCsvList((req.query as any)?.payment_method).filter((v) => paymentMethodAllowed.has(v));
+    const shipment_status = parseCsvList((req.query as any)?.shipment_status).filter((v) => shipmentStatusAllowed.has(v));
+    const orderId = String((req.query as any)?.order_id || '').trim();
+    const hasProof = parseTriBool((req.query as any)?.has_proof);
+    const verified = parseTriBool((req.query as any)?.verified);
+    const createdFrom = parseDateOrNull((req.query as any)?.created_from);
+    const createdTo = parseDateOrNull((req.query as any)?.created_to, { endOfDay: true });
+    const expiryFrom = parseDateOrNull((req.query as any)?.expiry_from);
+    const expiryTo = parseDateOrNull((req.query as any)?.expiry_to, { endOfDay: true });
+    const sort = String((req.query as any)?.sort || 'createdAt_desc').trim();
+    const minTotal = Number((req.query as any)?.min_total);
+    const maxTotal = Number((req.query as any)?.max_total);
+
+    const andClauses: any[] = [];
+    if (q) {
+        andClauses.push({
+            [Op.or]: [
+                { invoice_number: { [Op.like]: `%${q}%` } },
+                ...(q.length >= 8 ? [{ id: q }] : [])
+            ]
+        });
+    }
+    if (payment_status.length > 0) andClauses.push({ payment_status: { [Op.in]: payment_status } });
+    if (payment_method.length > 0) andClauses.push({ payment_method: { [Op.in]: payment_method } });
+    if (shipment_status.length > 0) andClauses.push({ shipment_status: { [Op.in]: shipment_status } });
+    if (createdFrom || createdTo) {
+        andClauses.push({
+            createdAt: {
+                ...(createdFrom ? { [Op.gte]: createdFrom } : {}),
+                ...(createdTo ? { [Op.lte]: createdTo } : {})
+            }
+        });
+    }
+    if (expiryFrom || expiryTo) {
+        andClauses.push({
+            expiry_date: {
+                ...(expiryFrom ? { [Op.gte]: expiryFrom } : {}),
+                ...(expiryTo ? { [Op.lte]: expiryTo } : {})
+            }
+        });
+    }
+    if (Number.isFinite(minTotal)) andClauses.push({ total: { [Op.gte]: minTotal } });
+    if (Number.isFinite(maxTotal)) andClauses.push({ total: { [Op.lte]: maxTotal } });
+
+    if (stage === 'completed') {
+        andClauses.push({
+            [Op.or]: [
+                { payment_status: 'paid' },
+                { payment_status: 'cod_pending', amount_paid: { [Op.gt]: 0 } }
+            ]
+        });
+    } else if (stage === 'active') {
+        andClauses.push({
+            [Op.or]: [
+                { payment_status: { [Op.in]: ['draft', 'unpaid'] } },
+                {
+                    payment_status: 'cod_pending',
+                    [Op.or]: [{ amount_paid: { [Op.lte]: 0 } }, { amount_paid: null }]
+                }
+            ]
+        });
+    }
+
+    if (hasProof !== null) {
+        if (hasProof) {
+            andClauses.push({ payment_proof_url: { [Op.ne]: null } });
+            andClauses.push({ payment_proof_url: { [Op.ne]: '' } });
+        } else {
+            andClauses.push({ [Op.or]: [{ payment_proof_url: null }, { payment_proof_url: '' }] });
+        }
+    }
+
+    if (verified !== null) {
+        andClauses.push({ verified_at: verified ? { [Op.ne]: null } : null });
+    }
+
+    const whereClause: any = andClauses.length > 0 ? { [Op.and]: andClauses } : {};
+
+    const orderWhere: any = { customer_id: userId };
+    if (orderId) orderWhere.id = orderId;
+
+    const orderBy: any[] = (() => {
+        const selected = sortAllowed.has(sort) ? sort : 'createdAt_desc';
+        if (selected === 'createdAt_asc') return [['createdAt', 'ASC']];
+        if (selected === 'total_desc') return [['total', 'DESC'], ['createdAt', 'DESC']];
+        if (selected === 'total_asc') return [['total', 'ASC'], ['createdAt', 'DESC']];
+        if (selected === 'expiry_asc') return [['expiry_date', 'ASC'], ['createdAt', 'DESC']];
+        if (selected === 'expiry_desc') return [['expiry_date', 'DESC'], ['createdAt', 'DESC']];
+        return [['createdAt', 'DESC']];
+    })();
+
+    const result = await Invoice.findAndCountAll({
+        where: whereClause,
+        attributes: [
+            'id',
+            'invoice_number',
+            'payment_status',
+            'payment_method',
+            'payment_proof_url',
+            'amount_paid',
+            'subtotal',
+            'discount_amount',
+            'shipping_fee_total',
+            'tax_amount',
+            'total',
+            'shipment_status',
+            'shipped_at',
+            'delivered_at',
+            'delivery_proof_url',
+            'verified_at',
+            'expiry_date',
+            'createdAt',
+            'updatedAt'
+        ],
+        include: [
+            {
+                model: InvoiceItem,
+                as: 'Items',
+                attributes: [],
+                required: true,
+                include: [
+                    {
+                        model: OrderItem,
+                        attributes: [],
+                        required: true,
+                        include: [
+                            {
+                                model: Order,
+                                attributes: [],
+                                required: true,
+                                where: orderWhere
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+        distinct: true,
+        limit,
+        offset,
+        order: orderBy
+    });
+
+    const invoices = result.rows.map((row) => row.get({ plain: true }) as any);
+    const invoiceIds = invoices.map((inv) => String(inv?.id || '').trim()).filter(Boolean);
+    const orderIdsByInvoiceId = await findOrderIdsByInvoiceIds(invoiceIds);
+    const totalsByInvoiceId = includeCollectibleTotals && invoiceIds.length > 0
+        ? await computeInvoiceNetTotalsBulk(invoiceIds)
+        : new Map<string, any>();
+
+    const enriched = invoices.map((inv) => {
+        const id = String(inv?.id || '').trim();
+        const computed = totalsByInvoiceId.get(id);
+        return {
+            ...inv,
+            orderIds: orderIdsByInvoiceId.get(id) || [],
+            collectible_total: computed ? Number(computed.net_total || 0) : null,
+            delivery_return_summary: computed || null
+        };
+    });
+
+    return res.json({
+        total: result.count,
+        totalPages: Math.ceil(Number(result.count) / limit),
+        currentPage: page,
+        limit,
+        invoices: enriched
     });
 });
 

@@ -166,6 +166,26 @@ export const api = {
 
     invoices: {
         getById: (invoiceId: string) => apiClient.get<InvoiceDetailResponse>(`/invoices/${invoiceId}`),
+        getMy: (params?: {
+            page?: number;
+            limit?: number;
+            q?: string;
+            stage?: 'all' | 'active' | 'completed' | string;
+            payment_status?: string; // comma-separated
+            payment_method?: string; // comma-separated
+            shipment_status?: string; // comma-separated
+            has_proof?: 'true' | 'false' | string;
+            verified?: 'true' | 'false' | string;
+            created_from?: string;
+            created_to?: string;
+            expiry_from?: string;
+            expiry_to?: string;
+            min_total?: number | string;
+            max_total?: number | string;
+            order_id?: string;
+            sort?: 'createdAt_desc' | 'createdAt_asc' | 'total_desc' | 'total_asc' | 'expiry_desc' | 'expiry_asc' | string;
+            include_collectible_total?: 'true' | 'false' | string;
+        }) => apiClient.get(`/invoices/my`, { params }),
         uploadPaymentProof: (invoiceId: string, formData: FormData) =>
             apiClient.post(`/invoices/${invoiceId}/proof`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
