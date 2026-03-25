@@ -2,10 +2,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Upload, ArrowLeft, CheckCircle2, XCircle, Truck } from 'lucide-react';
+import { Upload, ArrowLeft, CheckCircle2, XCircle, Truck, Camera, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { notifyAlert, notifyOpen } from '@/lib/notify';
@@ -67,6 +67,10 @@ const buildExpectedRows = (invoice: InvoiceDetailResponse | null): CheckRow[] =>
     .sort((a, b) => b.qty_expected - a.qty_expected);
 };
 
+type CameraTarget =
+  | { kind: 'header' }
+  | { kind: 'item'; productId: string };
+
 export default function TrackerGudangCheckPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang'], '/admin/orders');
   const router = useRouter();
@@ -82,6 +86,111 @@ export default function TrackerGudangCheckPage() {
   const [note, setNote] = useState('');
   const [result, setResult] = useState<'pass' | 'fail'>('pass');
   const [evidence, setEvidence] = useState<File | null>(null);
+
+  const [cameraTarget, setCameraTarget] = useState<CameraTarget | null>(null);
+  const [cameraFacingMode, setCameraFacingMode] = useState<'environment' | 'user'>('environment');
+  const [cameraError, setCameraError] = useState('');
+  const [cameraReady, setCameraReady] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = useCallback(() => {
+    setCameraReady(false);
+    const stream = streamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        try { track.stop(); } catch { /* ignore */ }
+      });
+    }
+    streamRef.current = null;
+    if (videoRef.current) {
+      try { (videoRef.current as any).srcObject = null; } catch { /* ignore */ }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!cameraTarget) {
+      stopCamera();
+      setCameraError('');
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Browser tidak mendukung akses kamera.');
+      return;
+    }
+
+    let cancelled = false;
+    setCameraError('');
+    setCameraReady(false);
+
+    void (async () => {
+      try {
+        stopCamera();
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: cameraFacingMode },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        const video = videoRef.current;
+        if (!video) return;
+        (video as any).srcObject = stream;
+        await video.play();
+        if (!cancelled) setCameraReady(true);
+      } catch (error: any) {
+        console.error('Camera access failed:', error);
+        setCameraError(String(error?.message || 'Gagal mengakses kamera. Cek izin kamera di browser.'));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraFacingMode, cameraTarget, stopCamera]);
+
+  const capturePhoto = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const width = Number(video.videoWidth || 0);
+    const height = Number(video.videoHeight || 0);
+    if (!width || !height) {
+      notifyAlert('Kamera belum siap. Tunggu sebentar lalu coba lagi.');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, width, height);
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9));
+    if (!blob) {
+      notifyAlert('Gagal mengambil foto.');
+      return;
+    }
+
+    const timestamp = Date.now();
+    const fileName = cameraTarget?.kind === 'item'
+      ? `checker-item-${cameraTarget.productId}-${timestamp}.jpg`
+      : `checker-${invoiceId}-${timestamp}.jpg`;
+    const file = new File([blob], fileName, { type: 'image/jpeg' });
+
+    if (!cameraTarget) return;
+    if (cameraTarget.kind === 'header') {
+      setEvidence(file);
+    } else {
+      const productId = cameraTarget.productId;
+      setRows((prev) => prev.map((row) => row.product_id === productId ? { ...row, evidence: file } : row));
+    }
+
+    setCameraTarget(null);
+  }, [cameraTarget, invoiceId]);
 
   const mismatchCount = useMemo(() => {
     return rows.filter((r) => r.qty_checked !== r.qty_expected || r.condition !== 'ok').length;
@@ -207,6 +316,61 @@ export default function TrackerGudangCheckPage() {
 
   return (
     <div className="p-6 space-y-5 pb-24">
+      {cameraTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg overflow-hidden rounded-[28px] bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-600">Kamera Checker</p>
+                <p className="text-sm font-black text-slate-900">
+                  {cameraTarget.kind === 'item' ? 'Ambil foto bukti per item' : 'Ambil foto bukti checker'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCameraTarget(null)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-black uppercase text-slate-700"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="bg-black">
+              <video ref={videoRef} playsInline className="w-full aspect-video object-cover" />
+            </div>
+
+            <div className="space-y-2 px-4 py-4">
+              {cameraError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] font-bold text-rose-700">
+                  {cameraError}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCameraFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase text-slate-700 disabled:opacity-60"
+                  disabled={!cameraReady}
+                >
+                  <RefreshCw size={14} /> Balik Kamera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void capturePhoto()}
+                  className="btn-3d inline-flex items-center gap-2 rounded-2xl bg-cyan-600 px-4 py-3 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-60"
+                  disabled={!cameraReady}
+                >
+                  <Camera size={14} /> Ambil Foto
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Jika kamera tidak muncul, pastikan izin kamera diaktifkan untuk domain ini.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <Link
           href="/admin/orders"
@@ -319,11 +483,19 @@ export default function TrackerGudangCheckPage() {
                   <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-8 group-hover:border-cyan-300 group-hover:bg-cyan-50/30 transition-all">
                     <Upload size={24} className="text-slate-400 group-hover:text-cyan-600 mb-2" />
                     <p className="text-xs font-bold text-slate-600">
-                      {evidence ? evidence.name : 'Klik untuk ambil foto'}
+                      {evidence ? evidence.name : 'Klik untuk pilih file (galeri)'}
                     </p>
                     <p className="text-[11px] text-slate-400 mt-1">Maks 5MB</p>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => (busy ? null : setCameraTarget({ kind: 'header' }))}
+                  className="btn-3d mt-2 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-600 px-4 py-3 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-60"
+                  disabled={busy}
+                >
+                  <Camera size={14} /> Buka Kamera
+                </button>
               </div>
             </div>
 
@@ -404,10 +576,18 @@ export default function TrackerGudangCheckPage() {
                             disabled={busy}
                           />
                           <span className="inline-flex items-center justify-center rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 border border-slate-200">
-                            Upload Foto
+                            Pilih File
                           </span>
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => (busy ? null : setCameraTarget({ kind: 'item', productId: row.product_id }))}
+                        className="btn-3d inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-600 px-4 py-3 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-60"
+                        disabled={busy}
+                      >
+                        <Camera size={14} /> Ambil Foto Item (Kamera)
+                      </button>
                     </div>
                   );
                 })}
