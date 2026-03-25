@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Camera, MessageCircle, Send, Upload, Coins, CreditCard, Undo2 } from 'lucide-react';
@@ -84,6 +85,12 @@ export default function DriverOrderDetailPage() {
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
   const [invoiceDetail, setInvoiceDetail] = useState<InvoiceDetailResponse | null>(null);
   const [proof, setProof] = useState<File | null>(null);
+  const [deliveryProofCameraOpen, setDeliveryProofCameraOpen] = useState(false);
+  const [deliveryProofCameraFacingMode, setDeliveryProofCameraFacingMode] = useState<'environment' | 'user'>('environment');
+  const [deliveryProofCameraError, setDeliveryProofCameraError] = useState('');
+  const [deliveryProofCameraReady, setDeliveryProofCameraReady] = useState(false);
+  const deliveryProofVideoRef = useRef<HTMLVideoElement | null>(null);
+  const deliveryProofStreamRef = useRef<MediaStream | null>(null);
   const [loading, setLoading] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isIssueOpen, setIsIssueOpen] = useState(false);
@@ -283,6 +290,98 @@ export default function DriverOrderDetailPage() {
       orderCount: groupedOrderIds.length,
     };
   }, [groupedOrderIds.length, groupedOrders, invoiceDetail?.id, invoiceDetail?.invoice_number, invoiceDetail?.payment_method, invoiceDetail?.payment_status, invoiceDetail?.total, order?.Invoice?.id, order?.Invoice?.invoice_number, order?.invoice_id, order?.invoice_number, resolvedInvoiceId]);
+
+  const stopDeliveryProofCamera = useCallback(() => {
+    setDeliveryProofCameraReady(false);
+    const stream = deliveryProofStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        try { track.stop(); } catch { /* ignore */ }
+      });
+    }
+    deliveryProofStreamRef.current = null;
+    if (deliveryProofVideoRef.current) {
+      try { (deliveryProofVideoRef.current as any).srcObject = null; } catch { /* ignore */ }
+    }
+  }, []);
+
+  useEffect(() => () => {
+    stopDeliveryProofCamera();
+  }, [stopDeliveryProofCamera]);
+
+  useEffect(() => {
+    if (!deliveryProofCameraOpen) {
+      stopDeliveryProofCamera();
+      setDeliveryProofCameraError('');
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setDeliveryProofCameraError('Browser tidak mendukung akses kamera.');
+      return;
+    }
+
+    let cancelled = false;
+    setDeliveryProofCameraError('');
+    setDeliveryProofCameraReady(false);
+
+    void (async () => {
+      try {
+        stopDeliveryProofCamera();
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: deliveryProofCameraFacingMode },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        deliveryProofStreamRef.current = stream;
+        const video = deliveryProofVideoRef.current;
+        if (!video) return;
+        (video as any).srcObject = stream;
+        await video.play();
+        if (!cancelled) setDeliveryProofCameraReady(true);
+      } catch (error: any) {
+        console.error('Delivery proof camera access failed:', error);
+        setDeliveryProofCameraError(String(error?.message || 'Gagal mengakses kamera. Cek izin kamera di browser.'));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deliveryProofCameraFacingMode, deliveryProofCameraOpen, stopDeliveryProofCamera]);
+
+  const captureDeliveryProofPhoto = useCallback(async () => {
+    const video = deliveryProofVideoRef.current;
+    if (!video) return;
+    const width = Number(video.videoWidth || 0);
+    const height = Number(video.videoHeight || 0);
+    if (!width || !height) {
+      notifyAlert('Kamera belum siap. Tunggu sebentar lalu coba lagi.');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, width, height);
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9));
+    if (!blob) {
+      notifyAlert('Gagal mengambil foto.');
+      return;
+    }
+
+    const timestamp = Date.now();
+    const proofRef = String(invoiceContext.invoiceId || orderId || '').slice(-8).toUpperCase() || 'INV';
+    const file = new File([blob], `delivery-proof-${proofRef}-${timestamp}.jpg`, { type: 'image/jpeg' });
+    setProof(file);
+    setDeliveryProofCameraOpen(false);
+  }, [invoiceContext.invoiceId, orderId]);
   const invoiceItemRows = useMemo(() => {
     const itemMap = new Map<string, { key: string; name: string; qty: number; orderIds: Set<string> }>();
     const invoiceItems = getInvoiceItems(invoiceDetail);
@@ -1530,22 +1629,103 @@ export default function DriverOrderDetailPage() {
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
             Bukti Foto (Wajib jika Selesai)
           </label>
-          <div className="relative group">
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={(e) => setProof(e.target.files?.[0] || null)}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-            />
-            <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 group-hover:border-emerald-300 rounded-3xl p-8 bg-slate-50 group-hover:bg-emerald-50/30 transition-all">
-              <Upload size={24} className="text-slate-400 group-hover:text-emerald-500 mb-2" />
-              <p className="text-xs font-bold text-slate-500 group-hover:text-emerald-700">
-                {proof ? proof.name : 'Klik untuk Ambil Foto Bukti'}
-              </p>
+          <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 p-6 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-slate-900">Bukti Pengiriman</p>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  {proof ? `Tersimpan: ${proof.name}` : 'Belum ada foto. Ambil foto dengan kamera.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeliveryProofCameraOpen(true)}
+                className="shrink-0 rounded-2xl bg-emerald-600 text-white px-4 py-3 text-[11px] font-black uppercase inline-flex items-center gap-2"
+              >
+                <Camera size={16} />
+                Ambil Foto
+              </button>
             </div>
+            {proof && (
+              <button
+                type="button"
+                onClick={() => setProof(null)}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase text-slate-700"
+              >
+                Hapus Foto
+              </button>
+            )}
           </div>
         </div>
+
+        {deliveryProofCameraOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Kamera</p>
+                  <h3 className="mt-2 text-lg font-black text-slate-900">Ambil bukti pengiriman</h3>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Foto ini wajib untuk menyelesaikan pengiriman.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeliveryProofCameraOpen(false)}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black uppercase text-slate-700"
+                >
+                  Tutup
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden">
+                <video ref={deliveryProofVideoRef} muted playsInline className="w-full aspect-video object-cover" />
+              </div>
+
+              {deliveryProofCameraError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] font-bold text-rose-700">
+                  {deliveryProofCameraError}
+                </div>
+              )}
+
+              {!deliveryProofCameraReady && deliveryProofCameraError && (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 space-y-2">
+                  <p className="text-[11px] font-bold text-slate-700">Alternatif: upload file (jika kamera tidak tersedia)</p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      if (file) setProof(file);
+                      setDeliveryProofCameraOpen(false);
+                    }}
+                    className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-[10px] file:font-black file:uppercase file:text-slate-800"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDeliveryProofCameraFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase text-slate-700 disabled:opacity-60"
+                >
+                  Ganti Kamera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void captureDeliveryProofPhoto()}
+                  disabled={!deliveryProofCameraReady}
+                  className="w-full rounded-2xl bg-emerald-600 text-white px-4 py-3 text-[11px] font-black uppercase disabled:opacity-60 inline-flex items-center justify-center gap-2"
+                >
+                  <Camera size={16} />
+                  Ambil Foto
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-3 pt-2">
           {customer.id ? (
