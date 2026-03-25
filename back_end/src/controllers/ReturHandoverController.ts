@@ -5,6 +5,7 @@ import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { ReturService } from '../services/ReturService';
 import { calculateDriverCodExposure } from '../utils/codExposure';
+import { findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
 
 export const getReturHandovers = asyncWrapper(async (req: Request, res: Response) => {
     const status = typeof req.query?.status === 'string' ? req.query.status.trim().toLowerCase() : '';
@@ -13,7 +14,7 @@ export const getReturHandovers = asyncWrapper(async (req: Request, res: Response
         where.status = status;
     }
 
-    const rows = await ReturHandover.findAll({
+    const rows = await findAllReturHandoversSafe({
         where,
         include: [
             { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'] },
@@ -49,7 +50,7 @@ export const receiveReturHandover = asyncWrapper(async (req: Request, res: Respo
     }
 
     try {
-        const handover = await ReturHandover.findByPk(id, {
+        const handover = await findReturHandoverByPkSafe(id, {
             include: [{ model: ReturHandoverItem, as: 'Items', attributes: ['retur_id'] }],
             transaction: t,
             lock: t.LOCK.UPDATE
@@ -119,7 +120,7 @@ export const receiveReturHandover = asyncWrapper(async (req: Request, res: Respo
             await driver.update({ debt: debtAfter }, { transaction: t });
         }
 
-        await handover.update({
+        await updateReturHandoverSafe(handover, {
             status: 'received',
             received_at: new Date(),
             received_by: actor.id,

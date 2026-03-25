@@ -54,6 +54,27 @@ Jika ada transaksi yang masih menunjuk ke produk dengan SKU yang salah/lama, gun
 mysql -u root -p migunani_motor_db < back_end/sql/20260325_repoint_product_transactions_by_sku.sql
 ```
 
+## Add retur handover driver debt snapshot
+
+Jalankan SQL ini untuk menambah kolom snapshot hutang driver pada tabel `retur_handovers` (dipakai untuk audit riwayat serah-terima retur dan halaman riwayat setoran driver):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260325_add_retur_handovers_driver_debt_snapshot.sql
+```
+
+Catatan:
+- Migrasi ini dijalankan **sekali per database** (production/staging/local). Deploy ulang backend tidak otomatis menjalankan migrasi.
+- Model Sequelize **tidak** otomatis menambah kolom di DB (kecuali kamu sengaja mengaktifkan mode sync/alter), jadi migrasi SQL tetap diperlukan.
+- Backend juga memiliki startup check yang akan mencoba menambahkan kolom ini secara otomatis saat start (butuh hak `ALTER`), tapi tetap disarankan menjalankan SQL migrasi agar proses deployment terkontrol.
+
+## Add COD settlements audit columns
+
+Jalankan SQL ini untuk menambah kolom audit pada tabel `cod_settlements` (dipakai oleh endpoint `/admin/driver-deposit/history`):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260325_add_cod_settlements_audit_columns.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

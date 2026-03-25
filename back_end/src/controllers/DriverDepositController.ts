@@ -25,6 +25,7 @@ import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../utils/orderNotification';
 import { JournalService } from '../services/JournalService';
 import { ReturService } from '../services/ReturService';
+import { bulkUpdateReturHandoversSafe, findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
 
 type DriverDepositCodInvoiceRow = {
     invoice_id: string;
@@ -106,10 +107,17 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
     drivers.forEach((d: any) => driverById.set(String(d.id), d));
 
     // COD invoices pending (latest invoice per order to avoid stale duplicates)
+    // IMPORTANT: keep this query filtered to avoid loading the entire invoice_items table into memory.
     const allInvoiceItems = await InvoiceItem.findAll({
+        attributes: ['invoice_id', 'order_item_id'],
         include: [{
             model: Invoice,
-            required: true
+            required: true,
+            attributes: ['id', 'invoice_number', 'courier_id', 'payment_method', 'payment_status', 'createdAt'],
+            where: {
+                payment_method: 'cod',
+                payment_status: 'cod_pending',
+            }
         }, {
             model: OrderItem,
             required: true,
@@ -132,12 +140,8 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
 
     const invoiceIds: string[] = [];
     latestInvoiceByOrderId.forEach((inv) => {
-        const method = String(inv?.payment_method || '').trim().toLowerCase();
-        const status = String(inv?.payment_status || '').trim().toLowerCase();
-        if (method !== 'cod' || status !== 'cod_pending') return;
         const id = String(inv?.id || '').trim();
-        if (!id) return;
-        invoiceIds.push(id);
+        if (id) invoiceIds.push(id);
     });
     const uniqueInvoiceIds = Array.from(new Set(invoiceIds));
 
@@ -231,7 +235,7 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         codRowsByDriverId.set(driverId, list);
     });
 
-    const handovers = await ReturHandover.findAll({
+    const handoverFindArgs: any = {
         where: { status: 'submitted' },
         include: [{
             model: ReturHandoverItem,
@@ -243,7 +247,9 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
             }]
         }],
         order: [['submitted_at', 'DESC'], ['id', 'DESC']]
-    });
+    };
+
+    const handovers: any[] = await findAllReturHandoversSafe(handoverFindArgs);
     const handoversByDriverId = new Map<string, DriverDepositHandoverRow[]>();
     handovers.forEach((handover: any) => {
         const driverId = String(handover?.driver_id || '').trim();
@@ -348,7 +354,7 @@ export const getDriverDepositHistory = asyncWrapper(async (req: Request, res: Re
         offset,
     });
 
-    const handovers = await ReturHandover.findAll({
+    const historyHandoverFindArgs: any = {
         where: handoverWhere,
         include: [
             { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
@@ -364,10 +370,12 @@ export const getDriverDepositHistory = asyncWrapper(async (req: Request, res: Re
                 }]
             }
         ],
-        order: [[sequelize.literal('COALESCE(received_at, submitted_at)'), 'DESC'], ['id', 'DESC']],
+        order: [[sequelize.fn('COALESCE', sequelize.col('received_at'), sequelize.col('submitted_at')), 'DESC'], ['id', 'DESC']],
         limit,
         offset,
-    });
+    };
+
+    const handovers: any[] = await findAllReturHandoversSafe(historyHandoverFindArgs);
 
     const safeParseInvoiceIds = (value: unknown): string[] => {
         if (typeof value !== 'string' || !value.trim()) return [];
@@ -534,7 +542,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     throw new CustomError('items wajib diisi untuk menerima handover', 400);
                 }
 
-                const handover = await ReturHandover.findByPk(handoverId, {
+                const handover = await findReturHandoverByPkSafe(handoverId, {
                     include: [{ model: ReturHandoverItem, as: 'Items', attributes: ['retur_id'] }],
                     transaction: t,
                     lock: t.LOCK.UPDATE
@@ -596,7 +604,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     processedReturIds.push(returId);
                 }
 
-                await handover.update({
+                await updateReturHandoverSafe(handover, {
                     status: 'received',
                     received_at: new Date(),
                     received_by: actor.id,
@@ -626,7 +634,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             amountReceived = Math.round(received * 100) / 100;
 
             // Block if any selected invoice still has pending retur handover
-            const pending = await ReturHandover.findAll({
+            const pending = await findAllReturHandoversSafe({
                 where: { invoice_id: { [Op.in]: invoiceIds }, status: 'submitted' },
                 transaction: t,
                 lock: t.LOCK.UPDATE
@@ -797,7 +805,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
 
             await settlement.update({ driver_debt_after: driverDebtAfter }, { transaction: t });
             if (processedHandoverIds.length > 0) {
-                await ReturHandover.update(
+                await bulkUpdateReturHandoversSafe(
                     { driver_debt_after: driverDebtAfter },
                     { where: { id: { [Op.in]: processedHandoverIds } }, transaction: t }
                 );
@@ -841,7 +849,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             await driver.update({ debt: exposure.exposure }, { transaction: t });
             const driverDebtAfter = toNumber((driver as any).debt);
             if (processedHandoverIds.length > 0) {
-                await ReturHandover.update(
+                await bulkUpdateReturHandoversSafe(
                     { driver_debt_after: driverDebtAfter },
                     { where: { id: { [Op.in]: processedHandoverIds } }, transaction: t }
                 );

@@ -6,6 +6,7 @@ Aplikasi full-stack untuk operasional toko suku cadang motor: e-commerce, invent
 
 - Panduan menyeluruh aplikasi: `GUIDE_APLIKASI_MIGUNANI_MOTOR.md`
 - Onboarding cepat developer: `ONBOARDING_DEVELOPER.md`
+- Backup database MySQL: `docs/BACKUP_DATABASE.md`
 - Kontrak API (aktual): `back_end/docs/API_Contract.md`
 - Daftar halaman frontend (aktual): `front_end/PAGE_LIST.md`
 - Catatan migrasi SQL manual: `back_end/sql/README.md`

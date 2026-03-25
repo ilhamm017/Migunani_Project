@@ -425,6 +425,95 @@ const ensureInboundCostVarianceColumnsReady = async () => {
     }
 };
 
+const ensureReturHandoverDebtSnapshotColumnsReady = async () => {
+    const tableName = 'retur_handovers';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const requiredColumns = ['driver_debt_before', 'driver_debt_after'] as const;
+    const missing: string[] = [];
+    for (const columnName of requiredColumns) {
+        const ok = await columnExists(tableName, columnName);
+        if (!ok) missing.push(columnName);
+    }
+
+    if (missing.length === 0) return;
+
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Applying targeted ALTER TABLE...`);
+
+    const addColumn = async (columnName: string, sqlType: string) => {
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${sqlType}`
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_FIELDNAME') return;
+            throw error;
+        }
+    };
+
+    // Add in order so AFTER clause is valid.
+    if (missing.includes('driver_debt_before')) {
+        await addColumn('driver_debt_before', 'DECIMAL(15, 2) NULL AFTER `note`');
+    }
+    if (missing.includes('driver_debt_after')) {
+        await addColumn('driver_debt_after', 'DECIMAL(15, 2) NULL AFTER `driver_debt_before`');
+    }
+};
+
+const ensureCodSettlementAuditColumnsReady = async () => {
+    const tableName = 'cod_settlements';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const requiredColumns = [
+        'total_expected',
+        'diff_amount',
+        'driver_debt_before',
+        'driver_debt_after',
+        'invoice_ids_json',
+    ] as const;
+
+    const missing: string[] = [];
+    for (const columnName of requiredColumns) {
+        const ok = await columnExists(tableName, columnName);
+        if (!ok) missing.push(columnName);
+    }
+
+    if (missing.length === 0) return;
+
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Applying targeted ALTER TABLE...`);
+
+    const addColumn = async (columnName: string, sqlType: string) => {
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${sqlType}`
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_FIELDNAME') return;
+            throw error;
+        }
+    };
+
+    if (missing.includes('total_expected')) {
+        await addColumn('total_expected', 'DECIMAL(15, 2) NULL AFTER `total_amount`');
+    }
+    if (missing.includes('diff_amount')) {
+        await addColumn('diff_amount', 'DECIMAL(15, 2) NULL AFTER `total_expected`');
+    }
+    if (missing.includes('driver_debt_before')) {
+        await addColumn('driver_debt_before', 'DECIMAL(15, 2) NULL AFTER `diff_amount`');
+    }
+    if (missing.includes('driver_debt_after')) {
+        await addColumn('driver_debt_after', 'DECIMAL(15, 2) NULL AFTER `driver_debt_before`');
+    }
+    if (missing.includes('invoice_ids_json')) {
+        await addColumn('invoice_ids_json', 'TEXT NULL AFTER `driver_debt_after`');
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -436,6 +525,8 @@ const syncDatabaseWithRetry = async () => {
         await sequelize.sync();
         await ensureCriticalTablesReady();
         await ensureInboundCostVarianceColumnsReady();
+        await ensureReturHandoverDebtSnapshotColumnsReady();
+        await ensureCodSettlementAuditColumnsReady();
         return;
     }
 
@@ -447,6 +538,8 @@ const syncDatabaseWithRetry = async () => {
             await sequelize.sync({ alter: true });
             await ensureCriticalTablesReady();
             await ensureInboundCostVarianceColumnsReady();
+            await ensureReturHandoverDebtSnapshotColumnsReady();
+            await ensureCodSettlementAuditColumnsReady();
             return;
         } catch (error) {
             lastError = error;
@@ -461,6 +554,8 @@ const syncDatabaseWithRetry = async () => {
             await sequelize.sync();
             await ensureCriticalTablesReady();
             await ensureInboundCostVarianceColumnsReady();
+            await ensureReturHandoverDebtSnapshotColumnsReady();
+            await ensureCodSettlementAuditColumnsReady();
             return;
         }
     }

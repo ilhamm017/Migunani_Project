@@ -193,6 +193,7 @@ export const createReturHandover = asyncWrapper(async (req: Request, res: Respon
 
         const existing = await ReturHandover.findOne({
             where: { invoice_id: String(invoice.id) },
+            attributes: ['id', 'invoice_id'],
             transaction: t,
             lock: t.LOCK.UPDATE
         });

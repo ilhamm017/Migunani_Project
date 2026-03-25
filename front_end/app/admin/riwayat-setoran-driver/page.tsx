@@ -94,21 +94,27 @@ export default function AdminRiwayatSetoranDriverPage() {
   const [expandedHandover, setExpandedHandover] = useState<Record<string, boolean>>({});
 
   const loadDrivers = useCallback(async () => {
-    const res = await api.admin.driverDeposit.getList();
-    const list = Array.isArray(res.data) ? (res.data as any[]) : [];
-    const opts: DriverOption[] = list
-      .map((row) => row?.driver)
-      .filter(Boolean)
-      .map((d) => ({
-        id: String(d.id || ''),
-        name: String(d.name || 'Driver'),
-        whatsapp_number: d.whatsapp_number ? String(d.whatsapp_number) : null,
-      }))
-      .filter((d) => d.id);
-    // unique by id
-    const map = new Map<string, DriverOption>();
-    opts.forEach((d) => { if (!map.has(d.id)) map.set(d.id, d); });
-    setDrivers(Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)));
+    try {
+      const res = await api.admin.driverDeposit.getList();
+      const list = Array.isArray(res.data) ? (res.data as any[]) : [];
+      const opts: DriverOption[] = list
+        .map((row) => row?.driver)
+        .filter(Boolean)
+        .map((d) => ({
+          id: String(d.id || ''),
+          name: String(d.name || 'Driver'),
+          whatsapp_number: d.whatsapp_number ? String(d.whatsapp_number) : null,
+        }))
+        .filter((d) => d.id);
+      // unique by id
+      const map = new Map<string, DriverOption>();
+      opts.forEach((d) => { if (!map.has(d.id)) map.set(d.id, d); });
+      setDrivers(Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (err: any) {
+      const message = String(err?.response?.data?.message || err?.message || 'Gagal memuat driver.');
+      setErrorMsg(message);
+      setDrivers([]);
+    }
   }, []);
 
   const loadHistory = useCallback(async () => {

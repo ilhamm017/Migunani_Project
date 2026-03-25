@@ -3,6 +3,7 @@ import { CustomError } from '../utils/CustomError';
 import { UniqueConstraintError, ValidationError } from 'sequelize';
 import { MulterError } from 'multer';
 import { cleanupUploadedFiles } from '../utils/uploadPolicy';
+import * as crypto from 'crypto';
 
 export const errorMiddleware = async (
     err: Error,
@@ -13,9 +14,32 @@ export const errorMiddleware = async (
     let statusCode = 500;
     let message = 'Internal Server Error';
     let errors = undefined;
+    const requestIdFromHeader = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].trim() : '';
+    const request_id = requestIdFromHeader || crypto.randomUUID();
 
     // Log the error for debugging
-    console.error(`[Error Handler] ${req.method} ${req.url} - ${err.name}: ${err.message}`);
+    console.error(`[Error Handler] [${request_id}] ${req.method} ${req.url} - ${err.name}: ${err.message}`);
+    // Print stack + (when available) the underlying SQL details for faster production debugging.
+    console.error(err);
+    const anyErr = err as any;
+    const sql = anyErr?.sql || anyErr?.parent?.sql || anyErr?.original?.sql;
+    const sqlMessage = anyErr?.parent?.sqlMessage || anyErr?.original?.sqlMessage;
+    if (sqlMessage) console.error(`[SQL Message] ${sqlMessage}`);
+    if (sql) console.error(`[SQL] ${sql}`);
+
+    const headerDebugToken = typeof req.headers['x-error-debug-token'] === 'string' ? req.headers['x-error-debug-token'].trim() : '';
+    const envDebugToken = String(process.env.ERROR_DEBUG_TOKEN || '').trim();
+    const debugTokenOk = (() => {
+        if (!envDebugToken || !headerDebugToken) return false;
+        const a = Buffer.from(headerDebugToken);
+        const b = Buffer.from(envDebugToken);
+        if (a.length !== b.length) return false;
+        return crypto.timingSafeEqual(a, b);
+    })();
+    const adminDebugRequested = String(req.headers['x-admin-debug'] || '').trim() === '1';
+    const isSuperAdmin = String((req as any).user?.role || '') === 'super_admin';
+    const exposeErrorDetails = process.env.EXPOSE_ERROR_DETAILS === 'true' || debugTokenOk || (adminDebugRequested && isSuperAdmin);
+    const exposeSql = process.env.EXPOSE_ERROR_SQL === 'true';
 
     // Handing our own Custom Errors (Operational errors)
     if (err instanceof CustomError) {
@@ -58,6 +82,16 @@ export const errorMiddleware = async (
         status: 'error',
         statusCode,
         message,
+        request_id,
+        ...(exposeErrorDetails && {
+            debug: {
+                name: err.name,
+                message: err.message,
+                stack: typeof (err as any)?.stack === 'string' ? (err as any).stack.split('\n').slice(0, 20).join('\n') : undefined,
+                sqlMessage,
+                ...(exposeSql && sql ? { sql: String(sql) } : null),
+            }
+        }),
         ...(errors && { errors }) // Only include errors array if it exists
     });
 };
