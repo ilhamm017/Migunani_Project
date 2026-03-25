@@ -22,9 +22,37 @@ interface ProductRow {
   sku: string;
   name: string;
   stock_quantity: number;
+  min_stock?: number;
   base_price: number;
   unit?: string;
 }
+
+interface BackorderSuggestion {
+  id: string;
+  sku: string;
+  name: string;
+  stock: number;
+  shortage: number;
+}
+
+interface BackorderItemRow {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  stock_quantity: number;
+  shortage_qty: number;
+}
+
+interface BackorderOrderRow {
+  shortage_items?: BackorderItemRow[];
+  status_label?: 'fulfilled' | 'backorder' | 'preorder' | 'unallocated' | string;
+}
+
+type BarcodeDetectorInstance = {
+  detect: (video: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+};
+
+type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorInstance;
 
 type ApiErrorWithMessage = {
   response?: { data?: { message?: string } };
@@ -44,6 +72,25 @@ export default function InboundCreatePage() {
   const [items, setItems] = useState<Array<{ product: ProductRow; qty: number; unit_cost: string; cost_note: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  const [mode, setMode] = useState<'empty' | 'backorder' | 'manual'>('empty');
+
+  const [emptyPage, setEmptyPage] = useState(1);
+  const [emptyLimit, setEmptyLimit] = useState(50);
+  const [emptySearch, setEmptySearch] = useState('');
+  const [debouncedEmptySearch, setDebouncedEmptySearch] = useState('');
+  const [emptyRows, setEmptyRows] = useState<ProductRow[]>([]);
+  const [emptyTotalPages, setEmptyTotalPages] = useState(1);
+  const [loadingEmpty, setLoadingEmpty] = useState(true);
+  const [selectedEmptyIds, setSelectedEmptyIds] = useState<Set<string>>(new Set());
+  const emptyMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
+
+  const [backorderRows, setBackorderRows] = useState<BackorderSuggestion[]>([]);
+  const [loadingBackorder, setLoadingBackorder] = useState(true);
+  const [backorderSearch, setBackorderSearch] = useState('');
+  const [selectedBackorderIds, setSelectedBackorderIds] = useState<Set<string>>(new Set());
+  const backorderMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const [addingBackorder, setAddingBackorder] = useState(false);
 
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<ProductRow[]>([]);
@@ -98,6 +145,103 @@ export default function InboundCreatePage() {
     void loadCategories();
   }, [allowed, loadSuppliers, loadCategories]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedEmptySearch(emptySearch.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [emptySearch]);
+
+  useEffect(() => {
+    setEmptyPage(1);
+  }, [debouncedEmptySearch]);
+
+  const loadEmptyStockSuggestions = useCallback(async () => {
+    try {
+      setLoadingEmpty(true);
+      const res = await api.admin.inventory.getProducts({
+        page: emptyPage,
+        limit: emptyLimit,
+        search: debouncedEmptySearch || undefined,
+        status: 'active',
+        stock_filter: 'empty',
+      });
+      const rows = (res.data?.products || []) as ProductRow[];
+      setEmptyRows(rows);
+      setEmptyTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
+    } catch {
+      setEmptyRows([]);
+      setEmptyTotalPages(1);
+    } finally {
+      setLoadingEmpty(false);
+    }
+  }, [debouncedEmptySearch, emptyLimit, emptyPage]);
+
+  const loadBackorderSuggestions = useCallback(async () => {
+    try {
+      setLoadingBackorder(true);
+      const res = await api.allocation.getPending({ scope: 'shortage' });
+      const orders = (res.data?.rows || []) as BackorderOrderRow[];
+
+      const aggregated = new Map<string, BackorderSuggestion>();
+      orders.forEach((order) => {
+        const label = String(order?.status_label || 'unallocated');
+        if (label !== 'unallocated' && label !== 'preorder' && label !== 'backorder') return;
+        (order.shortage_items || []).forEach((item) => {
+          const productId = item.product_id;
+          const prev = aggregated.get(productId);
+          const shortage = Number(item.shortage_qty || 0);
+          if (prev) {
+            prev.shortage += shortage;
+          } else {
+            aggregated.set(productId, {
+              id: productId,
+              sku: item.sku,
+              name: item.product_name,
+              stock: Number(item.stock_quantity || 0),
+              shortage,
+            });
+          }
+        });
+      });
+
+      setBackorderRows(Array.from(aggregated.values()).sort((a, b) => b.shortage - a.shortage));
+    } catch {
+      setBackorderRows([]);
+    } finally {
+      setLoadingBackorder(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!allowed) return;
+    void loadEmptyStockSuggestions();
+    setSelectedEmptyIds(new Set());
+  }, [allowed, loadEmptyStockSuggestions]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    void loadBackorderSuggestions();
+  }, [allowed, loadBackorderSuggestions]);
+
+  useEffect(() => {
+    if (!emptyMasterCheckboxRef.current) return;
+    const isAll = emptyRows.length > 0 && emptyRows.every((p) => selectedEmptyIds.has(p.id));
+    const isSome = emptyRows.some((p) => selectedEmptyIds.has(p.id));
+    emptyMasterCheckboxRef.current.indeterminate = isSome && !isAll;
+  }, [emptyRows, selectedEmptyIds]);
+
+  const filteredBackorderRows = useMemo(() => {
+    const q = backorderSearch.trim().toLowerCase();
+    if (!q) return backorderRows;
+    return backorderRows.filter((r) => r.name.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q));
+  }, [backorderRows, backorderSearch]);
+
+  useEffect(() => {
+    if (!backorderMasterCheckboxRef.current) return;
+    const isAll = filteredBackorderRows.length > 0 && filteredBackorderRows.every((p) => selectedBackorderIds.has(p.id));
+    const isSome = filteredBackorderRows.some((p) => selectedBackorderIds.has(p.id));
+    backorderMasterCheckboxRef.current.indeterminate = isSome && !isAll;
+  }, [filteredBackorderRows, selectedBackorderIds]);
+
   const doProductSearch = useCallback(async (q: string) => {
     const query = q.trim();
     if (!query || query.length < 2) {
@@ -134,6 +278,21 @@ export default function InboundCreatePage() {
     });
   }, []);
 
+  const upsertProductToItems = useCallback((product: ProductRow, qty: number) => {
+    const safeQty = Math.max(1, Number(qty || 1));
+    setItems((prev) => {
+      const idx = prev.findIndex((p) => p.product.id === product.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty: Math.max(next[idx].qty, safeQty) };
+        return next;
+      }
+      const basePrice = Number(product.base_price || 0);
+      const initialUnitCost = Number.isFinite(basePrice) && basePrice > 0 ? String(basePrice) : '';
+      return [...prev, { product, qty: safeQty, unit_cost: initialUnitCost, cost_note: '' }];
+    });
+  }, []);
+
   const scanAndAdd = useCallback(async (codeRaw: string) => {
     const code = String(codeRaw || '').trim();
     if (!code) return;
@@ -160,7 +319,7 @@ export default function InboundCreatePage() {
       await scanAndAdd(code);
       setScanCode('');
       requestAnimationFrame(() => scanInputRef.current?.focus());
-    } catch (error: unknown) {
+    } catch {
       requestAnimationFrame(() => scanInputRef.current?.focus());
     }
   }, [scanAndAdd, scanCode]);
@@ -182,6 +341,15 @@ export default function InboundCreatePage() {
   }, []);
 
   useEffect(() => {
+    if (mode === 'manual') return;
+    if (cameraOpen) {
+      setCameraOpen(false);
+      stopCamera();
+    }
+    setShowCreateProduct(false);
+  }, [cameraOpen, mode, stopCamera]);
+
+  useEffect(() => {
     if (!cameraOpen) {
       stopCamera();
       setCameraError('');
@@ -193,7 +361,8 @@ export default function InboundCreatePage() {
       try {
         setCameraError('');
         if (typeof window === 'undefined') return;
-        if (!(window as any).BarcodeDetector) {
+        const BarcodeDetectorCtor = (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
+        if (!BarcodeDetectorCtor) {
           setCameraError('Browser ini belum mendukung scan kamera. Gunakan Chrome/Edge terbaru, atau gunakan scanner (input field).');
           return;
         }
@@ -214,7 +383,7 @@ export default function InboundCreatePage() {
         video.srcObject = stream;
         await video.play().catch(() => { });
 
-        const detector = new (window as any).BarcodeDetector({
+        const detector = new BarcodeDetectorCtor({
           formats: ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code'],
         });
 
@@ -266,6 +435,41 @@ export default function InboundCreatePage() {
   }, [cameraOpen, scanAndAdd, stopCamera]);
 
   const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.product.id !== productId));
+
+  const addSelectedEmpty = () => {
+    const selected = emptyRows.filter((p) => selectedEmptyIds.has(p.id));
+    selected.forEach((p) => {
+      const suggested = Math.max(1, Number(p.min_stock || 0) - Number(p.stock_quantity || 0));
+      upsertProductToItems(p, suggested);
+    });
+    setSelectedEmptyIds(new Set());
+  };
+
+  const addSelectedBackorder = async () => {
+    const selected = filteredBackorderRows.filter((p) => selectedBackorderIds.has(p.id));
+    if (selected.length === 0) return;
+    try {
+      setAddingBackorder(true);
+      const products = await Promise.all(
+        selected.map(async (row) => {
+          try {
+            const res = await api.admin.inventory.scanBySku(row.sku);
+            return res.data as ProductRow;
+          } catch {
+            return null;
+          }
+        })
+      );
+      products.forEach((product, idx) => {
+        if (!product) return;
+        const row = selected[idx];
+        upsertProductToItems(product, row.shortage > 0 ? row.shortage : 1);
+      });
+      setSelectedBackorderIds(new Set());
+    } finally {
+      setAddingBackorder(false);
+    }
+  };
 
   const payloadItems = useMemo(() => {
     return items.map((it) => {
@@ -537,204 +741,431 @@ export default function InboundCreatePage() {
         <div className="lg:col-span-2 min-h-0 order-1 lg:order-2 flex flex-col gap-4">
           <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-bold text-slate-900">Cari Produk</h3>
-              <button
-                onClick={() => setShowCreateProduct((v) => !v)}
-                className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 hover:bg-slate-50 transition-all"
-              >
-                <Plus size={18} />
-                Tambah Produk Baru
-              </button>
-            </div>
-
-            <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <div className="text-xs font-black text-slate-500 uppercase tracking-widest">Scan SKU / Barcode</div>
-                {scanning && (
-                  <div className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Scanning...</div>
-                )}
+              <div className="inline-flex items-center gap-2 rounded-2xl bg-slate-100 p-1">
+                <button
+                  onClick={() => setMode('empty')}
+                  className={`px-4 py-2 rounded-2xl text-sm font-black transition-all ${mode === 'empty' ? 'bg-white shadow-sm border border-slate-200' : 'text-slate-600'}`}
+                >
+                  Produk Habis
+                </button>
+                <button
+                  onClick={() => setMode('backorder')}
+                  className={`px-4 py-2 rounded-2xl text-sm font-black transition-all ${mode === 'backorder' ? 'bg-white shadow-sm border border-slate-200' : 'text-slate-600'}`}
+                >
+                  Backorder
+                </button>
+                <button
+                  onClick={() => setMode('manual')}
+                  className={`px-4 py-2 rounded-2xl text-sm font-black transition-all ${mode === 'manual' ? 'bg-white shadow-sm border border-slate-200' : 'text-slate-600'}`}
+                >
+                  Manual
+                </button>
               </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void doScan();
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  ref={scanInputRef}
-                  value={scanCode}
-                  onChange={(e) => setScanCode(e.target.value)}
-                  placeholder="Scan di sini lalu Enter"
-                  className="flex-1 bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
-                  inputMode="text"
-                  autoComplete="off"
-                />
+              {mode === 'empty' ? (
                 <button
-                  type="submit"
-                  disabled={scanning || !scanCode.trim()}
-                  className="rounded-2xl bg-slate-900 text-white text-sm font-black px-5 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-800 transition-all"
+                  onClick={addSelectedEmpty}
+                  disabled={selectedEmptyIds.size === 0}
+                  className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 disabled:opacity-40 hover:bg-emerald-700 transition-all"
                 >
-                  <Search size={18} />
-                  Scan
+                  <Plus size={18} />
+                  Tambah ({selectedEmptyIds.size})
                 </button>
+              ) : mode === 'backorder' ? (
                 <button
-                  type="button"
-                  onClick={() => setCameraOpen(true)}
-                  disabled={scanning}
-                  className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all"
-                  title="Scan pakai kamera (preview kecil)"
+                  onClick={() => void addSelectedBackorder()}
+                  disabled={addingBackorder || selectedBackorderIds.size === 0}
+                  className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 disabled:opacity-40 hover:bg-emerald-700 transition-all"
                 >
-                  <Camera size={18} />
-                  Kamera
+                  {addingBackorder ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <Plus size={18} />
+                  )}
+                  Tambah ({selectedBackorderIds.size})
                 </button>
-              </form>
-              {scanMessage && (
-                <div className="mt-2 text-xs font-bold text-slate-700">
-                  {scanMessage}
-                </div>
+              ) : (
+                <button
+                  onClick={() => setShowCreateProduct((v) => !v)}
+                  className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 hover:bg-slate-50 transition-all"
+                >
+                  <Plus size={18} />
+                  Tambah Produk Baru
+                </button>
               )}
-              <div className="mt-2 text-[11px] text-slate-500 font-medium">
-                Mendukung input <span className="font-black">SKU</span> atau <span className="font-black">barcode</span>.
-              </div>
             </div>
 
-            {cameraOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-                <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-xl overflow-hidden">
-                  <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-slate-400">Scan Kamera</p>
-                      <p className="text-sm font-black text-slate-900">Arahkan kamera ke barcode</p>
+            {mode === 'empty' ? (
+              <>
+                <div className="flex flex-col md:flex-row gap-3 items-center mt-4">
+                  <div className="relative flex-1 w-full">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input
+                      value={emptySearch}
+                      onChange={(e) => setEmptySearch(e.target.value)}
+                      placeholder="Cari (produk habis)..."
+                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
+                    />
+                  </div>
+                  <select
+                    value={emptyLimit}
+                    onChange={(e) => setEmptyLimit(Number(e.target.value))}
+                    className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all outline-none"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                <div className="mt-4 max-h-[520px] overflow-y-auto pr-1">
+                  {loadingEmpty ? (
+                    <div className="flex items-center justify-center p-16 text-slate-400">
+                      <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
                     </div>
+                  ) : emptyRows.length === 0 ? (
+                    <div className="flex items-center gap-2 text-slate-500 text-sm">
+                      <AlertTriangle size={18} className="text-amber-500" />
+                      Tidak ada produk habis.
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="text-left text-xs text-slate-500">
+                          <th className="py-2 w-10">
+                            <input
+                              ref={emptyMasterCheckboxRef}
+                              type="checkbox"
+                              checked={emptyRows.length > 0 && emptyRows.every((p) => selectedEmptyIds.has(p.id))}
+                              onChange={(e) => {
+                                if (e.target.checked) setSelectedEmptyIds(new Set(emptyRows.map((p) => p.id)));
+                                else setSelectedEmptyIds(new Set());
+                              }}
+                            />
+                          </th>
+                          <th className="py-2">SKU</th>
+                          <th className="py-2">Produk</th>
+                          <th className="py-2 w-20">Stok</th>
+                          <th className="py-2 w-20">Min</th>
+                          <th className="py-2 w-24">Saran</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {emptyRows.map((p) => {
+                          const suggested = Math.max(1, Number(p.min_stock || 0) - Number(p.stock_quantity || 0));
+                          return (
+                            <tr key={p.id} className="border-t border-slate-100">
+                              <td className="py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedEmptyIds.has(p.id)}
+                                  onChange={(e) => {
+                                    setSelectedEmptyIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.add(p.id);
+                                      else next.delete(p.id);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              </td>
+                              <td className="py-2 font-mono text-xs uppercase tracking-wider text-slate-600">{p.sku}</td>
+                              <td className="py-2 font-bold text-slate-900">{p.name}</td>
+                              <td className="py-2">{Number(p.stock_quantity || 0)}</td>
+                              <td className="py-2">{Number(p.min_stock || 0)}</td>
+                              <td className="py-2 font-black text-emerald-700">{suggested}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {emptyTotalPages > 1 && (
+                  <div className="flex items-center justify-between mt-4">
                     <button
-                      type="button"
-                      onClick={() => {
-                        setCameraOpen(false);
-                        stopCamera();
-                        requestAnimationFrame(() => scanInputRef.current?.focus());
-                      }}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
-                      aria-label="Tutup"
+                      disabled={emptyPage === 1}
+                      onClick={() => setEmptyPage((p) => Math.max(1, p - 1))}
+                      className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-black disabled:opacity-30"
                     >
-                      <X size={16} />
+                      Prev
+                    </button>
+                    <div className="text-sm text-slate-600 font-bold">Halaman {emptyPage} / {emptyTotalPages}</div>
+                    <button
+                      disabled={emptyPage === emptyTotalPages}
+                      onClick={() => setEmptyPage((p) => Math.min(emptyTotalPages, p + 1))}
+                      className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-black disabled:opacity-30"
+                    >
+                      Next
                     </button>
                   </div>
-                  <div className="p-4">
-                    {cameraError ? (
-                      <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
-                        {cameraError}
-                      </div>
-                    ) : (
-                      <div className="rounded-2xl border border-slate-200 bg-black overflow-hidden">
-                        <video
-                          ref={videoRef}
-                          className="w-full h-64 object-cover"
-                          muted
-                          playsInline
-                        />
-                      </div>
-                    )}
-                    <div className="mt-3 text-[11px] text-slate-500 font-medium">
-                      Preview dibuat kecil (tidak full screen). Barcode terdeteksi otomatis.
-                    </div>
+                )}
+              </>
+            ) : mode === 'backorder' ? (
+              <>
+                <div className="flex flex-col md:flex-row gap-3 items-center mt-4">
+                  <div className="relative flex-1 w-full">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input
+                      value={backorderSearch}
+                      onChange={(e) => setBackorderSearch(e.target.value)}
+                      placeholder="Cari (backorder)..."
+                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
+                    />
                   </div>
                 </div>
-              </div>
-            )}
 
-            {showCreateProduct && (
-              <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">SKU</label>
-                    <input value={newSku} onChange={(e) => setNewSku(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <div className="mt-4 max-h-[520px] overflow-y-auto pr-1">
+                  {loadingBackorder ? (
+                    <div className="flex items-center justify-center p-16 text-slate-400">
+                      <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  ) : filteredBackorderRows.length === 0 ? (
+                    <div className="flex items-center gap-2 text-slate-500 text-sm">
+                      <AlertTriangle size={18} className="text-amber-500" />
+                      Tidak ada data backorder.
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="text-left text-xs text-slate-500">
+                          <th className="py-2 w-10">
+                            <input
+                              ref={backorderMasterCheckboxRef}
+                              type="checkbox"
+                              checked={filteredBackorderRows.length > 0 && filteredBackorderRows.every((p) => selectedBackorderIds.has(p.id))}
+                              onChange={(e) => {
+                                if (e.target.checked) setSelectedBackorderIds(new Set(filteredBackorderRows.map((p) => p.id)));
+                                else setSelectedBackorderIds(new Set());
+                              }}
+                            />
+                          </th>
+                          <th className="py-2">SKU</th>
+                          <th className="py-2">Produk</th>
+                          <th className="py-2 w-20">Stok</th>
+                          <th className="py-2 w-24">Shortage</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredBackorderRows.map((p) => (
+                          <tr key={p.id} className="border-t border-slate-100">
+                            <td className="py-2">
+                              <input
+                                type="checkbox"
+                                checked={selectedBackorderIds.has(p.id)}
+                                onChange={(e) => {
+                                  setSelectedBackorderIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(p.id);
+                                    else next.delete(p.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            </td>
+                            <td className="py-2 font-mono text-xs uppercase tracking-wider text-slate-600">{p.sku}</td>
+                            <td className="py-2 font-bold text-slate-900">{p.name}</td>
+                            <td className="py-2">{Number(p.stock || 0)}</td>
+                            <td className="py-2 font-black text-rose-700">{Number(p.shortage || 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="text-xs font-black text-slate-500 uppercase tracking-widest">Scan SKU / Barcode</div>
+                    {scanning && (
+                      <div className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Scanning...</div>
+                    )}
                   </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Nama</label>
-                    <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Unit</label>
-                    <input value={newUnit} onChange={(e) => setNewUnit(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Kategori</label>
-                    <select
-                      value={newCategoryId}
-                      onChange={(e) => setNewCategoryId(e.target.value)}
-                      disabled={loadingCategories}
-                      className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void doScan();
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      ref={scanInputRef}
+                      value={scanCode}
+                      onChange={(e) => setScanCode(e.target.value)}
+                      placeholder="Scan di sini lalu Enter"
+                      className="flex-1 bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                      inputMode="text"
+                      autoComplete="off"
+                    />
+                    <button
+                      type="submit"
+                      disabled={scanning || !scanCode.trim()}
+                      className="rounded-2xl bg-slate-900 text-white text-sm font-black px-5 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-800 transition-all"
                     >
-                      <option value="">Pilih kategori...</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Base Price (opsional)</label>
-                    <input value={newBasePrice} onChange={(e) => setNewBasePrice(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="contoh: 15000" />
-                  </div>
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={createProduct}
-                    disabled={creatingProduct}
-                    className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all"
-                  >
-                    {creatingProduct ? (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    ) : (
-                      <Plus size={18} />
-                    )}
-                    Simpan Produk
-                  </button>
-                  <button
-                    onClick={() => setShowCreateProduct(false)}
-                    className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 hover:bg-slate-50 transition-all"
-                  >
-                    Tutup
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Cari SKU / nama produk (min 2 huruf)..."
-                className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
-              />
-            </div>
-
-            <div className="mt-3 max-h-[520px] overflow-y-auto pr-1 space-y-2">
-              {searching ? (
-                <div className="text-sm text-slate-500">Mencari...</div>
-              ) : productResults.length === 0 ? (
-                <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
-              ) : (
-                productResults.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => addProductToItems(p)}
-                    className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
-                        <div className="font-black text-slate-900 truncate">{p.name}</div>
-                      </div>
-                      <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
-                        <Plus size={14} /> Tambah
-                      </span>
+                      <Search size={18} />
+                      Scan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCameraOpen(true)}
+                      disabled={scanning}
+                      className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all"
+                      title="Scan pakai kamera (preview kecil)"
+                    >
+                      <Camera size={18} />
+                      Kamera
+                    </button>
+                  </form>
+                  {scanMessage && (
+                    <div className="mt-2 text-xs font-bold text-slate-700">
+                      {scanMessage}
                     </div>
-                  </button>
-                ))
-              )}
-            </div>
+                  )}
+                  <div className="mt-2 text-[11px] text-slate-500 font-medium">
+                    Mendukung input <span className="font-black">SKU</span> atau <span className="font-black">barcode</span>.
+                  </div>
+                </div>
+
+                {cameraOpen && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+                    <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-widest text-slate-400">Scan Kamera</p>
+                          <p className="text-sm font-black text-slate-900">Arahkan kamera ke barcode</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCameraOpen(false);
+                            stopCamera();
+                            requestAnimationFrame(() => scanInputRef.current?.focus());
+                          }}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                          aria-label="Tutup"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <div className="p-4">
+                        {cameraError ? (
+                          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+                            {cameraError}
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-slate-200 bg-black overflow-hidden">
+                            <video
+                              ref={videoRef}
+                              className="w-full h-64 object-cover"
+                              muted
+                              playsInline
+                            />
+                          </div>
+                        )}
+                        <div className="mt-3 text-[11px] text-slate-500 font-medium">
+                          Preview dibuat kecil (tidak full screen). Barcode terdeteksi otomatis.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {showCreateProduct && (
+                  <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">SKU</label>
+                        <input value={newSku} onChange={(e) => setNewSku(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Nama</label>
+                        <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Unit</label>
+                        <input value={newUnit} onChange={(e) => setNewUnit(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Kategori</label>
+                        <select
+                          value={newCategoryId}
+                          onChange={(e) => setNewCategoryId(e.target.value)}
+                          disabled={loadingCategories}
+                          className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">Pilih kategori...</option>
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Base Price (opsional)</label>
+                        <input value={newBasePrice} onChange={(e) => setNewBasePrice(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="contoh: 15000" />
+                      </div>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={createProduct}
+                        disabled={creatingProduct}
+                        className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all"
+                      >
+                        {creatingProduct ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <Plus size={18} />
+                        )}
+                        Simpan Produk
+                      </button>
+                      <button
+                        onClick={() => setShowCreateProduct(false)}
+                        className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 hover:bg-slate-50 transition-all"
+                      >
+                        Tutup
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 relative">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="Cari SKU / nama produk (min 2 huruf)..."
+                    className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
+                  />
+                </div>
+
+                <div className="mt-3 max-h-[520px] overflow-y-auto pr-1 space-y-2">
+                  {searching ? (
+                    <div className="text-sm text-slate-500">Mencari...</div>
+                  ) : productResults.length === 0 ? (
+                    <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
+                  ) : (
+                    productResults.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => addProductToItems(p)}
+                        className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
+                            <div className="font-black text-slate-900 truncate">{p.name}</div>
+                          </div>
+                          <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
+                            <Plus size={14} /> Tambah
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
