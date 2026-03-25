@@ -29,7 +29,7 @@ export default function LaporanPembelianPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await api.admin.inventory.getPOs({
+      const res = await api.admin.inventory.getInbounds({
         page: 1,
         limit: 200,
         status: status || undefined,
@@ -107,7 +107,7 @@ export default function LaporanPembelianPage() {
               href="/admin/warehouse/inbound/history"
               className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
             >
-              Buka Riwayat PO
+              Buka Riwayat Inbound
             </Link>
           </div>
 

@@ -23,32 +23,38 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('items wajib diisi (minimal 1 barang)', 400);
         }
 
-        let supplier: any = null;
-        if (supplierId !== null) {
-            if (!Number.isInteger(supplierId) || supplierId <= 0) {
-                await t.rollback();
-                throw new CustomError('supplier_id tidak valid', 400);
-            }
-            supplier = await Supplier.findByPk(supplierId, { transaction: t });
-            if (!supplier) {
-                await t.rollback();
-                throw new CustomError('Supplier tidak ditemukan', 404);
-            }
+        if (supplierId === null || !Number.isInteger(supplierId) || supplierId <= 0) {
+            await t.rollback();
+            throw new CustomError('supplier_id wajib diisi dan valid', 400);
+        }
+        const supplier = await Supplier.findByPk(supplierId, { transaction: t });
+        if (!supplier) {
+            await t.rollback();
+            throw new CustomError('Supplier tidak ditemukan', 404);
         }
 
         let computedTotalCost = 0;
         for (const item of items) {
             const qty = Number(item?.qty);
-            const unitCost = Number(item?.unit_cost);
             const productId = String(item?.product_id || '').trim();
             if (!productId) continue;
             if (!Number.isFinite(qty) || qty <= 0) continue;
-            if (!Number.isFinite(unitCost) || unitCost < 0) continue;
-            computedTotalCost += qty * unitCost;
+
+            const product = await Product.findByPk(productId, { transaction: t });
+            if (!product) {
+                await t.rollback();
+                throw new CustomError(`Produk tidak ditemukan: ${productId}`, 404);
+            }
+
+            const unitCostInput = Number(item?.unit_cost);
+            const normalizedUnitCost = Number.isFinite(unitCostInput) && unitCostInput >= 0
+                ? unitCostInput
+                : Number((product as any).base_price || 0);
+            computedTotalCost += qty * normalizedUnitCost;
         }
 
         const po = await PurchaseOrder.create({
-            supplier_id: supplier ? supplier.id : null,
+            supplier_id: supplier.id,
             status: 'pending',
             total_cost: Number(computedTotalCost || 0),
             created_by: req.user!.id
@@ -57,24 +63,26 @@ export const createPurchaseOrder = asyncWrapper(async (req: Request, res: Respon
         let createdCount = 0;
         for (const item of items) {
             const qty = Number(item?.qty);
-            const unitCost = Number(item?.unit_cost);
             const productId = String(item?.product_id || '').trim();
             if (!productId) continue;
             if (!Number.isFinite(qty) || qty <= 0) continue;
-            if (!Number.isFinite(unitCost) || unitCost < 0) continue;
-
             const product = await Product.findByPk(productId, { transaction: t });
             if (!product) {
                 await t.rollback();
                 throw new CustomError(`Produk tidak ditemukan: ${productId}`, 404);
             }
 
+            const unitCostInput = Number(item?.unit_cost);
+            const normalizedUnitCost = Number.isFinite(unitCostInput) && unitCostInput >= 0
+                ? unitCostInput
+                : Number((product as any).base_price || 0);
+
             await PurchaseOrderItem.create({
                 purchase_order_id: po.id,
                 product_id: productId,
                 qty: qty,
-                unit_cost: unitCost,
-                total_cost: qty * unitCost,
+                unit_cost: normalizedUnitCost,
+                total_cost: qty * normalizedUnitCost,
                 received_qty: 0
             }, { transaction: t });
             createdCount += 1;

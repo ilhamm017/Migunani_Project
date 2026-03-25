@@ -375,14 +375,25 @@ export const api = {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 }),
             createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
+            // Inbound Gudang (canonical)
+            createInbound: (data: JsonRecord) => apiClient.post('/admin/inventory/inbound', data),
+            getInbounds: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/inventory/inbound', { params }),
+            getInboundById: (id: string) => apiClient.get(`/admin/inventory/inbound/${id}`),
+            exportInboundXlsx: (id: string) =>
+                apiClient.get(`/admin/inventory/inbound/${id}/export-xlsx`, { responseType: 'blob' }),
+            verifyInboundStep1: (id: string) => apiClient.patch(`/admin/inventory/inbound/${id}/verify-1`, {}),
+            verifyInboundStep2: (id: string) => apiClient.patch(`/admin/inventory/inbound/${id}/verify-2`, {}),
+            receiveInbound: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>
+                apiClient.patch(`/admin/inventory/inbound/${id}/receive`, data),
+
+            // Legacy alias (Deprecated): kept for compatibility
             createPO: (data: JsonRecord) => apiClient.post('/admin/inventory/po', data),
             getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/inventory/po', { params }),
             getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
             exportPOXlsx: (id: string) =>
                 apiClient.get(`/admin/inventory/po/${id}/export-xlsx`, { responseType: 'blob' }),
-            verifyInboundStep1: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-1`, {}),
-            verifyInboundStep2: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-2`, {}),
             receivePO: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>
                 apiClient.patch(`/admin/inventory/po/${id}/receive`, data),
             scanBySku: (sku: string) =>
@@ -413,6 +424,16 @@ export const api = {
             auditItem: (id: string, data: { product_id: string; physical_qty: number }) =>
                 apiClient.post(`/inventory/audit/${id}/item`, data),
             finishAudit: (id: string) => apiClient.post(`/inventory/audit/${id}/finish`),
+        },
+        procurement: {
+            createPreorder: (data: JsonRecord) => apiClient.post('/admin/procurement/preorders', data),
+            getPreorders: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/procurement/preorders', { params }),
+            getPreorderById: (id: string) => apiClient.get(`/admin/procurement/preorders/${id}`),
+            updatePreorder: (id: string, data: JsonRecord) => apiClient.patch(`/admin/procurement/preorders/${id}`, data),
+            finalizePreorder: (id: string) => apiClient.post(`/admin/procurement/preorders/${id}/finalize`, {}),
+            exportPreorderXlsx: (id: string) =>
+                apiClient.get(`/admin/procurement/preorders/${id}/export-xlsx`, { responseType: 'blob' }),
         },
         finance: {
             getExpenses: (params?: { page?: number; limit?: number; startDate?: string; endDate?: string; category?: string; status?: string }) =>

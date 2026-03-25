@@ -1,384 +1,199 @@
 'use client';
 
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useRequireRoles } from '@/lib/guards';
+import { AlertTriangle, History as HistoryIcon, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Search, Plus, Trash2, Save, Package, AlertTriangle, ShoppingBag, RefreshCw, History as HistoryIcon } from 'lucide-react';
+import { useRequireRoles } from '@/lib/guards';
 
 interface SupplierRow {
   id: number;
   name: string;
-  contact: string | null;
 }
 
-interface Product {
-  id: string;
+interface CategoryRow {
+  id: number;
   name: string;
-  sku: string;
-  stock_quantity: number;
-  min_stock?: number;
-  base_price: number;
 }
 
-interface POItem {
-  product: Product;
-  qty: number;
-  unit_cost: number;
-}
-
-interface BackorderSuggestion {
+interface ProductRow {
   id: string;
+  sku: string;
   name: string;
-  sku: string;
-  stock: number;
-  shortage: number;
-  shortage_unallocated?: number;
-  shortage_confirmed?: number;
-  base_price: number;
-}
-
-interface BackorderItemRow {
-  product_id: string;
-  product_name: string;
-  sku: string;
   stock_quantity: number;
-  shortage_qty: number;
   base_price: number;
-}
-
-interface BackorderOrderRow {
-  shortage_items?: BackorderItemRow[];
-  status_label?: 'fulfilled' | 'backorder' | 'preorder' | 'unallocated' | string;
-  has_active_backorder_record?: boolean;
-}
-
-interface CreatePOResult {
-  id?: string;
-  status?: string;
-  total_cost?: number;
+  unit?: string;
 }
 
 type ApiErrorWithMessage = {
   response?: { data?: { message?: string } };
 };
 
-export default function PurchaseOrderPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang'], '/admin');
+export default function InboundCreatePage() {
+  const allowed = useRequireRoles(['super_admin'], '/admin');
   const router = useRouter();
 
-  // Form State
-  const [supplierId, setSupplierId] = useState('');
-  const [items, setItems] = useState<POItem[]>([]);
-
-  // Data State
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loadingSuppliers, setLoadingSuppliers] = useState(true);
-  const [restockSuggestions, setRestockSuggestions] = useState<Product[]>([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(true);
-  const [restockTotal, setRestockTotal] = useState(0);
-  const [restockTotalPages, setRestockTotalPages] = useState(1);
-  const [restockPage, setRestockPage] = useState(1);
-  const [restockLimit, setRestockLimit] = useState(50);
-  const [restockSearch, setRestockSearch] = useState('');
-  const [debouncedRestockSearch, setDebouncedRestockSearch] = useState('');
-  const [selectedRestockIds, setSelectedRestockIds] = useState<Set<string>>(new Set());
-  const restockMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
-  const [backorderSuggestions, setBackorderSuggestions] = useState<BackorderSuggestion[]>([]);
-  const [loadingBackorderSuggestions, setLoadingBackorderSuggestions] = useState(true);
-  const [selectedBackorderIds, setSelectedBackorderIds] = useState<Set<string>>(new Set());
-  const [backorderSearch, setBackorderSearch] = useState('');
-  const backorderMasterCheckboxRef = useRef<HTMLInputElement | null>(null);
-  const [backorderOrderLabelCounts, setBackorderOrderLabelCounts] = useState<Record<string, number>>({});
+  const [loadingCategories, setLoadingCategories] = useState(true);
 
-  // Search State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<Product[]>([]);
+  const [supplierId, setSupplierId] = useState('');
+
+  const [items, setItems] = useState<Array<{ product: ProductRow; qty: number; unit_cost: string }>>([]);
+  const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const [productSearch, setProductSearch] = useState('');
+  const [productResults, setProductResults] = useState<ProductRow[]>([]);
   const [searching, setSearching] = useState(false);
 
-  // UI State
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<CreatePOResult | null>(null);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [suggestionMode, setSuggestionMode] = useState<'restock' | 'backorder'>('restock');
+  const [showCreateProduct, setShowCreateProduct] = useState(false);
+  const [newSku, setNewSku] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newUnit, setNewUnit] = useState('Pcs');
+  const [newCategoryId, setNewCategoryId] = useState('');
+  const [newBasePrice, setNewBasePrice] = useState('');
+  const [creatingProduct, setCreatingProduct] = useState(false);
 
-  const loadRestockSuggestions = useCallback(async () => {
-    try {
-      setLoadingSuggestions(true);
-      const res = await api.admin.inventory.getRestockSuggestions({
-        page: restockPage,
-        limit: restockLimit,
-        search: debouncedRestockSearch || undefined,
-        status: 'active'
-      });
-      setRestockSuggestions(res.data?.products || []);
-      setRestockTotal(Number(res.data?.total || 0));
-      setRestockTotalPages(Math.max(1, Number(res.data?.totalPages || 1)));
-    } catch (error) {
-      console.error('Failed to load restock suggestions', error);
-      setRestockSuggestions([]);
-      setRestockTotal(0);
-      setRestockTotalPages(1);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  }, [debouncedRestockSearch, restockLimit, restockPage]);
-
-  // Initial Load
-  useEffect(() => {
-    if (allowed) {
-      loadSuppliers();
-      loadBackorderSuggestions();
-    }
-  }, [allowed]);
-
-  // Restock suggestions: debounce + paging
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedRestockSearch(restockSearch.trim());
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [restockSearch]);
-
-  useEffect(() => {
-    if (!allowed) return;
-    loadRestockSuggestions();
-    // keep checklist page-local to avoid hidden selections
-    setSelectedRestockIds(new Set());
-  }, [allowed, loadRestockSuggestions]);
-
-  // Search Debounce
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (searchQuery.trim().length >= 2) {
-        performSearch(searchQuery);
-      } else {
-        setSearchResults([]);
-      }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const loadSuppliers = async () => {
+  const loadSuppliers = useCallback(async () => {
     try {
       setLoadingSuppliers(true);
       const res = await api.admin.inventory.getSuppliers();
-      setSuppliers(res.data?.suppliers || []);
-    } catch (error) {
-      console.error(error);
-      setErrorMessage('Gagal memuat daftar supplier.');
+      setSuppliers((res.data?.suppliers || []) as SupplierRow[]);
+    } catch {
+      setSuppliers([]);
     } finally {
       setLoadingSuppliers(false);
     }
-  };
+  }, []);
 
-  const loadBackorderSuggestions = async () => {
+  const loadCategories = useCallback(async () => {
     try {
-      setLoadingBackorderSuggestions(true);
-      const res = await api.allocation.getPending({ scope: 'shortage' });
-      const rows = (res.data?.rows || []) as BackorderOrderRow[];
-
-      // Aggregate shortages by product
-      const aggregated = new Map<string, BackorderSuggestion>();
-      const labelCounts: Record<string, number> = {};
-
-      rows.forEach((order) => {
-        const label = String(order?.status_label || 'unallocated');
-        labelCounts[label] = Number(labelCounts[label] || 0) + 1;
-
-        (order.shortage_items || []).forEach((item) => {
-          const productId = item.product_id;
-          const existing = aggregated.get(productId);
-          const shortageQty = Number(item.shortage_qty || 0);
-          const isUnallocated = label === 'unallocated';
-          if (existing) {
-            existing.shortage += shortageQty;
-            if (isUnallocated) existing.shortage_unallocated = Number(existing.shortage_unallocated || 0) + shortageQty;
-            else existing.shortage_confirmed = Number(existing.shortage_confirmed || 0) + shortageQty;
-          } else {
-            aggregated.set(productId, {
-              id: productId,
-              name: item.product_name,
-              sku: item.sku,
-              stock: Number(item.stock_quantity || 0),
-              shortage: shortageQty,
-              shortage_unallocated: isUnallocated ? shortageQty : 0,
-              shortage_confirmed: isUnallocated ? 0 : shortageQty,
-              base_price: Number(item.base_price || 0),
-            });
-          }
-        });
-      });
-
-      setBackorderSuggestions(
-        Array.from(aggregated.values()).sort((a, b) => {
-          if (b.shortage !== a.shortage) return b.shortage - a.shortage;
-          if (a.stock !== b.stock) return a.stock - b.stock;
-          return a.name.localeCompare(b.name);
-        })
-      );
-      setBackorderOrderLabelCounts(labelCounts);
-      setSelectedBackorderIds(new Set());
-    } catch (error) {
-      console.error('Failed to load backorder suggestions', error);
-      setBackorderSuggestions([]);
-      setBackorderOrderLabelCounts({});
+      setLoadingCategories(true);
+      const res = await api.admin.inventory.getCategories();
+      setCategories((res.data?.categories || []) as CategoryRow[]);
+    } catch {
+      setCategories([]);
     } finally {
-      setLoadingBackorderSuggestions(false);
+      setLoadingCategories(false);
     }
-  };
+  }, []);
 
-  const performSearch = async (query: string) => {
+  useEffect(() => {
+    if (!allowed) return;
+    void loadSuppliers();
+    void loadCategories();
+  }, [allowed, loadSuppliers, loadCategories]);
+
+  const doProductSearch = useCallback(async (q: string) => {
+    const query = q.trim();
+    if (!query || query.length < 2) {
+      setProductResults([]);
+      return;
+    }
     try {
       setSearching(true);
-      const res = await api.admin.inventory.getProducts({ search: query, limit: 10 });
-      setSearchResults(res.data?.products || []);
-    } catch (error) {
-      console.error(error);
+      const res = await api.admin.inventory.getProducts({ limit: 15, search: query, status: 'active' });
+      setProductResults((res.data?.products || []) as ProductRow[]);
+    } catch {
+      setProductResults([]);
     } finally {
       setSearching(false);
     }
-  };
+  }, []);
 
-  const addItem = (product: Product) => {
-    setItems(prev => {
-      if (prev.find(item => item.product.id === product.id)) return prev;
-      return [...prev, {
-        product,
-        qty: 1,
-        unit_cost: Number(product.base_price || 0)
-      }];
-    });
-    setSearchQuery(''); // Clear search after adding
-    setSearchResults([]);
-  };
+  useEffect(() => {
+    const timer = setTimeout(() => void doProductSearch(productSearch), 400);
+    return () => clearTimeout(timer);
+  }, [productSearch, doProductSearch]);
 
-  const getSuggestedRestockQty = (product: Product) => {
-    const stock = Number(product.stock_quantity || 0);
-    const minStock = Number(product.min_stock || 0);
-    return Math.max(1, (Math.max(minStock, 1) * 2) - stock);
-  };
-
-  const upsertDraftItems = (
-    draftItems: Array<{ product: Product; qty: number; unit_cost: number; mode: 'max' | 'add' }>
-  ) => {
-    setItems(prev => {
-      const next = [...prev];
-
-      draftItems.forEach(({ product, qty, unit_cost, mode }) => {
-        const existingIndex = next.findIndex(p => p.product.id === product.id);
-        if (existingIndex >= 0) {
-          const existing = next[existingIndex];
-          next[existingIndex] = {
-            ...existing,
-            qty: mode === 'add' ? (existing.qty + qty) : Math.max(existing.qty, qty),
-          };
-          return;
-        }
-
-        next.push({
-          product,
-          qty,
-          unit_cost
-        });
-      });
-
-      return next;
+  const addProductToItems = (product: ProductRow) => {
+    setItems((prev) => {
+      const idx = prev.findIndex((p) => p.product.id === product.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
+        return next;
+      }
+      return [...prev, { product, qty: 1, unit_cost: '' }];
     });
   };
 
-  const addSuggestedItem = (product: Product) => {
-    const defaultQty = getSuggestedRestockQty(product);
-    upsertDraftItems([{
-      product,
-      qty: defaultQty,
-      unit_cost: Number(product.base_price || 0),
-      mode: 'max'
-    }]);
-  };
+  const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.product.id !== productId));
 
-  const updateItem = (index: number, field: 'qty' | 'unit_cost', value: number) => {
-    setItems(prev => {
-      const newItems = [...prev];
-      newItems[index] = { ...newItems[index], [field]: value };
-      return newItems;
+  const payloadItems = useMemo(() => {
+    return items.map((it) => {
+      const unitCostNum = Number(it.unit_cost);
+      return {
+        product_id: it.product.id,
+        qty: Math.max(1, Number(it.qty || 1)),
+        ...(Number.isFinite(unitCostNum) && unitCostNum >= 0 ? { unit_cost: unitCostNum } : {}),
+      };
     });
-  };
-
-  const removeItem = (index: number) => {
-    setItems(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const totalCost = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.qty * item.unit_cost), 0);
   }, [items]);
 
-  const filteredBackorderSuggestions = useMemo(() => {
-    const q = backorderSearch.trim().toLowerCase();
-    if (!q) return backorderSuggestions;
-    return backorderSuggestions.filter(item =>
-      item.name.toLowerCase().includes(q) || item.sku.toLowerCase().includes(q)
-    );
-  }, [backorderSuggestions, backorderSearch]);
-
-  const isAllRestockSelectedOnPage = useMemo(() => {
-    if (restockSuggestions.length === 0) return false;
-    return restockSuggestions.every(p => selectedRestockIds.has(p.id));
-  }, [restockSuggestions, selectedRestockIds]);
-
-  const isSomeRestockSelectedOnPage = useMemo(() => {
-    return restockSuggestions.some(p => selectedRestockIds.has(p.id)) && !isAllRestockSelectedOnPage;
-  }, [restockSuggestions, selectedRestockIds, isAllRestockSelectedOnPage]);
-
-  useEffect(() => {
-    if (!restockMasterCheckboxRef.current) return;
-    restockMasterCheckboxRef.current.indeterminate = isSomeRestockSelectedOnPage;
-  }, [isSomeRestockSelectedOnPage]);
-
-  const isAllBackorderSelectedOnPage = useMemo(() => {
-    if (filteredBackorderSuggestions.length === 0) return false;
-    return filteredBackorderSuggestions.every(p => selectedBackorderIds.has(p.id));
-  }, [filteredBackorderSuggestions, selectedBackorderIds]);
-
-  const isSomeBackorderSelectedOnPage = useMemo(() => {
-    return filteredBackorderSuggestions.some(p => selectedBackorderIds.has(p.id)) && !isAllBackorderSelectedOnPage;
-  }, [filteredBackorderSuggestions, selectedBackorderIds, isAllBackorderSelectedOnPage]);
-
-  useEffect(() => {
-    if (!backorderMasterCheckboxRef.current) return;
-    backorderMasterCheckboxRef.current.indeterminate = isSomeBackorderSelectedOnPage;
-  }, [isSomeBackorderSelectedOnPage]);
-
-  const createPO = async () => {
+  const createInbound = async () => {
+    if (!supplierId) {
+      setErrorMessage('Supplier wajib dipilih.');
+      return;
+    }
     if (items.length === 0) {
       setErrorMessage('Masukkan minimal satu barang.');
       return;
     }
 
     try {
-      setLoading(true);
+      setSaving(true);
       setErrorMessage('');
-      const payload = {
-        ...(supplierId ? { supplier_id: Number(supplierId) } : {}),
-        total_cost: totalCost,
-        items: items.map(item => ({
-          product_id: item.product.id,
-          qty: item.qty,
-          unit_cost: item.unit_cost
-        }))
-      };
-
-      const res = await api.admin.inventory.createPO(payload);
-      const next = res.data as CreatePOResult;
-      setResult(next);
-      if (next?.id) router.push(`/admin/warehouse/inbound/${next.id}`);
+      const res = await api.admin.inventory.createInbound({
+        supplier_id: Number(supplierId),
+        items: payloadItems,
+      });
+      const id = String(res.data?.id || '');
+      if (id) router.push(`/admin/warehouse/inbound/${id}`);
     } catch (error: unknown) {
-      console.error('Create PO failed:', error);
       const err = error as ApiErrorWithMessage;
-      setErrorMessage(err?.response?.data?.message || 'Gagal membuat purchase order.');
+      setErrorMessage(err?.response?.data?.message || 'Gagal membuat draft inbound.');
     } finally {
-      setLoading(false);
+      setSaving(false);
+    }
+  };
+
+  const createProduct = async () => {
+    const sku = newSku.trim();
+    const name = newName.trim();
+    const unit = newUnit.trim() || 'Pcs';
+    const categoryId = Number(newCategoryId);
+    if (!sku || !name || !Number.isInteger(categoryId) || categoryId <= 0) {
+      setErrorMessage('Isi SKU, Nama, dan Kategori.');
+      return;
+    }
+    try {
+      setCreatingProduct(true);
+      setErrorMessage('');
+      const basePrice = Number(newBasePrice);
+      const res = await api.admin.inventory.createProduct({
+        sku,
+        name,
+        unit,
+        category_id: categoryId,
+        ...(Number.isFinite(basePrice) && basePrice >= 0 ? { base_price: basePrice, price: basePrice } : {}),
+      });
+      const product = res.data as ProductRow;
+      addProductToItems(product);
+      setShowCreateProduct(false);
+      setNewSku('');
+      setNewName('');
+      setNewUnit('Pcs');
+      setNewBasePrice('');
+      setNewCategoryId('');
+    } catch (error: unknown) {
+      const err = error as ApiErrorWithMessage;
+      setErrorMessage(err?.response?.data?.message || 'Gagal menambahkan produk baru.');
+    } finally {
+      setCreatingProduct(false);
     }
   };
 
@@ -390,16 +205,18 @@ export default function PurchaseOrderPage() {
         <div>
           <h1 className="warehouse-title !mb-1 flex items-center gap-2">
             <Package className="text-emerald-600" />
-            Inbound (Input Gudang)
+            Inbound Gudang
           </h1>
-          <p className="warehouse-subtitle !mb-0">Input data barang masuk (draft), lalu verifikasi 2 langkah sebelum stok diposting.</p>
+          <p className="warehouse-subtitle !mb-0">
+            Input barang fisik yang sudah datang, lalu verifikasi 2 langkah sebelum stok diposting.
+          </p>
         </div>
         <Link
           href="/admin/warehouse/inbound/history"
           className="rounded-2xl bg-white border border-slate-200 text-slate-600 text-sm font-black px-6 py-3 inline-flex items-center justify-center gap-2 hover:bg-slate-50 transition-all shadow-sm active:scale-95"
         >
           <HistoryIcon size={18} />
-          Riwayat PO
+          Riwayat Inbound
         </Link>
       </div>
 
@@ -409,71 +226,75 @@ export default function PurchaseOrderPage() {
         </div>
       )}
 
-      {result && (
-        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 shrink-0">
-          <p className="text-sm font-bold text-emerald-700">✅ Draft inbound berhasil dibuat</p>
-          <div className="text-xs text-emerald-600 mt-1 flex gap-4">
-            <span>ID: <span className="font-mono">{result.id}</span></span>
-            <span>Status: <span className="uppercase">{result.status}</span></span>
-            <span>Total: <span className="font-bold">Rp {Number(result.total_cost || totalCost).toLocaleString()}</span></span>
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-col lg:grid lg:grid-cols-3 gap-4 flex-1 min-h-0">
-        {/* Left Column (Mobile: Second / Desktop: First sidebar) */}
         <div className="lg:col-span-1 min-h-0 order-2 lg:order-1">
-          {/* Added Items List */}
           <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-full flex flex-col">
-            <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-between">
-              <span>Daftar Barang ({items.length})</span>
+            <h3 className="font-bold text-slate-900 mb-3">Header</h3>
+            <label className="text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Supplier (Wajib)</label>
+            <select
+              value={supplierId}
+              onChange={(e) => setSupplierId(e.target.value)}
+              disabled={loadingSuppliers}
+              className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all outline-none"
+            >
+              <option value="">Pilih Supplier...</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+
+            <div className="flex items-center justify-between mt-6 mb-2">
+              <h3 className="font-bold text-slate-900">Daftar Barang ({items.length})</h3>
               {items.length > 0 && (
-                <button onClick={() => setItems([])} className="text-xs text-rose-500 font-medium hover:underline">Hapus Semua</button>
+                <button onClick={() => setItems([])} className="text-xs text-rose-500 font-medium hover:underline inline-flex items-center gap-1">
+                  <Trash2 size={14} /> Hapus Semua
+                </button>
               )}
-            </h3>
+            </div>
 
             {items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-44 text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
+              <div className="flex flex-col items-center justify-center h-40 text-slate-400 border-2 border-dashed border-slate-100 rounded-2xl">
                 <Package size={48} className="mb-2 opacity-20" />
-                <p className="text-sm text-center px-4">Belum ada barang dipilih. Cari barang di panel kanan atau pilih saran di panel tengah.</p>
+                <p className="text-sm text-center px-4">Belum ada barang dipilih. Cari di panel kanan.</p>
               </div>
             ) : (
-              <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-                {items.map((item, index) => (
-                  <div key={`${item.product.id}-${index}`} className="flex flex-col gap-3 p-4 bg-slate-50 border border-slate-100 rounded-2xl">
-                    <div className="flex-1">
-                      <div className="font-bold text-slate-900 text-sm">{item.product.name}</div>
-                      <div className="text-xs text-slate-500">SKU: {item.product.sku}</div>
+              <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2">
+                {items.map((it) => (
+                  <div key={it.product.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{it.product.sku}</div>
+                        <div className="font-black text-slate-900 truncate">{it.product.name}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Stok DB: <span className="font-bold">{Number(it.product.stock_quantity || 0)}</span>
+                        </div>
+                      </div>
+                      <button onClick={() => removeItem(it.product.id)} className="text-rose-500 hover:underline text-xs font-bold">
+                        Hapus
+                      </button>
                     </div>
-
-                    <div className="flex items-center gap-3 w-full">
-                      <div className="flex-1">
-                        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Qty</label>
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Qty Datang</label>
                         <input
                           type="number"
-                          min="1"
-                          value={item.qty}
-                          onChange={(e) => updateItem(index, 'qty', parseInt(e.target.value) || 0)}
-                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-center focus:ring-2 focus:ring-emerald-500 outline-none"
+                          min={1}
+                          value={it.qty}
+                          onChange={(e) => {
+                            const nextQty = Math.max(1, Number(e.target.value || 1));
+                            setItems((prev) => prev.map((p) => p.product.id === it.product.id ? { ...p, qty: nextQty } : p));
+                          }}
+                          className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500"
                         />
                       </div>
-                      <div className="flex-[2]">
-                        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Harga Beli (@)</label>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Unit Cost (Opsional)</label>
                         <input
-                          type="number"
-                          min="0"
-                          value={item.unit_cost}
-                          onChange={(e) => updateItem(index, 'unit_cost', parseInt(e.target.value) || 0)}
-                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={it.unit_cost}
+                          onChange={(e) => setItems((prev) => prev.map((p) => p.product.id === it.product.id ? { ...p, unit_cost: e.target.value } : p))}
+                          className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          placeholder={`default: ${Number(it.product.base_price || 0)}`}
                         />
-                      </div>
-                      <div className="w-8 flex justify-end pt-5">
-                        <button
-                          onClick={() => removeItem(index)}
-                          className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-                        >
-                          <Trash2 size={18} />
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -481,519 +302,135 @@ export default function PurchaseOrderPage() {
               </div>
             )}
 
-            {items.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between items-center text-sm shrink-0">
-                <span className="text-slate-500 font-medium">Subtotal Item</span>
-                <span className="font-bold text-slate-900">Rp {totalCost.toLocaleString()}</span>
-              </div>
-            )}
+            <button
+              onClick={createInbound}
+              disabled={saving}
+              className="mt-4 rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all shadow-lg active:scale-95"
+            >
+              {saving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <Save size={18} />
+              )}
+              Simpan Draft Inbound
+            </button>
+
+            <div className="mt-3 text-xs text-slate-500 flex items-center gap-2">
+              <AlertTriangle size={14} className="text-amber-500" />
+              Draft belum menambah stok sampai verifikasi langkah 2.
+            </div>
           </div>
         </div>
 
-        {/* Right Column (Mobile: First / Desktop: Main area) */}
-        <div className="lg:col-span-2 min-h-0 order-1 lg:order-2">
-          <div className="flex flex-col lg:grid lg:grid-cols-2 gap-4 min-h-0 h-full">
-          {/* Product Search (Top priority on both mobile and desktop) */}
-          <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm shrink-0 lg:col-start-2 lg:row-start-1">
-            <h3 className="font-bold text-slate-900 mb-4">Cari Barang</h3>
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+        <div className="lg:col-span-2 min-h-0 order-1 lg:order-2 flex flex-col gap-4">
+          <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-bold text-slate-900">Cari Produk</h3>
+              <button
+                onClick={() => setShowCreateProduct((v) => !v)}
+                className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 hover:bg-slate-50 transition-all"
+              >
+                <Plus size={18} />
+                Tambah Produk Baru
+              </button>
+            </div>
+
+            {showCreateProduct && (
+              <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">SKU</label>
+                    <input value={newSku} onChange={(e) => setNewSku(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Nama</label>
+                    <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Unit</label>
+                    <input value={newUnit} onChange={(e) => setNewUnit(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Kategori</label>
+                    <select
+                      value={newCategoryId}
+                      onChange={(e) => setNewCategoryId(e.target.value)}
+                      disabled={loadingCategories}
+                      className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="">Pilih kategori...</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Base Price (opsional)</label>
+                    <input value={newBasePrice} onChange={(e) => setNewBasePrice(e.target.value)} className="w-full mt-1 bg-white border border-slate-200 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="contoh: 15000" />
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={createProduct}
+                    disabled={creatingProduct}
+                    className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-4 py-2.5 inline-flex items-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all"
+                  >
+                    {creatingProduct ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <Plus size={18} />
+                    )}
+                    Simpan Produk
+                  </button>
+                  <button
+                    onClick={() => setShowCreateProduct(false)}
+                    className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-2.5 hover:bg-slate-50 transition-all"
+                  >
+                    Tutup
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Ketik nama barang atau SKU..."
-                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium"
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+                placeholder="Cari SKU / nama produk (min 2 huruf)..."
+                className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
               />
-              {searching && (
-                <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                  <div className="w-5 h-5 border-2 border-slate-200 border-t-emerald-500 rounded-full animate-spin"></div>
-                </div>
-              )}
             </div>
 
-            {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
-              <div className="mt-2 text-sm text-slate-500 text-center py-2">Barang tidak ditemukan.</div>
-            )}
-
-            {searchResults.length > 0 && (
-              <div className="mt-4 border border-slate-100 rounded-2xl overflow-hidden max-h-60 overflow-y-auto shadow-sm">
-                {searchResults.map(product => (
-                  <button
-                    key={product.id}
-                    onClick={() => addItem(product)}
-                    className="w-full text-left p-3 hover:bg-emerald-50 border-b border-slate-50 last:border-0 flex items-center justify-between group transition-colors"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-900 text-sm group-hover:text-emerald-700">{product.name}</div>
-                      <div className="text-xs text-slate-500">SKU: {product.sku} • Stok: {product.stock_quantity}</div>
-                    </div>
-                    <div className="bg-slate-100 p-2 rounded-lg group-hover:bg-emerald-200 transition-colors">
-                      <Plus size={16} className="text-slate-600 group-hover:text-emerald-800" />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Middle Column: Suggestions */}
-          <div className="flex flex-col gap-4 flex-1 min-h-0 lg:col-start-1 lg:row-start-1 lg:row-span-2">
-            <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-4 shadow-sm shrink-0">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Saran</div>
-                  <div className="text-sm font-black text-slate-900">Pilih sumber saran</div>
-                </div>
-                <div className="inline-flex p-1 rounded-2xl bg-slate-50 border border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setSuggestionMode('restock')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${suggestionMode === 'restock'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                  >
-                    Menipis/Habis
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSuggestionMode('backorder')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${suggestionMode === 'backorder'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                  >
-                    Backorder/PO
-                  </button>
-                </div>
-              </div>
-            </div>
-            {/* Restock Suggestions */}
-            <div className={`warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex-1 min-h-0 flex flex-col ${suggestionMode === 'restock' ? '' : 'hidden'}`}>
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                    <AlertTriangle size={16} className="text-amber-600" />
-                    Saran Barang Menipis / Habis
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">Prioritas barang yang perlu dipertimbangkan untuk PO berikutnya.</p>
-                </div>
-                <button
-                  onClick={loadRestockSuggestions}
-                  disabled={loadingSuggestions}
-                  className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors disabled:opacity-50"
-                >
-                  {loadingSuggestions ? 'Memuat...' : 'Refresh'}
-                </button>
-              </div>
-
-              {loadingSuggestions ? (
-                <div className="text-sm text-slate-500 py-6 text-center">Memuat saran restock...</div>
-              ) : restockSuggestions.length === 0 ? (
-                <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl p-4">
-                  Semua stok produk saat ini dalam kondisi aman.
-                </div>
+            <div className="mt-3 max-h-[520px] overflow-y-auto pr-1 space-y-2">
+              {searching ? (
+                <div className="text-sm text-slate-500">Mencari...</div>
+              ) : productResults.length === 0 ? (
+                <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
               ) : (
-                <div className="flex flex-col gap-3 flex-1 min-h-0">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <div className="md:col-span-2">
-                      <input
-                        value={restockSearch}
-                        onChange={(e) => {
-                          setRestockSearch(e.target.value);
-                          setRestockPage(1);
-                        }}
-                        placeholder="Filter nama / SKU / barcode..."
-                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
+                productResults.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => addProductToItems(p)}
+                    className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
+                        <div className="font-black text-slate-900 truncate">{p.name}</div>
+                      </div>
+                      <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
+                        <Plus size={14} /> Tambah
+                      </span>
                     </div>
-                    <div className="md:col-span-1 flex items-center gap-2">
-                      <select
-                        value={restockLimit}
-                        onChange={(e) => {
-                          setRestockLimit(Number(e.target.value) || 50);
-                          setRestockPage(1);
-                        }}
-                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value={25}>25 / halaman</option>
-                        <option value={50}>50 / halaman</option>
-                        <option value={100}>100 / halaman</option>
-                        <option value={200}>200 / halaman</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs text-slate-500">
-                      Total: <span className="font-bold text-slate-700">{restockTotal.toLocaleString()}</span> item
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          const selected = restockSuggestions.filter(p => selectedRestockIds.has(p.id));
-                          selected.forEach(addSuggestedItem);
-                          setSelectedRestockIds(new Set());
-                        }}
-                        disabled={selectedRestockIds.size === 0}
-                        className="text-xs font-bold px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50 transition-colors"
-                      >
-                        Tambah Terpilih ({selectedRestockIds.size})
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 min-h-0 border border-slate-100 rounded-2xl overflow-hidden">
-                    <div className="h-full overflow-auto">
-                      <table className="min-w-full text-sm">
-                        <thead className="sticky top-0 bg-white border-b border-slate-100">
-                          <tr className="text-xs text-slate-500">
-                            <th className="px-3 py-2 w-10">
-                              <input
-                                ref={restockMasterCheckboxRef}
-                                type="checkbox"
-                                checked={isAllRestockSelectedOnPage}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedRestockIds(new Set(restockSuggestions.map(p => p.id)));
-                                  } else {
-                                    setSelectedRestockIds(new Set());
-                                  }
-                                }}
-                                className="h-4 w-4 accent-emerald-600"
-                              />
-                            </th>
-                            <th className="px-3 py-2 text-left font-bold">Nama</th>
-                            <th className="px-3 py-2 text-left font-bold">SKU</th>
-                            <th className="px-3 py-2 text-right font-bold">Stok</th>
-                            <th className="px-3 py-2 text-right font-bold">Min</th>
-                            <th className="px-3 py-2 text-left font-bold">Status</th>
-                            <th className="px-3 py-2 text-right font-bold">Saran Qty</th>
-                            <th className="px-3 py-2 text-right font-bold">Aksi</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                          {restockSuggestions.map((product) => {
-                            const stock = Number(product.stock_quantity || 0);
-                            const minStock = Number(product.min_stock || 0);
-                            const critical = stock <= 0;
-                            const alreadyInDraft = items.some(item => item.product.id === product.id);
-                            const suggestedQty = getSuggestedRestockQty(product);
-                            const checked = selectedRestockIds.has(product.id);
-
-                            return (
-                              <tr key={product.id} className="hover:bg-slate-50">
-                                <td className="px-3 py-2 align-middle">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => {
-                                      setSelectedRestockIds(prev => {
-                                        const next = new Set(prev);
-                                        if (next.has(product.id)) next.delete(product.id);
-                                        else next.add(product.id);
-                                        return next;
-                                      });
-                                    }}
-                                    className="h-4 w-4 accent-emerald-600"
-                                  />
-                                </td>
-                                <td className="px-3 py-2 font-bold text-slate-900 whitespace-nowrap">
-                                  <div className="max-w-[360px] truncate">{product.name}</div>
-                                </td>
-                                <td className="px-3 py-2 text-slate-600 font-mono text-xs whitespace-nowrap">{product.sku}</td>
-                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{stock}</td>
-                                <td className="px-3 py-2 text-right font-bold text-slate-700 whitespace-nowrap">{minStock}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">
-                                  <span
-                                    className={`text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider ${critical
-                                      ? 'bg-rose-100 text-rose-700'
-                                      : 'bg-amber-100 text-amber-700'
-                                      }`}
-                                  >
-                                    {critical ? 'Habis' : 'Menipis'}
-                                  </span>
-                                  {alreadyInDraft && (
-                                    <span className="ml-2 text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-wider bg-slate-100 text-slate-600">
-                                      Draft
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{suggestedQty}</td>
-                                <td className="px-3 py-2 text-right whitespace-nowrap">
-                                  <button
-                                    onClick={() => addSuggestedItem(product)}
-                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
-                                      ? 'bg-slate-200 text-slate-600 border-slate-300'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                                      }`}
-                                  >
-                                    {alreadyInDraft ? 'Sudah' : 'Tambah'}
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
-                    <div>
-                      Halaman <span className="font-bold text-slate-700">{restockPage}</span> / <span className="font-bold text-slate-700">{restockTotalPages}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setRestockPage(p => Math.max(1, p - 1))}
-                        disabled={restockPage <= 1}
-                        className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        Prev
-                      </button>
-                      <button
-                        onClick={() => setRestockPage(p => Math.min(restockTotalPages, p + 1))}
-                        disabled={restockPage >= restockTotalPages}
-                        className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  </button>
+                ))
               )}
             </div>
-
-            {/* Backorder Suggestions */}
-            <div className={`warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex-1 min-h-0 flex flex-col ${suggestionMode === 'backorder' ? '' : 'hidden'}`}>
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                    <ShoppingBag size={16} className="text-emerald-600" />
-                    Saran Backorder / PO
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">Barang yang kurang untuk memenuhi pesanan.</p>
-                </div>
-                <button
-                  onClick={loadBackorderSuggestions}
-                  disabled={loadingBackorderSuggestions}
-                  className="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {loadingBackorderSuggestions ? (
-                    <RefreshCw size={14} className="animate-spin" />
-                  ) : (
-                    <RefreshCw size={14} />
-                  )}
-                  <span>Refresh</span>
-                </button>
-              </div>
-
-              {loadingBackorderSuggestions ? (
-                <div className="text-sm text-slate-500 py-6 text-center">Memuat saran backorder...</div>
-              ) : backorderSuggestions.length === 0 ? (
-                <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl p-4">
-                  Tidak ada barang backorder saat ini.
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3 flex-1 min-h-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-slate-100 text-slate-700">
-                      Unallocated: {Number(backorderOrderLabelCounts.unallocated || 0)}
-                    </span>
-                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-purple-100 text-purple-700">
-                      Preorder: {Number(backorderOrderLabelCounts.preorder || 0)}
-                    </span>
-                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-blue-100 text-blue-700">
-                      Backorder: {Number(backorderOrderLabelCounts.backorder || 0)}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <div className="md:col-span-2">
-                      <input
-                        value={backorderSearch}
-                        onChange={(e) => setBackorderSearch(e.target.value)}
-                        placeholder="Filter nama / SKU..."
-                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="md:col-span-1 flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          const selected = filteredBackorderSuggestions.filter(p => selectedBackorderIds.has(p.id));
-                          upsertDraftItems(
-                            selected.map((it) => ({
-                              product: {
-                                id: it.id,
-                                name: it.name,
-                                sku: it.sku,
-                                stock_quantity: it.stock,
-                                base_price: it.base_price
-                              },
-                              qty: it.shortage,
-                              unit_cost: it.base_price,
-                              mode: 'add'
-                            }))
-                          );
-                          setSelectedBackorderIds(new Set());
-                        }}
-                        disabled={selectedBackorderIds.size === 0}
-                        className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50 transition-colors"
-                      >
-                        Tambah Terpilih ({selectedBackorderIds.size})
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 min-h-0 border border-slate-100 rounded-2xl overflow-hidden">
-                    <div className="h-full overflow-auto">
-                      <table className="min-w-full text-sm">
-                        <thead className="sticky top-0 bg-white border-b border-slate-100">
-                          <tr className="text-xs text-slate-500">
-                            <th className="px-3 py-2 w-10">
-                              <input
-                                ref={backorderMasterCheckboxRef}
-                                type="checkbox"
-                                checked={isAllBackorderSelectedOnPage}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedBackorderIds(new Set(filteredBackorderSuggestions.map(p => p.id)));
-                                  } else {
-                                    setSelectedBackorderIds(new Set());
-                                  }
-                                }}
-                                className="h-4 w-4 accent-emerald-600"
-                              />
-                            </th>
-                            <th className="px-3 py-2 text-left font-bold">Nama</th>
-                            <th className="px-3 py-2 text-left font-bold">SKU</th>
-                            <th className="px-3 py-2 text-right font-bold">Stok</th>
-                            <th className="px-3 py-2 text-right font-bold">Butuh</th>
-                            <th className="px-3 py-2 text-right font-bold">Aksi</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                          {filteredBackorderSuggestions.map((it) => {
-                            const alreadyInDraft = items.some(draftItem => draftItem.product.id === it.id);
-                            const checked = selectedBackorderIds.has(it.id);
-
-                            return (
-                              <tr key={it.id} className="hover:bg-slate-50">
-                                <td className="px-3 py-2 align-middle">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => {
-                                      setSelectedBackorderIds(prev => {
-                                        const next = new Set(prev);
-                                        if (next.has(it.id)) next.delete(it.id);
-                                        else next.add(it.id);
-                                        return next;
-                                      });
-                                    }}
-                                    className="h-4 w-4 accent-emerald-600"
-                                  />
-                                </td>
-                                <td className="px-3 py-2 font-bold text-slate-900 whitespace-nowrap">
-                                  <div className="max-w-[360px] truncate">{it.name}</div>
-                                  {alreadyInDraft && (
-                                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mt-0.5">Draft</div>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-slate-600 font-mono text-xs whitespace-nowrap">{it.sku}</td>
-                                <td className="px-3 py-2 text-right font-bold text-slate-900 whitespace-nowrap">{it.stock}</td>
-                                <td className="px-3 py-2 text-right whitespace-nowrap">
-                                  <div className="font-black text-rose-700">{it.shortage}</div>
-                                  {(Number(it.shortage_unallocated || 0) > 0 || Number(it.shortage_confirmed || 0) > 0) && (
-                                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5">
-                                      {Number(it.shortage_unallocated || 0) > 0 ? `Unalloc ${Number(it.shortage_unallocated || 0)}` : null}
-                                      {Number(it.shortage_unallocated || 0) > 0 && Number(it.shortage_confirmed || 0) > 0 ? ' • ' : null}
-                                      {Number(it.shortage_confirmed || 0) > 0 ? `Confirmed ${Number(it.shortage_confirmed || 0)}` : null}
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-right whitespace-nowrap">
-                                  <button
-                                    onClick={() => {
-                                      upsertDraftItems([{
-                                        product: {
-                                          id: it.id,
-                                          name: it.name,
-                                          sku: it.sku,
-                                          stock_quantity: it.stock,
-                                          base_price: it.base_price
-                                        },
-                                        qty: it.shortage,
-                                        unit_cost: it.base_price,
-                                        mode: 'add'
-                                      }]);
-                                    }}
-                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ${alreadyInDraft
-                                      ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                                      }`}
-                                  >
-                                    {alreadyInDraft ? `Tambah (+${it.shortage})` : 'Tambah'}
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Information Supplier Card moved to main area */}
-          <div className="warehouse-panel bg-white border border-slate-200 rounded-3xl p-5 shadow-sm shrink-0 lg:col-start-2 lg:row-start-2">
-            <h3 className="font-bold text-slate-900 mb-4">Informasi Supplier & Finalisasi PO</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="md:col-span-1">
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Supplier</label>
-                <select
-                  value={supplierId}
-                  onChange={(e) => setSupplierId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
-                  disabled={loadingSuppliers}
-                >
-                  <option value="">{loadingSuppliers ? 'Memuat...' : 'Pilih Supplier...'}</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="md:col-span-1 p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col justify-center">
-                <div className="text-xs font-bold text-slate-400 uppercase mb-1">Total Estimasi Biaya</div>
-                <div className="text-xl font-black text-slate-900">
-                  Rp {totalCost.toLocaleString()}
-                </div>
-              </div>
-
-              <div className="md:col-span-1 flex items-end">
-                <button
-                  onClick={createPO}
-                  disabled={loading || items.length === 0 || !supplierId}
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-lg shadow-slate-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
-                >
-                  {loading ? 'Menyimpan...' : (
-                    <span className="inline-flex items-center justify-center gap-2 whitespace-nowrap leading-tight">
-                      <Save size={18} className="shrink-0 -translate-y-[0.5px]" />
-                      <span>Buat Purchase Order</span>
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
           </div>
         </div>
       </div>
     </div>
   );
 }
+

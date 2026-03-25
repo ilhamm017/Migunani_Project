@@ -27,7 +27,7 @@ interface PO {
 }
 
 export default function POHistoryPage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
+    const allowed = useRequireRoles(['super_admin'], '/admin');
     const [pos, setPos] = useState<PO[]>([]);
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
@@ -37,7 +37,7 @@ export default function POHistoryPage() {
     const loadPOs = useCallback(async () => {
         try {
             setLoading(true);
-            const res = await api.admin.inventory.getPOs({
+            const res = await api.admin.inventory.getInbounds({
                 page,
                 limit: 10,
                 status: statusFilter || undefined
@@ -92,9 +92,9 @@ export default function POHistoryPage() {
                     <div>
                         <h1 className="warehouse-title !mb-0 flex items-center gap-2">
                             <Clock className="text-emerald-600" />
-                            Riwayat Purchase Order (PO)
+                            Riwayat Inbound Gudang
                         </h1>
-                        <p className="warehouse-subtitle !mb-0">Daftar semua PO dan status penerimaan barang.</p>
+                        <p className="warehouse-subtitle !mb-0">Daftar inbound dan status verifikasi/posting stok.</p>
                     </div>
                 </div>
             </div>

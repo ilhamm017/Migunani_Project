@@ -57,13 +57,30 @@ router.post('/admin/products/upload-image', authenticateToken, authorizeRoles('s
 router.post('/admin/inventory/mutation', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createStockMutation);
 router.get('/admin/inventory/mutation/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getProductMutations);
 router.get('/admin/inventory/stock-history/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProductStockHistory);
-router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrders);
-router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrderById);
-router.get('/admin/inventory/po/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.exportPurchaseOrderExcel);
-router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createPurchaseOrder);
-router.patch('/admin/inventory/po/:id/verify-1', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.verifyInboundStep1);
-router.patch('/admin/inventory/po/:id/verify-2', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.verifyInboundStep2AndPost);
-router.patch('/admin/inventory/po/:id/receive', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.receivePurchaseOrder);
+
+/**
+ * Inbound Gudang (Receipt)
+ * New canonical endpoints under /admin/inventory/inbound
+ */
+router.get('/admin/inventory/inbound/:id', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrderById);
+router.get('/admin/inventory/inbound/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.exportPurchaseOrderExcel);
+router.get('/admin/inventory/inbound', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrders);
+router.post('/admin/inventory/inbound', authenticateToken, authorizeRoles('super_admin'), InventoryController.createPurchaseOrder);
+router.patch('/admin/inventory/inbound/:id/verify-1', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep1);
+router.patch('/admin/inventory/inbound/:id/verify-2', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep2AndPost);
+router.patch('/admin/inventory/inbound/:id/receive', authenticateToken, authorizeRoles('super_admin'), InventoryController.receivePurchaseOrder);
+
+/**
+ * Legacy alias (Deprecated): /admin/inventory/po -> same behavior as inbound receipt.
+ * Kept temporarily for backward compatibility. Write operations remain super_admin only.
+ */
+router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrders);
+router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.getPurchaseOrderById);
+router.get('/admin/inventory/po/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_finance', 'kasir'), InventoryController.exportPurchaseOrderExcel);
+router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin'), InventoryController.createPurchaseOrder);
+router.patch('/admin/inventory/po/:id/verify-1', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep1);
+router.patch('/admin/inventory/po/:id/verify-2', authenticateToken, authorizeRoles('super_admin'), InventoryController.verifyInboundStep2AndPost);
+router.patch('/admin/inventory/po/:id/receive', authenticateToken, authorizeRoles('super_admin'), InventoryController.receivePurchaseOrder);
 router.post('/admin/inventory/import/preview', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImportMiddleware, InventoryController.previewProductsImportFromUpload);
 router.post('/admin/inventory/import/commit', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.commitProductsImport);
 router.post('/admin/inventory/import', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), uploadImportMiddleware, InventoryController.importProductsFromUpload);

@@ -14,7 +14,8 @@ export default function WarehouseDashboardLayout({ children }: { children: React
         pathname === '/admin/warehouse/stok' ||
         pathname === '/admin/warehouse/pesanan' ||
         pathname === '/admin/warehouse/helper' ||
-        pathname === '/admin/warehouse/inbound';
+        pathname === '/admin/warehouse/inbound' ||
+        pathname === '/admin/warehouse/po';
 
     useEffect(() => {
         if (!allowed) return;

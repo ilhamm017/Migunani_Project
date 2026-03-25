@@ -50,7 +50,7 @@ interface PO {
 }
 
 export default function POReceivePage() {
-    const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'kasir'], '/admin');
+    const allowed = useRequireRoles(['super_admin'], '/admin');
     const { id } = useParams();
 
     const [po, setPo] = useState<PO | null>(null);
@@ -64,7 +64,7 @@ export default function POReceivePage() {
         if (!id) return;
         try {
             setLoading(true);
-            const res = await api.admin.inventory.getPOById(id as string);
+            const res = await api.admin.inventory.getInboundById(id as string);
             setPo(res.data);
         } catch (error) {
             console.error('Failed to load PO', error);
@@ -122,7 +122,7 @@ export default function POReceivePage() {
         setIsExporting(true);
         setMessage('');
         try {
-            const res = await api.admin.inventory.exportPOXlsx(po.id);
+            const res = await api.admin.inventory.exportInboundXlsx(po.id);
             const contentDisposition = String(res.headers?.['content-disposition'] || '');
             const filenameMatch = /filename="?([^";]+)"?/i.exec(contentDisposition);
             const fallbackName = `inbound-${po.id.split('-')[0]?.toUpperCase() || 'INB'}.xlsx`;

@@ -86,23 +86,43 @@ export default function WarehouseLandingPage() {
         },
         {
             href: '/admin/warehouse/inbound',
-            label: 'Inbound / PO',
-            desc: 'Input stok masuk dari Supplier',
+            label: 'Inbound Gudang',
+            desc: 'Terima stok fisik, lalu verifikasi posting',
             icon: ShoppingCart,
             color: 'text-emerald-600',
             bg: 'bg-emerald-50',
             border: 'border-emerald-100',
-            roles: ['super_admin', 'kasir']
+            roles: ['super_admin']
         },
         {
-            href: '/admin/warehouse/inbound/history',
-            label: 'Riwayat PO',
-            desc: 'Daftar semua Purchase Order',
+            href: '/admin/warehouse/po',
+            label: 'PO (PreOrder Supplier)',
+            desc: 'Rekap barang untuk order ke supplier',
             icon: Clock,
             color: 'text-amber-600',
             bg: 'bg-amber-50',
             border: 'border-amber-100',
-            roles: ['super_admin', 'admin_gudang', 'kasir']
+            roles: ['super_admin', 'kasir']
+        },
+        {
+            href: '/admin/warehouse/po/history',
+            label: 'Riwayat PO',
+            desc: 'History pembuatan preorder',
+            icon: Clock,
+            color: 'text-amber-600',
+            bg: 'bg-amber-50',
+            border: 'border-amber-100',
+            roles: ['super_admin', 'kasir']
+        },
+        {
+            href: '/admin/warehouse/inbound/history',
+            label: 'Riwayat Inbound',
+            desc: 'History inbound gudang',
+            icon: Clock,
+            color: 'text-slate-600',
+            bg: 'bg-slate-50',
+            border: 'border-slate-100',
+            roles: ['super_admin']
         },
         {
             href: '/admin/warehouse/audit',

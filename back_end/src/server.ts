@@ -223,6 +223,7 @@ import discountVoucherRoutes from './routes/discountVoucher';
 import accountRoutes from './routes/accounts';
 import profileRoutes from './routes/profile';
 import promoRoutes from './routes/promo';
+import procurementRoutes from './routes/procurement';
 
 // Routes
 app.use('/api/v1/auth', authRoutes);
@@ -239,6 +240,7 @@ import catalogRoutes from './routes/catalog';
 
 app.use('/api/v1/catalog', catalogRoutes); // Public Product Catalog
 app.use('/api/v1', inventoryRoutes); // /api/v1/products, /api/v1/admin/inventory...
+app.use('/api/v1', procurementRoutes); // /api/v1/admin/procurement...
 app.use('/api/v1/inventory/audit', stockOpnameRoutes);
 app.use('/api/v1/allocation', allocationRoutes);
 app.use('/api/v1/retur', returRoutes);

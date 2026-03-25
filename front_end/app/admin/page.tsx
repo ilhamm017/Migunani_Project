@@ -457,17 +457,31 @@ export default function AdminOverviewPage() {
       },
       {
         href: '/admin/warehouse/inbound',
-        title: 'Inbound / PO',
-        desc: 'Input stok masuk dari Supplier manual.',
+        title: 'Inbound Gudang',
+        desc: 'Terima stok fisik & verifikasi posting.',
         icon: ShoppingCart,
         tone: 'bg-teal-100 text-teal-700 group-hover:bg-teal-700 group-hover:text-white',
       },
       {
-        href: '/admin/warehouse/inbound/history',
-        title: 'Riwayat PO',
-        desc: 'Daftar semua Purchase Order.',
+        href: '/admin/warehouse/po',
+        title: 'PO (PreOrder Supplier)',
+        desc: 'Rekap barang untuk order ke supplier.',
         icon: Clock,
         tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white',
+      },
+      {
+        href: '/admin/warehouse/po/history',
+        title: 'Riwayat PO',
+        desc: 'History preorder ke supplier.',
+        icon: Clock,
+        tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white',
+      },
+      {
+        href: '/admin/warehouse/inbound/history',
+        title: 'Riwayat Inbound',
+        desc: 'History inbound gudang.',
+        icon: Clock,
+        tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-700 group-hover:text-white',
       },
       {
         href: '/admin/finance/laporan/backorder',
@@ -799,7 +813,6 @@ export default function AdminOverviewPage() {
       { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat', icon: ScanBarcode, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/categories', title: 'Kategori', desc: 'Kelola kategori', icon: Layers, tone: 'bg-sky-100 text-sky-700 group-hover:bg-sky-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/suppliers', title: 'Supplier', desc: 'Data vendor', icon: Truck, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white', badge: 0 },
-      { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor daftar PO', icon: Clock, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white', badge: 0 },
       { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data', icon: FileSpreadsheet, tone: 'bg-lime-100 text-lime-700 group-hover:bg-lime-700 group-hover:text-white', badge: 0 },
     ];
 
@@ -947,8 +960,10 @@ export default function AdminOverviewPage() {
 	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
 	        { href: '/admin/warehouse/vehicle-types', title: 'Jenis Kendaraan', desc: 'Master aplikasi kendaraan.', icon: Car },
 	        { href: '/admin/warehouse/suppliers', title: 'Data Supplier', desc: 'Vendor dan mitra.', icon: Truck },
-	        { href: '/admin/warehouse/inbound', title: 'Inbound / PO', desc: 'Input stok masuk.', icon: ShoppingCart },
-	        { href: '/admin/warehouse/inbound/history', title: 'Riwayat PO', desc: 'Monitor pengadaan.', icon: Clock },
+	        { href: '/admin/warehouse/inbound', title: 'Inbound Gudang', desc: 'Terima stok fisik & verifikasi.', icon: ShoppingCart },
+	        { href: '/admin/warehouse/inbound/history', title: 'Riwayat Inbound', desc: 'History inbound gudang.', icon: Clock },
+	        { href: '/admin/warehouse/po', title: 'PO (PreOrder Supplier)', desc: 'Rekap order ke supplier.', icon: ShoppingCart },
+	        { href: '/admin/warehouse/po/history', title: 'Riwayat PO', desc: 'History preorder supplier.', icon: Clock },
 	        { href: '/admin/warehouse/import', title: 'Import Excel/CSV', desc: 'Update massal data.', icon: FileSpreadsheet },
 	      ]
 	    },

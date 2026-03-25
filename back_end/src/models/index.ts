@@ -47,6 +47,8 @@ import CreditNoteLine from './CreditNoteLine';
 import IdempotencyKey from './IdempotencyKey';
 import NotificationOutbox from './NotificationOutbox';
 import AuditLog from './AuditLog';
+import SupplierPreorder from './SupplierPreorder';
+import SupplierPreorderItem from './SupplierPreorderItem';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -237,6 +239,19 @@ PurchaseOrder.belongsTo(User, { foreignKey: 'created_by' });
 PurchaseOrder.hasMany(PurchaseOrderItem, { foreignKey: 'purchase_order_id', as: 'Items' });
 PurchaseOrderItem.belongsTo(PurchaseOrder, { foreignKey: 'purchase_order_id' });
 
+// Procurement (Supplier Preorders)
+Supplier.hasMany(SupplierPreorder, { foreignKey: 'supplier_id', as: 'Preorders' });
+SupplierPreorder.belongsTo(Supplier, { foreignKey: 'supplier_id', as: 'Supplier' });
+
+User.hasMany(SupplierPreorder, { foreignKey: 'created_by', as: 'CreatedSupplierPreorders' });
+SupplierPreorder.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+
+SupplierPreorder.hasMany(SupplierPreorderItem, { foreignKey: 'supplier_preorder_id', as: 'Items' });
+SupplierPreorderItem.belongsTo(SupplierPreorder, { foreignKey: 'supplier_preorder_id', as: 'Preorder' });
+
+SupplierPreorderItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(SupplierPreorderItem, { foreignKey: 'product_id', as: 'SupplierPreorderItems' });
+
 // Supplier Invoices & Payments (AP)
 Supplier.hasMany(SupplierInvoice, { foreignKey: 'supplier_id', as: 'SupplierInvoices' });
 SupplierInvoice.belongsTo(Supplier, { foreignKey: 'supplier_id', as: 'Supplier' });
@@ -341,5 +356,7 @@ export {
     CreditNoteLine,
     IdempotencyKey,
     NotificationOutbox,
-    AuditLog
+    AuditLog,
+    SupplierPreorder,
+    SupplierPreorderItem
 };
