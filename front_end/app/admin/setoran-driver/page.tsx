@@ -126,6 +126,15 @@ export default function AdminSetoranDriverPage() {
     return Object.entries(selectedHandoverIds).filter(([, v]) => v).map(([k]) => k);
   }, [selectedHandoverIds]);
 
+  const hasSelectedCod = selectedInvoiceIdList.length > 0;
+  const hasSelectedHandover = selectedHandoverIdList.length > 0;
+  const depositKindLabel = useMemo(() => {
+    if (hasSelectedCod && hasSelectedHandover) return 'Uang + Barang';
+    if (hasSelectedCod) return 'Uang saja';
+    if (hasSelectedHandover) return 'Barang saja';
+    return 'Belum dipilih';
+  }, [hasSelectedCod, hasSelectedHandover]);
+
   const expectedSelectedTotal = useMemo(() => {
     if (!selectedDriver) return 0;
     const byId = new Map(selectedDriver.cod_invoices_pending.map((inv) => [String(inv.invoice_id), inv]));
@@ -134,6 +143,12 @@ export default function AdminSetoranDriverPage() {
 
   const amountReceived = useMemo(() => parseAmount(amountReceivedInput), [amountReceivedInput, parseAmount]);
   const diff = useMemo(() => Math.round((amountReceived - expectedSelectedTotal) * 100) / 100, [amountReceived, expectedSelectedTotal]);
+
+  useEffect(() => {
+    if (!hasSelectedCod && amountReceivedInput) {
+      setAmountReceivedInput('');
+    }
+  }, [amountReceivedInput, hasSelectedCod]);
 
   const canSelectInvoice = useCallback((inv: CodInvoiceRow) => {
     if (!inv.requires_retur_handover) return true;
@@ -297,6 +312,11 @@ export default function AdminSetoranDriverPage() {
                   <p className="text-xs font-bold text-slate-500">Pilih invoice COD yang akan disettle</p>
                 </div>
 
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-700 flex items-center justify-between gap-3">
+                  <span>Setoran kali ini:</span>
+                  <span className="font-black">{depositKindLabel}</span>
+                </div>
+
                 {selectedDriver.cod_invoices_pending.length === 0 && (
                   <p className="text-sm font-bold text-slate-500">Tidak ada invoice COD pending.</p>
                 )}
@@ -351,20 +371,34 @@ export default function AdminSetoranDriverPage() {
                     <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Uang Diterima</label>
                     <input
                       value={amountReceivedInput}
-                      onChange={(e) => setAmountReceivedInput(formatAmount(e.target.value))}
-                      placeholder="0"
-                      className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900"
+                      onChange={(e) => {
+                        if (!hasSelectedCod) return;
+                        setAmountReceivedInput(formatAmount(e.target.value));
+                      }}
+                      placeholder={hasSelectedCod ? '0' : 'Diblokir (setoran hanya barang)'}
+                      disabled={!hasSelectedCod}
+                      className={`mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 ${!hasSelectedCod ? 'opacity-60' : ''}`}
                       inputMode="numeric"
                     />
-                    <p className="text-[11px] text-slate-500 mt-2">Selisih akan dicatat sebagai utang/piutang driver.</p>
+                    {hasSelectedCod ? (
+                      <p className="text-[11px] text-slate-500 mt-2">Selisih akan dicatat sebagai utang/piutang driver.</p>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 mt-2">Pilih invoice COD jika ada penerimaan uang. Jika setoran hanya barang retur, nominal uang tidak perlu diisi.</p>
+                    )}
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ringkasan</p>
-                    <p className="text-xs font-bold text-slate-700 mt-2">Expected: <span className="font-black">{new Intl.NumberFormat('id-ID').format(expectedSelectedTotal)}</span></p>
-                    <p className="text-xs font-bold text-slate-700">Received: <span className="font-black">{new Intl.NumberFormat('id-ID').format(amountReceived)}</span></p>
-                    <p className={`text-xs font-bold ${diff === 0 ? 'text-slate-700' : (diff < 0 ? 'text-rose-700' : 'text-emerald-700')}`}>
-                      Diff: <span className="font-black">{new Intl.NumberFormat('id-ID').format(diff)}</span>
-                    </p>
+                    {hasSelectedCod ? (
+                      <>
+                        <p className="text-xs font-bold text-slate-700 mt-2">Expected: <span className="font-black">{new Intl.NumberFormat('id-ID').format(expectedSelectedTotal)}</span></p>
+                        <p className="text-xs font-bold text-slate-700">Received: <span className="font-black">{new Intl.NumberFormat('id-ID').format(amountReceived)}</span></p>
+                        <p className={`text-xs font-bold ${diff === 0 ? 'text-slate-700' : (diff < 0 ? 'text-rose-700' : 'text-emerald-700')}`}>
+                          Diff: <span className="font-black">{new Intl.NumberFormat('id-ID').format(diff)}</span>
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-xs font-bold text-slate-600 mt-2">Tidak ada settlement uang pada setoran ini.</p>
+                    )}
                   </div>
                 </div>
               </div>

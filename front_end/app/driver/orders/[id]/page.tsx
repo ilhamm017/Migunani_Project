@@ -407,6 +407,7 @@ export default function DriverOrderDetailPage() {
   const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
   const deliveryNetTotal = Number(deliveryReturnSummary?.net_total || 0);
   const deliveryReturnTotal = Number(deliveryReturnSummary?.return_total || 0);
+  const deliveryNewItemsSubtotal = Number(deliveryReturnSummary?.new_items_subtotal ?? Number.NaN);
   const existingDeliveryReturs = Array.isArray((invoiceDetail as any)?.delivery_returs) ? ((invoiceDetail as any).delivery_returs as any[]) : [];
   const hasExistingDeliveryRetur = existingDeliveryReturs.length > 0;
   const handoverReadyReturs = existingDeliveryReturs.filter((r: any) => String(r?.status || '') === 'picked_up');
@@ -431,6 +432,12 @@ export default function DriverOrderDetailPage() {
   const activePaymentMethod = paymentMethod || invoiceContext.invoicePaymentMethod;
   const isCod = activePaymentMethod === 'cod';
   const paymentRecorded = isCod && ['cod_pending', 'paid'].includes(String(invoiceContext.invoicePaymentStatus || ''));
+  const isFullReturnNoCash = isCod
+    && hasExistingDeliveryRetur
+    && (
+      (Number.isFinite(deliveryNewItemsSubtotal) && deliveryNewItemsSubtotal <= 0.01)
+      || payableInvoiceTotal <= 0.01
+    );
   const returLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
   const paymentAmountValue = paymentAmount.trim() ? Number(paymentAmount) : undefined;
   const paymentAmountValid = paymentAmountValue === undefined || Number.isFinite(paymentAmountValue);
@@ -438,22 +445,42 @@ export default function DriverOrderDetailPage() {
   const missingChecklist = !checklistState.exists;
   const hasChecklistMismatch = checklistState.exists && checklistState.mismatchCount > 0;
   const missingProof = !proof;
-  const missingCodPaymentRecord = isCod && !paymentRecorded;
+  const missingCodPaymentRecord = isCod && !paymentRecorded && !isFullReturnNoCash;
   const missingReturHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
-  const codStatusTitle = paymentRecorded ? 'Status COD sudah tercatat untuk invoice ini.' : 'Konfirmasi COD jika invoice masih belum tercatat.';
-  const codStatusHint = paymentRecorded
-    ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut checklist dan bukti kirim.'
-    : 'Jika invoice COD ini masih belum tercatat, driver dapat konfirmasi penerimaan uang customer di sini.';
-  const codProofHint = paymentRecorded
-    ? 'Upload bukti COD bersifat opsional untuk dokumentasi tambahan.'
-    : 'Jika masih diperlukan, upload bukti COD akan mencoba mencatat pembayaran otomatis.';
-  const codActionLabel = paymentRecorded ? 'COD Sudah Tercatat' : 'Konfirmasi Penerimaan COD';
-  const codCompletionHint = paymentRecorded
-    ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah checklist dan bukti kirim lengkap.'
-    : 'Invoice COD ini masih belum tercatat. Konfirmasi penerimaan COD terlebih dahulu sebelum selesai.';
-  const codBlockingHint = paymentRecorded
+  const codStatusTitle = isFullReturnNoCash
+    ? 'Retur penuh: tidak ada transaksi uang.'
+    : paymentRecorded
+      ? 'Status COD sudah tercatat untuk invoice ini.'
+      : 'Konfirmasi COD jika invoice masih belum tercatat.';
+  const codStatusHint = isFullReturnNoCash
+    ? 'Customer mengembalikan semua barang, jadi tidak ada transaksi uang. Langkah selanjutnya: serahkan barang retur ke Admin/Kasir.'
+    : paymentRecorded
+      ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut checklist dan bukti kirim.'
+      : 'Jika invoice COD ini masih belum tercatat, driver dapat konfirmasi penerimaan uang customer di sini.';
+  const codProofHint = isFullReturnNoCash
+    ? 'Bukti COD dinonaktifkan karena tidak ada transaksi uang.'
+    : paymentRecorded
+      ? 'Upload bukti COD bersifat opsional untuk dokumentasi tambahan.'
+      : 'Jika masih diperlukan, upload bukti COD akan mencoba mencatat pembayaran otomatis.';
+  const codActionLabel = isFullReturnNoCash
+    ? 'Tidak Perlu Konfirmasi Uang'
+    : paymentRecorded
+      ? 'COD Sudah Tercatat'
+      : 'Konfirmasi Penerimaan COD';
+  const codCompletionHint = isFullReturnNoCash
+    ? 'Retur penuh: tidak ada transaksi uang. Pastikan retur sudah diajukan lalu serahkan barang ke Admin/Kasir.'
+    : paymentRecorded
+      ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah checklist dan bukti kirim lengkap.'
+      : 'Invoice COD ini masih belum tercatat. Konfirmasi penerimaan COD terlebih dahulu sebelum selesai.';
+  const codBlockingHint = (paymentRecorded || isFullReturnNoCash)
     ? ''
     : 'Pembayaran COD belum tercatat. Upload bukti COD atau klik Konfirmasi Penerimaan COD.';
+  const codBadgeLabel = isFullReturnNoCash ? 'Tidak Perlu' : paymentRecorded ? 'Sudah Dicatat' : 'Belum Dicatat';
+  const codBadgeClass = isFullReturnNoCash
+    ? 'bg-slate-100 text-slate-700 border border-slate-200'
+    : paymentRecorded
+      ? 'bg-emerald-100 text-emerald-700'
+      : 'bg-white text-amber-700 border border-amber-200';
   const fallbackActionOrderId = String(resolvedFromOrderId || groupedOrderIds[0] || order?.id || orderId).trim();
   const getActionTargetIds = () => {
     if (actionableOrderIds.length > 0) return actionableOrderIds;
@@ -496,6 +523,11 @@ export default function DriverOrderDetailPage() {
 
   const recordPayment = async (options?: { skipConfirm?: boolean; proofOverride?: File | null }) => {
     if (!isCod) return;
+    if (isFullReturnNoCash) {
+      setPaymentMessage('Customer retur semua barang, tidak ada transaksi uang. Langkah selanjutnya: serahkan barang retur ke Admin/Kasir.');
+      setCodPaymentConfirm(null);
+      return;
+    }
     if (paymentRecorded) {
       setPaymentMessage('Status COD untuk invoice ini sudah tercatat. Lanjutkan proses selesai pengiriman.');
       setCodPaymentConfirm(null);
@@ -700,6 +732,11 @@ export default function DriverOrderDetailPage() {
     setPaymentProof(file);
     if (!file) return;
     if (!isCod) return;
+    if (isFullReturnNoCash) {
+      setPaymentMessage('Customer retur semua barang, tidak ada transaksi uang. Bukti COD tidak diperlukan. Serahkan barang retur ke Admin/Kasir.');
+      setPaymentProof(null);
+      return;
+    }
     if (paymentRecorded) {
       setPaymentMessage('Bukti COD tersimpan sebagai dokumentasi. Status COD invoice ini sudah tercatat.');
       return;
@@ -817,7 +854,7 @@ export default function DriverOrderDetailPage() {
     && checklistState.exists
     && checklistState.mismatchCount === 0
     && !loading
-    && (!isCod || paymentRecorded)
+    && (!isCod || paymentRecorded || isFullReturnNoCash)
     && !missingReturHandover;
   const customer = order?.Customer || {};
 
@@ -1516,10 +1553,16 @@ export default function DriverOrderDetailPage() {
                 <p className="text-sm font-black text-slate-900">{codStatusTitle}</p>
                 <p className="text-[11px] text-slate-600 mt-1">{codStatusHint}</p>
               </div>
-              <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${paymentRecorded ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-amber-700 border border-amber-200'}`}>
-                {paymentRecorded ? 'Sudah Dicatat' : 'Belum Dicatat'}
+              <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${codBadgeClass}`}>
+                {codBadgeLabel}
               </span>
             </div>
+
+            {isFullReturnNoCash && (
+              <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-[11px] font-bold text-slate-700">
+                Tidak perlu konfirmasi penerimaan uang. Silakan fokus ajukan retur lalu serahkan barang ke Admin/Kasir.
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -1540,8 +1583,9 @@ export default function DriverOrderDetailPage() {
                   type="file"
                   accept="image/*"
                   capture="environment"
+                  disabled={isFullReturnNoCash}
                   onChange={(e) => handlePaymentProofChange(e.target.files?.[0] || null)}
-                  className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-200 file:px-3 file:py-2 file:text-[10px] file:font-black file:uppercase file:text-amber-900"
+                  className={`block w-full text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-200 file:px-3 file:py-2 file:text-[10px] file:font-black file:uppercase file:text-amber-900 ${isFullReturnNoCash ? 'opacity-60' : ''}`}
                 />
                 <p className="text-[10px] text-slate-500">{codProofHint}</p>
               </div>
@@ -1554,7 +1598,7 @@ export default function DriverOrderDetailPage() {
             <button
               type="button"
               onClick={() => void recordPayment()}
-              disabled={paymentRecorded || paymentLoading || !paymentAmountValid}
+              disabled={paymentRecorded || paymentLoading || !paymentAmountValid || isFullReturnNoCash}
               className="w-full py-3 rounded-2xl bg-amber-600 text-white text-xs font-black uppercase disabled:opacity-60"
             >
               {paymentLoading ? 'Memproses...' : codActionLabel}
