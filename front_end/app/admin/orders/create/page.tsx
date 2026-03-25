@@ -688,8 +688,8 @@ function ManualOrderContent() {
                         </div>
                     )}
 
-                    {/* Product Selection */}
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+	                    {/* Product Selection */}
+	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
                         <h2 className="font-bold text-slate-900 flex items-center gap-2">
                             <ShoppingCart size={18} /> Tambah Produk
                         </h2>
@@ -734,17 +734,105 @@ function ManualOrderContent() {
                                         : 'Pilih pelanggan dulu untuk melihat harga sesuai tier.'}
                                 </p>
                             )}
-                        </div>
-                    </div>
+	                        </div>
+	                    </div>
 
-                </div>
+	                    {/* Payment & Summary (Admin-only pricing note lives here) */}
+	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+	                        {canOverridePricing ? (
+	                            <div>
+	                                <label className="block text-xs font-bold text-slate-500 mb-1">Keterangan Nego (Opsional)</label>
+	                                <textarea
+	                                    value={orderOverrideReason}
+	                                    onChange={(e) => setOrderOverrideReason(e.target.value)}
+	                                    className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm"
+	                                    rows={2}
+	                                    placeholder="Mis: harga khusus untuk kenalan / diskon nego..."
+	                                />
+	                            </div>
+	                        ) : null}
+
+	                        <div>
+	                            <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
+	                            <select
+	                                value={paymentMethod}
+	                                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodUi)}
+	                                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
+	                            >
+	                                <option value="cash_store">Cash (Bayar di Toko)</option>
+	                                <option value="transfer_manual">Transfer Bank</option>
+	                                <option value="cod">COD (Bayar ditempat)</option>
+	                                <option value="follow_driver">Mengikuti Driver (ditentukan saat pengiriman)</option>
+	                            </select>
+	                            {paymentMethod === 'follow_driver' ? (
+	                                <p className="text-[11px] text-slate-500 mt-1">
+	                                    Metode pembayaran akan dipilih oleh driver saat pengiriman.
+	                                </p>
+	                            ) : null}
+	                        </div>
+
+	                        <div>
+	                            <div className="flex items-center justify-between gap-2 mb-1">
+	                                <label className="block text-xs font-bold text-slate-500">Jenis Pengiriman</label>
+	                                {canManageShippingConfig ? (
+	                                    <Link href="/admin/sales/shipping-methods" className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800">
+	                                        Kelola
+	                                    </Link>
+	                                ) : null}
+	                            </div>
+	                            <select
+	                                value={shippingMethodCode}
+	                                onChange={(e) => setShippingMethodCode(e.target.value)}
+	                                disabled={loadingShippingMethods || shippingMethods.length === 0}
+	                                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold disabled:opacity-60"
+	                            >
+	                                {shippingMethods.length === 0 ? (
+	                                    <option value="">{loadingShippingMethods ? 'Memuat metode...' : 'Belum ada metode aktif'}</option>
+	                                ) : (
+	                                    shippingMethods.map((item) => (
+	                                        <option key={item.code} value={item.code}>
+	                                            {item.name} ({formatCurrency(Number(item.fee || 0))})
+	                                        </option>
+	                                    ))
+	                                )}
+	                            </select>
+	                        </div>
+
+	                        <div className="space-y-1 text-sm">
+	                            <div className="flex justify-between items-center">
+	                                <span className="font-semibold text-slate-600">Subtotal Produk</span>
+	                                <span className="font-bold text-slate-900">{formatCurrency(calculateSubtotal())}</span>
+	                            </div>
+	                            <div className="flex justify-between items-center">
+	                                <span className="font-semibold text-slate-600">Biaya Pengiriman</span>
+	                                <span className="font-bold text-slate-900">{formatCurrency(shippingFee)}</span>
+	                            </div>
+	                        </div>
+	                        <div className="flex justify-between items-center text-lg">
+	                            <span className="font-bold text-slate-600">Total</span>
+	                            <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
+	                        </div>
+	                        <button
+	                            onClick={handleSubmit}
+	                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
+	                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+	                        >
+	                            {submitting ? 'Memproses...' : (
+	                                <>
+	                                    <Check size={18} /> Buat Pesanan
+	                                </>
+	                            )}
+	                        </button>
+	                    </div>
+	
+	                </div>
 
 	                {/* Right Column (Lebih luas): Cart Summary */}
 	                <div className="order-1 lg:order-1 lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
                         <h2 className="font-bold text-slate-900 mb-4">Ringkasan Pesanan</h2>
 
-                        <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+	                        <div className="flex-1 overflow-y-auto space-y-3 mb-4">
                             {cart.length === 0 ? (
                                 <div className="text-center py-10 text-slate-400">
                                     <ShoppingCart size={48} className="mx-auto mb-2 opacity-20" />
@@ -809,95 +897,11 @@ function ManualOrderContent() {
                                         </button>
                                     </div>
                                 ))
-                            )}
-	                        </div>
-
-	                        <div className="pt-4 border-t border-slate-100 space-y-4">
-	                            {canOverridePricing ? (
-	                                <div>
-	                                    <label className="block text-xs font-bold text-slate-500 mb-1">Keterangan Nego (Opsional)</label>
-	                                    <textarea
-	                                        value={orderOverrideReason}
-	                                        onChange={(e) => setOrderOverrideReason(e.target.value)}
-	                                        className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm"
-	                                        rows={2}
-	                                        placeholder="Mis: harga khusus untuk kenalan / diskon nego..."
-	                                    />
-	                                </div>
-	                            ) : null}
-	                            <div>
-	                                <label className="block text-xs font-bold text-slate-500 mb-1">Metode Pembayaran</label>
-	                                <select
-	                                    value={paymentMethod}
-                                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodUi)}
-                                    className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold"
-                                >
-                                    <option value="cash_store">Cash (Bayar di Toko)</option>
-                                    <option value="transfer_manual">Transfer Bank</option>
-                                    <option value="cod">COD (Bayar ditempat)</option>
-                                    <option value="follow_driver">Mengikuti Driver (ditentukan saat pengiriman)</option>
-                                </select>
-                                {paymentMethod === 'follow_driver' ? (
-                                    <p className="text-[11px] text-slate-500 mt-1">
-                                        Metode pembayaran akan dipilih oleh driver saat pengiriman.
-                                    </p>
-                                ) : null}
-                            </div>
-                            <div>
-                                <div className="flex items-center justify-between gap-2 mb-1">
-                                    <label className="block text-xs font-bold text-slate-500">Jenis Pengiriman</label>
-                                    {canManageShippingConfig ? (
-                                        <Link href="/admin/sales/shipping-methods" className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800">
-                                            Kelola
-                                        </Link>
-                                    ) : null}
-                                </div>
-                                <select
-                                    value={shippingMethodCode}
-                                    onChange={(e) => setShippingMethodCode(e.target.value)}
-                                    disabled={loadingShippingMethods || shippingMethods.length === 0}
-                                    className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold disabled:opacity-60"
-                                >
-                                    {shippingMethods.length === 0 ? (
-                                        <option value="">{loadingShippingMethods ? 'Memuat metode...' : 'Belum ada metode aktif'}</option>
-                                    ) : (
-                                        shippingMethods.map((item) => (
-                                            <option key={item.code} value={item.code}>
-                                                {item.name} ({formatCurrency(Number(item.fee || 0))})
-                                            </option>
-                                        ))
-                                    )}
-                                </select>
-                            </div>
-                            <div className="space-y-1 text-sm">
-                                <div className="flex justify-between items-center">
-                                    <span className="font-semibold text-slate-600">Subtotal Produk</span>
-                                    <span className="font-bold text-slate-900">{formatCurrency(calculateSubtotal())}</span>
-                                </div>
-                                <div className="flex justify-between items-center">
-                                    <span className="font-semibold text-slate-600">Biaya Pengiriman</span>
-                                    <span className="font-bold text-slate-900">{formatCurrency(shippingFee)}</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between items-center text-lg">
-                                <span className="font-bold text-slate-600">Total</span>
-                                <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
-                            </div>
-                            <button
-                                onClick={handleSubmit}
-                                disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
-                                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-                            >
-                                {submitting ? 'Memproses...' : (
-                                    <>
-                                        <Check size={18} /> Buat Pesanan
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+	                            )}
+		                        </div>
+	                    </div>
+	                </div>
+	            </div>
         </div>
     );
 }
