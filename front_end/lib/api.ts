@@ -233,6 +233,7 @@ export const api = {
                 status?: string;
                 startDate?: string;
                 endDate?: string;
+                include_collectible_total?: boolean;
             }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
             updateEmail: (id: string, email: string) =>
                 apiClient.patch(`/admin/customers/${id}/email`, { email }),

@@ -64,6 +64,11 @@ type CustomerOrderRow = {
     payment_method?: string;
     createdAt?: string;
     total?: number | string;
+    collectible_total?: number | string;
+    delivery_return_summary?: {
+      net_total?: number | string;
+      return_total?: number | string;
+    };
   }>;
 };
 
@@ -92,6 +97,7 @@ type AggregatedInvoice = {
   suppliedQty: number;
   productCount: number;
   totalValue: number;
+  returnTotal: number;
   products: Array<{
     key: string;
     name: string;
@@ -116,7 +122,8 @@ const extractOrderInvoices = (order: CustomerOrderRow) => {
         paymentStatus: String(invoice?.payment_status || '-'),
         paymentMethod: String(invoice?.payment_method || '-'),
         createdAt: String(invoice?.createdAt || ''),
-        totalValue: Number(invoice?.total || 0),
+        totalValue: Number(invoice?.collectible_total ?? invoice?.delivery_return_summary?.net_total ?? invoice?.total ?? 0),
+        returnTotal: Number(invoice?.delivery_return_summary?.return_total ?? 0),
       }))
       .filter((invoice) => invoice.id);
   }
@@ -129,6 +136,7 @@ const extractOrderInvoices = (order: CustomerOrderRow) => {
       paymentMethod: String(order.Invoice?.payment_method || '-'),
       createdAt: String(order.Invoice?.createdAt || order.createdAt || ''),
       totalValue: Number(order.total_amount || 0),
+      returnTotal: 0,
     }].filter((invoice) => invoice.id);
   }
 
@@ -211,6 +219,7 @@ export default function CustomerPurchaseHistoryPanel({
         scope: 'all',
         startDate,
         endDate,
+        include_collectible_total: true,
       });
       const rows = Array.isArray(res.data?.orders) ? res.data.orders as CustomerOrderRow[] : [];
       const enrichedRows = await enrichOrdersWithDetails(rows);
@@ -317,6 +326,14 @@ export default function CustomerPurchaseHistoryPanel({
   }, [orders]);
 
   const invoiceSummary = useMemo<AggregatedInvoice[]>(() => {
+    const invoiceMetaById = new Map<string, { totalValue: number; returnTotal: number }>();
+    orders.forEach((order) => {
+      extractOrderInvoices(order).forEach((inv) => {
+        if (!inv?.id) return;
+        invoiceMetaById.set(inv.id, { totalValue: Number(inv.totalValue || 0), returnTotal: Number(inv.returnTotal || 0) });
+      });
+    });
+
     const invoiceBucket = new Map<string, AggregatedInvoice>();
     orders.forEach((order) => {
       const orderItems = Array.isArray(order.OrderItems) ? order.OrderItems : [];
@@ -330,6 +347,7 @@ export default function CustomerPurchaseHistoryPanel({
           const invoiceId = String(invoiceItem?.Invoice?.id || '').trim();
           if (!invoiceId) return;
           const suppliedQty = Number(invoiceItem?.qty || 0);
+          const invoiceMeta = invoiceMetaById.get(invoiceId);
           const invoice = invoiceBucket.get(invoiceId) || {
             id: invoiceId,
             invoiceNumber: String(invoiceItem?.Invoice?.invoice_number || '-'),
@@ -338,11 +356,14 @@ export default function CustomerPurchaseHistoryPanel({
             createdAt: String(invoiceItem?.Invoice?.createdAt || invoiceItem?.createdAt || ''),
             suppliedQty: 0,
             productCount: 0,
-            totalValue: 0,
+            totalValue: invoiceMeta ? Number(invoiceMeta.totalValue || 0) : 0,
+            returnTotal: invoiceMeta ? Number(invoiceMeta.returnTotal || 0) : 0,
             products: [],
           };
           invoice.suppliedQty += suppliedQty;
-          invoice.totalValue += Number(invoiceItem?.line_total || 0);
+          if (!invoiceMeta) {
+            invoice.totalValue += Number(invoiceItem?.line_total || 0);
+          }
           const productExisting = invoice.products.find((entry) => entry.key === productKey);
           if (productExisting) {
             productExisting.suppliedQty += suppliedQty;
@@ -365,6 +386,7 @@ export default function CustomerPurchaseHistoryPanel({
           if (suppliedQty <= 0) return;
           const distributedQty = fallbackInvoices.length > 0 ? suppliedQty / fallbackInvoices.length : suppliedQty;
           fallbackInvoices.forEach((invoiceMeta) => {
+            const meta = invoiceMetaById.get(invoiceMeta.id);
             const invoice = invoiceBucket.get(invoiceMeta.id) || {
               id: invoiceMeta.id,
               invoiceNumber: invoiceMeta.invoiceNumber,
@@ -373,7 +395,8 @@ export default function CustomerPurchaseHistoryPanel({
               createdAt: invoiceMeta.createdAt,
               suppliedQty: 0,
               productCount: 0,
-              totalValue: invoiceMeta.totalValue,
+              totalValue: Number(meta?.totalValue ?? invoiceMeta.totalValue ?? 0),
+              returnTotal: Number(meta?.returnTotal ?? invoiceMeta.returnTotal ?? 0),
               products: [],
             };
             invoice.suppliedQty += distributedQty;
@@ -402,8 +425,8 @@ export default function CustomerPurchaseHistoryPanel({
   }, [orders]);
 
   const totalValue = useMemo(
-    () => orders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0),
-    [orders]
+    () => invoiceSummary.reduce((sum, invoice) => sum + Number(invoice.totalValue || 0), 0),
+    [invoiceSummary]
   );
   const totalQty = useMemo(
     () => productSummary.reduce((sum, item) => sum + item.orderedQty, 0),
@@ -641,6 +664,11 @@ export default function CustomerPurchaseHistoryPanel({
                 <div className="text-right">
                   <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Nilai Invoice</p>
                   <p className="text-sm font-black text-emerald-700">{formatCurrency(invoice.totalValue)}</p>
+                  {invoice.returnTotal > 0 && (
+                    <p className="mt-1 text-[11px] font-bold text-rose-700">
+                      Retur: -{formatCurrency(invoice.returnTotal)}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">

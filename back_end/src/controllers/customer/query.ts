@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice } from '../../models';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
+import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { OPEN_ORDER_STATUSES } from './types';
 import { normalizeId, parsePositiveNumber, applyCustomerSearch, applyStatusFilter } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
@@ -176,10 +177,11 @@ export const getCustomerOrders = asyncWrapper(async (req: Request, res: Response
             throw new CustomError('Customer tidak ditemukan', 404);
         }
 
-        const { page = 1, limit = 20, scope = 'all', status, startDate, endDate } = req.query;
+        const { page = 1, limit = 20, scope = 'all', status, startDate, endDate, include_collectible_total } = req.query;
         const safePage = parsePositiveNumber(page, 1, 100000);
         const safeLimit = parsePositiveNumber(limit, 20, 100);
         const offset = (safePage - 1) * safeLimit;
+        const includeCollectibleTotals = String(include_collectible_total || '').trim().toLowerCase() === 'true';
 
         const whereClause: any = {
             customer_id: customerId,
@@ -242,11 +244,67 @@ export const getCustomerOrders = asyncWrapper(async (req: Request, res: Response
         const plainOrders = orders.rows.map((row: any) => row.get({ plain: true }) as any);
         const ordersWithInvoices = await attachInvoicesToOrders(plainOrders);
 
+        let enrichedOrders = ordersWithInvoices;
+        if (includeCollectibleTotals) {
+            const invoiceIds = new Set<string>();
+            ordersWithInvoices.forEach((row: any) => {
+                const inv = row?.Invoice;
+                if (inv?.id) invoiceIds.add(String(inv.id));
+                const list = Array.isArray(row?.Invoices) ? row.Invoices : [];
+                list.forEach((i: any) => { if (i?.id) invoiceIds.add(String(i.id)); });
+
+                const orderItems = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
+                orderItems.forEach((item: any) => {
+                    const invoiceItems = Array.isArray(item?.InvoiceItems) ? item.InvoiceItems : [];
+                    invoiceItems.forEach((invoiceItem: any) => {
+                        const nestedInv = invoiceItem?.Invoice;
+                        if (nestedInv?.id) invoiceIds.add(String(nestedInv.id));
+                    });
+                });
+            });
+
+            const ids = Array.from(invoiceIds).filter(Boolean);
+            const totalsByInvoiceId = ids.length > 0 ? await computeInvoiceNetTotalsBulk(ids) : new Map<string, any>();
+
+            const attach = (inv: any) => {
+                if (!inv?.id) return inv;
+                const computed = totalsByInvoiceId.get(String(inv.id));
+                if (!computed) return inv;
+                return {
+                    ...inv,
+                    collectible_total: Number(computed.net_total || 0),
+                    delivery_return_summary: computed,
+                };
+            };
+
+            enrichedOrders = ordersWithInvoices.map((row: any) => {
+                const orderItems = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
+                const patchedItems = orderItems.map((item: any) => {
+                    const invoiceItems = Array.isArray(item?.InvoiceItems) ? item.InvoiceItems : [];
+                    const patchedInvoiceItems = invoiceItems.map((invoiceItem: any) => ({
+                        ...invoiceItem,
+                        Invoice: invoiceItem?.Invoice ? attach(invoiceItem.Invoice) : invoiceItem?.Invoice || null,
+                    }));
+                    return {
+                        ...item,
+                        InvoiceItems: patchedInvoiceItems,
+                    };
+                });
+
+                return {
+                    ...row,
+                    Invoice: row?.Invoice ? attach(row.Invoice) : row?.Invoice || null,
+                    Invoices: Array.isArray(row?.Invoices) ? row.Invoices.map((i: any) => attach(i)) : row?.Invoices || [],
+                    OrderItems: patchedItems,
+                };
+            });
+        }
+
         res.json({
             total: orders.count,
             totalPages: Math.ceil(orders.count / safeLimit),
             currentPage: safePage,
-            orders: ordersWithInvoices,
+            orders: enrichedOrders,
         });
     } catch (error) {
         if (error instanceof CustomError) {
