@@ -130,7 +130,7 @@ export const api = {
             shipping_address?: string;
             customer_note?: string;
         }) => apiClient.post('/orders/checkout', data),
-        getMyOrders: (params?: { page?: number; limit?: number; status?: string }) =>
+        getMyOrders: (params?: { page?: number; limit?: number; status?: string; include_collectible_total?: string }) =>
             apiClient.get('/orders/my-orders', { params }),
         getOrderById: (id: string) => apiClient.get<OrderDetailResponse>(`/orders/${id}`),
         uploadPaymentProof: (orderId: string, formData: FormData) =>
@@ -373,6 +373,8 @@ export const api = {
             getPOs: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/inventory/po', { params }),
             getPOById: (id: string) => apiClient.get(`/admin/inventory/po/${id}`),
+            exportPOXlsx: (id: string) =>
+                apiClient.get(`/admin/inventory/po/${id}/export-xlsx`, { responseType: 'blob' }),
             verifyInboundStep1: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-1`, {}),
             verifyInboundStep2: (id: string) => apiClient.patch(`/admin/inventory/po/${id}/verify-2`, {}),
             receivePO: (id: string, data: { items: Array<{ product_id: string; received_qty: number; note?: string }> }) =>

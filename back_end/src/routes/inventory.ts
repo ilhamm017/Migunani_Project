@@ -59,6 +59,7 @@ router.get('/admin/inventory/mutation/:product_id', authenticateToken, authorize
 router.get('/admin/inventory/stock-history/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProductStockHistory);
 router.get('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrders);
 router.get('/admin/inventory/po/:id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.getPurchaseOrderById);
+router.get('/admin/inventory/po/:id/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'kasir'), InventoryController.exportPurchaseOrderExcel);
 router.post('/admin/inventory/po', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.createPurchaseOrder);
 router.patch('/admin/inventory/po/:id/verify-1', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.verifyInboundStep1);
 router.patch('/admin/inventory/po/:id/verify-2', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.verifyInboundStep2AndPost);

@@ -15,6 +15,7 @@ type InvoiceRow = {
   payment_method: string;
   payment_proof_url?: string | null;
   total: number;
+  amount_paid?: number | null;
   createdAt?: string;
   orderIds: string[];
 };
@@ -26,6 +27,9 @@ type InvoiceSummary = {
   payment_method?: string | null;
   payment_proof_url?: string | null;
   total?: number | null;
+  amount_paid?: number | null;
+  collectible_total?: number | null;
+  delivery_return_summary?: { net_total?: number | null; return_total?: number | null } | null;
   createdAt?: string | null;
   created_at?: string | null;
 };
@@ -52,10 +56,21 @@ const paymentStatusLabel = (status?: string) => {
   return status || '-';
 };
 
+const paymentStatusLabelForRow = (row: InvoiceRow) => {
+  const status = String(row.payment_status || '');
+  const method = String(row.payment_method || '');
+  const amountPaid = Number(row.amount_paid || 0);
+  const codCollected = Number.isFinite(amountPaid) && amountPaid > 0;
+  if (method === 'cod' && status === 'cod_pending' && !codCollected) return 'Belum Lunas';
+  return paymentStatusLabel(status);
+};
+
 const deriveInvoicePaymentStage = (row: InvoiceRow) => {
   const paymentMethod = String(row.payment_method || '');
   const paymentStatus = String(row.payment_status || '');
   const proofUploaded = Boolean(String(row.payment_proof_url || '').trim());
+  const amountPaid = Number((row as any).amount_paid || 0);
+  const codCollected = Number.isFinite(amountPaid) && amountPaid > 0;
 
   if (!paymentMethod || paymentMethod === 'pending' || paymentStatus === 'draft') {
     return {
@@ -88,12 +103,24 @@ const deriveInvoicePaymentStage = (row: InvoiceRow) => {
   }
 
   if (paymentMethod === 'cod') {
+    if (paymentStatus === 'paid') {
+      return {
+        label: 'Lunas',
+        note: 'Setoran COD sudah selesai diverifikasi finance.',
+        tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
+    }
+    if (paymentStatus === 'cod_pending' && codCollected) {
+      return {
+        label: 'Sudah Dibayar ke Driver',
+        note: 'Pembayaran COD sudah diterima driver. Proses setoran ke admin finance ditangani internal.',
+        tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
+    }
     return {
-      label: paymentStatus === 'paid' ? 'Lunas' : 'Sudah Dibayar ke Driver',
-      note: paymentStatus === 'paid'
-        ? 'Setoran COD sudah selesai diverifikasi finance.'
-        : 'Pembayaran COD sudah diterima driver. Proses setoran ke admin finance ditangani internal.',
-      tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      label: 'Belum Dibayar',
+      note: 'Pembayaran COD belum diterima driver. Customer bayar tunai saat barang diterima.',
+      tone: 'bg-amber-50 text-amber-700 border-amber-200',
     };
   }
 
@@ -119,7 +146,7 @@ export default function CustomerInvoicesPage() {
     }
     try {
       if (!silent) setLoading(true);
-      const res = await api.orders.getMyOrders({ page: 1, limit: 200 });
+      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
       const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const latestInvoiceIds = new Set<string>();
       orders.forEach((order) => {
@@ -143,7 +170,8 @@ export default function CustomerInvoicesPage() {
 	            payment_status: String(invoice?.payment_status || ''),
 	            payment_method: String(invoice?.payment_method || ''),
 	            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
-	            total: Number(invoice?.total || 0),
+              amount_paid: Number((invoice as any)?.amount_paid ?? 0),
+	            total: Number((invoice as any)?.collectible_total ?? invoice?.total ?? 0),
 	            createdAt: invoice?.createdAt || invoice?.created_at || undefined,
 	            orderIds: []
 	          };
@@ -156,7 +184,12 @@ export default function CustomerInvoicesPage() {
       const unpaid = Array.from(invoiceMap.values()).filter((inv) => {
         const status = String(inv.payment_status || '');
         if (!latestInvoiceIds.has(String(inv.id || '').trim())) return false;
-        return status !== 'paid' && status !== 'cod_pending';
+        if (status === 'paid') return false;
+        if (status === 'cod_pending') {
+          const amountPaid = Number((inv as any).amount_paid || 0);
+          return !(Number.isFinite(amountPaid) && amountPaid > 0);
+        }
+        return true;
       });
       setRows(unpaid.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
     } catch (error) {
@@ -291,10 +324,10 @@ export default function CustomerInvoicesPage() {
                           <p className="text-sm font-black text-rose-700">{formatCurrency(Number(row.total || 0))}</p>
                         </div>
                       </div>
-                      <div className={`mt-3 rounded-xl border px-3 py-2 ${stage.tone}`}>
+                        <div className={`mt-3 rounded-xl border px-3 py-2 ${stage.tone}`}>
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-[10px] font-black uppercase tracking-[0.22em]">{stage.label}</p>
-                          <p className="text-[10px] font-bold">{paymentStatusLabel(row.payment_status)}</p>
+                          <p className="text-[10px] font-bold">{paymentStatusLabelForRow(row)}</p>
                         </div>
                         <p className="mt-1 text-[11px] font-medium">{stage.note}</p>
                       </div>

@@ -39,6 +39,7 @@ type InvoiceDetail = {
   payment_status: string;
   payment_method: string;
   payment_proof_url?: string | null;
+  amount_paid?: number | null;
   subtotal?: number;
   discount_amount?: number;
   shipping_fee_total?: number;
@@ -53,6 +54,15 @@ type InvoiceDetail = {
     whatsapp_number?: string | null;
   } | null;
   InvoiceItems?: InvoiceItem[];
+  delivery_returs?: Array<{
+    id: string;
+    retur_type?: string;
+    status?: string;
+    qty?: number;
+    reason?: string | null;
+    Product?: { name?: string | null; sku?: string | null; unit?: string | null } | null;
+  }>;
+  delivery_return_summary?: { net_total?: number; return_total?: number } | null;
 };
 
 const paymentMethodLabel = (method?: string) => {
@@ -76,7 +86,7 @@ const paymentInstructionLabel = (method?: string) => {
     return 'Metode pembayaran belum dipilih. Customer akan menentukan pembayaran bersama driver saat proses pengiriman.';
   }
   if (method === 'cod') {
-    return 'Jika customer sudah membayar COD ke driver, invoice ini dianggap selesai dari sisi customer. Proses setoran ke admin finance ditangani internal.';
+    return 'Pembayaran COD dilakukan tunai ke driver saat barang diterima. Status akan diperbarui setelah driver mencatat penerimaan COD.';
   }
   if (method === 'transfer_manual') {
     return 'Untuk transfer manual, pembayaran diverifikasi finance setelah bukti transfer diterima.';
@@ -96,6 +106,13 @@ export default function CustomerInvoiceDetailPage() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const [detail, setDetail] = useState<InvoiceDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const deliverySummary = detail?.delivery_return_summary || null;
+  const deliveryReturs = Array.isArray(detail?.delivery_returs) ? (detail?.delivery_returs || []) : [];
+  const deliveryReturnTotal = Number(deliverySummary?.return_total || 0);
+  const deliveryNetTotal = Number(deliverySummary?.net_total);
+  const payableTotal = deliverySummary && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0
+    ? deliveryNetTotal
+    : Number(detail?.total || 0);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
@@ -108,12 +125,15 @@ export default function CustomerInvoiceDetailPage() {
       if (!silent) setLoading(true);
       const res = await api.invoices.getById(String(invoiceId));
       const invoice = res.data || {};
+      const deliveryReturnSummary = (invoice as any)?.delivery_return_summary || null;
+      const deliveryReturs = Array.isArray((invoice as any)?.delivery_returs) ? (invoice as any).delivery_returs : [];
       setDetail({
         id: String(invoice?.id || invoiceId),
         invoice_number: String(invoice?.invoice_number || invoiceId),
         payment_status: String(invoice?.payment_status || ''),
         payment_method: String(invoice?.payment_method || ''),
         payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
+        amount_paid: Number((invoice as any)?.amount_paid ?? 0),
         subtotal: Number(invoice?.subtotal || 0),
         discount_amount: Number(invoice?.discount_amount || 0),
         shipping_fee_total: Number(invoice?.shipping_fee_total || 0),
@@ -123,6 +143,8 @@ export default function CustomerInvoiceDetailPage() {
         shipping_method_name: invoice?.shipping_method_name || null,
         customer: invoice?.customer || null,
         InvoiceItems: Array.isArray(invoice?.InvoiceItems) ? invoice.InvoiceItems : [],
+        delivery_returs: deliveryReturs,
+        delivery_return_summary: deliveryReturnSummary,
       });
     } catch (error) {
       console.error('Failed to load invoice detail:', error);
@@ -158,6 +180,15 @@ export default function CustomerInvoiceDetailPage() {
   const transferProofNeeded = needsTransferProof(detail);
   const waitingFinanceVerification = Boolean(String(detail?.payment_proof_url || '').trim()) || String(detail?.payment_status || '') === 'waiting_admin_verification';
   const paymentMethodUndecided = !String(detail?.payment_method || '').trim() || String(detail?.payment_method || '') === 'pending';
+  const displayPaymentStatusLabel = useMemo(() => {
+    if (!detail) return '-';
+    const method = String(detail.payment_method || '');
+    const status = String(detail.payment_status || '');
+    const amountPaid = Number(detail.amount_paid || 0);
+    const codCollected = Number.isFinite(amountPaid) && amountPaid > 0;
+    if (method === 'cod' && status === 'cod_pending' && !codCollected) return 'Belum Lunas';
+    return paymentStatusLabel(status);
+  }, [detail]);
 
   if (!isAuthenticated) {
     return (
@@ -264,7 +295,7 @@ export default function CustomerInvoiceDetailPage() {
                     <p className="text-lg font-bold text-slate-900">{detail.invoice_number}</p>
                     <p className="text-xs text-slate-500 mt-1">Tanggal: {detail.createdAt ? formatDateTime(detail.createdAt) : '-'}</p>
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      {paymentStatusLabel(detail.payment_status)}
+                      {displayPaymentStatusLabel}
                     </div>
                   </div>
                 </div>
@@ -418,6 +449,28 @@ export default function CustomerInvoiceDetailPage() {
                       {paymentInstructionLabel(detail.payment_method)}
                       Simpan invoice ini sebagai bukti transaksi dan rujukan layanan purna jual.
                     </p>
+                    {deliveryReturs.length > 0 && (
+                      <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                        <p className="text-[10px] font-black uppercase tracking-[0.28em] text-rose-700">Retur Saat Pengiriman</p>
+                        <p className="text-xs font-bold text-slate-700 mt-1">
+                          Ada retur item sehingga total tagihan menyesuaikan.
+                        </p>
+                        <div className="mt-3 space-y-2 max-h-44 overflow-y-auto">
+                          {deliveryReturs.map((r) => (
+                            <div key={String(r.id)} className="flex items-start justify-between gap-3 rounded-xl border border-rose-200/60 bg-white px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="text-xs font-black text-slate-900 truncate">{String(r.Product?.name || 'Produk')}</p>
+                                <p className="text-[10px] text-slate-500 truncate">
+                                  {String(r.retur_type || '') === 'delivery_damage' ? 'Barang rusak' : 'Tidak jadi beli'}
+                                  {r.reason ? ` · ${String(r.reason)}` : ''}
+                                </p>
+                              </div>
+                              <span className="text-xs font-black text-rose-700">Qty {Number(r.qty || 0)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="rounded-2xl bg-slate-900 text-white p-4">
                     <div className="flex items-center justify-between text-xs">
@@ -436,9 +489,15 @@ export default function CustomerInvoiceDetailPage() {
                       <span>Pajak</span>
                       <span>{formatCurrency(Number(detail.tax_amount || 0))}</span>
                     </div>
+                    {deliverySummary && deliveryReturnTotal > 0 && (
+                      <div className="flex items-center justify-between text-xs mt-2 text-rose-200">
+                        <span>Potongan Retur</span>
+                        <span>-{formatCurrency(deliveryReturnTotal)}</span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between text-sm font-bold border-t border-white/20 mt-3 pt-3">
-                      <span>Total</span>
-                      <span>{formatCurrency(Number(detail.total || 0))}</span>
+                      <span>Total Tagihan</span>
+                      <span>{formatCurrency(Number(payableTotal || 0))}</span>
                     </div>
                   </div>
                 </div>
@@ -472,7 +531,7 @@ export default function CustomerInvoiceDetailPage() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Status</span>
-                  <span className="font-bold">{paymentStatusLabel(detail.payment_status)}</span>
+                  <span className="font-bold">{displayPaymentStatusLabel}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Metode</span>
@@ -561,9 +620,15 @@ export default function CustomerInvoiceDetailPage() {
                   <span>Pajak</span>
                   <span>{formatCurrency(Number(detail.tax_amount || 0))}</span>
                 </div>
+                {deliverySummary && deliveryReturnTotal > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span>Potongan Retur</span>
+                    <span>-{formatCurrency(deliveryReturnTotal)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-sm font-bold border-t border-dashed border-slate-300 pt-2 mt-2">
-                  <span>Total</span>
-                  <span>{formatCurrency(Number(detail.total || 0))}</span>
+                  <span>Total Tagihan</span>
+                  <span>{formatCurrency(Number(payableTotal || 0))}</span>
                 </div>
               </div>
 

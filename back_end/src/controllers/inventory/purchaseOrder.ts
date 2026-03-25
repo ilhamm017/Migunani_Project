@@ -287,6 +287,113 @@ export const getPurchaseOrderById = asyncWrapper(async (req: Request, res: Respo
     }
 });
 
+export const exportPurchaseOrderExcel = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id as string;
+        const po = await PurchaseOrder.findByPk(id, {
+            include: [
+                { model: Supplier, attributes: ['id', 'name'] },
+                {
+                    model: PurchaseOrderItem,
+                    as: 'Items',
+                    include: [{ model: Product, attributes: ['id', 'sku', 'name', 'stock_quantity'] }]
+                }
+            ]
+        });
+
+        if (!po) {
+            throw new CustomError('Purchase Order not found', 404);
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Migunani System';
+        workbook.created = new Date();
+
+        const sheet = workbook.addWorksheet('Inbound');
+
+        const toDateStr = (d: unknown) => {
+            const date = d ? new Date(String(d)) : null;
+            return date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 19).replace('T', ' ') : '-';
+        };
+
+        const supplierName = (po as any)?.Supplier?.name || '-';
+        const createdAtStr = toDateStr((po as any)?.createdAt);
+        const verified1AtStr = toDateStr((po as any)?.verified1_at);
+        const verified2AtStr = toDateStr((po as any)?.verified2_at);
+        const status = String((po as any)?.status || '');
+
+        sheet.getRow(1).values = ['Inbound / Purchase Order'];
+        sheet.getRow(1).font = { bold: true, size: 14 };
+
+        sheet.getRow(3).values = ['ID', String((po as any).id)];
+        sheet.getRow(4).values = ['Supplier', supplierName];
+        sheet.getRow(5).values = ['Tanggal Input', createdAtStr];
+        sheet.getRow(6).values = ['Status', status];
+        sheet.getRow(7).values = ['Verifikasi 1', verified1AtStr];
+        sheet.getRow(8).values = ['Verifikasi 2 / Posting', verified2AtStr];
+        sheet.getRow(9).values = ['Total Cost', Number((po as any)?.total_cost || 0)];
+        sheet.getRow(9).getCell(2).numFmt = '#,##0';
+
+        const headerRowIndex = 11;
+        const headers = ['No', 'SKU', 'Produk', 'Qty Input', 'Posted', 'Sisa', 'Modal', 'Total'];
+        sheet.getRow(headerRowIndex).values = headers;
+        sheet.getRow(headerRowIndex).font = { bold: true };
+
+        const items = Array.isArray((po as any)?.Items) ? ((po as any).Items as any[]) : [];
+        items.forEach((item, idx) => {
+            const excelRowIndex = headerRowIndex + 1 + idx;
+            const qty = Number(item?.qty || 0);
+            const receivedQty = Number(item?.received_qty || 0);
+            const remaining = Math.max(0, qty - receivedQty);
+            const unitCost = Number(item?.unit_cost || 0);
+            const totalCost = Number(item?.total_cost || qty * unitCost);
+
+            sheet.getRow(excelRowIndex).values = [
+                idx + 1,
+                item?.Product?.sku || item?.product_id || '-',
+                item?.Product?.name || '-',
+                qty,
+                receivedQty,
+                remaining,
+                unitCost,
+                totalCost,
+            ];
+
+            sheet.getRow(excelRowIndex).getCell(4).numFmt = '#,##0';
+            sheet.getRow(excelRowIndex).getCell(5).numFmt = '#,##0';
+            sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
+            sheet.getRow(excelRowIndex).getCell(7).numFmt = '#,##0';
+            sheet.getRow(excelRowIndex).getCell(8).numFmt = '#,##0';
+        });
+
+        sheet.columns = [
+            { key: 'no', width: 6 },
+            { key: 'sku', width: 18 },
+            { key: 'product', width: 44 },
+            { key: 'qty', width: 12 },
+            { key: 'posted', width: 12 },
+            { key: 'remaining', width: 10 },
+            { key: 'unit_cost', width: 14 },
+            { key: 'total_cost', width: 16 },
+        ];
+
+        const timestamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+        const shortId = String((po as any).id || '').split('-')[0]?.toUpperCase() || 'INB';
+        const fileName = `inbound-${shortId}-${fileSuffix}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error exporting inbound excel', 500);
+    }
+});
+
 export const receivePurchaseOrder = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {

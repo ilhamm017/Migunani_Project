@@ -15,6 +15,7 @@ type InvoiceRow = {
   payment_method: string;
   payment_proof_url?: string | null;
   total: number;
+  amount_paid?: number | null;
   createdAt?: string;
   orderIds: string[];
 };
@@ -26,6 +27,9 @@ type InvoiceSummary = {
   payment_method?: string | null;
   payment_proof_url?: string | null;
   total?: number | null;
+  amount_paid?: number | null;
+  collectible_total?: number | null;
+  delivery_return_summary?: { net_total?: number | null; return_total?: number | null } | null;
   createdAt?: string | null;
   created_at?: string | null;
 };
@@ -53,8 +57,10 @@ const customerFinishedStatusLabel = (status?: string) => {
 const finishedInvoiceStage = (row: InvoiceRow) => {
   const paymentMethod = String(row.payment_method || '');
   const paymentStatus = String(row.payment_status || '');
+  const amountPaid = Number((row as any).amount_paid || 0);
+  const codCollected = Number.isFinite(amountPaid) && amountPaid > 0;
 
-  if (paymentMethod === 'cod' && paymentStatus === 'cod_pending') {
+  if (paymentMethod === 'cod' && paymentStatus === 'cod_pending' && codCollected) {
     return {
       label: 'Sudah Dibayar ke Driver',
       note: 'Pembayaran COD sudah diterima driver. Proses setoran ke admin finance ditangani internal.',
@@ -84,7 +90,7 @@ export default function CustomerCompletedInvoicesPage() {
     }
     try {
       if (!silent) setLoading(true);
-      const res = await api.orders.getMyOrders({ page: 1, limit: 200 });
+      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
       const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const invoiceMap = new Map<string, InvoiceRow>();
       orders.forEach((order) => {
@@ -102,7 +108,8 @@ export default function CustomerCompletedInvoicesPage() {
 	            payment_status: String(invoice?.payment_status || ''),
 	            payment_method: String(invoice?.payment_method || ''),
 	            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
-	            total: Number(invoice?.total || 0),
+              amount_paid: Number((invoice as any)?.amount_paid ?? 0),
+	            total: Number((invoice as any)?.collectible_total ?? invoice?.total ?? 0),
 	            createdAt: invoice?.createdAt || invoice?.created_at || undefined,
 	            orderIds: [],
 	          };
@@ -114,7 +121,12 @@ export default function CustomerCompletedInvoicesPage() {
       });
       const completed = Array.from(invoiceMap.values()).filter((inv) => {
         const status = String(inv.payment_status || '');
-        return status === 'paid' || status === 'cod_pending';
+        if (status === 'paid') return true;
+        if (status === 'cod_pending') {
+          const amountPaid = Number((inv as any).amount_paid || 0);
+          return Number.isFinite(amountPaid) && amountPaid > 0;
+        }
+        return false;
       });
       setRows(completed.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
     } catch (error) {

@@ -10,12 +10,13 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 import { enqueueWhatsappNotification } from '../../services/TransactionNotificationOutboxService';
-import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 
 export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
     const userId = req.user!.id;
     const { page = 1, limit = 10, status } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const includeCollectibleTotals = String((req.query as any)?.include_collectible_total || '') === 'true';
 
     const whereClause: any = { customer_id: userId };
     if (status) {
@@ -61,12 +62,42 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
     });
 
     const ordersWithInvoices = await attachInvoicesToOrders(plainOrders);
+    let enrichedOrders = ordersWithInvoices;
+    if (includeCollectibleTotals) {
+        const invoiceIds = new Set<string>();
+        ordersWithInvoices.forEach((row: any) => {
+            const inv = row?.Invoice;
+            if (inv?.id) invoiceIds.add(String(inv.id));
+            const list = Array.isArray(row?.Invoices) ? row.Invoices : [];
+            list.forEach((i: any) => { if (i?.id) invoiceIds.add(String(i.id)); });
+        });
+        const ids = Array.from(invoiceIds).filter(Boolean);
+        const totalsByInvoiceId = ids.length > 0 ? await computeInvoiceNetTotalsBulk(ids) : new Map<string, any>();
+
+        enrichedOrders = ordersWithInvoices.map((row: any) => {
+            const attach = (inv: any) => {
+                if (!inv?.id) return inv;
+                const computed = totalsByInvoiceId.get(String(inv.id));
+                if (!computed) return inv;
+                return {
+                    ...inv,
+                    collectible_total: Number(computed.net_total || 0),
+                    delivery_return_summary: computed
+                };
+            };
+            return {
+                ...row,
+                Invoice: row?.Invoice ? attach(row.Invoice) : row?.Invoice || null,
+                Invoices: Array.isArray(row?.Invoices) ? row.Invoices.map((i: any) => attach(i)) : row?.Invoices || []
+            };
+        });
+    }
 
     res.json({
         total: orders.count,
         totalPages: Math.ceil(orders.count / Number(limit)),
         currentPage: Number(page),
-        orders: ordersWithInvoices
+        orders: enrichedOrders
     });
 });
 

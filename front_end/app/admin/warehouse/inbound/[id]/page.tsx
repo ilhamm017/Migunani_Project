@@ -10,7 +10,8 @@ import {
     Truck,
     Package,
     Clock,
-    Save
+    Save,
+    Download
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
@@ -55,6 +56,7 @@ export default function POReceivePage() {
     const [po, setPo] = useState<PO | null>(null);
     const [loading, setLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'success' | 'error'>('success');
 
@@ -115,6 +117,40 @@ export default function POReceivePage() {
         }
     };
 
+    const onExportXlsx = async () => {
+        if (!po) return;
+        setIsExporting(true);
+        setMessage('');
+        try {
+            const res = await api.admin.inventory.exportPOXlsx(po.id);
+            const contentDisposition = String(res.headers?.['content-disposition'] || '');
+            const filenameMatch = /filename="?([^";]+)"?/i.exec(contentDisposition);
+            const fallbackName = `inbound-${po.id.split('-')[0]?.toUpperCase() || 'INB'}.xlsx`;
+            const filename = filenameMatch?.[1] || fallbackName;
+
+            const blob = new Blob([res.data], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            setMessageType('success');
+            setMessage('File XLSX berhasil diunduh.');
+        } catch (error: unknown) {
+            console.error('Failed to export XLSX', error);
+            setMessageType('error');
+            setMessage('Gagal ekstrak XLSX.');
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
     if (!allowed) return null;
 
     if (loading && !po) {
@@ -159,6 +195,19 @@ export default function POReceivePage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={onExportXlsx}
+                        disabled={isExporting}
+                        className="rounded-2xl bg-white border border-slate-200 text-slate-900 text-sm font-black px-5 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all shadow-sm active:scale-95"
+                        title="Ekstrak data inbound ke XLSX"
+                    >
+                        {isExporting ? (
+                            <div className="w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                            <Download size={18} />
+                        )}
+                        Ekstrak XLSX
+                    </button>
                     {canVerify1 && (
                         <button
                             onClick={onVerify1}
