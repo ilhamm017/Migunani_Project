@@ -193,7 +193,12 @@ export const api = {
             headers: { 'Content-Type': 'multipart/form-data' }
         }),
         getMyReturs: () => apiClient.get('/retur/my'),
-        getAll: (status?: string) => apiClient.get('/retur/all', { params: { status } }),
+        getAll: (params?: string | { status?: string; retur_type?: 'customer_request' | 'delivery_refusal' | 'delivery_damage' | string }) => {
+            if (typeof params === 'string') {
+                return apiClient.get('/retur/all', { params: { status: params } });
+            }
+            return apiClient.get('/retur/all', { params });
+        },
         updateStatus: (id: string, data: {
             status: string;
             admin_response?: string;

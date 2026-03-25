@@ -18,6 +18,7 @@ import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
+import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 
 // --- Driver COD Deposit ---
 
@@ -72,6 +73,10 @@ export const getDriverCodList = asyncWrapper(async (req: Request, res: Response)
         });
 
         const orderIds = Array.from(orderInvoicesMap.keys());
+        const invoiceIdsForTotals = Array.from(new Set(Array.from(invoiceDataMap.keys()).map((x) => String(x || '').trim()).filter(Boolean)));
+        const netTotalsByInvoiceId = invoiceIdsForTotals.length > 0
+            ? await computeInvoiceNetTotalsBulk(invoiceIdsForTotals)
+            : new Map<string, any>();
         const orders = orderIds.length > 0
             ? await Order.findAll({
                 where: { id: { [Op.in]: orderIds } },
@@ -148,24 +153,32 @@ export const getDriverCodList = asyncWrapper(async (req: Request, res: Response)
                 if (!inv) return;
 
                 const invoiceNumber = String((inv as any).invoice_number || '');
-                const invoiceTotalRaw = Number((inv as any).total);
-                const invoiceTotal = Number.isFinite(invoiceTotalRaw) ? invoiceTotalRaw : 0;
+                const amountPaid = Number((inv as any).amount_paid || 0);
+                const net = netTotalsByInvoiceId.get(String(invId))?.net_total;
+                const computedNet = Number(net);
+                const invoiceGrossTotalRaw = Number((inv as any).total);
+                const invoiceGrossTotal = Number.isFinite(invoiceGrossTotalRaw) ? invoiceGrossTotalRaw : 0;
+                const invoiceCollectible = (Number.isFinite(amountPaid) && amountPaid > 0)
+                    ? amountPaid
+                    : (Number.isFinite(computedNet) && computedNet >= 0 ? computedNet : invoiceGrossTotal);
 
                 grouped[courier.id].orders.push({
                     id: order.id,
                     order_number: order.id,
                     customer_name: (order as any).Customer?.name || 'Customer',
-                    total_amount: invoiceTotal,
+                    total_amount: invoiceCollectible,
                     invoice_id: invId || null,
                     invoice_number: invoiceNumber || null,
-                    invoice_total: invoiceTotal,
+                    invoice_total: invoiceCollectible,
+                    invoice_total_gross: invoiceGrossTotal,
+                    invoice_total_net: (Number.isFinite(computedNet) && computedNet >= 0) ? computedNet : null,
                     created_at: order.createdAt
                 });
 
                 const driverInvoiceMap = driverInvoiceTotals.get(String(courier.id)) || new Map<string, number>();
                 const invoiceKey = invId || `order-${String(order.id)}`;
                 if (!driverInvoiceMap.has(invoiceKey)) {
-                    driverInvoiceMap.set(invoiceKey, invoiceTotal);
+                    driverInvoiceMap.set(invoiceKey, invoiceCollectible);
                 }
                 driverInvoiceTotals.set(String(courier.id), driverInvoiceMap);
             });
@@ -296,9 +309,9 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 throw new CustomError('Invoice COD pending tidak ditemukan untuk order yang dipilih.', 409);
             }
 
-            const invoiceIds = Array.from(invoiceMap.keys());
+            const invoiceIdsFromMap = Array.from(invoiceMap.keys());
             const allInvoiceItems = await InvoiceItem.findAll({
-                where: { invoice_id: { [Op.in]: invoiceIds } },
+                where: { invoice_id: { [Op.in]: invoiceIdsFromMap } },
                 include: [{
                     model: OrderItem,
                     attributes: ['order_id'],
@@ -344,9 +357,16 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             }
 
             invoices = Array.from(invoiceMap.values());
+            const invoiceIds = invoices.map((inv: any) => String(inv?.id || '').trim()).filter(Boolean);
+            const netTotals = invoiceIds.length > 0 ? await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t }) : new Map<string, any>();
             totalExpected = invoices.reduce((sum, invoice: any) => {
-                const invoiceTotal = Number(invoice?.total);
-                return sum + (Number.isFinite(invoiceTotal) ? invoiceTotal : 0);
+                const invId = String(invoice?.id || '').trim();
+                const amountPaid = Number(invoice?.amount_paid || 0);
+                if (Number.isFinite(amountPaid) && amountPaid > 0) return sum + amountPaid;
+                const computedNet = Number(netTotals.get(invId)?.net_total);
+                if (Number.isFinite(computedNet) && computedNet >= 0) return sum + computedNet;
+                const invoiceGross = Number(invoice?.total);
+                return sum + (Number.isFinite(invoiceGross) ? invoiceGross : 0);
             }, 0);
 
             affectedOrderIds = allOrderIds;

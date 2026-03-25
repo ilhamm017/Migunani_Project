@@ -56,7 +56,8 @@ export const getMyReturs = asyncWrapper(async (req: Request, res: Response) => {
 export const getAllReturs = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const status = req.query.status as string | undefined;
-        const returs = await ReturService.getAllReturs(status);
+        const returType = req.query.retur_type as string | undefined;
+        const returs = await ReturService.getAllReturs(status, returType);
         return res.json(returs);
     } catch (error) {
         if (error instanceof CustomError) {

@@ -148,7 +148,7 @@ export const useAdminActionBadges = ({
         ? api.admin.finance.getDriverCodList().then((res) => res.data).catch(() => [])
         : Promise.resolve([]);
       const returPromise = needFinanceCounts
-        ? api.retur.getAll().then((res) => res.data).catch(() => [])
+        ? api.retur.getAll({ retur_type: 'customer_request' }).then((res) => res.data).catch(() => [])
         : Promise.resolve([]);
 
       const [stats, codRows, returRows] = await Promise.all([statsPromise, codPromise, returPromise]);

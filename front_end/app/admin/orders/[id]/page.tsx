@@ -495,11 +495,18 @@ export default function AdminInvoiceDetailPage() {
     ? invoiceRow.createdAt
     : null;
 
+  const deliveryReturnSummary = asRecord(invoiceRow.delivery_return_summary);
+  const deliveryNetTotal = Number(deliveryReturnSummary.net_total);
+  const deliveryReturnTotal = Number(deliveryReturnSummary.return_total || 0);
+  const hasDeliveryReturnSummary = Object.keys(deliveryReturnSummary).length > 0 && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0;
+  const deliveryRetursRaw = Array.isArray(invoiceRow.delivery_returs) ? invoiceRow.delivery_returs : [];
+
   // If we have an actual invoice, prioritize its total field.
   // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
   const invoiceTotal = hasActualInvoice
     ? Number(invoiceRow.total || 0)
     : Number(allocatedSummary.total || 0);
+  const invoicePayableTotal = hasActualInvoice && hasDeliveryReturnSummary ? deliveryNetTotal : invoiceTotal;
 
   const customerName = String(
     asRecord(invoiceRow.customer).name ||
@@ -600,8 +607,13 @@ export default function AdminInvoiceDetailPage() {
             )}
           </div>
           <div className="text-right">
-            <p className="text-xs text-slate-500">Total Invoice</p>
-            <p className="text-lg font-black text-slate-900">{formatCurrency(invoiceTotal)}</p>
+            <p className="text-xs text-slate-500">{hasDeliveryReturnSummary ? 'Total Tagihan (Setelah Retur)' : 'Total Invoice'}</p>
+            <p className="text-lg font-black text-slate-900">{formatCurrency(invoicePayableTotal)}</p>
+            {hasDeliveryReturnSummary && deliveryReturnTotal > 0 && (
+              <p className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-lg inline-block mt-1">
+                Potongan retur: -{formatCurrency(deliveryReturnTotal)} · Gross: {formatCurrency(invoiceTotal)}
+              </p>
+            )}
             {hasActualInvoice && Math.abs(invoiceTotal - allocatedSummary.total) > 1 && (
               <p className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg inline-block mt-1">
                 Original Order(s): {formatCurrency(allocatedSummary.total)}
@@ -697,6 +709,36 @@ export default function AdminInvoiceDetailPage() {
             )}
           </div>
         </div>
+
+        {hasDeliveryReturnSummary && deliveryRetursRaw.length > 0 && (
+          <div className="rounded-[24px] border border-rose-200 bg-rose-50/60 p-5 space-y-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-700">Retur Saat Pengiriman</p>
+              <p className="text-xs font-bold text-slate-700 mt-1">
+                Ada retur item pada invoice ini (nilai tagihan sudah menyesuaikan).
+              </p>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {(deliveryRetursRaw as unknown[]).map((raw) => {
+                const r = asRecord(raw);
+                const product = asRecord(r.Product);
+                const returType = String(r.retur_type || '');
+                const returTypeLabel = returType === 'delivery_damage' ? 'Barang rusak' : 'Tidak jadi beli';
+                return (
+                  <div key={String(r.id || Math.random())} className="rounded-2xl border border-rose-200/60 bg-white px-4 py-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900 truncate">{String(product.name || 'Produk')}</p>
+                      <p className="text-[10px] text-slate-500 truncate">
+                        {returTypeLabel} · Status {String(r.status || '-')} · {String(r.reason || '').trim() ? String(r.reason) : '-'}
+                      </p>
+                    </div>
+                    <span className="text-xs font-black text-rose-700">Qty {Number(r.qty || 0)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2">
           <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>

@@ -44,7 +44,7 @@ export default function FinanceReturPage() {
         const silent = Boolean(opts?.silent);
         try {
             if (!silent) setLoading(true);
-            const res = await api.retur.getAll();
+            const res = await api.retur.getAll({ retur_type: 'customer_request' });
             const rows = Array.isArray(res.data) ? res.data : [];
             const mapped: ReturFinanceRow[] = rows.map((item) => {
                 const row = item as Record<string, unknown>;

@@ -103,9 +103,17 @@ export class ReturService {
         });
     }
 
-    static async getAllReturs(status?: string) {
+    static async getAllReturs(status?: string, returType?: string) {
         const whereClause: any = {};
         if (status) whereClause.status = status;
+        const normalizedType = typeof returType === 'string' ? returType.trim() : '';
+        if (normalizedType) {
+            const allowed = ['customer_request', 'delivery_refusal', 'delivery_damage'] as const;
+            if (!(allowed as readonly string[]).includes(normalizedType)) {
+                throw new Error('retur_type tidak valid');
+            }
+            whereClause.retur_type = normalizedType;
+        }
 
         return Retur.findAll({
             where: whereClause,
@@ -380,6 +388,10 @@ export class ReturService {
 
             if (!retur) {
                 throw new Error('Retur request not found');
+            }
+
+            if (String((retur as any).retur_type || 'customer_request') !== 'customer_request') {
+                throw new Error('Refund hanya berlaku untuk retur customer_request (retur pelanggan).');
             }
 
             if (!['super_admin', 'admin_finance'].includes(user.role)) {

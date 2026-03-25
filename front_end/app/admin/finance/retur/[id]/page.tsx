@@ -77,7 +77,7 @@ export default function FinanceReturDetailPage() {
         const silent = Boolean(opts?.silent);
         try {
             if (!silent) setLoading(true);
-            const res = await api.retur.getAll();
+            const res = await api.retur.getAll({ retur_type: 'customer_request' });
             const found = ((res.data || []) as ReturDetail[]).find((r) => String(r.id) === String(returId));
             setRetur(found || null);
         } catch (error) {
