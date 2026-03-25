@@ -432,68 +432,57 @@ export default function POReceivePage() {
             </div>
 
             {confirm.open && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                    <button
-                        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
-                        onClick={() => !isSaving && setConfirm({ open: false, action: null })}
-                        aria-label="Tutup"
-                    />
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+                    <div className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-xl p-4 space-y-4">
+                        <div>
+                            <p className="text-xs font-black uppercase tracking-widest text-slate-400">
+                                {confirm.action === 'verify2' ? 'Posting Gudang' : 'Verifikasi Draft'}
+                            </p>
+                            <h3 className="text-base font-black text-slate-900 mt-1">
+                                {confirm.action === 'verify2' ? 'Konfirmasi Verifikasi 2 + Posting' : 'Konfirmasi Verifikasi 1'}
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                {confirm.action === 'verify2'
+                                    ? 'Stok akan diposting ke gudang untuk item yang belum diposting. Pastikan data sudah benar.'
+                                    : 'Draft akan ditandai Verified 1. Stok belum bertambah sampai Verifikasi 2.'}
+                            </p>
+                        </div>
 
-                    <div className="relative w-full max-w-lg rounded-[28px] bg-white border border-slate-200 shadow-2xl overflow-hidden">
-                        <div className="p-6">
-                            <div className="flex items-start gap-3">
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${confirm.action === 'verify2' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-amber-50 border-amber-100 text-amber-700'}`}>
-                                    {confirm.action === 'verify2' ? <CheckCircle2 size={22} /> : <Save size={22} />}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="text-lg font-black text-slate-900">
-                                        {confirm.action === 'verify2' ? 'Konfirmasi Verifikasi 2 + Posting' : 'Konfirmasi Verifikasi 1'}
-                                    </h3>
-                                    <p className="text-sm text-slate-600 mt-1 font-medium">
-                                        {confirm.action === 'verify2'
-                                            ? 'Tindakan ini akan mem-posting stok ke gudang untuk seluruh item yang belum diposting.'
-                                            : 'Tindakan ini menandai draft sebagai Verified 1 (belum menambah stok).'}
-                                    </p>
-                                    <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
-                                        <div className="flex items-center justify-between">
-                                            <span className="font-bold text-slate-500">Inbound</span>
-                                            <span className="font-black font-mono">#{po.id.split('-')[0].toUpperCase()}</span>
-                                        </div>
-                                        <div className="flex items-center justify-between mt-1">
-                                            <span className="font-bold text-slate-500">Supplier</span>
-                                            <span className="font-black">{po.Supplier?.name || '-'}</span>
-                                        </div>
-                                        <div className="flex items-center justify-between mt-1">
-                                            <span className="font-bold text-slate-500">Total Qty</span>
-                                            <span className="font-black">{totalQty} Pcs</span>
-                                        </div>
-                                    </div>
-                                </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 space-y-1">
+                            <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-500">Inbound</span>
+                                <span className="font-black font-mono">#{po.id.split('-')[0].toUpperCase()}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-500">Supplier</span>
+                                <span className="font-black">{po.Supplier?.name || '-'}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-500">Total Qty</span>
+                                <span className="font-black">{totalQty} Pcs</span>
                             </div>
                         </div>
-                        <div className="px-6 pb-6 flex gap-2 justify-end">
+
+                        <div className="flex justify-end gap-2">
                             <button
+                                type="button"
                                 onClick={() => setConfirm({ open: false, action: null })}
                                 disabled={isSaving}
-                                className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-5 py-3 hover:bg-slate-50 disabled:opacity-50 transition-all"
+                                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-50"
                             >
                                 Batal
                             </button>
                             <button
+                                type="button"
                                 onClick={async () => {
                                     if (confirm.action === 'verify1') await onVerify1();
                                     if (confirm.action === 'verify2') await onVerify2AndPost();
                                     setConfirm({ open: false, action: null });
                                 }}
                                 disabled={isSaving}
-                                className={`rounded-2xl text-white text-sm font-black px-6 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 transition-all ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-amber-600'}`}
+                                className={`rounded-xl text-white px-4 py-2 text-xs font-bold disabled:opacity-50 ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-amber-600'}`}
                             >
-                                {isSaving ? (
-                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                                ) : (
-                                    <CheckCircle2 size={18} />
-                                )}
-                                Ya, Lanjutkan
+                                {isSaving ? 'Memproses...' : 'Konfirmasi'}
                             </button>
                         </div>
                     </div>

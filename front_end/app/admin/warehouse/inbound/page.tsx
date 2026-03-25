@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, History as HistoryIcon, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
@@ -48,6 +48,11 @@ export default function InboundCreatePage() {
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<ProductRow[]>([]);
   const [searching, setSearching] = useState(false);
+
+  const [scanCode, setScanCode] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState('');
+  const scanInputRef = useRef<HTMLInputElement | null>(null);
 
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newSku, setNewSku] = useState('');
@@ -109,7 +114,7 @@ export default function InboundCreatePage() {
     return () => clearTimeout(timer);
   }, [productSearch, doProductSearch]);
 
-  const addProductToItems = (product: ProductRow) => {
+  const addProductToItems = useCallback((product: ProductRow) => {
     setItems((prev) => {
       const idx = prev.findIndex((p) => p.product.id === product.id);
       if (idx >= 0) {
@@ -121,7 +126,28 @@ export default function InboundCreatePage() {
       const initialUnitCost = Number.isFinite(basePrice) && basePrice > 0 ? String(basePrice) : '';
       return [...prev, { product, qty: 1, unit_cost: initialUnitCost, cost_note: '' }];
     });
-  };
+  }, []);
+
+  const doScan = useCallback(async () => {
+    const code = scanCode.trim();
+    if (!code) return;
+    try {
+      setScanning(true);
+      setScanMessage('');
+      const res = await api.admin.inventory.scanBySku(code);
+      const product = res.data as ProductRow;
+      addProductToItems(product);
+      setScanCode('');
+      setScanMessage(`Ditambahkan: ${product.sku} - ${product.name}`);
+      requestAnimationFrame(() => scanInputRef.current?.focus());
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { message?: string } } };
+      setScanMessage(err?.response?.data?.message || 'Gagal scan SKU/barcode.');
+      requestAnimationFrame(() => scanInputRef.current?.focus());
+    } finally {
+      setScanning(false);
+    }
+  }, [addProductToItems, scanCode]);
 
   const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.product.id !== productId));
 
@@ -403,6 +429,48 @@ export default function InboundCreatePage() {
                 <Plus size={18} />
                 Tambah Produk Baru
               </button>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-black text-slate-500 uppercase tracking-widest">Scan SKU / Barcode</div>
+                {scanning && (
+                  <div className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Scanning...</div>
+                )}
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void doScan();
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  ref={scanInputRef}
+                  value={scanCode}
+                  onChange={(e) => setScanCode(e.target.value)}
+                  placeholder="Scan di sini lalu Enter"
+                  className="flex-1 bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                  inputMode="text"
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  disabled={scanning || !scanCode.trim()}
+                  className="rounded-2xl bg-slate-900 text-white text-sm font-black px-5 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-800 transition-all"
+                >
+                  <Search size={18} />
+                  Scan
+                </button>
+              </form>
+              {scanMessage && (
+                <div className="mt-2 text-xs font-bold text-slate-700">
+                  {scanMessage}
+                </div>
+              )}
+              <div className="mt-2 text-[11px] text-slate-500 font-medium">
+                Mendukung input <span className="font-black">SKU</span> atau <span className="font-black">barcode</span>.
+              </div>
             </div>
 
             {showCreateProduct && (
