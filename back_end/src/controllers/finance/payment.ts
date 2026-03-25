@@ -17,6 +17,7 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 
 export const verifyPayment = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -82,14 +83,17 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
                 throw new CustomError('Pembayaran sudah pernah di-approve', 409);
             }
 
+            const computedTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
+            const collectibleTotal = Math.max(0, Math.round(Number(computedTotals?.net_total || 0) * 100) / 100);
+
             await invoice.update({
                 payment_status: 'paid',
                 verified_by: verifierId,
                 verified_at: new Date(),
-                amount_paid: Number(invoice.total || 0)
+                amount_paid: collectibleTotal
             }, { transaction: t });
 
-            const totalAmount = Number(invoice.total || 0);
+            const totalAmount = collectibleTotal;
             const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
             const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
             const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });

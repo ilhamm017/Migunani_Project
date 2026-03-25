@@ -12,10 +12,12 @@ import { DELIVERY_EMPLOYEE_ROLES, withOrderTrackingFields, normalizeIssueNote, I
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isLegacyOrderStatusAlias, isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
+import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 
 export const getAllOrders = asyncWrapper(async (req: Request, res: Response) => {
     const { page = 1, limit = 10, status, search, startDate, endDate, dateFrom, dateTo, is_backorder, exclude_backorder, updatedAfter } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const includeCollectibleTotals = String((req.query as any)?.include_collectible_total || '') === 'true';
 
     const whereClause: any = {};
     // Used later to annotate each order with `is_backorder` for UI classification.
@@ -207,7 +209,37 @@ export const getAllOrders = asyncWrapper(async (req: Request, res: Response) => 
         is_backorder: backorderOrderIdSetForPage ? backorderOrderIdSetForPage.has(String(row?.id || '')) : false,
     }));
     const rowsWithInvoices = await attachInvoicesToOrders(annotatedRows);
-    const rows = rowsWithInvoices.map((row) => withOrderTrackingFields(row as any));
+    let enrichedRows = rowsWithInvoices;
+    if (includeCollectibleTotals) {
+        const invoiceIds = new Set<string>();
+        rowsWithInvoices.forEach((row: any) => {
+            const inv = row?.Invoice;
+            if (inv?.id) invoiceIds.add(String(inv.id));
+            const list = Array.isArray(row?.Invoices) ? row.Invoices : [];
+            list.forEach((i: any) => { if (i?.id) invoiceIds.add(String(i.id)); });
+        });
+
+        const ids = Array.from(invoiceIds).filter(Boolean);
+        const totalsByInvoiceId = ids.length > 0 ? await computeInvoiceNetTotalsBulk(ids) : new Map<string, any>();
+
+        enrichedRows = rowsWithInvoices.map((row: any) => {
+            const attach = (inv: any) => {
+                if (!inv?.id) return inv;
+                const computed = totalsByInvoiceId.get(String(inv.id));
+                if (!computed) return inv;
+                return {
+                    ...inv,
+                    collectible_total: Number(computed.net_total || 0),
+                    delivery_return_summary: computed
+                };
+            };
+            const invoice = row?.Invoice ? attach(row.Invoice) : null;
+            const invoices = Array.isArray(row?.Invoices) ? row.Invoices.map((i: any) => attach(i)) : [];
+            return { ...row, Invoice: invoice, Invoices: invoices };
+        });
+    }
+
+    const rows = enrichedRows.map((row) => withOrderTrackingFields(row as any));
 
     res.json({
         total: orders.count,

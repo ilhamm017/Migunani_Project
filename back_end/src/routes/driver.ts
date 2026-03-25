@@ -35,5 +35,6 @@ router.get('/wallet', authorizeRoles('driver', 'admin_finance', 'super_admin'), 
 router.get('/retur', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturs);
 router.get('/retur/:id', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturDetail);
 router.patch('/retur/:id/status', authorizeRoles('driver'), DriverController.updateAssignedReturStatus);
+router.post('/retur/handovers', authorizeRoles('driver'), DriverController.createReturHandover);
 
 export default router;

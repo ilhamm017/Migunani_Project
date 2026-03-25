@@ -16,6 +16,7 @@ type OrderInvoiceSummary = {
   id: string;
   invoice_number?: string | null;
   total?: number | null;
+  collectible_total?: number | null;
   payment_status?: string | null;
   payment_method?: string | null;
   payment_proof_url?: string | null;
@@ -93,6 +94,7 @@ export default function FinanceVerifyPage() {
         page: 1,
         limit: 100,
         status,
+        include_collectible_total: 'true',
       });
       const totalPages = Math.max(1, Number(firstPage.data?.totalPages || 1));
       let rows = Array.isArray(firstPage.data?.orders) ? firstPage.data.orders : [];
@@ -104,6 +106,7 @@ export default function FinanceVerifyPage() {
               page: index + 2,
               limit: 100,
               status,
+              include_collectible_total: 'true',
             })
           )
         );
@@ -124,6 +127,7 @@ export default function FinanceVerifyPage() {
           id: String((row.Invoice as Record<string, unknown>).id ?? ''),
           invoice_number: (row.Invoice as Record<string, unknown>).invoice_number ? String((row.Invoice as Record<string, unknown>).invoice_number) : null,
           total: Number((row.Invoice as Record<string, unknown>).total ?? 0),
+          collectible_total: Number((row.Invoice as Record<string, unknown>).collectible_total ?? (row.Invoice as Record<string, unknown>).total ?? 0),
           payment_status: (row.Invoice as Record<string, unknown>).payment_status ? String((row.Invoice as Record<string, unknown>).payment_status) : null,
           payment_method: (row.Invoice as Record<string, unknown>).payment_method ? String((row.Invoice as Record<string, unknown>).payment_method) : null,
           payment_proof_url: (row.Invoice as Record<string, unknown>).payment_proof_url ? String((row.Invoice as Record<string, unknown>).payment_proof_url) : null,
@@ -323,7 +327,7 @@ export default function FinanceVerifyPage() {
                     </div>
                   </div>
                   <span className="text-sm font-black text-slate-900">
-                    {formatCurrency(Number(o.Invoice?.total || 0))}
+                    {formatCurrency(Number(o.Invoice?.collectible_total ?? o.Invoice?.total ?? 0))}
                   </span>
                 </div>
 

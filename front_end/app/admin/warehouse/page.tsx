@@ -8,7 +8,7 @@ import {
     Layers, Truck, ShoppingCart, ShieldCheck,
     ScanBarcode, FileSpreadsheet, ClipboardCheck,
     Package, TrendingDown, ChevronRight,
-    ArrowUpRight, Clock, Car
+    ArrowUpRight, Clock, Car, PackageCheck
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -113,6 +113,16 @@ export default function WarehouseLandingPage() {
             bg: 'bg-rose-50',
             border: 'border-rose-100',
             roles: ['super_admin', 'admin_gudang']
+        },
+        {
+            href: '/admin/warehouse/retur-handovers',
+            label: 'Retur Handover',
+            desc: 'Terima retur driver per invoice',
+            icon: PackageCheck,
+            color: 'text-violet-700',
+            bg: 'bg-violet-50',
+            border: 'border-violet-100',
+            roles: ['super_admin', 'admin_gudang', 'kasir']
         },
         {
             href: '/admin/warehouse/scanner',

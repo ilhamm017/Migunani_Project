@@ -120,6 +120,14 @@ export default function DriverOrderDetailPage() {
   const [deliveryReturReason, setDeliveryReturReason] = useState('Retur saat pengiriman (tidak jadi beli)');
   const [deliveryReturLoading, setDeliveryReturLoading] = useState(false);
   const [deliveryReturMessage, setDeliveryReturMessage] = useState('');
+  const [deliveryReturStep, setDeliveryReturStep] = useState<1 | 2>(1);
+  const [deliveryReturAck, setDeliveryReturAck] = useState(false);
+  const [isReturHandoverOpen, setIsReturHandoverOpen] = useState(false);
+  const [returHandoverStep, setReturHandoverStep] = useState<1 | 2>(1);
+  const [returHandoverAck, setReturHandoverAck] = useState(false);
+  const [returHandoverLoading, setReturHandoverLoading] = useState(false);
+  const [returHandoverMessage, setReturHandoverMessage] = useState('');
+  const [returHandoverNote, setReturHandoverNote] = useState('');
 
   const loadOrder = useCallback(async () => {
     try {
@@ -175,17 +183,20 @@ export default function DriverOrderDetailPage() {
       const resolvedPaymentMethod = sortedScopedRows
         .map((row) => getOrderInvoicePayload(row).paymentMethod)
         .find((method: string) => method === 'cod' || method === 'transfer_manual') || '';
+      const deliverySummary = (invoiceDetail as any)?.delivery_return_summary;
+      const net = Number(deliverySummary?.net_total);
+      const payableTotal = deliverySummary && Number.isFinite(net) && net >= 0 ? net : resolvedInvoiceTotal;
       setOrder(selected);
       setGroupedOrders(sortedScopedRows);
       setResolvedInvoiceId(resolvedInvoice);
       setResolvedFromOrderId(resolvedOrder);
-      setPaymentAmount(resolvedInvoiceTotal > 0 ? String(resolvedInvoiceTotal) : '');
+      setPaymentAmount(Number.isFinite(payableTotal) && payableTotal >= 0 ? String(payableTotal) : '');
       setPaymentMethod(resolvedPaymentMethod as 'cod' | 'transfer_manual' | '');
     } catch (error) {
       console.error('Load driver order failed:', error);
       setInvoiceDetail(null);
     }
-  }, [orderId]);
+  }, [invoiceDetail, orderId]);
 
   useEffect(() => {
     if (allowed && orderId) {
@@ -393,6 +404,16 @@ export default function DriverOrderDetailPage() {
   const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
   const deliveryNetTotal = Number(deliveryReturnSummary?.net_total || 0);
   const deliveryReturnTotal = Number(deliveryReturnSummary?.return_total || 0);
+  const existingDeliveryReturs = Array.isArray((invoiceDetail as any)?.delivery_returs) ? ((invoiceDetail as any).delivery_returs as any[]) : [];
+  const hasExistingDeliveryRetur = existingDeliveryReturs.length > 0;
+  const handoverReadyReturs = existingDeliveryReturs.filter((r: any) => String(r?.status || '') === 'picked_up');
+  const canSubmitHandover = handoverReadyReturs.length > 0;
+  const payableInvoiceTotal = useMemo(() => {
+    const hasDeliveryNet = Boolean(deliveryReturnSummary && (deliveryReturnTotal > 0 || hasExistingDeliveryRetur));
+    if (hasDeliveryNet && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0) return deliveryNetTotal;
+    const gross = Number(invoiceContext.invoiceTotal || 0);
+    return Number.isFinite(gross) && gross >= 0 ? gross : 0;
+  }, [deliveryNetTotal, deliveryReturnSummary, deliveryReturnTotal, hasExistingDeliveryRetur, invoiceContext.invoiceTotal]);
   const invoiceDisplayLabel = useMemo(() => {
     if (invoiceContext.invoiceNumber) return invoiceContext.invoiceNumber;
     if (invoiceContext.invoiceId) return `INV-${invoiceContext.invoiceId.slice(-8).toUpperCase()}`;
@@ -415,6 +436,7 @@ export default function DriverOrderDetailPage() {
   const hasChecklistMismatch = checklistState.exists && checklistState.mismatchCount > 0;
   const missingProof = !proof;
   const missingCodPaymentRecord = isCod && !paymentRecorded;
+  const missingReturHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
   const codStatusTitle = paymentRecorded ? 'Status COD sudah tercatat untuk invoice ini.' : 'Konfirmasi COD jika invoice masih belum tercatat.';
   const codStatusHint = paymentRecorded
     ? 'Invoice COD normal bisa sudah berstatus pending sejak invoice diterbitkan. Driver bisa lanjut checklist dan bukti kirim.'
@@ -527,9 +549,46 @@ export default function DriverOrderDetailPage() {
     }
   };
 
+  const validateDeliveryReturDraft = () => {
+    const selected = invoiceItemRows
+      .map((row) => {
+        const draft = deliveryReturDraft[row.key];
+        const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
+        return { row, draft, qty };
+      })
+      .filter((x) => Number.isFinite(x.qty) && x.qty > 0);
+
+    if (selected.length === 0) {
+      return 'Isi minimal 1 item retur dengan qty > 0.';
+    }
+
+    for (const { row, draft, qty } of selected) {
+      if (qty > Number(row.qty || 0)) {
+        return `Qty retur melebihi qty invoice untuk ${row.name}.`;
+      }
+      if (row.orderIds.length > 1) {
+        const orderId = typeof draft?.order_id === 'string' ? draft.order_id.trim() : '';
+        if (!orderId) {
+          return `Pilih order untuk item ${row.name} (produk ada di beberapa order).`;
+        }
+      }
+    }
+
+    return null;
+  };
+
   const submitDeliveryRetur = async () => {
     if (returLocked) {
       setDeliveryReturMessage('Invoice sudah tercatat (paid/cod_pending). Retur delivery dikunci.');
+      return;
+    }
+    if (hasExistingDeliveryRetur) {
+      setDeliveryReturMessage('Retur delivery untuk invoice ini sudah diajukan dan tidak bisa diubah.');
+      return;
+    }
+    const validationError = validateDeliveryReturDraft();
+    if (validationError) {
+      setDeliveryReturMessage(validationError);
       return;
     }
     const payloadItems = invoiceItemRows
@@ -573,6 +632,8 @@ export default function DriverOrderDetailPage() {
       setIsDeliveryReturOpen(false);
       setDeliveryReturDraft({});
       setDeliveryReturReason('Retur saat pengiriman (tidak jadi beli)');
+      setDeliveryReturStep(1);
+      setDeliveryReturAck(false);
     } catch (error) {
       const message = axios.isAxiosError(error)
         ? String(error.response?.data?.message || error.message || 'Gagal mengajukan retur')
@@ -580,6 +641,45 @@ export default function DriverOrderDetailPage() {
       setDeliveryReturMessage(message);
     } finally {
       setDeliveryReturLoading(false);
+    }
+  };
+
+  const submitReturHandover = async () => {
+    const invoiceIdToSubmit = String(resolvedInvoiceId || invoiceContext.invoiceId || '').trim();
+    if (!invoiceIdToSubmit) {
+      setReturHandoverMessage('Invoice belum ditemukan.');
+      return;
+    }
+    if (!canSubmitHandover) {
+      setReturHandoverMessage('Tidak ada retur delivery yang siap diserahkan (status picked_up).');
+      return;
+    }
+    try {
+      setReturHandoverLoading(true);
+      setReturHandoverMessage('');
+      await api.driver.submitReturHandover({
+        invoice_id: invoiceIdToSubmit,
+        note: returHandoverNote.trim() ? returHandoverNote.trim() : undefined
+      });
+
+      try {
+        const invoiceRes = await api.invoices.getById(invoiceIdToSubmit);
+        setInvoiceDetail(invoiceRes.data || null);
+      } catch (refreshError) {
+        console.error('Refresh invoice detail after retur handover failed:', refreshError);
+      }
+      await loadOrder();
+      setIsReturHandoverOpen(false);
+      setReturHandoverStep(1);
+      setReturHandoverAck(false);
+      setReturHandoverNote('');
+    } catch (error) {
+      const message = axios.isAxiosError(error)
+        ? String(error.response?.data?.message || error.message || 'Gagal serah-terima retur')
+        : 'Gagal serah-terima retur';
+      setReturHandoverMessage(message);
+    } finally {
+      setReturHandoverLoading(false);
     }
   };
 
@@ -713,7 +813,8 @@ export default function DriverOrderDetailPage() {
     && checklistState.exists
     && checklistState.mismatchCount === 0
     && !loading
-    && (!isCod || paymentRecorded);
+    && (!isCod || paymentRecorded)
+    && !missingReturHandover;
   const customer = order?.Customer || {};
 
   return (
@@ -743,75 +844,125 @@ export default function DriverOrderDetailPage() {
               </button>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alasan</label>
-              <input
-                value={deliveryReturReason}
-                onChange={(e) => setDeliveryReturReason(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800"
-                placeholder="Contoh: Customer tidak jadi beli"
-              />
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-3">
-              {invoiceItemRows.map((row) => {
-                const draft = deliveryReturDraft[row.key] || { qty: '0', order_id: row.orderIds.length === 1 ? row.orderIds[0] : '' };
-                return (
-                  <div key={row.key} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-black text-slate-900">{row.name}</p>
-                        <p className="text-[10px] text-slate-500">Qty invoice: <span className="font-black">{row.qty}</span></p>
-                      </div>
-                      <div className="text-right">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty Retur</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max={row.qty}
-                          value={draft.qty}
-                          onChange={(e) => {
-                            const nextQty = e.target.value;
-                            setDeliveryReturDraft((prev) => ({
-                              ...prev,
-                              [row.key]: { ...draft, qty: nextQty }
-                            }));
-                          }}
-                          className="mt-1 w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-800"
-                        />
-                      </div>
-                    </div>
-                    {row.orderIds.length > 1 && (
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Order</label>
-                        <select
-                          value={draft.order_id || ''}
-                          onChange={(e) => {
-                            const nextOrderId = e.target.value;
-                            setDeliveryReturDraft((prev) => ({
-                              ...prev,
-                              [row.key]: { ...draft, order_id: nextOrderId }
-                            }));
-                          }}
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-800 bg-white"
-                        >
-                          <option value="">Pilih order...</option>
-                          {row.orderIds.map((oid) => (
-                            <option key={oid} value={oid}>
-                              {oid}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-[10px] text-slate-500">Produk ini ada di beberapa order. Wajib pilih order.</p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {invoiceItemRows.length === 0 && (
-                <p className="text-xs font-semibold text-slate-500">Tidak ada item pada invoice ini.</p>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
+              Step <span className="font-black">{deliveryReturStep}</span> / 2
+              {deliveryReturStep === 2 && (
+                <span className="ml-2 text-rose-700 font-black">FINAL</span>
               )}
             </div>
+
+            {deliveryReturStep === 1 ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alasan</label>
+                  <input
+                    value={deliveryReturReason}
+                    onChange={(e) => setDeliveryReturReason(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800"
+                    placeholder="Contoh: Customer tidak jadi beli"
+                  />
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-3">
+                  {invoiceItemRows.map((row) => {
+                    const draft = deliveryReturDraft[row.key] || { qty: '0', order_id: row.orderIds.length === 1 ? row.orderIds[0] : '' };
+                    return (
+                      <div key={row.key} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-black text-slate-900">{row.name}</p>
+                            <p className="text-[10px] text-slate-500">Qty invoice: <span className="font-black">{row.qty}</span></p>
+                          </div>
+                          <div className="text-right">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty Retur</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max={row.qty}
+                              value={draft.qty}
+                              onChange={(e) => {
+                                const nextQty = e.target.value;
+                                setDeliveryReturDraft((prev) => ({
+                                  ...prev,
+                                  [row.key]: { ...draft, qty: nextQty }
+                                }));
+                              }}
+                              className="mt-1 w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-800"
+                            />
+                          </div>
+                        </div>
+                        {row.orderIds.length > 1 && (
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Order</label>
+                            <select
+                              value={draft.order_id || ''}
+                              onChange={(e) => {
+                                const nextOrderId = e.target.value;
+                                setDeliveryReturDraft((prev) => ({
+                                  ...prev,
+                                  [row.key]: { ...draft, order_id: nextOrderId }
+                                }));
+                              }}
+                              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-800 bg-white"
+                            >
+                              <option value="">Pilih order...</option>
+                              {row.orderIds.map((oid) => (
+                                <option key={oid} value={oid}>
+                                  {oid}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-[10px] text-slate-500">Produk ini ada di beberapa order. Wajib pilih order.</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {invoiceItemRows.length === 0 && (
+                    <p className="text-xs font-semibold text-slate-500">Tidak ada item pada invoice ini.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] text-rose-800 space-y-1">
+                  <p className="font-black uppercase tracking-widest text-[10px] text-rose-700">Verifikasi Retur (Final)</p>
+                  <p>Retur delivery hanya bisa diinput <span className="font-black">1 kali</span> dan <span className="font-black">tidak bisa diubah</span>.</p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
+                  {invoiceItemRows
+                    .map((row) => {
+                      const draft = deliveryReturDraft[row.key];
+                      const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
+                      if (!Number.isFinite(qty) || qty <= 0) return null;
+                      const orderId = typeof draft?.order_id === 'string' && draft.order_id.trim() ? draft.order_id.trim() : '';
+                      return (
+                        <div key={row.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-black text-slate-900">{row.name}</p>
+                            <p className="text-[10px] text-slate-500">
+                              {row.orderIds.length > 1 ? `Order: ${orderId || '(belum dipilih)'}` : `Order: ${row.orderIds[0] || '-'}`}
+                            </p>
+                          </div>
+                          <span className="text-xs font-black text-rose-700">Qty {qty}</span>
+                        </div>
+                      );
+                    })
+                    .filter(Boolean)}
+                </div>
+
+                <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={deliveryReturAck}
+                    onChange={(e) => setDeliveryReturAck(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>Saya sudah cek ulang item dan qty retur di atas dan yakin data ini benar.</span>
+                </label>
+              </>
+            )}
 
             {deliveryReturMessage && (
               <p className="text-xs font-bold text-rose-700">{deliveryReturMessage}</p>
@@ -820,19 +971,212 @@ export default function DriverOrderDetailPage() {
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setIsDeliveryReturOpen(false)}
+                onClick={() => {
+                  if (deliveryReturLoading) return;
+                  if (deliveryReturStep === 2) {
+                    setDeliveryReturStep(1);
+                    setDeliveryReturAck(false);
+                    setDeliveryReturMessage('');
+                    return;
+                  }
+                  setIsDeliveryReturOpen(false);
+                }}
                 disabled={deliveryReturLoading}
                 className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
               >
-                Batal
+                {deliveryReturStep === 2 ? 'Kembali' : 'Batal'}
               </button>
               <button
                 type="button"
-                onClick={() => void submitDeliveryRetur()}
-                disabled={deliveryReturLoading || invoiceItemRows.length === 0}
+                onClick={() => {
+                  if (deliveryReturStep === 1) {
+                    const err = validateDeliveryReturDraft();
+                    if (err) {
+                      setDeliveryReturMessage(err);
+                      return;
+                    }
+                    setDeliveryReturStep(2);
+                    setDeliveryReturAck(false);
+                    setDeliveryReturMessage('');
+                    return;
+                  }
+                  if (!deliveryReturAck) {
+                    setDeliveryReturMessage('Centang konfirmasi cek ulang sebelum ajukan retur.');
+                    return;
+                  }
+                  void submitDeliveryRetur();
+                }}
+                disabled={deliveryReturLoading || invoiceItemRows.length === 0 || hasExistingDeliveryRetur}
                 className="py-3 rounded-xl bg-rose-600 text-white text-xs font-black uppercase disabled:opacity-60"
               >
-                {deliveryReturLoading ? 'Memproses...' : 'Simpan Retur'}
+                {deliveryReturLoading
+                  ? 'Memproses...'
+                  : deliveryReturStep === 1
+                    ? 'Lanjut Verifikasi'
+                    : 'Ya, Ajukan Retur'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {isReturHandoverOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-700">
+                  Serah-Terima Retur Gudang
+                </p>
+                <h3 className="mt-2 text-lg font-black text-slate-900">
+                  {returHandoverStep === 1 ? 'Buat tiket penyerahan retur' : 'Verifikasi Handover (Final)'}
+                </h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Retur delivery yang sudah dicatat harus diserahkan kembali ke gudang dan diterima admin agar tidak miss.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (returHandoverLoading) return;
+                  setIsReturHandoverOpen(false);
+                }}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black uppercase text-slate-700"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
+              Step <span className="font-black">{returHandoverStep}</span> / 2
+              {returHandoverStep === 2 && (
+                <span className="ml-2 text-violet-700 font-black">FINAL</span>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] text-violet-800 space-y-1">
+              <p>
+                Retur siap diserahkan: <span className="font-black">{handoverReadyReturs.length}</span>
+              </p>
+              <p>
+                Invoice: <span className="font-black">{invoiceDisplayLabel}</span>
+              </p>
+            </div>
+
+            {returHandoverStep === 1 ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Catatan (Opsional)</label>
+                  <input
+                    value={returHandoverNote}
+                    onChange={(e) => setReturHandoverNote(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800"
+                    placeholder="Contoh: Diserahkan ke gudang sore hari"
+                  />
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
+                  {handoverReadyReturs.map((r: any) => (
+                    <div key={String(r?.id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-900 truncate">{String(r?.Product?.name || 'Produk')}</p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          Retur ID: {String(r?.id || '').slice(-8).toUpperCase()} · SKU: {String(r?.Product?.sku || '-')}
+                        </p>
+                      </div>
+                      <span className="text-xs font-black text-violet-700">Qty {Number(r?.qty || 0)}</span>
+                    </div>
+                  ))}
+                  {handoverReadyReturs.length === 0 && (
+                    <p className="text-xs font-semibold text-slate-500">Tidak ada retur dengan status picked_up.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] text-violet-900 space-y-1">
+                  <p className="font-black uppercase tracking-widest text-[10px] text-violet-700">Konfirmasi Final</p>
+                  <p>Setelah submit, semua retur di atas masuk status <span className="font-black">handed_to_warehouse</span> dan menunggu penerimaan admin gudang/kasir.</p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
+                  {handoverReadyReturs.map((r: any) => (
+                    <div key={String(r?.id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-900 truncate">{String(r?.Product?.name || 'Produk')}</p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          Retur ID: {String(r?.id || '').slice(-8).toUpperCase()}
+                        </p>
+                      </div>
+                      <span className="text-xs font-black text-violet-700">Qty {Number(r?.qty || 0)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={returHandoverAck}
+                    onChange={(e) => setReturHandoverAck(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>Saya sudah cek ulang daftar retur dan yakin barang fisik benar-benar diserahkan ke gudang.</span>
+                </label>
+              </>
+            )}
+
+            {returHandoverMessage && (
+              <p className="text-xs font-bold text-violet-700">{returHandoverMessage}</p>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (returHandoverLoading) return;
+                  if (returHandoverStep === 2) {
+                    setReturHandoverStep(1);
+                    setReturHandoverAck(false);
+                    setReturHandoverMessage('');
+                    return;
+                  }
+                  setIsReturHandoverOpen(false);
+                }}
+                disabled={returHandoverLoading}
+                className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
+              >
+                {returHandoverStep === 2 ? 'Kembali' : 'Batal'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (returHandoverStep === 1) {
+                    if (!invoiceContext.invoiceId) {
+                      setReturHandoverMessage('Invoice belum ditemukan.');
+                      return;
+                    }
+                    if (handoverReadyReturs.length === 0) {
+                      setReturHandoverMessage('Tidak ada retur delivery yang siap diserahkan (status picked_up).');
+                      return;
+                    }
+                    setReturHandoverStep(2);
+                    setReturHandoverAck(false);
+                    setReturHandoverMessage('');
+                    return;
+                  }
+                  if (!returHandoverAck) {
+                    setReturHandoverMessage('Centang konfirmasi sebelum submit serah-terima.');
+                    return;
+                  }
+                  void submitReturHandover();
+                }}
+                disabled={returHandoverLoading || handoverReadyReturs.length === 0}
+                className="py-3 rounded-xl bg-violet-700 text-white text-xs font-black uppercase disabled:opacity-60"
+              >
+                {returHandoverLoading
+                  ? 'Memproses...'
+                  : returHandoverStep === 1
+                    ? 'Lanjut Verifikasi'
+                    : 'Ya, Submit Handover'}
               </button>
             </div>
           </div>
@@ -904,7 +1248,7 @@ export default function DriverOrderDetailPage() {
 
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800 space-y-1">
               <p>
-                Total ditagih: <span className="font-black">{formatCurrency(Number((deliveryNetTotal > 0 ? deliveryNetTotal : invoiceContext.invoiceTotal) || 0))}</span>
+                Total ditagih: <span className="font-black">{formatCurrency(payableInvoiceTotal)}</span>
               </p>
               <p>
                 Nominal dicatat: <span className="font-black">{formatCurrency(paymentAmountValue)}</span>
@@ -991,7 +1335,7 @@ export default function DriverOrderDetailPage() {
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500 font-bold uppercase">Total Invoice</span>
             <span className="text-xs font-black text-slate-900">
-              Rp {Number((deliveryNetTotal > 0 ? deliveryNetTotal : invoiceContext.invoiceTotal) || 0).toLocaleString('id-ID')}
+              Rp {Number(payableInvoiceTotal || 0).toLocaleString('id-ID')}
             </span>
           </div>
         </div>
@@ -1007,6 +1351,8 @@ export default function DriverOrderDetailPage() {
                 type="button"
                 onClick={() => {
                   setDeliveryReturMessage('');
+                  setDeliveryReturStep(1);
+                  setDeliveryReturAck(false);
                   const nextDraft: Record<string, { qty: string; order_id?: string }> = {};
                   invoiceItemRows.forEach((row) => {
                     nextDraft[row.key] = {
@@ -1017,7 +1363,7 @@ export default function DriverOrderDetailPage() {
                   setDeliveryReturDraft(nextDraft);
                   setIsDeliveryReturOpen(true);
                 }}
-                disabled={returLocked || invoiceItemRows.length === 0}
+                disabled={returLocked || hasExistingDeliveryRetur || invoiceItemRows.length === 0}
                 className="inline-flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-black uppercase text-rose-700 disabled:opacity-60"
               >
                 <Undo2 size={14} />
@@ -1035,6 +1381,29 @@ export default function DriverOrderDetailPage() {
               <p className="text-xs font-bold text-slate-700 mt-1">
                 Potongan retur: {formatCurrency(deliveryReturnTotal)} · Total setelah retur: {formatCurrency(deliveryNetTotal)}
               </p>
+            </div>
+          )}
+          {hasExistingDeliveryRetur && (
+            <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Serah-Terima Gudang</p>
+                <p className="text-xs font-bold text-slate-700 mt-1 truncate">
+                  Retur siap diserahkan: <span className="font-black">{handoverReadyReturs.length}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setReturHandoverMessage('');
+                  setReturHandoverStep(1);
+                  setReturHandoverAck(false);
+                  setIsReturHandoverOpen(true);
+                }}
+                disabled={!canSubmitHandover || returHandoverLoading}
+                className="shrink-0 inline-flex items-center gap-2 rounded-2xl border border-violet-200 bg-white px-3 py-2 text-[10px] font-black uppercase text-violet-700 disabled:opacity-60"
+              >
+                Serahkan
+              </button>
             </div>
           )}
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-64 overflow-y-auto space-y-2">
@@ -1237,10 +1606,11 @@ export default function DriverOrderDetailPage() {
             </div>
           )}
 
-          {(missingChecklist || hasChecklistMismatch || missingProof || missingCodPaymentRecord) && (
+          {(missingChecklist || hasChecklistMismatch || missingProof || missingCodPaymentRecord || missingReturHandover) && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600 space-y-1">
               <p className="uppercase text-[10px] tracking-widest text-slate-400">Belum Bisa Selesai</p>
               {missingCodPaymentRecord && <p>{codBlockingHint}</p>}
+              {missingReturHandover && <p>Retur delivery belum diserahkan ke gudang. Klik tombol Serahkan di kartu Serah-Terima Gudang.</p>}
               {missingChecklist && <p>Checklist belum disimpan. Buka checklist lalu klik Simpan.</p>}
               {hasChecklistMismatch && <p>Checklist masih ada selisih. Perbaiki atau laporkan terlebih dahulu.</p>}
               {missingProof && <p>Upload bukti foto pengiriman (bukan bukti pembayaran).</p>}
@@ -1288,7 +1658,7 @@ export default function DriverOrderDetailPage() {
               <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-center space-y-1">
                 <p className="text-xs font-bold text-orange-600 uppercase tracking-wide">Tagihan COD</p>
                 <p className="text-2xl font-black text-slate-900">
-                  Rp {Number(invoiceContext.invoiceTotal || 0).toLocaleString('id-ID')}
+                  Rp {Number(payableInvoiceTotal || 0).toLocaleString('id-ID')}
                 </p>
                 <p className="text-[10px] text-orange-700 font-medium">
                   Terima uang tunai dari customer bila invoice COD ini belum lunas, lalu lanjutkan setoran ke finance sesuai proses.

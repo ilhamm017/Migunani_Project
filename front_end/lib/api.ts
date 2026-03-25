@@ -200,8 +200,13 @@ export const api = {
             courier_id?: string;
             refund_amount?: number;
             is_back_to_stock?: boolean;
+            qty_received?: number;
         }) => apiClient.put(`/retur/${id}/status`, data),
         disburse: (id: string, note?: string) => apiClient.post(`/retur/${id}/disburse`, { note }),
+        getHandovers: (params?: { status?: 'submitted' | 'received' }) =>
+            apiClient.get('/retur/handovers', { params }),
+        receiveHandover: (handoverId: number | string, payload: { items: Array<{ retur_id: string; qty_received: number }>; note?: string }) =>
+            apiClient.post(`/retur/handovers/${handoverId}/receive`, payload),
     },
 
     // Admin
@@ -301,6 +306,7 @@ export const api = {
                 is_backorder?: string;
                 exclude_backorder?: string;
                 updatedAfter?: string;
+                include_collectible_total?: string;
             }) =>
                 apiClient.get<AdminOrderListResponse>('/orders/admin/list', { params }),
             getStats: () => apiClient.get('/orders/admin/stats'),
@@ -675,6 +681,8 @@ export const api = {
                 items: Array<{ product_id: string; qty: number; order_id?: string; reason?: string; evidence_img?: string }>;
             }
         ) => apiClient.post(`/driver/orders/${orderOrInvoiceId}/retur`, payload),
+        submitReturHandover: (payload: { invoice_id: string; note?: string }) =>
+            apiClient.post('/driver/retur/handovers', payload),
         recordPayment: (orderId: string, payload: { amount_received?: number; proof?: File | null }) => {
             const formData = new FormData();
             if (payload.amount_received !== undefined && payload.amount_received !== null) {

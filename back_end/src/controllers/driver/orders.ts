@@ -140,6 +140,22 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
         }
 
         const orderIds = orders.map((o: any) => String(o.id)).filter(Boolean);
+
+        const existingDeliveryRetur = await Retur.findOne({
+            where: {
+                order_id: { [Op.in]: orderIds },
+                retur_type: 'delivery_refusal',
+                status: { [Op.ne]: 'rejected' }
+            },
+            attributes: ['id'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (existingDeliveryRetur) {
+            await t.rollback();
+            throw new CustomError('Retur delivery untuk invoice ini sudah diajukan dan tidak bisa diubah.', 409);
+        }
+
         const invoiceItems = await InvoiceItem.findAll({
             where: { invoice_id: String(invoice.id) },
             include: [{

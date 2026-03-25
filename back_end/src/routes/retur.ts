@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticateToken as authenticate, authorizeRoles as requireRole } from '../middleware/authMiddleware';
 import * as ReturController from '../controllers/ReturController';
+import * as ReturHandoverController from '../controllers/ReturHandoverController';
 import { createImageUpload, createSingleUploadMiddleware } from '../utils/uploadPolicy';
 
 const router = Router();
@@ -19,5 +20,9 @@ router.get('/my', authenticate, ReturController.getMyReturs);
 router.get('/all', authenticate, requireRole('super_admin', 'kasir', 'admin_finance', 'admin_gudang'), ReturController.getAllReturs);
 router.put('/:id/status', authenticate, requireRole('super_admin', 'kasir', 'admin_gudang'), ReturController.updateReturStatus);
 router.post('/:id/disburse', authenticate, requireRole('super_admin', 'admin_finance'), ReturController.disburseRefund);
+
+// Retur Handovers (Gudang/Kasir)
+router.get('/handovers', authenticate, requireRole('super_admin', 'kasir', 'admin_gudang'), ReturHandoverController.getReturHandovers);
+router.post('/handovers/:id/receive', authenticate, requireRole('super_admin', 'kasir', 'admin_gudang'), ReturHandoverController.receiveReturHandover);
 
 export default router;

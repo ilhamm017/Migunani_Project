@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt } from 'lucide-react';
+import { AlertTriangle, Boxes, Car, ChevronDown, ClipboardList, DollarSign, FileSpreadsheet, Layers, MessageSquare, ShoppingCart, Users, Settings, Shield, LayoutDashboard, Megaphone, ScanBarcode, UserCheck, Warehouse, Plus, Wallet, Truck, RotateCcw, Percent, CheckCircle, Clock, TrendingUp, FileText, Receipt, PackageCheck } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -22,6 +22,7 @@ type DashboardCodRow = { total_pending?: number | string | null };
 type DashboardProductRow = { stock_quantity?: number | string | null };
 type DashboardAuditRow = { status?: string | null };
 type DashboardReturRow = { status?: string | null; admin_response?: string | null };
+type DashboardReturHandoverRow = { status?: string | null };
 
 export default function AdminOverviewPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir', 'driver']);
@@ -157,6 +158,15 @@ export default function AdminOverviewPage() {
           return status === 'pending' && !hasAdminResponse;
         }).length;
         newWarehouseBadges['/admin/warehouse/retur'] = pendingReturActions;
+      }
+
+      if (role === 'kasir' || role === 'admin_gudang' || role === 'super_admin') {
+        const handoversRes = await api.retur.getHandovers({ status: 'submitted' }).catch(() => ({ data: [] }));
+        const handovers = Array.isArray((handoversRes as any).data)
+          ? ((handoversRes as any).data as DashboardReturHandoverRow[])
+          : [];
+        const pendingHandovers = handovers.filter((h) => String(h?.status || '').toLowerCase() === 'submitted').length;
+        newWarehouseBadges['/admin/warehouse/retur-handovers'] = pendingHandovers;
       }
 
       if (!isMountedRef.current) return;
@@ -918,6 +928,7 @@ export default function AdminOverviewPage() {
     { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang & preorder.', icon: AlertTriangle, badge: 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
     { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer lintas channel.', icon: MessageSquare, badge: summary.chats, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
     { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
+    { href: '/admin/warehouse/retur-handovers', title: 'Retur Handover', desc: 'Terima retur driver per invoice.', icon: PackageCheck, badge: warehouseCardBadges['/admin/warehouse/retur-handovers'] || 0, tone: 'bg-violet-100 text-violet-700 group-hover:bg-violet-700 group-hover:text-white' },
   ];
   const featureCategories = [
 	    {
@@ -926,10 +937,11 @@ export default function AdminOverviewPage() {
 	      menus: [
 	        { href: '/admin/warehouse', title: 'Dashboard Gudang', desc: 'Kanban, picker, alokasi.', icon: Warehouse },
 	        { href: '/admin/warehouse/stok', title: 'Data Inventori', desc: 'Stok dan produk.', icon: Boxes },
-        { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
+	        { href: '/admin/warehouse/pesanan', title: 'Kanban Pesanan', desc: 'Pantau alur order.', icon: ClipboardList, badge: warehouseCardBadges['/admin/warehouse/pesanan'] || 0 },
 	        { href: '/admin/warehouse/helper', title: 'Picklist Alokasi', desc: 'Daftar barang alokasi untuk diambil.', icon: UserCheck, badge: warehouseCardBadges['/admin/warehouse/helper'] || 0 },
         { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
         { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
+        { href: '/admin/warehouse/retur-handovers', title: 'Retur Handover', desc: 'Terima retur driver (per invoice).', icon: PackageCheck, badge: warehouseCardBadges['/admin/warehouse/retur-handovers'] || 0 },
         { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
 	        { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
 	        { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },

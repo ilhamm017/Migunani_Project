@@ -15,6 +15,7 @@ import {
 } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 
 // --- Reports ---
 export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Response) => {
@@ -29,7 +30,13 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
         });
 
         const context = await buildAccountsReceivableContext(ar);
-        const invoiceRows = mapAccountsReceivableRows(ar, context);
+        const invoiceIds = ar.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+        const netTotals = await computeInvoiceNetTotalsBulk(invoiceIds);
+        const collectibleByInvoiceId = new Map<string, number>();
+        netTotals.forEach((row, id) => collectibleByInvoiceId.set(id, Number(row.net_total || 0)));
+        const invoiceRows = mapAccountsReceivableRows(ar, context, {
+            collectible_total_by_invoice_id: collectibleByInvoiceId
+        });
 
         // 2. Get Driver Debts (User.debt > 0)
         const debtors = await User.findAll({
@@ -154,7 +161,12 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
         }
 
         const context = await buildAccountsReceivableContext([invoice]);
-        const [row] = mapAccountsReceivableRows([invoice], context);
+        const netTotals = await computeInvoiceNetTotalsBulk([invoiceId]);
+        const collectibleByInvoiceId = new Map<string, number>();
+        netTotals.forEach((row, id) => collectibleByInvoiceId.set(id, Number(row.net_total || 0)));
+        const [row] = mapAccountsReceivableRows([invoice], context, {
+            collectible_total_by_invoice_id: collectibleByInvoiceId
+        });
         if (!row) {
             throw new CustomError('Data piutang tidak ditemukan', 404);
         }

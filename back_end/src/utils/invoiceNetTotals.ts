@@ -186,3 +186,164 @@ export const computeInvoiceNetTotals = async (
         per_order_item_returned_qty: perOrderItemReturnedQty
     };
 };
+
+export const computeInvoiceNetTotalsBulk = async (
+    invoiceIds: string[],
+    options?: { transaction?: Transaction }
+): Promise<Map<string, InvoiceNetTotals>> => {
+    const normalizedIds = Array.from(new Set(
+        (Array.isArray(invoiceIds) ? invoiceIds : [])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+    ));
+    const result = new Map<string, InvoiceNetTotals>();
+    if (normalizedIds.length === 0) return result;
+
+    const invoices = await Invoice.findAll({
+        where: { id: { [Op.in]: normalizedIds } },
+        attributes: ['id', 'total', 'discount_amount', 'shipping_fee_total', 'tax_mode_snapshot', 'tax_percent'],
+        transaction: options?.transaction
+    });
+    const invoiceById = new Map<string, any>();
+    invoices.forEach((inv: any) => invoiceById.set(String(inv.id), inv.get({ plain: true })));
+
+    const invoiceItems = await InvoiceItem.findAll({
+        where: { invoice_id: { [Op.in]: normalizedIds } },
+        attributes: ['invoice_id', 'qty', 'unit_price', 'order_item_id'],
+        include: [{
+            model: OrderItem,
+            required: true,
+            attributes: ['id', 'order_id', 'product_id']
+        }],
+        transaction: options?.transaction
+    });
+
+    const itemsByInvoiceId = new Map<string, any[]>();
+    const orderIds: string[] = [];
+    invoiceItems.forEach((row: any) => {
+        const invoiceId = String(row?.invoice_id || '').trim();
+        if (!invoiceId) return;
+        const list = itemsByInvoiceId.get(invoiceId) || [];
+        list.push(row.get ? row.get({ plain: true }) : row);
+        itemsByInvoiceId.set(invoiceId, list);
+
+        const orderId = String(row?.OrderItem?.order_id || '').trim();
+        if (orderId) orderIds.push(orderId);
+    });
+
+    const uniqueOrderIds = Array.from(new Set(orderIds));
+    const returs = uniqueOrderIds.length > 0
+        ? await Retur.findAll({
+            where: {
+                order_id: { [Op.in]: uniqueOrderIds },
+                retur_type: 'delivery_refusal',
+                status: { [Op.ne]: 'rejected' }
+            },
+            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status'],
+            transaction: options?.transaction
+        })
+        : [];
+
+    const effectiveReturnByOrderProduct = new Map<string, number>();
+    returs.forEach((retur: any) => {
+        const orderId = String(retur?.order_id || '').trim();
+        const productId = String(retur?.product_id || '').trim();
+        if (!orderId || !productId) return;
+        const key = `${orderId}:${productId}`;
+        const eff = normalizeEffectiveReturQty(retur);
+        effectiveReturnByOrderProduct.set(key, Number(effectiveReturnByOrderProduct.get(key) || 0) + eff);
+    });
+
+    for (const invoiceId of normalizedIds) {
+        const plainInvoice = invoiceById.get(invoiceId);
+        const items = itemsByInvoiceId.get(invoiceId) || [];
+
+        const perOrderItemReturnedQty: PerOrderItemReturnedQty = {};
+        const itemsByOrderProduct = new Map<string, any[]>();
+        items.forEach((row: any) => {
+            const orderId = String(row?.OrderItem?.order_id || '').trim();
+            const productId = String(row?.OrderItem?.product_id || '').trim();
+            const orderItemId = String(row?.order_item_id || row?.OrderItem?.id || '').trim();
+            if (!orderId || !productId || !orderItemId) return;
+            const key = `${orderId}:${productId}`;
+            const bucket = itemsByOrderProduct.get(key) || [];
+            bucket.push(row);
+            itemsByOrderProduct.set(key, bucket);
+        });
+
+        itemsByOrderProduct.forEach((bucket, key) => {
+            let remaining = Math.max(0, Math.trunc(Number(effectiveReturnByOrderProduct.get(key) || 0)));
+            if (remaining <= 0) return;
+            const sorted = [...bucket].sort((a: any, b: any) => {
+                const aId = String(a?.order_item_id || a?.OrderItem?.id || '');
+                const bId = String(b?.order_item_id || b?.OrderItem?.id || '');
+                const aNum = Number(aId);
+                const bNum = Number(bId);
+                if (Number.isFinite(aNum) && Number.isFinite(bNum)) return aNum - bNum;
+                return aId.localeCompare(bId);
+            });
+            for (const row of sorted) {
+                if (remaining <= 0) break;
+                const orderItemId = String(row?.order_item_id || row?.OrderItem?.id || '').trim();
+                if (!orderItemId) continue;
+                const lineQty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+                if (lineQty <= 0) continue;
+                const take = Math.max(0, Math.min(remaining, lineQty));
+                remaining -= take;
+                perOrderItemReturnedQty[orderItemId] = (perOrderItemReturnedQty[orderItemId] || 0) + take;
+            }
+        });
+
+        let oldItemsSubtotal = 0;
+        let newItemsSubtotal = 0;
+        items.forEach((row: any) => {
+            const orderItemId = String(row?.order_item_id || row?.OrderItem?.id || '').trim();
+            const qty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const unitPrice = Math.max(0, Number(row?.unit_price || 0));
+            const returnedQty = Math.max(0, Math.min(qty, Math.trunc(Number(perOrderItemReturnedQty[orderItemId] || 0))));
+            oldItemsSubtotal += round2(unitPrice * qty);
+            newItemsSubtotal += round2(unitPrice * Math.max(0, qty - returnedQty));
+        });
+        oldItemsSubtotal = round2(oldItemsSubtotal);
+        newItemsSubtotal = round2(newItemsSubtotal);
+
+        const grossTotal = round2(Number(plainInvoice?.total || 0));
+        const shippingFeeTotal = round2(Number(plainInvoice?.shipping_fee_total || 0));
+        const oldDiscount = round2(Number(plainInvoice?.discount_amount || 0));
+        const ratio = oldItemsSubtotal > 0 ? (newItemsSubtotal / oldItemsSubtotal) : 0;
+        const newDiscount = round2(Math.min(newItemsSubtotal, Math.max(0, oldDiscount * ratio)));
+
+        const subtotalBase = round2(Math.max(0, newItemsSubtotal - newDiscount + shippingFeeTotal));
+        const taxMode = plainInvoice?.tax_mode_snapshot === 'pkp' ? 'pkp' : 'non_pkp';
+        const taxPercent = Number(plainInvoice?.tax_percent || 0);
+        let taxAmount = 0;
+        let pphFinalAmount: number | null = null;
+        let netTotal = subtotalBase;
+        if (taxMode === 'pkp') {
+            taxAmount = round2(subtotalBase * (taxPercent / 100));
+            netTotal = round2(subtotalBase + taxAmount);
+        } else {
+            pphFinalAmount = round2(subtotalBase * (taxPercent / 100));
+            netTotal = subtotalBase;
+        }
+
+        result.set(invoiceId, {
+            invoice_id: invoiceId,
+            gross_total: grossTotal,
+            net_total: netTotal,
+            return_total: round2(Math.max(0, grossTotal - netTotal)),
+            old_items_subtotal: oldItemsSubtotal,
+            new_items_subtotal: newItemsSubtotal,
+            old_discount_amount: oldDiscount,
+            new_discount_amount: newDiscount,
+            shipping_fee_total: shippingFeeTotal,
+            tax_mode_snapshot: taxMode,
+            tax_percent: taxPercent,
+            tax_amount: taxAmount,
+            pph_final_amount: pphFinalAmount,
+            per_order_item_returned_qty: perOrderItemReturnedQty
+        });
+    }
+
+    return result;
+};

@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, ReturHandover, ReturHandoverItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
@@ -165,5 +165,101 @@ export const updateAssignedReturStatus = asyncWrapper(async (req: Request, res: 
             throw error;
         }
         throw new CustomError('Error updating retur task status', 500);
+    }
+});
+
+export const createReturHandover = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const driverId = String(req.user!.id || '').trim();
+        const invoiceId = String(req.body?.invoice_id || '').trim();
+        const note = typeof req.body?.note === 'string' ? req.body.note.trim() : null;
+
+        if (!invoiceId) {
+            await t.rollback();
+            throw new CustomError('invoice_id wajib diisi', 400);
+        }
+
+        const context = await findDriverInvoiceContextByOrderOrInvoiceId(invoiceId, driverId, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const invoice = context.invoice;
+        const orders = context.orders;
+        if (!invoice || orders.length === 0) {
+            await t.rollback();
+            throw new CustomError('Invoice tidak ditemukan atau bukan tugas Anda.', 404);
+        }
+
+        const existing = await ReturHandover.findOne({
+            where: { invoice_id: String(invoice.id) },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (existing) {
+            await t.rollback();
+            throw new CustomError('Serah-terima retur untuk invoice ini sudah dibuat.', 409);
+        }
+
+        const orderIds = orders.map((o: any) => String(o.id)).filter(Boolean);
+        const returs = await Retur.findAll({
+            where: {
+                order_id: { [Op.in]: orderIds },
+                retur_type: 'delivery_refusal',
+                status: 'picked_up',
+                courier_id: driverId
+            },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (returs.length === 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada retur delivery yang siap diserahkan (status picked_up).', 409);
+        }
+
+        const handover = await ReturHandover.create({
+            invoice_id: String(invoice.id),
+            driver_id: driverId,
+            status: 'submitted',
+            note
+        }, { transaction: t });
+
+        await ReturHandoverItem.bulkCreate(
+            returs.map((r: any) => ({
+                handover_id: handover.id,
+                retur_id: String(r.id)
+            })),
+            { transaction: t }
+        );
+
+        for (const retur of returs as any[]) {
+            const previousStatus = String(retur.status || '');
+            await retur.update({ status: 'handed_to_warehouse' }, { transaction: t });
+            await emitReturStatusChanged({
+                retur_id: String(retur.id),
+                order_id: String(retur.order_id),
+                from_status: previousStatus || null,
+                to_status: 'handed_to_warehouse',
+                courier_id: driverId,
+                triggered_by_role: String(req.user?.role || 'driver'),
+                target_roles: ['driver', 'kasir', 'admin_gudang', 'admin_finance', 'customer', 'super_admin'],
+                target_user_ids: [driverId],
+            }, {
+                transaction: t,
+                requestContext: 'driver_submit_retur_handover'
+            });
+        }
+
+        await t.commit();
+        return res.status(201).json({
+            message: 'Serah-terima retur berhasil dicatat dan menunggu penerimaan gudang.',
+            handover
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Gagal membuat serah-terima retur', 500);
     }
 });

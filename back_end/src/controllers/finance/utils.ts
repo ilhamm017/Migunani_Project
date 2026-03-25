@@ -217,6 +217,9 @@ export const mapAccountsReceivableRows = (
         orderIdsByInvoiceId: Map<string, Set<string>>;
         primaryOrderByInvoiceId: Map<string, any>;
         ordersById: Map<string, any>;
+    },
+    options?: {
+        collectible_total_by_invoice_id?: Map<string, number>;
     }
 ) => {
     const normalizeMethod = (value: unknown) => String(value || '').trim().toLowerCase();
@@ -263,7 +266,12 @@ export const mapAccountsReceivableRows = (
         const orderCreatedAtMs = orderCreatedAtRaw ? new Date(orderCreatedAtRaw).getTime() : nowMs;
         const agingDays = Math.max(0, Math.floor((nowMs - orderCreatedAtMs) / (24 * 60 * 60 * 1000)));
 
-        const totalAmount = Number(plainInvoice.total || order.total_amount || 0);
+        const collectible = options?.collectible_total_by_invoice_id?.get(invoiceId);
+        const totalAmount = Number(
+            (Number.isFinite(Number(collectible)) && Number(collectible) >= 0)
+                ? collectible
+                : (plainInvoice.total || order.total_amount || 0)
+        );
         const amountPaid = Number(plainInvoice.amount_paid || 0);
         const amountDue = Math.max(0, totalAmount - amountPaid);
 
