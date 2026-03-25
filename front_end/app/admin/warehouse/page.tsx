@@ -8,7 +8,7 @@ import {
     Layers, Truck, ShoppingCart, ShieldCheck,
     ScanBarcode, FileSpreadsheet, ClipboardCheck,
     Package, TrendingDown, ChevronRight,
-    ArrowUpRight, Clock, Car
+    ArrowUpRight, Clock, Car, AlertTriangle
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -73,6 +73,16 @@ export default function WarehouseLandingPage() {
             bg: 'bg-blue-50',
             border: 'border-blue-100',
             roles: ['super_admin', 'admin_gudang']
+        },
+        {
+            href: '/admin/warehouse/driver-issues',
+            label: 'Laporan Hold',
+            desc: 'Follow-up pesanan HOLD (barang kurang/mismatch)',
+            icon: AlertTriangle,
+            color: 'text-rose-600',
+            bg: 'bg-rose-50',
+            border: 'border-rose-100',
+            roles: ['super_admin', 'admin_gudang', 'checker_gudang']
         },
         {
             href: '/admin/warehouse/helper',
