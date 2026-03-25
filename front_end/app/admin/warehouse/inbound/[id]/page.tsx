@@ -69,6 +69,13 @@ export default function POReceivePage() {
     const [confirm, setConfirm] = useState<{ open: boolean; action: 'verify1' | 'verify2' | null }>({ open: false, action: null });
     const [costEditor, setCostEditor] = useState<{ open: boolean }>({ open: false });
     const [costRows, setCostRows] = useState<Array<{ product_id: string; sku: string; name: string; expected: number; unit_cost: string; cost_note: string }>>([]);
+    const [verifyChecklist, setVerifyChecklist] = useState({
+        supplierOk: false,
+        qtyOk: false,
+        costOk: false,
+        varianceReasonOk: false,
+        irreversibleOk: false,
+    });
 
     const loadPO = useCallback(async () => {
         if (!id) return;
@@ -195,6 +202,24 @@ export default function POReceivePage() {
     const canVerify2 = po.status === 'partially_received' && !po.verified2_at;
     const totalQty = po.Items?.reduce((acc, item) => acc + Number(item.qty || 0), 0) || 0;
     const canEditCost = po.status === 'pending' && !po.verified1_at;
+    const itemsCount = Array.isArray(po.Items) ? po.Items.length : 0;
+    const varianceSummary = (() => {
+        const items = Array.isArray(po.Items) ? po.Items : [];
+        let varianceCount = 0;
+        let missingReasonCount = 0;
+        for (const item of items) {
+            const expected = Number(item.expected_unit_cost ?? 0);
+            const actual = Number(item.unit_cost ?? 0);
+            const expected2 = Math.round(expected * 100) / 100;
+            const actual2 = Math.round(actual * 100) / 100;
+            if (expected2 !== actual2) {
+                varianceCount += 1;
+                const note = String(item.cost_note || '').trim();
+                if (!note) missingReasonCount += 1;
+            }
+        }
+        return { varianceCount, missingReasonCount };
+    })();
 
     return (
         <div className="warehouse-page w-full max-w-none lg:h-full lg:overflow-hidden overflow-y-auto">
@@ -242,7 +267,16 @@ export default function POReceivePage() {
                     )}
                     {canVerify1 && (
                         <button
-                            onClick={() => setConfirm({ open: true, action: 'verify1' })}
+                            onClick={() => {
+                                setVerifyChecklist({
+                                    supplierOk: false,
+                                    qtyOk: false,
+                                    costOk: false,
+                                    varianceReasonOk: false,
+                                    irreversibleOk: false,
+                                });
+                                setConfirm({ open: true, action: 'verify1' });
+                            }}
                             disabled={isSaving}
                             className="rounded-2xl bg-slate-900 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-amber-600 transition-all shadow-lg active:scale-95"
                         >
@@ -256,7 +290,16 @@ export default function POReceivePage() {
                     )}
                     {canVerify2 && (
                         <button
-                            onClick={() => setConfirm({ open: true, action: 'verify2' })}
+                            onClick={() => {
+                                setVerifyChecklist({
+                                    supplierOk: false,
+                                    qtyOk: false,
+                                    costOk: false,
+                                    varianceReasonOk: false,
+                                    irreversibleOk: false,
+                                });
+                                setConfirm({ open: true, action: 'verify2' });
+                            }}
                             disabled={isSaving}
                             className="rounded-2xl bg-emerald-600 text-white text-sm font-black px-6 py-3.5 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-emerald-700 transition-all shadow-lg active:scale-95"
                         >
@@ -458,10 +501,80 @@ export default function POReceivePage() {
                                 <span className="font-black">{po.Supplier?.name || '-'}</span>
                             </div>
                             <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-500">Item</span>
+                                <span className="font-black">{itemsCount}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
                                 <span className="font-bold text-slate-500">Total Qty</span>
                                 <span className="font-black">{totalQty} Pcs</span>
                             </div>
+                            {confirm.action === 'verify2' && (
+                                <div className="flex items-center justify-between">
+                                    <span className="font-bold text-slate-500">Selisih Modal</span>
+                                    <span className={`font-black ${varianceSummary.varianceCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                        {varianceSummary.varianceCount} item
+                                    </span>
+                                </div>
+                            )}
                         </div>
+
+                        {confirm.action === 'verify2' && (
+                            <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Checklist Verifikasi</p>
+                                <div className="mt-2 space-y-2 text-xs text-slate-700">
+                                    <label className="flex items-start gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={verifyChecklist.supplierOk}
+                                            onChange={(e) => setVerifyChecklist((p) => ({ ...p, supplierOk: e.target.checked }))}
+                                            className="mt-0.5"
+                                        />
+                                        <span><span className="font-black">Supplier</span> sudah benar.</span>
+                                    </label>
+                                    <label className="flex items-start gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={verifyChecklist.qtyOk}
+                                            onChange={(e) => setVerifyChecklist((p) => ({ ...p, qtyOk: e.target.checked }))}
+                                            className="mt-0.5"
+                                        />
+                                        <span><span className="font-black">Qty fisik</span> sudah dicek (total {totalQty} Pcs).</span>
+                                    </label>
+                                    <label className="flex items-start gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={verifyChecklist.costOk}
+                                            onChange={(e) => setVerifyChecklist((p) => ({ ...p, costOk: e.target.checked }))}
+                                            className="mt-0.5"
+                                        />
+                                        <span><span className="font-black">Modal/unit cost</span> sudah benar.</span>
+                                    </label>
+                                    <label className="flex items-start gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={verifyChecklist.varianceReasonOk}
+                                            onChange={(e) => setVerifyChecklist((p) => ({ ...p, varianceReasonOk: e.target.checked }))}
+                                            className="mt-0.5"
+                                        />
+                                        <span>
+                                            Jika ada selisih modal, <span className="font-black">alasan selisih</span> sudah terisi.
+                                            {varianceSummary.missingReasonCount > 0 && (
+                                                <span className="font-black text-rose-700"> ({varianceSummary.missingReasonCount} item masih kosong)</span>
+                                            )}
+                                        </span>
+                                    </label>
+                                    <label className="flex items-start gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={verifyChecklist.irreversibleOk}
+                                            onChange={(e) => setVerifyChecklist((p) => ({ ...p, irreversibleOk: e.target.checked }))}
+                                            className="mt-0.5"
+                                        />
+                                        <span>Setelah posting, <span className="font-black">stok bertambah</span> dan tidak bisa dibatalkan dari layar ini.</span>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex justify-end gap-2">
                             <button
@@ -479,7 +592,16 @@ export default function POReceivePage() {
                                     if (confirm.action === 'verify2') await onVerify2AndPost();
                                     setConfirm({ open: false, action: null });
                                 }}
-                                disabled={isSaving}
+                                disabled={
+                                    isSaving ||
+                                    (confirm.action === 'verify2' &&
+                                        (!verifyChecklist.supplierOk ||
+                                            !verifyChecklist.qtyOk ||
+                                            !verifyChecklist.costOk ||
+                                            !verifyChecklist.varianceReasonOk ||
+                                            !verifyChecklist.irreversibleOk ||
+                                            varianceSummary.missingReasonCount > 0))
+                                }
                                 className={`rounded-xl text-white px-4 py-2 text-xs font-bold disabled:opacity-50 ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-amber-600'}`}
                             >
                                 {isSaving ? 'Memproses...' : 'Konfirmasi'}
