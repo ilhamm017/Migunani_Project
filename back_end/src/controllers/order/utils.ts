@@ -26,6 +26,7 @@ export const GENERIC_CUSTOMER_NAMES = new Set([
     'customer',
     'super_admin',
     'admin_gudang',
+    'checker_gudang',
     'admin_finance',
     'driver'
 ]);
@@ -381,4 +382,3 @@ export const resolveEffectiveTierPricing = (
 
 
 // --- Admin Endpoints ---
-

@@ -14,7 +14,7 @@ export interface StaffRecord {
 
 export const roleOptions: Array<{ value: StaffRole; label: string }> = [
   { value: 'admin_gudang', label: 'Admin Gudang' },
-  { value: 'checker_gudang', label: 'Checker Gudang' },
+  { value: 'checker_gudang', label: 'Tracker (Checker) Gudang' },
   { value: 'admin_finance', label: 'Admin Finance' },
   { value: 'driver', label: 'Driver' },
   { value: 'kasir', label: 'Kasir / Sales Admin' },
@@ -22,7 +22,7 @@ export const roleOptions: Array<{ value: StaffRole; label: string }> = [
 
 export const roleLabelMap: Record<StaffRole, string> = {
   admin_gudang: 'Admin Gudang',
-  checker_gudang: 'Checker Gudang',
+  checker_gudang: 'Tracker (Checker) Gudang',
   admin_finance: 'Admin Finance',
   driver: 'Driver',
   kasir: 'Kasir / Sales Admin',
