@@ -82,6 +82,7 @@ function ManualOrderContent() {
 
     const [submitPopup, setSubmitPopup] = useState<SubmitPopupState>(null);
     const submitPopupTimerRef = useRef<number | null>(null);
+    const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
 
     const dismissSubmitPopup = useCallback(() => {
         setSubmitPopup(null);
@@ -380,16 +381,50 @@ function ManualOrderContent() {
 	        return normalizedBasePrice;
 	    };
 
-	    const getDealUnitPrice = (item: CartItem) => {
-	        const overrideRaw = item?.unit_price_override;
-	        const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
-	        if (Number.isFinite(override) && override > 0) return Math.max(0, override);
-	        return Math.max(0, getProductPrice(item.product));
-	    };
-	
-	    const addToCart = (product: ProductOption) => {
-	        setCart(prev => {
-	            const existing = prev.find(item => item.product_id === product.id);
+		    const getDealUnitPrice = (item: CartItem) => {
+		        const overrideRaw = item?.unit_price_override;
+		        const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
+		        if (Number.isFinite(override) && override > 0) return Math.max(0, override);
+		        return Math.max(0, getProductPrice(item.product));
+		    };
+
+            const validateBeforeSubmit = useCallback(() => {
+                if (!selectedCustomer) {
+                    showSubmitPopup('error', 'Gagal', 'Pilih customer terlebih dahulu');
+                    return false;
+                }
+                if (selectedCustomer.status !== 'active') {
+                    showSubmitPopup('error', 'Gagal', 'Customer sedang diblokir');
+                    return false;
+                }
+                if (cart.length === 0) {
+                    showSubmitPopup('error', 'Gagal', 'Keranjang kosong');
+                    return false;
+                }
+                if (shippingMethods.length > 0 && !shippingMethodCode) {
+                    showSubmitPopup('error', 'Gagal', 'Pilih jenis pengiriman terlebih dahulu');
+                    return false;
+                }
+
+                if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
+                    const invalid = cart.find((item) => {
+                        const deal = getDealUnitPrice(item);
+                        const costRaw = Number(item?.product?.base_price);
+                        if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
+                        return deal < costRaw;
+                    });
+                    if (invalid) {
+                        showSubmitPopup('error', 'Tidak Diizinkan', 'Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
+                        return false;
+                    }
+                }
+
+                return true;
+            }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
+		
+		    const addToCart = (product: ProductOption) => {
+		        setCart(prev => {
+		            const existing = prev.find(item => item.product_id === product.id);
 	            if (existing) {
 	                return prev.map(item => item.product_id === product.id ? { ...item, qty: item.qty + 1 } : item);
 	            }
@@ -462,32 +497,22 @@ function ManualOrderContent() {
         }
     };
 
-		    const handleSubmit = async () => {
-		        if (!selectedCustomer) return showSubmitPopup('error', 'Gagal', 'Pilih customer terlebih dahulu');
-		        if (selectedCustomer.status !== 'active') return showSubmitPopup('error', 'Gagal', 'Customer sedang diblokir');
-		        if (cart.length === 0) return showSubmitPopup('error', 'Gagal', 'Keranjang kosong');
-		        if (shippingMethods.length > 0 && !shippingMethodCode) return showSubmitPopup('error', 'Gagal', 'Pilih jenis pengiriman terlebih dahulu');
+			    const handleSubmit = () => {
+                    if (submitting) return;
+                    if (!validateBeforeSubmit()) return;
+                    setSubmitConfirmOpen(true);
+                };
 
-		        if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
-		            const invalid = cart.find((item) => {
-		                const deal = getDealUnitPrice(item);
-		                const costRaw = Number(item?.product?.base_price);
-	                if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
-	                return deal < costRaw;
-		            });
-		            if (invalid) {
-		                return showSubmitPopup('error', 'Tidak Diizinkan', 'Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
-		            }
-		        }
-		
-		        if (!confirm('Buat pesanan ini?')) return;
+                const submitOrder = async () => {
+                    if (submitting) return;
+                    if (!validateBeforeSubmit()) return;
+                    setSubmitConfirmOpen(false);
+                    showSubmitPopup('info', 'Memproses', 'Membuat pesanan...');
 
-                showSubmitPopup('info', 'Memproses', 'Membuat pesanan...');
-
-		        setSubmitting(true);
-		        try {
-	            const orderReason = orderOverrideReason.trim();
-	            const payload: Parameters<typeof api.orders.checkout>[0] = {
+			        setSubmitting(true);
+			        try {
+		            const orderReason = orderOverrideReason.trim();
+		            const payload: Parameters<typeof api.orders.checkout>[0] = {
 	                customer_id: selectedCustomer.id, // Only works if admin
 	                items: cart.map(item => {
 	                    const baseline = Math.max(0, getProductPrice(item.product));
@@ -533,20 +558,20 @@ function ManualOrderContent() {
 	                detailParts.length > 0 ? detailParts.join(' • ') : 'Pesanan berhasil dibuat!',
 	                2200
 	            );
-	            window.setTimeout(() => {
-	                router.push('/admin/orders');
-	            }, 1700);
-	        } catch (error: unknown) {
-	            console.error(error);
+		            window.setTimeout(() => {
+		                router.push('/admin/orders');
+		            }, 1700);
+		        } catch (error: unknown) {
+		            console.error(error);
 	            showSubmitPopup(
 	                'error',
 	                'Gagal',
 	                (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Gagal membuat pesanan'
 	            );
-	        } finally {
-	            setSubmitting(false);
-	        }
-	    };
+		        } finally {
+		            setSubmitting(false);
+		        }
+		        };
 
     if (!allowed) return null;
 
@@ -981,11 +1006,79 @@ function ManualOrderContent() {
 		                </div>
 		            </div>
 
+                    {submitConfirmOpen && (
+                        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+                            <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+                                <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600">Konfirmasi</p>
+                                    <h3 className="mt-2 text-lg font-black text-slate-900">Buat pesanan ini?</h3>
+                                    <p className="mt-1 text-xs text-slate-500">Periksa ringkasan sebelum lanjut.</p>
+                                </div>
+
+                                <div className="px-5 py-4 space-y-3 text-sm text-slate-700">
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs font-bold text-slate-500">Customer</span>
+                                            <span className="text-right font-black text-slate-900">{selectedCustomer?.name || '-'}</span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs font-bold text-slate-500">Item</span>
+                                            <span className="text-right font-black text-slate-900">
+                                                {cart.reduce((sum, row) => sum + Number(row.qty || 0), 0)}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs font-bold text-slate-500">Total</span>
+                                            <span className="text-right font-black text-slate-900">{formatCurrency(grandTotal)}</span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs font-bold text-slate-500">Pembayaran</span>
+                                            <span className="text-right font-bold text-slate-700">
+                                                {paymentMethod === 'follow_driver'
+                                                    ? 'Mengikuti Driver'
+                                                    : paymentMethod === 'cash_store'
+                                                        ? 'Cash (Bayar di Toko)'
+                                                        : paymentMethod === 'transfer_manual'
+                                                            ? 'Transfer Bank'
+                                                            : 'COD (Bayar ditempat)'}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs font-bold text-slate-500">Pengiriman</span>
+                                            <span className="text-right font-bold text-slate-700">
+                                                {shippingMethods.find((m) => String(m.code) === String(shippingMethodCode))?.name || shippingMethodCode || '-'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="border-t border-slate-200 px-5 py-4 flex items-center justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSubmitConfirmOpen(false)}
+                                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                                        disabled={submitting}
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={submitOrder}
+                                        className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                                        disabled={submitting}
+                                    >
+                                        {submitting ? 'Memproses...' : 'Ya, Buat Pesanan'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {submitPopup && (
                         <button
                             type="button"
                             onClick={dismissSubmitPopup}
-                            className={`fixed right-4 bottom-24 z-50 w-[min(92vw,360px)] rounded-xl border px-4 py-3 text-left shadow-lg ${submitPopup.tone === 'success'
+                            className={`fixed right-4 bottom-[calc(var(--admin-bottom-nav-height,5rem)+1rem)] z-[80] w-[min(92vw,360px)] rounded-xl border px-4 py-3 text-left shadow-lg ${submitPopup.tone === 'success'
                                 ? 'border-emerald-300 bg-emerald-50'
                                 : submitPopup.tone === 'error'
                                     ? 'border-rose-300 bg-rose-50'

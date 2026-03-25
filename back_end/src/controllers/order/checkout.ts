@@ -281,23 +281,37 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             finalCustomerNote = finalCustomerNote ? `${adminNote} ${finalCustomerNote}` : adminNote;
         }
 
-        const order = await Order.create({
-            customer_id: targetCustomerId,
-            customer_name: customerName,
-            source: (source === 'whatsapp') ? 'whatsapp' : 'web',
-            status: 'pending', // All orders start as pending — admin reviews and allocates
-            payment_method: resolvedPaymentMethod,
-            total_amount: totalAmount,
-            discount_amount: totalDiscountAmount,
-            pricing_override_note: orderLevelOverrideReason || null,
-            expiry_date: expiryDate,
-            stock_released: false,
-            shipping_method_code: selectedShippingMethod?.code || null,
-            shipping_method_name: selectedShippingMethod?.name || null,
-            shipping_fee: shippingFee,
-            shipping_address: typeof shipping_address === 'string' ? shipping_address.trim() : null,
-            customer_note: finalCustomerNote
-        }, { transaction: t });
+	        let order: any;
+	        try {
+	            order = await Order.create({
+	                customer_id: targetCustomerId,
+	                customer_name: customerName,
+	                source: (source === 'whatsapp') ? 'whatsapp' : 'web',
+	                status: 'pending', // All orders start as pending — admin reviews and allocates
+	                payment_method: resolvedPaymentMethod,
+	                total_amount: totalAmount,
+	                discount_amount: totalDiscountAmount,
+	                pricing_override_note: orderLevelOverrideReason || null,
+	                expiry_date: expiryDate,
+	                stock_released: false,
+	                shipping_method_code: selectedShippingMethod?.code || null,
+	                shipping_method_name: selectedShippingMethod?.name || null,
+	                shipping_fee: shippingFee,
+	                shipping_address: typeof shipping_address === 'string' ? shipping_address.trim() : null,
+	                customer_note: finalCustomerNote
+	            }, { transaction: t });
+	        } catch (error: any) {
+	            const message = String(error?.parent?.sqlMessage || error?.original?.sqlMessage || error?.message || '');
+	            const code = error?.parent?.code || error?.original?.code || error?.code;
+	            if (code === 'ER_BAD_FIELD_ERROR' && message.includes('pricing_override_note')) {
+	                await t.rollback();
+	                throw new CustomError(
+	                    'Database belum dimigrasi untuk fitur catatan nego. Jalankan SQL: back_end/sql/20260326_add_orders_pricing_override_note.sql',
+	                    500
+	                );
+	            }
+	            throw error;
+	        }
         await recordOrderEvent({
             transaction: t,
             order_id: String(order.id),

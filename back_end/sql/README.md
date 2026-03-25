@@ -75,6 +75,14 @@ Jalankan SQL ini untuk menambah kolom audit pada tabel `cod_settlements` (dipaka
 mysql -u root -p migunani_motor_db < back_end/sql/20260325_add_cod_settlements_audit_columns.sql
 ```
 
+## Add order pricing override note (nego)
+
+Jalankan SQL ini untuk menambah kolom catatan nego level order (`orders.pricing_override_note`) yang dipakai saat admin/kasir membuat order manual dengan harga deal:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_orders_pricing_override_note.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

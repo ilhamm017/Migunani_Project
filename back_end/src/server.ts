@@ -514,6 +514,39 @@ const ensureCodSettlementAuditColumnsReady = async () => {
     }
 };
 
+const ensureOrderPricingOverrideColumnsReady = async () => {
+    const tableName = 'orders';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const requiredColumns = ['pricing_override_note'] as const;
+    const missing: string[] = [];
+    for (const columnName of requiredColumns) {
+        const ok = await columnExists(tableName, columnName);
+        if (!ok) missing.push(columnName);
+    }
+
+    if (missing.length === 0) return;
+
+    console.warn(`[Startup] Missing columns in ${tableName}: ${missing.join(', ')}. Applying targeted ALTER TABLE...`);
+
+    const addColumn = async (columnName: string, sqlType: string) => {
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${sqlType}`
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_FIELDNAME') return;
+            throw error;
+        }
+    };
+
+    if (missing.includes('pricing_override_note')) {
+        await addColumn('pricing_override_note', 'TEXT NULL AFTER `discount_amount`');
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -711,13 +744,14 @@ const startServer = async () => {
             schemaLock = await acquireSchemaLock(sequelize);
             console.log(`[SchemaLock] Acquired '${schemaLock.lockName}'`);
 
-	            await runStartupStep('Database sync', syncDatabaseWithRetry);
-	            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
-	            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
-	            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
-	            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
-	            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
-	            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
+		            await runStartupStep('Database sync', syncDatabaseWithRetry);
+		            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
+		            await runStartupStep('Ensure orders pricing override columns', ensureOrderPricingOverrideColumnsReady);
+		            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
+		            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+		            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
+		            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
+		            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
 	            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
 	        } catch (error: any) {
             if (error instanceof SchemaLockError && error.code === 'SCHEMA_LOCK_TIMEOUT') {
