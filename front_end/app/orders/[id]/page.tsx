@@ -282,11 +282,18 @@ export default function OrderDetailPage() {
     acc[key] = String(item?.Product?.name || 'Produk');
     return acc;
   }, {});
-  const paymentMethod = String(order?.Invoice?.payment_method || '');
+  const paymentMethodRaw = String(order?.Invoice?.payment_method || order?.payment_method || '').trim().toLowerCase();
   const paymentStatus = String(order?.Invoice?.payment_status || '');
   const normalizedOrderStatus = String(order?.status || '');
+  const paymentMethodLabel = (() => {
+    if (!paymentMethodRaw || paymentMethodRaw === 'pending') return 'Mengikuti Driver';
+    if (paymentMethodRaw === 'cod') return 'COD (Bayar di Tempat)';
+    if (paymentMethodRaw === 'transfer_manual') return 'Transfer Manual';
+    if (paymentMethodRaw === 'cash_store') return 'Bayar di Toko';
+    return paymentMethodRaw.toUpperCase();
+  })();
   const needsTransferProof =
-    paymentMethod === 'transfer_manual' &&
+    paymentMethodRaw === 'transfer_manual' &&
     paymentStatus !== 'paid' &&
     !['canceled', 'expired'].includes(normalizedOrderStatus);
   const isWaitingFinanceVerification = paymentStatus === 'waiting_admin_verification';
@@ -316,7 +323,7 @@ export default function OrderDetailPage() {
 
         <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
           <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>
-          <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{order.Invoice?.payment_method || '-'}</span></p>
+          <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{paymentMethodLabel}</span></p>
           <p className="text-xs text-slate-600">Status Bayar: <span className="font-bold text-slate-900">{customerPaymentStatusLabel}</span></p>
         </div>
 

@@ -460,6 +460,14 @@ export default function CheckoutPage() {
             </span>
           </div>
 
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+            <p className="text-xs text-slate-600">
+              Metode pembayaran:{' '}
+              <span className="font-bold text-slate-900">Mengikuti Driver</span>
+              <span className="text-slate-500"> (ditentukan saat pengiriman)</span>
+            </p>
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Metode Pembayaran</p>
             <div className="mt-2 flex items-start gap-3">

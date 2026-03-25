@@ -343,8 +343,10 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
         const taxConfig = await TaxConfigService.getConfig();
         const computedTax = computeInvoiceTax(subtotalBase, taxConfig);
 
-        const invoicePaymentMethod = paymentMethod === 'cash_store' ? 'cash_store' : 'pending';
-        const paymentStatus = paymentMethod === 'cash_store' ? 'unpaid' : 'draft';
+        const invoicePaymentMethod = (paymentMethod && VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod))
+            ? paymentMethod
+            : 'pending';
+        const paymentStatus = invoicePaymentMethod === 'pending' ? 'draft' : 'unpaid';
         const actorId = String(req.user?.id || '').trim() || null;
         const actorRole = String(req.user?.role || '').trim() || null;
 
@@ -738,8 +740,10 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
         const taxConfig = await TaxConfigService.getConfig();
         const computedTax = computeInvoiceTax(subtotalBase, taxConfig);
 
-        const invoicePaymentMethod = paymentMethod === 'cash_store' ? 'cash_store' : 'pending';
-        const paymentStatus = paymentMethod === 'cash_store' ? 'unpaid' : 'draft';
+        const invoicePaymentMethod = (paymentMethod && VALID_COMBINED_INVOICE_PAYMENT_METHODS.has(paymentMethod))
+            ? paymentMethod
+            : 'pending';
+        const paymentStatus = invoicePaymentMethod === 'pending' ? 'draft' : 'unpaid';
         const actorId = String(req.user?.id || '').trim() || null;
         const actorRole = String(req.user?.role || '').trim() || null;
 

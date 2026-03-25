@@ -3017,9 +3017,15 @@ export default function AdminOrdersWorkspace({
                             : isWarehouseCompactView
                               ? 'Lihat Detail Invoice'
                               : 'Proses Gudang';
-                      const paymentMethodLabel = paymentMethodSet.size <= 1
-                        ? (Array.from(paymentMethodSet)[0] || '-')
-                        : `${paymentMethodSet.size} metode`;
+                      const paymentMethodLabel = (() => {
+                        if (paymentMethodSet.size !== 1) return `${paymentMethodSet.size} metode`;
+                        const raw = String(Array.from(paymentMethodSet)[0] || '').trim().toLowerCase();
+                        if (!raw || raw === 'pending') return 'Mengikuti Driver';
+                        if (raw === 'cod') return 'COD';
+                        if (raw === 'transfer_manual') return 'Transfer';
+                        if (raw === 'cash_store') return 'Cash Store';
+                        return raw.toUpperCase();
+                      })();
                       const paymentStatusLabel = paymentStatusSet.size <= 1
                         ? (Array.from(paymentStatusSet)[0] || '-')
                         : `${paymentStatusSet.size} status bayar`;

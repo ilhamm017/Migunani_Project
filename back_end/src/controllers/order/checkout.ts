@@ -53,10 +53,8 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
             }
             resolvedPaymentMethod = requestedPaymentMethod as CheckoutPaymentMethod;
         }
-        if (userRole === 'customer' && !resolvedPaymentMethod) {
-            await t.rollback();
-            throw new CustomError('Metode pembayaran wajib dipilih', 400);
-        }
+        // Customer checkout from catalog/cart does not require explicit payment method selection.
+        // When omitted, payment_method stays NULL and will be decided later (e.g. by driver/ops).
 
         let finalItems = normalizeCheckoutItems(items);
 
