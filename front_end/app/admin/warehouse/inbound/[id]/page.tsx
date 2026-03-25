@@ -11,7 +11,8 @@ import {
     Package,
     Clock,
     Save,
-    Download
+    Download,
+    X
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
@@ -488,23 +489,56 @@ export default function POReceivePage() {
             </div>
 
             {confirm.open && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-                    <div className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-xl p-4 space-y-4">
-                        <div>
-                            <p className="text-xs font-black uppercase tracking-widest text-slate-400">
-                                {confirm.action === 'verify2' ? 'Posting Gudang' : 'Verifikasi Draft'}
-                            </p>
-                            <h3 className="text-base font-black text-slate-900 mt-1">
-                                {confirm.action === 'verify2' ? 'Konfirmasi Verifikasi 2 + Posting' : 'Konfirmasi Verifikasi 1'}
-                            </h3>
-                            <p className="text-xs text-slate-500 mt-1">
-                                {confirm.action === 'verify2'
-                                    ? 'Stok akan diposting ke gudang untuk item yang belum diposting. Pastikan data sudah benar.'
-                                    : 'Draft akan ditandai Verified 1. Stok belum bertambah sampai Verifikasi 2.'}
-                            </p>
+                <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Konfirmasi Verifikasi Inbound"
+                    onClick={() => !isSaving && setConfirm({ open: false, action: null })}
+                >
+                    <div
+                        className={`w-full max-w-sm rounded-3xl border p-4 shadow-2xl space-y-4 ${confirm.action === 'verify2'
+                            ? 'border-amber-200 bg-amber-50'
+                            : 'border-sky-200 bg-sky-50'
+                            }`}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                                <div className={`mt-0.5 inline-flex h-10 w-10 items-center justify-center rounded-2xl ${confirm.action === 'verify2'
+                                    ? 'text-amber-700 bg-amber-100'
+                                    : 'text-sky-700 bg-sky-100'
+                                    }`}
+                                >
+                                    <AlertCircle size={18} />
+                                </div>
+                                <div>
+                                    <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+                                        {confirm.action === 'verify2' ? 'Posting Gudang' : 'Verifikasi Draft'}
+                                    </p>
+                                    <h3 className="mt-1 text-base font-black text-slate-900">
+                                        {confirm.action === 'verify2' ? 'Konfirmasi Verifikasi 2 + Posting' : 'Konfirmasi Verifikasi 1'}
+                                    </h3>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setConfirm({ open: false, action: null })}
+                                disabled={isSaving}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/60 text-slate-600 hover:bg-white disabled:opacity-50"
+                                aria-label="Tutup"
+                            >
+                                <X size={16} />
+                            </button>
                         </div>
 
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 space-y-1">
+                        <p className="text-xs text-slate-600 -mt-2">
+                            {confirm.action === 'verify2'
+                                ? 'Stok akan diposting ke gudang untuk item yang belum diposting. Pastikan data sudah benar.'
+                                : 'Draft akan ditandai Verified 1. Stok belum bertambah sampai Verifikasi 2.'}
+                        </p>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white/70 p-3 text-xs text-slate-700 space-y-1">
                             <div className="flex items-center justify-between">
                                 <span className="font-bold text-slate-500">Inbound</span>
                                 <span className="font-black font-mono">#{po.id.split('-')[0].toUpperCase()}</span>
@@ -536,8 +570,8 @@ export default function POReceivePage() {
                         </div>
 
                         {confirm.action === 'verify2' && (
-                            <div className="rounded-xl border border-slate-200 bg-white p-3">
-                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Checklist Verifikasi</p>
+                            <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Checklist Verifikasi</p>
                                 <div className="mt-2 space-y-2 text-xs text-slate-700">
                                     <label className="flex items-start gap-2">
                                         <input
@@ -593,12 +627,12 @@ export default function POReceivePage() {
                             </div>
                         )}
 
-                        <div className="flex justify-end gap-2">
+                        <div className="flex gap-2">
                             <button
                                 type="button"
                                 onClick={() => setConfirm({ open: false, action: null })}
                                 disabled={isSaving}
-                                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 disabled:opacity-50"
+                                className="flex-1 rounded-2xl bg-white px-4 py-3 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
                             >
                                 Batal
                             </button>
@@ -619,7 +653,7 @@ export default function POReceivePage() {
                                             !verifyChecklist.irreversibleOk ||
                                             varianceSummary.missingReasonCount > 0))
                                 }
-                                className={`rounded-xl text-white px-4 py-2 text-xs font-bold disabled:opacity-50 ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-amber-600'}`}
+                                className={`flex-1 rounded-2xl px-4 py-3 text-sm font-black text-white shadow-sm disabled:opacity-50 ${confirm.action === 'verify2' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-900 hover:bg-black'}`}
                             >
                                 {isSaving ? 'Memproses...' : 'Konfirmasi'}
                             </button>
