@@ -4055,7 +4055,6 @@ export default function AdminOrdersWorkspace({
 	                        canAllocate &&
 	                        section !== 'selesai' &&
 	                        detail &&
-	                        Number(shortageSummary.allocatedTotal || 0) > 0 &&
 	                        backorderEditorModel
 	                          ? renderBackorderEditor(backorderEditorModel, 'embedded')
 	                          : null;
