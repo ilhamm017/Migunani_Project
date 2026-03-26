@@ -26,6 +26,8 @@ services:
     build:
       context: ./back_end
       dockerfile: Dockerfile
+      # Force production image (Dockerfile last stage is `dev`).
+      target: runner
     restart: "no"
     depends_on:
       mysql:
@@ -72,6 +74,8 @@ services:
     build:
       context: ./back_end
       dockerfile: Dockerfile
+      # Force production image (Dockerfile last stage is `dev`).
+      target: runner
     restart: unless-stopped
     depends_on:
       mysql:
@@ -125,6 +129,8 @@ services:
     build:
       context: ./front_end
       dockerfile: Dockerfile
+      # Force production image (Dockerfile last stage is `dev`).
+      target: runner
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://back_end:5000/api/v1}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:5000}

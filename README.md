@@ -45,6 +45,10 @@ Akses:
 - Backend API: `http://localhost:5000`
 - MySQL: `localhost:3306`
 
+Catatan:
+- Mode **production** (build `target: runner`) berjalan lewat `docker-compose.yml`.
+- Mode **development** (hot reload) gunakan gabungan `docker-compose.yml` + `docker-compose.dev.yml`.
+
 ### Opsi C - Dev di Docker (hot reload tanpa rebuild terus-menerus)
 
 Cocok kalau kamu ingin tetap coding di host, tapi backend/frontend jalan di container (auto reload).
