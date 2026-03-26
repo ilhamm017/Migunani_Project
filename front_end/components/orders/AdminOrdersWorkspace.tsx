@@ -85,6 +85,29 @@ type BackorderTimelineEvent = {
 };
 
 type BackorderEditableItem = BackorderSnapshotItem;
+type BackorderEditorModel = {
+  orderId: string;
+  createdAt: string | null;
+  rawOrderStatus: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceRefLabel: string;
+  items: BackorderEditableItem[];
+  summary: {
+    orderedTotal: number;
+    suppliedTotal: number;
+    shortageTotal: number;
+    allocatableTotal: number;
+  };
+  topupDraftByProductId: Record<string, number>;
+  backorderDirty: boolean;
+  allocationBusy: boolean;
+  canCancelBackorderEarly: boolean;
+  isBackorderAllocationEditable: boolean;
+  backorderLockReason: string | null;
+  isBackorderAllocationActionEnabled: boolean;
+  previousSnapshots: BackorderSnapshot[];
+};
 type WarehouseInvoiceBucket = {
   groupKey: string;
   invoiceId: string;
@@ -1993,6 +2016,353 @@ export default function AdminOrdersWorkspace({
     setAllocationConfirm({ orderId, step: 1, action: 'cancel_order' });
   };
 
+  const buildBackorderEditorModel = (params: {
+    orderId: string;
+    order: AdminOrderListRow;
+    detail?: OrderDetailResponse | null;
+    invoiceDetail?: InvoiceDetailResponse | null;
+    invoiceId?: string;
+    invoiceNumber?: string;
+    rawOrderStatus: string;
+    groupedItems: Array<{ product_id: string; qty: number; Product?: ProductLite | null }>;
+    persistedAlloc: Record<string, number>;
+    allocationDraft: Record<string, number>;
+    topupDraftByProductId: Record<string, number>;
+    allocationBusy: boolean;
+    canAllocate: boolean;
+    backorderHistory: BackorderSnapshot[];
+  }): BackorderEditorModel | null => {
+    const orderId = String(params.orderId || '').trim();
+    if (!orderId) return null;
+
+    const groupedItems = Array.isArray(params.groupedItems) ? params.groupedItems : [];
+    const persistedAlloc = params.persistedAlloc || {};
+    const allocationDraft = params.allocationDraft || {};
+
+    const items = groupedItems
+      .map((item) => {
+        const productId = String(item?.product_id || '');
+        if (!productId) return null;
+        const orderedQty = Number(item?.qty || 0);
+        const allocatedQty = Number(
+          allocationDraft[productId] !== undefined
+            ? allocationDraft[productId]
+            : persistedAlloc[productId] || 0
+        );
+        const shortageQty = Math.max(0, orderedQty - allocatedQty);
+        if (shortageQty <= 0) return null;
+        const stockQty = Number(item?.Product?.stock_quantity);
+        const persistedQty = Number(persistedAlloc[productId] || 0);
+        const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+        const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
+        const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
+        return {
+          product_id: productId,
+          name: String(item?.Product?.name || 'Produk'),
+          sku: String(item?.Product?.sku || '-'),
+          orderedQty,
+          allocatedQty,
+          shortageQty,
+          allocatableQty,
+        } satisfies BackorderEditableItem;
+      })
+      .filter(Boolean) as BackorderEditableItem[];
+
+    if (items.length === 0) return null;
+
+    const summary = items.reduce(
+      (acc, item) => ({
+        orderedTotal: acc.orderedTotal + item.orderedQty,
+        suppliedTotal: acc.suppliedTotal + item.allocatedQty,
+        shortageTotal: acc.shortageTotal + item.shortageQty,
+        allocatableTotal: acc.allocatableTotal + item.allocatableQty,
+      }),
+      { orderedTotal: 0, suppliedTotal: 0, shortageTotal: 0, allocatableTotal: 0 }
+    );
+
+    const topupDraftByProductId = params.topupDraftByProductId || {};
+    const backorderDirty = items.some((item) => {
+      const requestedTopup = Number(topupDraftByProductId[item.product_id] ?? 0);
+      const topupQty = Math.max(0, Math.min(item.allocatableQty, requestedTopup));
+      return topupQty > 0;
+    });
+
+    const invoiceId = String(params.invoiceId || '').trim();
+    const invoiceNumber = String(params.invoiceNumber || '').trim();
+    const invoiceRefLabel = formatInvoiceReference(invoiceId, invoiceNumber);
+
+    const rawOrderStatus = String(params.rawOrderStatus || '');
+    const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
+
+    const invoiceShipmentStatus = String(
+      params.invoiceDetail?.shipment_status ||
+        (params.order as any)?.Invoice?.shipment_status ||
+        (params.detail as any)?.Invoice?.shipment_status ||
+        (params.order as any)?.shipment_status ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+
+    const backorderLockReason = getBackorderAllocationLockReason({
+      invoiceDetail: params.invoiceDetail || null,
+      invoiceShipmentStatus,
+    });
+
+    const isBackorderAllocationActionEnabled =
+      Boolean(params.canAllocate) && isBackorderAllocationEditable && !backorderLockReason;
+
+    const backorderHistory = Array.isArray(params.backorderHistory) ? params.backorderHistory : [];
+
+    return {
+      orderId,
+      createdAt: params.order?.createdAt ? String(params.order.createdAt) : null,
+      rawOrderStatus,
+      invoiceId,
+      invoiceNumber,
+      invoiceRefLabel,
+      items,
+      summary,
+      topupDraftByProductId,
+      backorderDirty,
+      allocationBusy: Boolean(params.allocationBusy),
+      canCancelBackorderEarly: Boolean(params.canAllocate),
+      isBackorderAllocationEditable,
+      backorderLockReason,
+      isBackorderAllocationActionEnabled,
+      previousSnapshots: backorderHistory.slice(1),
+    };
+  };
+
+  const renderBackorderEditor = (model: BackorderEditorModel, variant: 'panel' | 'embedded') => {
+    const wrapperClassName =
+      variant === 'panel'
+        ? `rounded-2xl border bg-amber-50/40 p-4 shadow-sm ${
+            model.orderId === initialFocusOrderId
+              ? 'border-amber-400 ring-2 ring-amber-200'
+              : 'border-amber-200'
+          }`
+        : 'mt-3 space-y-2';
+
+    return (
+      <div className={wrapperClassName}>
+        {variant === 'panel' && (
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-900">Order #{model.orderId}</p>
+              <p className="text-[11px] text-slate-500">{formatDateTime(model.createdAt)}</p>
+              <p className="mt-1 text-[11px] text-amber-700">
+                Status fulfillment {normalizeOrderStatus(model.rawOrderStatus) || '-'}
+                {model.invoiceId || model.invoiceNumber ? ` • Invoice ${model.invoiceRefLabel}` : ' • Belum invoice'}
+              </p>
+            </div>
+            <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
+              {model.items.length} item backorder
+            </span>
+          </div>
+        )}
+
+        <div className={variant === 'panel' ? 'mt-3 space-y-2' : 'space-y-2'}>
+          <div className="border border-amber-100 rounded-2xl p-3 bg-amber-50/60 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Backorder Stok</p>
+                <p className="text-[11px] text-amber-700">
+                  Total {model.summary.orderedTotal} • Tersuplai {model.summary.suppliedTotal}
+                  {model.summary.shortageTotal > 0 ? ` • Backorder ${model.summary.shortageTotal}` : ''}
+                  {model.summary.allocatableTotal > 0 ? ` • Bisa dialokasikan lagi ${model.summary.allocatableTotal}` : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAutoFillBackorder(model.orderId, model.items)}
+                  disabled={!model.isBackorderAllocationActionEnabled || model.allocationBusy}
+                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
+                >
+                  Auto Fill
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveBackorderAllocationWithConfirm(model.orderId)}
+                  disabled={!model.isBackorderAllocationActionEnabled || model.allocationBusy || !model.backorderDirty}
+                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
+                >
+                  {model.allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCancelBackorder(model.orderId)}
+                  disabled={!model.canCancelBackorderEarly || model.allocationBusy}
+                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+                >
+                  Cancel Backorder
+                </button>
+              </div>
+            </div>
+
+            {model.backorderLockReason && (
+              <p className="text-[10px] text-amber-700">{model.backorderLockReason}</p>
+            )}
+            {model.canCancelBackorderEarly && !model.isBackorderAllocationActionEnabled && (
+              <p className="text-[10px] text-rose-700">
+                Backorder sudah bisa dibatalkan lebih awal bila customer tidak ingin menunggu sisa qty.
+              </p>
+            )}
+            {!model.isBackorderAllocationEditable && (
+              <p className="text-[10px] text-amber-700">
+                Alokasi backorder dikunci pada status <span className="font-bold">{model.rawOrderStatus}</span>.
+              </p>
+            )}
+            {!canAllocate && (
+              <p className="text-[10px] text-slate-500">
+                Hanya kasir atau super admin yang bisa mengalokasikan ulang backorder.
+              </p>
+            )}
+            {!model.backorderDirty && (
+              <p className="text-[10px] text-amber-700">Belum ada perubahan top up backorder.</p>
+            )}
+
+            <div className="space-y-2">
+              {model.items.map((item) => {
+                const topupDraft = Number(model.topupDraftByProductId[item.product_id] ?? 0);
+                const topupQty = Math.max(0, Math.min(item.allocatableQty, topupDraft));
+                return (
+                  <div key={item.product_id} className="bg-white border border-amber-100 rounded-xl p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">{item.name}</p>
+                        <p className="text-[10px] text-slate-500">SKU: {item.sku}</p>
+                        <p className="text-[10px] text-slate-500">
+                          Pesan {item.orderedQty} • Tersuplai {item.allocatedQty}
+                        </p>
+                        <p className="text-[10px] font-bold text-rose-600">Backorder {item.shortageQty}</p>
+                        <p className="text-[10px] text-amber-700">
+                          {item.allocatableQty > 0
+                            ? `Bisa dialokasikan lagi ${item.allocatableQty}`
+                            : 'Belum ada stok tambahan untuk dialokasi'}
+                        </p>
+                      </div>
+                      <div className="text-right space-y-1 min-w-[150px]">
+                        <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleBackorderTopupChange(
+                                model.orderId,
+                                item.product_id,
+                                item.allocatableQty,
+                                String(topupQty - 1)
+                              )
+                            }
+                            disabled={
+                              !model.isBackorderAllocationActionEnabled ||
+                              model.allocationBusy ||
+                              item.allocatableQty <= 0 ||
+                              topupQty <= 0
+                            }
+                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                            aria-label="Kurangi top up alokasi"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            max={item.allocatableQty}
+                            value={topupQty}
+                            disabled={
+                              !model.isBackorderAllocationActionEnabled ||
+                              model.allocationBusy ||
+                              item.allocatableQty <= 0
+                            }
+                            onChange={(e) =>
+                              handleBackorderTopupChange(
+                                model.orderId,
+                                item.product_id,
+                                item.allocatableQty,
+                                e.target.value
+                              )
+                            }
+                            className="w-24 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleBackorderTopupChange(
+                                model.orderId,
+                                item.product_id,
+                                item.allocatableQty,
+                                String(topupQty + 1)
+                              )
+                            }
+                            disabled={
+                              !model.isBackorderAllocationActionEnabled ||
+                              model.allocationBusy ||
+                              item.allocatableQty <= 0 ||
+                              topupQty >= item.allocatableQty
+                            }
+                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
+                            aria-label="Tambah top up alokasi"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {model.previousSnapshots.map((snapshot) => (
+            <div key={snapshot.snapshotId} className="border border-amber-100 rounded-2xl p-3 bg-amber-50/30 space-y-2">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Backorder Stok (Riwayat)</p>
+                <p className="text-[10px] text-amber-700">{formatDateTime(snapshot.createdAt)}</p>
+                <p className="text-[11px] text-amber-700">
+                  Total {snapshot.summary.orderedTotal} • Tersuplai {snapshot.summary.suppliedTotal} • Backorder{' '}
+                  {snapshot.summary.shortageTotal}
+                  {Number(snapshot.summary.reducedValue || 0) > 0
+                    ? ` • Nilai berkurang ${formatCurrency(Number(snapshot.summary.reducedValue || 0))}`
+                    : ''}
+                </p>
+                {snapshot.reason && (
+                  <p className="text-[10px] text-amber-700">
+                    Alasan: <span className="font-bold">{snapshot.reason}</span>
+                  </p>
+                )}
+                {snapshot.projectedStatus && (
+                  <p className="text-[10px] text-amber-700">
+                    Status setelah pembatalan: <span className="font-bold">{snapshot.projectedStatus}</span>
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                {snapshot.items.map((item) => (
+                  <div key={`${snapshot.snapshotId}:${item.product_id}`} className="bg-white border border-amber-100 rounded-xl p-3">
+                    <p className="text-xs font-bold text-slate-900">{item.name}</p>
+                    <p className="text-[10px] text-slate-500">SKU: {item.sku}</p>
+                    <p className="text-[10px] text-slate-500">
+                      Pesan {item.orderedQty} • Tersuplai {item.allocatedQty} • Backorder {item.shortageQty}
+                    </p>
+                    {Number(item.canceledValue || 0) > 0 && (
+                      <p className="text-[10px] font-bold text-rose-600">
+                        Nilai dibatalkan {formatCurrency(Number(item.canceledValue || 0))}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const handleMoveToIndent = async (orderId: string) => {
     if (!orderId) return;
     if (allocationSaving[orderId]) return;
@@ -3067,7 +3437,7 @@ export default function AdminOrdersWorkspace({
                 )}
               </div>
 
-              {forcedCustomerId && orderSectionFilter === 'backorder' && (
+              {forcedCustomerId && orderSectionFilter !== 'backorder' && (
                 <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -3085,220 +3455,43 @@ export default function AdminOrdersWorkspace({
                         <p className="text-xs text-slate-500">Belum ada backorder aktif untuk customer ini.</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
-	                        {backorderActiveOrders.map((order) => {
-	                          const orderId = String(order?.id || '');
-	                      const detail = orderDetails[orderId];
-	                      const rawOrderStatus = String(order?.status || '');
-	                      const orderStatus = normalizeOrderStatus(rawOrderStatus);
-	                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order, detail);
-	                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
-	                      const canCancelBackorderEarly = canAllocate;
-                      const allocationBusy = Boolean(allocationSaving[orderId]);
-                          const groupedItems = groupedItemsByOrderId[orderId] || [];
-                          const persistedAlloc = persistedAllocByOrderId[orderId] || {};
-                          const allocationDraft = allocationDrafts[orderId] || {};
-                          const invoiceShipmentStatus = String(invoiceDetail?.shipment_status || order?.shipment_status || '').trim().toLowerCase();
-                          const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
-                          const backorderLockReason = getBackorderAllocationLockReason({
-                            invoiceDetail,
-                            invoiceShipmentStatus
-                          });
-                          const isBackorderAllocationActionEnabled =
-                            canAllocate && isBackorderAllocationEditable && !backorderLockReason;
-                          const backorderEditorItems = groupedItems
-                            .map((item) => {
-                              const productId = String(item?.product_id || '');
-                              if (!productId) return null;
-                              const orderedQty = Number(item?.qty || 0);
-                              const allocatedQty = Number(
-                                allocationDraft[productId] !== undefined
-                                  ? allocationDraft[productId]
-                                  : persistedAlloc[productId] || 0
-                              );
-                              const shortageQty = Math.max(0, orderedQty - allocatedQty);
-                              if (shortageQty <= 0) return null;
-                              const stockQty = Number(item?.Product?.stock_quantity);
-                              const persistedQty = Number(persistedAlloc[productId] || 0);
-                              const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
-                              const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
-                              const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
-                              return {
-                                product_id: productId,
-                                name: String(item?.Product?.name || 'Produk'),
-                                sku: String(item?.Product?.sku || '-'),
-                                orderedQty,
-                                allocatedQty,
-                                shortageQty,
-                                allocatableQty,
-                              };
-                            })
-                            .filter(Boolean) as BackorderEditableItem[];
-                          const backorderEditorSummary = backorderEditorItems.reduce(
-                            (acc, item) => ({
-                              orderedTotal: acc.orderedTotal + item.orderedQty,
-                              suppliedTotal: acc.suppliedTotal + item.allocatedQty,
-                              shortageTotal: acc.shortageTotal + item.shortageQty,
-                              allocatableTotal: acc.allocatableTotal + item.allocatableQty,
-                            }),
-                            { orderedTotal: 0, suppliedTotal: 0, shortageTotal: 0, allocatableTotal: 0 }
-                          );
-                          const backorderDirty = backorderEditorItems.some((item) => {
-                            const requestedTopup = Number(backorderTopupDrafts[orderId]?.[item.product_id] ?? 0);
-                            const topupQty = Math.max(0, Math.min(item.allocatableQty, requestedTopup));
-                            return topupQty > 0;
-                          });
-                          if (backorderEditorItems.length === 0) return null;
+	                      <div className="space-y-3">
+		                        {backorderActiveOrders.map((order) => {
+		                          const orderId = String(order?.id || '').trim();
+		                          if (!orderId) return null;
+		                          const detail = orderDetails[orderId];
+		                          const rawOrderStatus = String(order?.status || '');
+		                          const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order, detail);
+		                          const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
 
-                          return (
-                            <div
-                              key={`backorder:${orderId}`}
-                              className={`rounded-2xl border bg-amber-50/40 p-4 shadow-sm ${
-                                orderId === initialFocusOrderId
-                                  ? 'border-amber-400 ring-2 ring-amber-200'
-                                  : 'border-amber-200'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-sm font-black text-slate-900">Order #{orderId}</p>
-                                  <p className="text-[11px] text-slate-500">{formatDateTime(order?.createdAt)}</p>
-                                  <p className="mt-1 text-[11px] text-amber-700">
-                                    Status fulfillment {normalizeOrderStatus(order?.status) || '-'}
-                                    {invoiceId || invoiceNumber ? ` • Invoice ${formatInvoiceReference(invoiceId, invoiceNumber)}` : ' • Belum invoice'}
-                                  </p>
-                                </div>
-                                <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
-                                  {backorderEditorItems.length} item backorder
-                                </span>
-                              </div>
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAutoFillBackorder(orderId, backorderEditorItems)}
-                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy || backorderEditorItems.length === 0}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
-                                >
-                                  Auto Fill
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveBackorderAllocationWithConfirm(orderId)}
-                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
-                                >
-                                  {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleCancelBackorder(orderId)}
-                                  disabled={!canCancelBackorderEarly || allocationBusy}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
-                                >
-                                  Cancel Backorder
-                                </button>
-                              </div>
-                              <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50/60 p-3 space-y-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div>
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Edit Backorder</p>
-                                    <p className="text-[11px] text-amber-700">
-                                      Total {backorderEditorSummary.orderedTotal} • Tersuplai {backorderEditorSummary.suppliedTotal}
-                                      {backorderEditorSummary.shortageTotal > 0 ? ` • Backorder ${backorderEditorSummary.shortageTotal}` : ''}
-                                      {backorderEditorSummary.allocatableTotal > 0
-                                        ? ` • Bisa dialokasikan lagi ${backorderEditorSummary.allocatableTotal}`
-                                        : ' • Belum ada stok tambahan'}
-                                    </p>
-                                  </div>
-                                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-amber-700 border border-amber-200">
-                                    {backorderEditorItems.length} item editable
-                                  </span>
-                                </div>
-                                {backorderLockReason && (
-                                  <p className="text-[10px] text-amber-700">
-                                    {backorderLockReason}
-                                  </p>
-                                )}
-                                {!isBackorderAllocationEditable && (
-                                  <p className="text-[10px] text-amber-700">
-                                    Alokasi backorder dikunci pada status <span className="font-bold">{order.status}</span>.
-                                  </p>
-                                )}
-                                {!canAllocate && (
-                                  <p className="text-[10px] text-slate-500">
-                                    Hanya kasir atau super admin yang bisa mengalokasikan ulang backorder.
-                                  </p>
-                                )}
-                                {!backorderDirty && (
-                                  <p className="text-[10px] text-amber-700">
-                                    Belum ada perubahan top up backorder.
-                                  </p>
-                                )}
-                                <div className="space-y-2">
-                                  {backorderEditorItems.map((item) => {
-                                    const topupDraft = Number(backorderTopupDrafts[orderId]?.[item.product_id] ?? 0);
-                                    const topupQty = Math.max(0, Math.min(item.allocatableQty, topupDraft));
-                                    return (
-                                      <div key={`editor:${item.product_id}`} className="rounded-xl border border-amber-100 bg-white px-3 py-3">
-                                        <div className="flex flex-wrap items-start justify-between gap-3">
-                                          <div>
-                                            <p className="text-xs font-bold text-slate-900">{item.name}</p>
-                                            <p className="text-[10px] text-slate-500">SKU {item.sku}</p>
-                                            <p className="text-[10px] text-slate-500">
-                                              Pesan {item.orderedQty} • Tersuplai {item.allocatedQty}
-                                            </p>
-                                            <p className="text-[10px] font-bold text-rose-600">Backorder {item.shortageQty}</p>
-                                            <p className="text-[10px] text-amber-700">
-                                              {item.allocatableQty > 0
-                                                ? `Bisa dialokasikan lagi ${item.allocatableQty}`
-                                                : 'Belum ada stok tambahan untuk dialokasi'}
-                                            </p>
-                                          </div>
-                                          <div className="min-w-[150px] space-y-1 text-right">
-                                            <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
-                                            <div className="flex items-center justify-end gap-1">
-                                              <button
-                                                type="button"
-                                                onClick={() => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, String(topupQty - 1))}
-                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty <= 0}
-                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
-                                                aria-label="Kurangi top up alokasi"
-                                              >
-                                                <Minus size={14} />
-                                              </button>
-                                              <input
-                                                type="number"
-                                                min={0}
-                                                max={item.allocatableQty}
-                                                value={topupQty}
-                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
-                                                onChange={(e) => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, e.target.value)}
-                                                className="w-24 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
-                                              />
-                                              <button
-                                                type="button"
-                                                onClick={() => handleBackorderTopupChange(orderId, item.product_id, item.allocatableQty, String(topupQty + 1))}
-                                                disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty >= item.allocatableQty}
-                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
-                                                aria-label="Tambah top up alokasi"
-                                              >
-                                                <Plus size={14} />
-                                              </button>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-              )}
+		                          const model = buildBackorderEditorModel({
+		                            orderId,
+		                            order,
+		                            detail,
+		                            invoiceDetail,
+		                            invoiceId,
+		                            invoiceNumber,
+		                            rawOrderStatus,
+		                            groupedItems: groupedItemsByOrderId[orderId] || [],
+		                            persistedAlloc: persistedAllocByOrderId[orderId] || {},
+		                            allocationDraft: allocationDrafts[orderId] || {},
+		                            topupDraftByProductId: backorderTopupDrafts[orderId] || {},
+		                            allocationBusy: Boolean(allocationSaving[orderId]),
+		                            canAllocate,
+		                            backorderHistory: backorderHistoryByOrderId[orderId] || [],
+		                          });
+
+		                          if (!model) return null;
+		                          return (
+		                            <div key={`backorder:${orderId}`} className="contents">
+		                              {renderBackorderEditor(model, 'panel')}
+		                            </div>
+		                          );
+		                        })}
+	                      </div>
+	                    )}
+	                  </div>
+	              )}
 
               {detailsLoading && (
                 <div className="text-xs text-slate-400">Memuat detail order...</div>
@@ -3736,11 +3929,9 @@ export default function AdminOrdersWorkspace({
                       const shortageSummary = shortageSummaryByOrderId[String(order.id)] || { orderedTotal: 0, allocatedTotal: 0, shortageTotal: 0 };
                       const isAllocatedOnlyView = Boolean(forcedCustomerId && orderSectionFilter === 'allocated');
                       const invoiceableOrderAmount = Number(invoiceableAmountByOrderId[String(order.id)] || 0);
-                      const showInvoiceableAmount = rawOrderStatus === 'waiting_invoice' && invoiceableOrderAmount > 0;
-                      const isAllocationEditable = ALLOCATION_EDITABLE_STATUSES.has(rawOrderStatus);
-                      const isBackorderAllocationEditable = BACKORDER_REALLOCATABLE_STATUSES.has(rawOrderStatus);
-                      const canCancelBackorderEarly = canAllocate;
-                      const allocationBusy = Boolean(allocationSaving[String(order.id)]);
+	                      const showInvoiceableAmount = rawOrderStatus === 'waiting_invoice' && invoiceableOrderAmount > 0;
+	                      const isAllocationEditable = ALLOCATION_EDITABLE_STATUSES.has(rawOrderStatus);
+	                      const allocationBusy = Boolean(allocationSaving[String(order.id)]);
                       const invoiceGroupKey = invoiceGroupKeyForOrder(order);
                       const invoiceGroupOrderIds =
                         orderStatus === 'ready_to_ship' && invoiceGroupKey ? (readyToShipInvoiceGroups.get(invoiceGroupKey) || []) : [];
@@ -3760,16 +3951,10 @@ export default function AdminOrdersWorkspace({
                       const invoicePaymentStatus = String(
                         invoiceDetail?.payment_status || order?.Invoice?.payment_status || detail?.Invoice?.payment_status || ''
                       ).trim().toLowerCase();
-                      const invoiceShipmentStatus = String(
-                        invoiceDetail?.shipment_status || order?.Invoice?.shipment_status || detail?.Invoice?.shipment_status || ''
-                      ).trim().toLowerCase();
-                      const backorderLockReason = getBackorderAllocationLockReason({
-                        invoiceDetail,
-                        invoiceShipmentStatus
-                      });
-                      const isBackorderAllocationActionEnabled =
-                        canAllocate && isBackorderAllocationEditable && !backorderLockReason;
-                      const warehouseTargetId = normalizeInvoiceRef(invoiceId || order?.id);
+	                      const invoiceShipmentStatus = String(
+	                        invoiceDetail?.shipment_status || order?.Invoice?.shipment_status || detail?.Invoice?.shipment_status || ''
+	                      ).trim().toLowerCase();
+	                      const warehouseTargetId = normalizeInvoiceRef(invoiceId || order?.id);
                       const warehouseActionLabel = orderStatus === 'ready_to_ship'
                         ? invoiceGroupCount > 1
                           ? `Tunjuk Driver (${invoiceGroupCount} order)`
@@ -3849,229 +4034,31 @@ export default function AdminOrdersWorkspace({
                         },
                         { hasShortage: false, hasStockConstraint: false, allocatableNowTotal: 0 }
                       );
-                      const backorderItems = groupedItems
-                        .map((item) => {
-                          const productId = String(item.product_id || '');
-                          if (!productId) return null;
-                          const orderedQty = Number(item.qty || 0);
-                          const allocatedQty = Number(
-                            allocationDraft[productId] !== undefined
-                              ? allocationDraft[productId]
-                              : persistedAlloc[productId] || 0
-                          );
-                          const shortageQty = Math.max(0, orderedQty - allocatedQty);
-                          if (shortageQty <= 0) return null;
-                          const stockQty = Number(item?.Product?.stock_quantity);
-                          const persistedQty = Number(persistedAlloc[productId] || 0);
-                          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
-                          const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
-                          const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
-                          return {
-                            product_id: productId,
-                            name: item.Product?.name || 'Produk',
-                            sku: item.Product?.sku || '-',
-                            orderedQty,
-                            allocatedQty,
-                            shortageQty,
-                            allocatableQty,
-                          };
-                        })
-                        .filter(Boolean) as Array<{
-                          product_id: string;
-                          name: string;
-                          sku: string;
-                          orderedQty: number;
-                          allocatedQty: number;
-                          shortageQty: number;
-                          allocatableQty: number;
-                        }>;
-                      const backorderSummary = backorderItems.reduce(
-                        (acc, item) => ({
-                          orderedTotal: acc.orderedTotal + item.orderedQty,
-                          suppliedTotal: acc.suppliedTotal + item.allocatedQty,
-                          shortageTotal: acc.shortageTotal + item.shortageQty,
-                          allocatableTotal: acc.allocatableTotal + item.allocatableQty,
-                        }),
-                        { orderedTotal: 0, suppliedTotal: 0, shortageTotal: 0, allocatableTotal: 0 }
-                      );
-                      const backorderHistory = backorderHistoryByOrderId[String(order.id)] || [];
-                      const previousBackorderCards = backorderHistory.slice(1);
-                      const backorderDirty = backorderItems.some((item) => {
-                        const requestedTopup = Number(backorderTopupDrafts[String(order.id)]?.[item.product_id] ?? 0);
-                        const topupQty = Math.max(0, Math.min(item.allocatableQty, requestedTopup));
-                        return topupQty > 0;
-                      });
-                      const backorderCard = orderSectionFilter === 'backorder'
-                        && canAllocate
-                        && section !== 'selesai'
-                        && detail
-                        && Number(shortageSummary.allocatedTotal || 0) > 0
-                        && backorderItems.length > 0 ? (
-                        <div className="mt-3 space-y-2">
-                          <div className="border border-amber-100 rounded-2xl p-3 bg-amber-50/60 space-y-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Backorder Stok</p>
-                                <p className="text-[11px] text-amber-700">
-                                  Total {backorderSummary.orderedTotal} • Tersuplai {backorderSummary.suppliedTotal}
-                                  {backorderSummary.shortageTotal > 0 ? ` • Backorder ${backorderSummary.shortageTotal}` : ''}
-                                  {backorderSummary.allocatableTotal > 0
-                                    ? ` • Bisa dialokasikan lagi ${backorderSummary.allocatableTotal}`
-                                    : ''}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAutoFillBackorder(String(order.id), backorderItems)}
-                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-bold border border-amber-200 text-amber-700 disabled:opacity-50"
-                                >
-                                  Auto Fill
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveBackorderAllocationWithConfirm(String(order.id))}
-                                  disabled={!isBackorderAllocationActionEnabled || allocationBusy || !backorderDirty}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-600 text-white disabled:opacity-50"
-                                >
-                                  {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleCancelBackorder(String(order.id))}
-                                  disabled={!canCancelBackorderEarly || allocationBusy}
-                                  className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
-                                >
-                                  Cancel Backorder
-                                </button>
-                              </div>
-                            </div>
-                            {backorderLockReason && (
-                              <p className="text-[10px] text-amber-700">
-                                {backorderLockReason}
-                              </p>
-                            )}
-                            {canCancelBackorderEarly && !isBackorderAllocationActionEnabled && (
-                              <p className="text-[10px] text-rose-700">
-                                Backorder sudah bisa dibatalkan lebih awal bila customer tidak ingin menunggu sisa qty.
-                              </p>
-                            )}
-                            {!isBackorderAllocationEditable && (
-                              <p className="text-[10px] text-amber-700">
-                                Alokasi backorder dikunci pada status <span className="font-bold">{order.status}</span>.
-                              </p>
-                            )}
-                            {!canAllocate && (
-                              <p className="text-[10px] text-slate-500">
-                                Hanya kasir atau super admin yang bisa mengalokasikan ulang backorder.
-                              </p>
-                            )}
-                            {!backorderDirty && (
-                              <p className="text-[10px] text-amber-700">
-                                Belum ada perubahan top up backorder.
-                              </p>
-                            )}
-                            <div className="space-y-2">
-                              {backorderItems.map((item) => {
-                                const topupDraft = Number(backorderTopupDrafts[String(order.id)]?.[item.product_id] ?? 0);
-                                const topupQty = Math.max(0, Math.min(item.allocatableQty, topupDraft));
-                                return (
-                                  <div key={item.product_id} className="bg-white border border-amber-100 rounded-xl p-3">
-                                    <div className="flex flex-wrap items-start justify-between gap-3">
-                                      <div>
-                                        <p className="text-xs font-bold text-slate-900">{item.name}</p>
-                                        <p className="text-[10px] text-slate-500">SKU: {item.sku}</p>
-                                        <p className="text-[10px] text-slate-500">
-                                          Pesan {item.orderedQty} • Tersuplai {item.allocatedQty}
-                                        </p>
-                                        <p className="text-[10px] font-bold text-rose-600">Backorder {item.shortageQty}</p>
-                                        <p className="text-[10px] text-amber-700">
-                                          {item.allocatableQty > 0
-                                            ? `Bisa dialokasikan lagi ${item.allocatableQty}`
-                                            : 'Belum ada stok tambahan untuk dialokasi'}
-                                        </p>
-                                      </div>
-                                      <div className="text-right space-y-1 min-w-[150px]">
-                                        <p className="text-[10px] text-amber-600">Top Up Alokasi</p>
-                                        <div className="flex items-center justify-end gap-1">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, String(topupQty - 1))}
-                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty <= 0}
-                                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
-                                            aria-label="Kurangi top up alokasi"
-                                          >
-                                            <Minus size={14} />
-                                          </button>
-                                          <input
-                                            type="number"
-                                            min={0}
-                                            max={item.allocatableQty}
-                                            value={topupQty}
-                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0}
-                                            onChange={(e) => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, e.target.value)}
-                                            className="w-24 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-right disabled:opacity-60"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => handleBackorderTopupChange(String(order.id), item.product_id, item.allocatableQty, String(topupQty + 1))}
-                                            disabled={!isBackorderAllocationActionEnabled || allocationBusy || item.allocatableQty <= 0 || topupQty >= item.allocatableQty}
-                                            className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 disabled:opacity-50"
-                                            aria-label="Tambah top up alokasi"
-                                          >
-                                            <Plus size={14} />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          {previousBackorderCards.map((snapshot) => (
-                            <div key={snapshot.snapshotId} className="border border-amber-100 rounded-2xl p-3 bg-amber-50/30 space-y-2">
-                              <div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                                  Backorder Stok (Riwayat)
-                                </p>
-                                <p className="text-[10px] text-amber-700">{formatDateTime(snapshot.createdAt)}</p>
-                                <p className="text-[11px] text-amber-700">
-                                  Total {snapshot.summary.orderedTotal} • Tersuplai {snapshot.summary.suppliedTotal} • Backorder {snapshot.summary.shortageTotal}
-                                  {Number(snapshot.summary.reducedValue || 0) > 0 ? ` • Nilai berkurang ${formatCurrency(Number(snapshot.summary.reducedValue || 0))}` : ''}
-                                </p>
-                                {snapshot.reason && (
-                                  <p className="text-[10px] text-amber-700">
-                                    Alasan: <span className="font-bold">{snapshot.reason}</span>
-                                  </p>
-                                )}
-                                {snapshot.projectedStatus && (
-                                  <p className="text-[10px] text-amber-700">
-                                    Status setelah pembatalan: <span className="font-bold">{snapshot.projectedStatus}</span>
-                                  </p>
-                                )}
-                              </div>
-                              <div className="space-y-2">
-                                {snapshot.items.map((item) => (
-                                  <div key={`${snapshot.snapshotId}:${item.product_id}`} className="bg-white border border-amber-100 rounded-xl p-3">
-                                    <p className="text-xs font-bold text-slate-900">{item.name}</p>
-                                    <p className="text-[10px] text-slate-500">SKU: {item.sku}</p>
-                                    <p className="text-[10px] text-slate-500">
-                                      Pesan {item.orderedQty} • Tersuplai {item.allocatedQty} • Backorder {item.shortageQty}
-                                    </p>
-                                    {Number(item.canceledValue || 0) > 0 && (
-                                      <p className="text-[10px] font-bold text-rose-600">
-                                        Nilai dibatalkan {formatCurrency(Number(item.canceledValue || 0))}
-                                      </p>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null;
+	                      const backorderEditorModel = buildBackorderEditorModel({
+	                        orderId: String(order.id || '').trim(),
+	                        order,
+	                        detail,
+	                        invoiceDetail,
+	                        invoiceId,
+	                        invoiceNumber,
+	                        rawOrderStatus,
+	                        groupedItems,
+	                        persistedAlloc,
+	                        allocationDraft,
+	                        topupDraftByProductId: backorderTopupDrafts[String(order.id)] || {},
+	                        allocationBusy,
+	                        canAllocate,
+	                        backorderHistory: backorderHistoryByOrderId[String(order.id)] || [],
+	                      });
+	                      const backorderCard =
+	                        orderSectionFilter === 'backorder' &&
+	                        canAllocate &&
+	                        section !== 'selesai' &&
+	                        detail &&
+	                        Number(shortageSummary.allocatedTotal || 0) > 0 &&
+	                        backorderEditorModel
+	                          ? renderBackorderEditor(backorderEditorModel, 'embedded')
+	                          : null;
                       return (
                         <div key={order.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                           <div className="flex items-start justify-between gap-2">
@@ -4159,11 +4146,11 @@ export default function AdminOrdersWorkspace({
                                 Indent {indentQty}
                               </span>
                             )}
-                            {isBackorder && (
-                              <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">
-                                Backorder {backorderSummary.shortageTotal || totals.remainingQty}
-                              </span>
-                            )}
+	                            {isBackorder && (
+	                              <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">
+	                                Backorder {shortageSummary.shortageTotal || totals.remainingQty}
+	                              </span>
+	                            )}
                             {Boolean((order as any)?.active_issue) && (
                               <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-700">
                                 Ada issue driver
