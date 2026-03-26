@@ -8,6 +8,7 @@ interface PosSaleAttributes {
     receipt_no?: string; // BIGINT (may be returned as string)
     receipt_number?: string | null; // generated column
     cashier_user_id: string; // UUID
+    customer_id?: string | null; // UUID (required for underpay / hutang)
     customer_name?: string | null;
     note?: string | null;
     status: PosSaleStatus;
@@ -37,6 +38,7 @@ class PosSale extends Model<PosSaleAttributes, PosSaleCreationAttributes> implem
     declare receipt_no: string;
     declare receipt_number: string | null;
     declare cashier_user_id: string;
+    declare customer_id: string | null;
     declare customer_name: string | null;
     declare note: string | null;
     declare status: PosSaleStatus;
@@ -80,6 +82,10 @@ PosSale.init(
         cashier_user_id: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        customer_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
         customer_name: {
             type: DataTypes.STRING(255),

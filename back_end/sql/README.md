@@ -99,6 +99,14 @@ Jalankan SQL ini untuk menambah kolom diskon persen pada `pos_sales`:
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_discount_percent.sql
 ```
 
+## Add POS customer link (Kasir Offline)
+
+Jalankan SQL ini untuk menambah `customer_id` pada `pos_sales` (wajib dipilih jika transaksi POS kurang bayar / hutang):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_customer_id.sql
+```
+
 ## Add POS journaling status fields (Kasir Offline)
 
 Jalankan SQL ini untuk menambah kolom status journaling pada `pos_sales` (untuk audit jika posting jurnal gagal):

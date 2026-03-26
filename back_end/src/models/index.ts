@@ -343,13 +343,15 @@ Product.hasMany(PurchaseOrderItem, { foreignKey: 'product_id' });
 Backorder.belongsTo(OrderItem, { foreignKey: 'order_item_id' });
 OrderItem.hasOne(Backorder, { foreignKey: 'order_item_id' });
 
-// POS Sales (Kasir Offline)
-PosSale.hasMany(PosSaleItem, { foreignKey: 'pos_sale_id', as: 'Items' });
-PosSaleItem.belongsTo(PosSale, { foreignKey: 'pos_sale_id', as: 'Sale' });
-PosSale.belongsTo(User, { foreignKey: 'cashier_user_id', as: 'Cashier' });
-User.hasMany(PosSale, { foreignKey: 'cashier_user_id', as: 'PosSales' });
-PosSaleItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
-Product.hasMany(PosSaleItem, { foreignKey: 'product_id', as: 'PosSaleItems' });
+	// POS Sales (Kasir Offline)
+	PosSale.hasMany(PosSaleItem, { foreignKey: 'pos_sale_id', as: 'Items' });
+	PosSaleItem.belongsTo(PosSale, { foreignKey: 'pos_sale_id', as: 'Sale' });
+	PosSale.belongsTo(User, { foreignKey: 'cashier_user_id', as: 'Cashier' });
+	User.hasMany(PosSale, { foreignKey: 'cashier_user_id', as: 'PosSales' });
+	PosSale.belongsTo(User, { foreignKey: 'customer_id', as: 'Customer' });
+	User.hasMany(PosSale, { foreignKey: 'customer_id', as: 'PosCustomerSales' });
+	PosSaleItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+	Product.hasMany(PosSaleItem, { foreignKey: 'product_id', as: 'PosSaleItems' });
 
 export {
     sequelize,

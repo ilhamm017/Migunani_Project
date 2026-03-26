@@ -89,6 +89,11 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
                 status: 'paid',
                 change_amount: { [Op.lt]: 0 }
             },
+            include: [{
+                association: 'Customer' as any,
+                attributes: ['id', 'name', 'whatsapp_number', 'email'],
+                required: false,
+            }],
             order: [['paid_at', 'ASC'], ['createdAt', 'ASC']],
         });
 
@@ -99,7 +104,7 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
             const paidAt = sale.paid_at ? new Date(sale.paid_at) : new Date(sale.createdAt || Date.now());
             const agingDays = Math.max(0, Math.floor((Date.now() - paidAt.getTime()) / (24 * 60 * 60 * 1000)));
             const receipt = String(sale.receipt_number || '').trim() || `POS-${String(sale.id || '').slice(-8)}`;
-            const customerName = String(sale.customer_name || '').trim() || 'Walk-in';
+            const customerName = String(sale.Customer?.name || sale.customer_name || '').trim() || 'Walk-in';
 
             return {
                 id: `pos-${sale.id}`,
@@ -122,7 +127,12 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
                     createdAt: paidAt,
                     updatedAt: sale.updatedAt || paidAt,
                     expiry_date: null,
-                    customer: null,
+                    customer: sale.Customer ? {
+                        id: String(sale.Customer.id || ''),
+                        name: sale.Customer.name || null,
+                        email: sale.Customer.email || null,
+                        whatsapp_number: sale.Customer.whatsapp_number || null,
+                    } : null,
                     courier: null,
                     items: []
                 }
@@ -199,7 +209,13 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
             const posId = invoiceId.replace('pos-', '');
             if (!posId.trim()) throw new CustomError('pos id tidak valid', 400);
 
-            const sale = await PosSale.findByPk(posId);
+            const sale = await PosSale.findByPk(posId, {
+                include: [{
+                    association: 'Customer' as any,
+                    attributes: ['id', 'name', 'whatsapp_number', 'email'],
+                    required: false,
+                }]
+            });
             if (!sale) throw new CustomError('Data piutang POS tidak ditemukan', 404);
 
             const total = Number((sale as any).total || 0);
@@ -212,7 +228,7 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
             const paidAt = (sale as any).paid_at ? new Date((sale as any).paid_at) : new Date((sale as any).createdAt || Date.now());
             const agingDays = Math.max(0, Math.floor((Date.now() - paidAt.getTime()) / (24 * 60 * 60 * 1000)));
             const receipt = String((sale as any).receipt_number || '').trim() || `POS-${String(posId).slice(-8)}`;
-            const customerName = String((sale as any).customer_name || '').trim() || 'Walk-in';
+            const customerName = String((sale as any).Customer?.name || (sale as any).customer_name || '').trim() || 'Walk-in';
 
             const items = await PosSaleItem.findAll({
                 where: { pos_sale_id: posId },
@@ -240,7 +256,12 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
                     createdAt: paidAt,
                     updatedAt: (sale as any).updatedAt || paidAt,
                     expiry_date: null,
-                    customer: null,
+                    customer: (sale as any).Customer ? {
+                        id: String((sale as any).Customer.id || ''),
+                        name: (sale as any).Customer.name || null,
+                        email: (sale as any).Customer.email || null,
+                        whatsapp_number: (sale as any).Customer.whatsapp_number || null,
+                    } : null,
                     courier: null,
                     items: (items as any[]).map((it) => ({
                         id: String(it.id),

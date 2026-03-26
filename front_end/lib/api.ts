@@ -256,7 +256,7 @@ export const api = {
     admin: {
         pos: {
             createSale: (data: {
-                customer_name?: string;
+                customer_id?: string;
                 note?: string;
                 discount_percent?: number;
                 amount_received: number;
@@ -340,6 +340,12 @@ export const api = {
                 tier?: 'regular' | 'gold' | 'platinum';
                 address?: string;
             }) => apiClient.post('/admin/customers/create', data),
+            quickCreate: (data: {
+                name: string;
+                whatsapp_number: string;
+                tier?: 'regular' | 'gold' | 'platinum';
+                address?: string;
+            }) => apiClient.post('/admin/customers/quick-create', data),
             updateTier: (id: string, tier: 'regular' | 'gold' | 'platinum') =>
                 apiClient.patch(`/admin/customers/${id}/tier`, { tier }),
             getBalance: (id: string, params?: { limit?: number; offset?: number }) =>

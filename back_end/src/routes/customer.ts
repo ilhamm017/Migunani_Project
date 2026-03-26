@@ -8,6 +8,7 @@ router.get('/', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_
 router.get('/search', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.searchCustomers);
 router.post('/otp/send', authenticate, requireRole('super_admin', 'kasir'), CustomerController.sendCustomerOtp);
 router.post('/create', authenticate, requireRole('super_admin', 'kasir'), CustomerController.createCustomerByAdmin);
+router.post('/quick-create', authenticate, requireRole('super_admin', 'kasir'), CustomerController.createCustomerQuickByAdmin);
 router.get('/:id', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerById);
 router.get('/:id/orders', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerOrders);
 router.get('/:id/balance', authenticate, requireRole('super_admin', 'admin_finance', 'kasir'), CustomerController.getCustomerBalance);

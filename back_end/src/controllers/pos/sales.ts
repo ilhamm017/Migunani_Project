@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Account, PosSale, PosSaleItem, Product, StockMutation, sequelize } from '../../models';
+import { Account, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -94,9 +94,12 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
             throw new CustomError('Tidak memiliki akses POS.', 403);
         }
 
-        const customerName = typeof req.body?.customer_name === 'string' && req.body.customer_name.trim()
-            ? req.body.customer_name.trim()
+        const customerIdRaw = typeof req.body?.customer_id === 'string' ? req.body.customer_id.trim() : '';
+        const customerId = customerIdRaw || null;
+        const customer = customerId
+            ? await User.findOne({ where: { id: customerId, role: 'customer' }, transaction: t, lock: t.LOCK.SHARE })
             : null;
+        const customerName = customer ? String((customer as any).name || '').trim() || null : null;
         const note = typeof req.body?.note === 'string' && req.body.note.trim()
             ? req.body.note.trim()
             : null;
@@ -207,10 +210,16 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const total = round2(computedTax.total);
 
         const changeAmount = round2(amountReceived - total);
+        const isUnderpay = changeAmount < 0;
+        if (isUnderpay && !customer) {
+            await t.rollback();
+            throw new CustomError('Transaksi hutang wajib memilih customer yang terdaftar.', 400);
+        }
 
         const paidAt = new Date();
         const sale = await PosSale.create({
             cashier_user_id: userId,
+            customer_id: customer ? String((customer as any).id) : null,
             customer_name: customerName,
             note,
             status: 'paid',

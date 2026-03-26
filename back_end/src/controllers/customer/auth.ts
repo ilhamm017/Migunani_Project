@@ -189,6 +189,88 @@ export const createCustomerByAdmin = asyncWrapper(async (req: Request, res: Resp
     }
 });
 
+export const createCustomerQuickByAdmin = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const actorId = String(req.user?.id || '').trim();
+        if (!actorId) {
+            await t.rollback();
+            throw new CustomError('Unauthorized', 401);
+        }
+
+        const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+        const normalizedWhatsapp = normalizeWhatsappNumber(req.body?.whatsapp_number);
+        const tier = normalizeTier(req.body?.tier);
+        const address = typeof req.body?.address === 'string' ? req.body.address.trim() : '';
+
+        if (!name) {
+            await t.rollback();
+            throw new CustomError('Nama customer wajib diisi', 400);
+        }
+        if (!normalizedWhatsapp) {
+            await t.rollback();
+            throw new CustomError('Nomor WhatsApp tidak valid', 400);
+        }
+
+        const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
+        const existing = await User.findOne({
+            where: { whatsapp_number: { [Op.in]: whatsappCandidates } },
+            transaction: t
+        });
+        if (existing) {
+            await t.rollback();
+            throw new CustomError('Nomor WhatsApp sudah terdaftar di sistem', 409);
+        }
+
+        const user = await User.create({
+            name,
+            email: null,
+            password: null,
+            whatsapp_number: normalizedWhatsapp,
+            role: 'customer',
+            status: 'active',
+            debt: 0
+        }, { transaction: t });
+
+        const saved_addresses = address ? [{
+            label: 'Alamat Utama',
+            address,
+            isPrimary: true
+        }] : [];
+
+        await CustomerProfile.create({
+            user_id: user.id,
+            tier,
+            credit_limit: 0,
+            points: 0,
+            saved_addresses
+        }, { transaction: t });
+
+        await t.commit();
+
+        res.status(201).json({
+            message: 'Customer berhasil ditambahkan (quick)',
+            customer: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                whatsapp_number: user.whatsapp_number,
+                status: user.status,
+                role: user.role,
+                CustomerProfile: {
+                    tier,
+                    credit_limit: 0,
+                    points: 0,
+                }
+            }
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Gagal menambahkan customer', 500);
+    }
+});
+
 export const updateCustomerEmailByAdmin = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = normalizeId(req.params?.id);

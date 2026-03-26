@@ -21,6 +21,13 @@ type CartLine = {
   override_reason?: string;
 };
 
+type CustomerPick = {
+  id: string;
+  name: string;
+  whatsapp_number?: string | null;
+  email?: string | null;
+};
+
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -35,7 +42,6 @@ export default function AdminPosPage() {
   const [searchError, setSearchError] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
 
-  const [customerName, setCustomerName] = useState('');
   const [note, setNote] = useState('');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
 
@@ -43,6 +49,20 @@ export default function AdminPosPage() {
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  const customerInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerPick | null>(null);
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [customerSearchLoading, setCustomerSearchLoading] = useState(false);
+  const [customerSearchError, setCustomerSearchError] = useState('');
+  const [customerResults, setCustomerResults] = useState<CustomerPick[]>([]);
+
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [quickName, setQuickName] = useState('');
+  const [quickWhatsapp, setQuickWhatsapp] = useState('');
+  const [quickAddress, setQuickAddress] = useState('');
+  const [quickSubmitting, setQuickSubmitting] = useState(false);
+  const [quickError, setQuickError] = useState('');
 
   const subtotal = useMemo(() => round2(cart.reduce((sum, line) => {
     const unitPrice = Number.isFinite(line.unit_price_override) ? Number(line.unit_price_override) : line.price;
@@ -55,6 +75,10 @@ export default function AdminPosPage() {
   }, [discountPercent, subtotal]);
 
   const subtotalAfterDiscountEst = useMemo(() => round2(Math.max(0, subtotal - discountAmountEst)), [subtotal, discountAmountEst]);
+  const underpayEst = useMemo(
+    () => cart.length > 0 && Number(amountReceived || 0) < Number(subtotalAfterDiscountEst || 0),
+    [amountReceived, cart.length, subtotalAfterDiscountEst]
+  );
 
   const addToCart = useCallback((product: any) => {
     const productId = String(product?.id || '').trim();
@@ -122,6 +146,61 @@ export default function AdminPosPage() {
     return () => window.clearTimeout(handle);
   }, [allowed, searchText]);
 
+  useEffect(() => {
+    if (!allowed) return;
+    if (underpayEst) return;
+    setSelectedCustomer(null);
+    setCustomerQuery('');
+    setCustomerResults([]);
+    setCustomerSearchError('');
+  }, [allowed, underpayEst]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (!underpayEst) return;
+    const q = customerQuery.trim();
+    if (!q) {
+      setCustomerResults([]);
+      setCustomerSearchError('');
+      return;
+    }
+
+    const handle = window.setTimeout(async () => {
+      try {
+        setCustomerSearchLoading(true);
+        setCustomerSearchError('');
+        const res = await api.admin.customers.search(q, { status: 'active', limit: 10 });
+        const payload = res.data || {};
+        const rows = Array.isArray(payload.customers) ? payload.customers : [];
+        setCustomerResults(rows
+          .map((c: any) => ({
+            id: String(c?.id || ''),
+            name: String(c?.name || ''),
+            whatsapp_number: c?.whatsapp_number ?? null,
+            email: c?.email ?? null,
+          }))
+          .filter((c: CustomerPick) => Boolean(c.id && c.name)));
+      } catch (e: unknown) {
+        const message = typeof e === 'object' && e && 'response' in e
+          ? String((e as any).response?.data?.message || '')
+          : '';
+        setCustomerSearchError(message || 'Gagal mencari customer.');
+      } finally {
+        setCustomerSearchLoading(false);
+      }
+    }, 300);
+
+    return () => window.clearTimeout(handle);
+  }, [allowed, customerQuery, underpayEst]);
+
+  const handleSelectCustomer = useCallback((c: CustomerPick) => {
+    setSelectedCustomer(c);
+    setCustomerQuery('');
+    setCustomerResults([]);
+    setCustomerSearchError('');
+    window.setTimeout(() => customerInputRef.current?.focus(), 0);
+  }, []);
+
   const updateQty = (productId: string, delta: number) => {
     setCart((prev) => prev
       .map((row) => row.product_id === productId ? { ...row, qty: Math.max(1, row.qty + delta) } : row)
@@ -165,8 +244,14 @@ export default function AdminPosPage() {
         return;
       }
 
+      if (Number(amountReceived || 0) < Number(subtotalAfterDiscountEst || 0) && !selectedCustomer?.id) {
+        setSubmitError('Transaksi hutang: wajib pilih customer yang terdaftar.');
+        try { printWindow?.close(); } catch { }
+        return;
+      }
+
       const payload = {
-        customer_name: customerName.trim() || undefined,
+        customer_id: selectedCustomer?.id || undefined,
         note: note.trim() || undefined,
         discount_percent: Math.min(100, Math.max(0, Number(discountPercent || 0))) || undefined,
         amount_received: Number(amountReceived || 0),
@@ -187,7 +272,9 @@ export default function AdminPosPage() {
       }
       setCart([]);
       setAmountReceived(0);
-      setCustomerName('');
+      setSelectedCustomer(null);
+      setCustomerQuery('');
+      setCustomerResults([]);
       setNote('');
       setDiscountPercent(0);
 
@@ -381,22 +468,103 @@ export default function AdminPosPage() {
         </div>
 
         <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
-            <p className="text-xs font-black uppercase tracking-widest text-slate-500">Customer</p>
-            <input
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              placeholder="Nama (opsional)"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
-            />
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Catatan (opsional)"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
-              rows={3}
-            />
-          </div>
+          {underpayEst ? (
+            <div className="bg-white border border-rose-200 rounded-3xl p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-black uppercase tracking-widest text-rose-700">Customer (Wajib untuk Hutang)</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCustomer(null);
+                    setCustomerQuery('');
+                    setCustomerResults([]);
+                    setCustomerSearchError('');
+                    window.setTimeout(() => customerInputRef.current?.focus(), 0);
+                  }}
+                  className="text-[10px] font-black uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                  title="Clear customer"
+                >
+                  Clear
+                </button>
+              </div>
+
+              {selectedCustomer ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                  <p className="text-sm font-black text-slate-900">{selectedCustomer.name}</p>
+                  <p className="text-[11px] text-slate-600">
+                    {selectedCustomer.whatsapp_number ? `WA: ${selectedCustomer.whatsapp_number}` : 'WA: -'}
+                    {selectedCustomer.email ? ` • ${selectedCustomer.email}` : ''}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-rose-700">Pilih customer agar hutang tercatat di sistem keuangan (AR).</p>
+              )}
+
+              <div className="relative">
+                <input
+                  ref={customerInputRef}
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery(e.target.value)}
+                  placeholder="Cari customer (nama / WhatsApp)..."
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                {customerResults.length > 0 ? (
+                  <div className="absolute z-20 mt-2 w-full divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden max-h-72 overflow-y-auto">
+                    {customerResults.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => handleSelectCustomer(c)}
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50"
+                      >
+                        <p className="text-sm font-black text-slate-900">{c.name}</p>
+                        <p className="text-[11px] text-slate-500">{c.whatsapp_number || '-'}</p>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              {customerSearchLoading ? <p className="text-xs text-slate-500">Mencari customer...</p> : null}
+              {customerSearchError ? <p className="text-xs text-rose-600">{customerSearchError}</p> : null}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickError('');
+                  setQuickName('');
+                  setQuickWhatsapp('');
+                  setQuickAddress('');
+                  setQuickCreateOpen(true);
+                }}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-700"
+              >
+                Daftarkan Customer (Shortcut)
+              </button>
+
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Catatan (opsional)"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                rows={3}
+              />
+            </div>
+          ) : (
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
+              <p className="text-xs font-black uppercase tracking-widest text-slate-500">Catatan</p>
+              <p className="text-[11px] text-slate-500">
+                Customer tidak diperlukan jika bayar penuh. Customer hanya wajib saat hutang (kurang bayar).
+              </p>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Catatan (opsional)"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                rows={3}
+              />
+            </div>
+          )}
 
           <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
             <p className="text-xs font-black uppercase tracking-widest text-slate-500">Pembayaran</p>
@@ -470,6 +638,115 @@ export default function AdminPosPage() {
           </div>
         </div>
       </div>
+
+      {quickCreateOpen ? (
+        <div className="fixed inset-0 z-[100] bg-black/40 p-4 flex items-center justify-center">
+          <div className="w-full max-w-lg rounded-3xl bg-white border border-slate-200 shadow-xl p-5 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-black text-slate-900">Daftarkan Customer (Shortcut)</h2>
+              <button
+                type="button"
+                onClick={() => setQuickCreateOpen(false)}
+                className="text-xs font-black uppercase tracking-wide text-slate-500 hover:text-slate-700"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Nama</label>
+                <input
+                  value={quickName}
+                  onChange={(e) => setQuickName(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
+                  placeholder="Nama customer"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-500 uppercase">WhatsApp</label>
+                <input
+                  value={quickWhatsapp}
+                  onChange={(e) => setQuickWhatsapp(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
+                  placeholder="08xxxxxxxxxx"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Alamat (Opsional)</label>
+                <textarea
+                  value={quickAddress}
+                  onChange={(e) => setQuickAddress(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
+                  placeholder="Alamat singkat"
+                  rows={2}
+                />
+              </div>
+            </div>
+
+            {quickError ? <p className="text-xs text-rose-600 whitespace-pre-wrap">{quickError}</p> : null}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setQuickSubmitting(true);
+                    setQuickError('');
+                    if (!quickName.trim()) {
+                      setQuickError('Nama wajib diisi.');
+                      return;
+                    }
+                    if (!quickWhatsapp.trim()) {
+                      setQuickError('WhatsApp wajib diisi.');
+                      return;
+                    }
+                    const res = await api.admin.customers.quickCreate({
+                      name: quickName.trim(),
+                      whatsapp_number: quickWhatsapp.trim(),
+                      ...(quickAddress.trim() ? { address: quickAddress.trim() } : {}),
+                    });
+                    const c = (res.data || {}).customer || {};
+                    const picked: CustomerPick = {
+                      id: String(c.id || ''),
+                      name: String(c.name || ''),
+                      whatsapp_number: c.whatsapp_number ?? null,
+                      email: c.email ?? null,
+                    };
+                    if (!picked.id || !picked.name) {
+                      setQuickError('Customer tersimpan, tapi response tidak lengkap.');
+                      return;
+                    }
+                    setSelectedCustomer(picked);
+                    setQuickCreateOpen(false);
+                    setCustomerQuery('');
+                    setCustomerResults([]);
+                    setCustomerSearchError('');
+                  } catch (e: unknown) {
+                    const message = typeof e === 'object' && e && 'response' in e
+                      ? String((e as any).response?.data?.message || '')
+                      : '';
+                    setQuickError(message || 'Gagal membuat customer.');
+                  } finally {
+                    setQuickSubmitting(false);
+                  }
+                }}
+                disabled={quickSubmitting}
+                className="flex-1 rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white disabled:opacity-60"
+              >
+                {quickSubmitting ? 'Menyimpan...' : 'Simpan & Pilih'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuickCreateOpen(false)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-700"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
