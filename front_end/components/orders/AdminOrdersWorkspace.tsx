@@ -1856,6 +1856,23 @@ export default function AdminOrdersWorkspace({
         setBusyInvoice(true);
         await api.admin.finance.issueInvoiceBatch(readyOrderIds);
         await loadOrders();
+        notifyOpen({
+          variant: 'success',
+          title: 'Invoice diterbitkan',
+          message:
+            "Invoice berhasil dibuat. Order akan masuk ke 'Proses Gudang' (atau 'Checker' jika sudah ditugaskan driver).",
+          primaryLabel: 'Buka Proses Gudang',
+          onPrimary: () => {
+            setOrderSectionFilter('gudang');
+            notifyClose();
+          },
+          secondaryLabel: 'Buka Checker',
+          onSecondary: () => {
+            setOrderSectionFilter('checker');
+            notifyClose();
+          },
+          autoCloseMs: 8000,
+        });
         setAllocationConfirm(null);
       } catch (error: unknown) {
         console.error('Issue invoice failed:', error);
