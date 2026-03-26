@@ -568,7 +568,7 @@ export const api = {
                 apiClient.get('/admin/finance/reports/customer-balance', { params }),
             getBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders', { params }),
-            exportBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
+            exportBackorderReport: (params?: { startDate?: string; endDate?: string; extract?: 'full' | 'po' }) =>
                 apiClient.get('/admin/finance/reports/backorders/export', { params, responseType: 'blob' }),
             printBackorderReportThermal: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders/print', { params, responseType: 'blob' }),

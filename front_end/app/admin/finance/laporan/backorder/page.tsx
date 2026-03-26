@@ -61,6 +61,7 @@ export default function BackorderReportPage() {
     const [exporting, setExporting] = useState(false);
     const [printing, setPrinting] = useState(false);
     const [selectedProduct, setSelectedProduct] = useState<BackorderTopProduct | null>(null);
+    const [exportModeOpen, setExportModeOpen] = useState(false);
 
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
@@ -87,13 +88,17 @@ export default function BackorderReportPage() {
         }
     }, [filterParams]);
 
-    const handleExport = useCallback(async () => {
+    const handleExport = useCallback(async (extract: 'full' | 'po') => {
         try {
             setExporting(true);
-            const res = await api.admin.finance.exportBackorderReport(filterParams);
+            const res = await api.admin.finance.exportBackorderReport({
+                ...filterParams,
+                extract,
+            });
             const contentDisposition = String(res.headers?.['content-disposition'] || '');
             const fileNameMatch = contentDisposition.match(/filename="([^"]+)"/i);
-            const fileName = fileNameMatch?.[1] || `laporan-backorder-preorder-${toDateInputValue(new Date()).replace(/-/g, '')}.xlsx`;
+            const defaultPrefix = extract === 'po' ? 'ekstrak-po-backorder' : 'laporan-backorder-preorder';
+            const fileName = fileNameMatch?.[1] || `${defaultPrefix}-${toDateInputValue(new Date()).replace(/-/g, '')}.xlsx`;
 
             const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
             const url = window.URL.createObjectURL(blob);
@@ -175,6 +180,15 @@ export default function BackorderReportPage() {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [selectedProduct]);
 
+    useEffect(() => {
+        if (!exportModeOpen) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setExportModeOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [exportModeOpen]);
+
     if (!allowed) return null;
 
     return (
@@ -199,7 +213,7 @@ export default function BackorderReportPage() {
                         </button>
                         <button
                             type="button"
-                            onClick={handleExport}
+                            onClick={() => setExportModeOpen(true)}
                             disabled={exporting || loading || printing}
                             className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-60"
                         >
@@ -211,6 +225,72 @@ export default function BackorderReportPage() {
             </div>
 
             <div className="px-5 space-y-4">
+                {exportModeOpen ? (
+                    <div className="fixed inset-0 z-50">
+                        <button
+                            type="button"
+                            className="absolute inset-0 bg-black/30"
+                            aria-label="Tutup"
+                            onClick={() => setExportModeOpen(false)}
+                            disabled={exporting}
+                        />
+                        <div
+                            role="dialog"
+                            aria-modal="true"
+                            className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-white p-5 shadow-2xl"
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                        Export Excel
+                                    </p>
+                                    <h3 className="mt-1 font-black text-slate-900">Pilih mode ekstrak</h3>
+                                    <p className="text-[11px] text-slate-500 mt-1">
+                                        Full: rincian per order. PO: agregasi per SKU (seperti export PO).
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setExportModeOpen(false)}
+                                    disabled={exporting}
+                                    className="shrink-0 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    Tutup
+                                </button>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-2 gap-3">
+                                <button
+                                    type="button"
+                                    disabled={exporting}
+                                    onClick={async () => {
+                                        setExportModeOpen(false);
+                                        await handleExport('full');
+                                    }}
+                                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mode</p>
+                                    <p className="mt-1 font-black text-slate-900">Full</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">Tanggal, order, customer, SKU, qty, nilai.</p>
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={exporting}
+                                    onClick={async () => {
+                                        setExportModeOpen(false);
+                                        await handleExport('po');
+                                    }}
+                                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mode</p>
+                                    <p className="mt-1 font-black text-slate-900">PO</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">No, SKU, Produk, Qty (agregat).</p>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                     <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500 mb-3">
                         <Filter size={14} />

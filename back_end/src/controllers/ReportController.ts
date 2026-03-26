@@ -190,9 +190,11 @@ export const getBackorderPreorderReport = asyncWrapper(async (req: Request, res:
 
 export const exportBackorderPreorderReportExcel = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, extract } = req.query;
         const startRaw = typeof startDate === 'string' && startDate.trim() ? startDate.trim() : undefined;
         const endRaw = typeof endDate === 'string' && endDate.trim() ? endDate.trim() : undefined;
+        const extractModeRaw = typeof extract === 'string' ? extract.trim().toLowerCase() : '';
+        const extractMode: 'full' | 'po' = extractModeRaw === 'po' ? 'po' : 'full';
 
         const startParsed = startRaw ? new Date(startRaw) : null;
         const endParsed = endRaw ? new Date(endRaw) : null;
@@ -211,60 +213,116 @@ export const exportBackorderPreorderReportExcel = asyncWrapper(async (req: Reque
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'Migunani Admin';
         workbook.created = new Date();
-        const sheet = workbook.addWorksheet('Backorder_Preorder');
 
         const periodStart = report.period.start.toISOString().slice(0, 10);
         const periodEnd = report.period.end.toISOString().slice(0, 10);
         const exportTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-        sheet.getCell('A1').value = 'Laporan Backorder / Preorder';
-        sheet.getCell('A2').value = `Waktu Export: ${exportTime}`;
-        sheet.getCell('A3').value = `Periode: ${periodStart} s/d ${periodEnd}`;
-        sheet.getCell('A4').value = `Total Item: ${Number(report.summary?.total_items || 0)}`;
-        sheet.getCell('A5').value = `Estimasi Nilai: ${Number(report.summary?.total_value || 0)}`;
-        sheet.getCell('A6').value = `Backorder Count: ${Number(report.summary?.backorder_count || 0)}`;
-        sheet.getCell('A7').value = `Preorder Count: ${Number(report.summary?.preorder_count || 0)}`;
-
-        const headerRowIndex = 9;
-        const headers = ['Tanggal', 'Order ID', 'Customer', 'SKU', 'Produk', 'Tipe', 'Qty', 'Harga', 'Total'];
-        sheet.getRow(headerRowIndex).values = headers;
-        sheet.getRow(headerRowIndex).font = { bold: true };
-
         const details = Array.isArray((report as any)?.details) ? ((report as any).details as any[]) : [];
-        details.forEach((row, idx) => {
-            const excelRowIndex = headerRowIndex + 1 + idx;
-            const date = row?.date ? new Date(row.date) : null;
-            const dateStr = date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : '-';
 
-            sheet.getRow(excelRowIndex).values = [
-                dateStr,
-                row?.order_id ? String(row.order_id) : '-',
-                row?.customer_name || '-',
-                row?.sku || '-',
-                row?.product_name || '-',
-                row?.type || '-',
-                Number(row?.qty || 0),
-                Number(row?.price || 0),
-                Number(row?.total_value || 0),
+        if (extractMode === 'po') {
+            const sheet = workbook.addWorksheet('PO_Extract');
+
+            sheet.getCell('A1').value = 'Ekstrak PO (Backorder / Preorder)';
+            sheet.getCell('A2').value = `Waktu Export: ${exportTime}`;
+            sheet.getCell('A3').value = `Periode: ${periodStart} s/d ${periodEnd}`;
+            sheet.getCell('A4').value = `Total Item: ${Number(report.summary?.total_items || 0)}`;
+
+            const aggregated = new Map<string, { sku: string; product_name: string; qty: number }>();
+            details.forEach((row: any) => {
+                const sku = String(row?.sku || '').trim();
+                if (!sku || sku === '-') return;
+                const productName = String(row?.product_name || '').trim() || '-';
+                const qty = Number(row?.qty || 0);
+                if (qty <= 0) return;
+                const prev = aggregated.get(sku);
+                if (prev) {
+                    prev.qty += qty;
+                    if (!prev.product_name || prev.product_name === '-' || prev.product_name === 'Unknown Product') {
+                        prev.product_name = productName;
+                    }
+                } else {
+                    aggregated.set(sku, { sku, product_name: productName, qty });
+                }
+            });
+
+            const rows = Array.from(aggregated.values())
+                .sort((a, b) => (b.qty - a.qty) || a.sku.localeCompare(b.sku));
+
+            sheet.getCell('A5').value = `Total SKU: ${rows.length}`;
+
+            const headerRowIndex = 7;
+            sheet.getRow(headerRowIndex).values = ['No', 'SKU', 'Produk', 'Qty'];
+            sheet.getRow(headerRowIndex).font = { bold: true };
+
+            rows.forEach((row, idx) => {
+                sheet.getRow(headerRowIndex + 1 + idx).values = [
+                    idx + 1,
+                    row.sku,
+                    row.product_name,
+                    Number(row.qty || 0),
+                ];
+            });
+
+            sheet.columns = [
+                { key: 'no', width: 6 },
+                { key: 'sku', width: 18 },
+                { key: 'product', width: 44 },
+                { key: 'qty', width: 12 },
             ];
-        });
+        } else {
+            const sheet = workbook.addWorksheet('Backorder_Preorder');
 
-        sheet.columns = [
-            { key: 'date', width: 14 },
-            { key: 'order_id', width: 18 },
-            { key: 'customer', width: 26 },
-            { key: 'sku', width: 18 },
-            { key: 'product', width: 36 },
-            { key: 'type', width: 12 },
-            { key: 'qty', width: 10 },
-            { key: 'price', width: 14 },
-            { key: 'total', width: 16 },
-        ];
+            sheet.getCell('A1').value = 'Laporan Backorder / Preorder';
+            sheet.getCell('A2').value = `Waktu Export: ${exportTime}`;
+            sheet.getCell('A3').value = `Periode: ${periodStart} s/d ${periodEnd}`;
+            sheet.getCell('A4').value = `Total Item: ${Number(report.summary?.total_items || 0)}`;
+            sheet.getCell('A5').value = `Estimasi Nilai: ${Number(report.summary?.total_value || 0)}`;
+            sheet.getCell('A6').value = `Backorder Count: ${Number(report.summary?.backorder_count || 0)}`;
+            sheet.getCell('A7').value = `Preorder Count: ${Number(report.summary?.preorder_count || 0)}`;
+
+            const headerRowIndex = 9;
+            const headers = ['Tanggal', 'Order ID', 'Customer', 'SKU', 'Produk', 'Tipe', 'Qty', 'Harga', 'Total'];
+            sheet.getRow(headerRowIndex).values = headers;
+            sheet.getRow(headerRowIndex).font = { bold: true };
+
+            details.forEach((row: any, idx: number) => {
+                const excelRowIndex = headerRowIndex + 1 + idx;
+                const date = row?.date ? new Date(row.date) : null;
+                const dateStr = date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : '-';
+
+                sheet.getRow(excelRowIndex).values = [
+                    dateStr,
+                    row?.order_id ? String(row.order_id) : '-',
+                    row?.customer_name || '-',
+                    row?.sku || '-',
+                    row?.product_name || '-',
+                    row?.type || '-',
+                    Number(row?.qty || 0),
+                    Number(row?.price || 0),
+                    Number(row?.total_value || 0),
+                ];
+            });
+
+            sheet.columns = [
+                { key: 'date', width: 14 },
+                { key: 'order_id', width: 18 },
+                { key: 'customer', width: 26 },
+                { key: 'sku', width: 18 },
+                { key: 'product', width: 36 },
+                { key: 'type', width: 12 },
+                { key: 'qty', width: 10 },
+                { key: 'price', width: 14 },
+                { key: 'total', width: 16 },
+            ];
+        }
 
         const timestamp = new Date();
         const pad = (n: number) => String(n).padStart(2, '0');
         const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
-        const fileName = `laporan-backorder-preorder-${fileSuffix}.xlsx`;
+        const fileName = extractMode === 'po'
+            ? `ekstrak-po-backorder-preorder-${fileSuffix}.xlsx`
+            : `laporan-backorder-preorder-${fileSuffix}.xlsx`;
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
