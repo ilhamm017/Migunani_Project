@@ -8,6 +8,7 @@ interface OrderItemAttributes {
     qty: number;
     ordered_qty_original: number;
     qty_canceled_backorder: number;
+    qty_canceled_manual: number;
     price_at_purchase: number;
     cost_at_purchase: number;
     pricing_snapshot: unknown | null;
@@ -22,6 +23,7 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes> 
     declare qty: number;
     declare ordered_qty_original: number;
     declare qty_canceled_backorder: number;
+    declare qty_canceled_manual: number;
     declare price_at_purchase: number;
     declare cost_at_purchase: number;
     declare pricing_snapshot: unknown | null;
@@ -55,6 +57,11 @@ OrderItem.init(
             defaultValue: 0,
         },
         qty_canceled_backorder: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 0,
+        },
+        qty_canceled_manual: {
             type: DataTypes.INTEGER,
             allowNull: false,
             defaultValue: 0,

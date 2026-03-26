@@ -275,7 +275,8 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
     try {
         const orderId = String(req.params.id);
         const userRole = req.user!.role;
-        const { status, courier_id, issue_type, issue_note, resolution_note } = req.body;
+        const { status, courier_id, issue_type, issue_note, resolution_note, reason } = req.body;
+        const cancelReason = typeof reason === 'string' ? reason.trim() : '';
 
         const nextStatus = typeof status === 'string' ? status : '';
         if (!ORDER_STATUS_OPTIONS.includes(nextStatus as (typeof ORDER_STATUS_OPTIONS)[number])) {
@@ -393,6 +394,20 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             actor_role: userRole || null,
             reason: 'admin_update_order_status',
         });
+        if (nextStatus === 'canceled' && cancelReason) {
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                event_type: 'order_canceled',
+                actor_user_id: String(req.user?.id || '').trim() || null,
+                actor_role: userRole || null,
+                reason: cancelReason,
+                payload: {
+                    before: { status: prevStatus },
+                    after: { status: nextStatus },
+                }
+            });
+        }
 
         if (nextStatus === 'shipped') {
             const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
@@ -644,6 +659,374 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         res.json({ message: `Order status updated to ${nextStatus}` });
 
 
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        throw error;
+    }
+});
+
+export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const orderId = String(req.params.id || '').trim();
+        const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason : '';
+        const reason = reasonRaw.trim();
+        const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+
+        if (!orderId) {
+            await t.rollback();
+            throw new CustomError('Order ID tidak valid.', 400);
+        }
+        if (!reason) {
+            await t.rollback();
+            throw new CustomError('Alasan cancel wajib diisi.', 400);
+        }
+        if (itemsRaw.length === 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada item yang dicancel.', 400);
+        }
+
+        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!order) {
+            await t.rollback();
+            throw new CustomError('Order tidak ditemukan.', 404);
+        }
+
+        const currentStatus = String(order.status || '').trim().toLowerCase();
+        const terminalStatuses = ['shipped', 'delivered', 'completed', 'expired', 'canceled'];
+        if (terminalStatuses.includes(currentStatus)) {
+            await t.rollback();
+            throw new CustomError(`Order dengan status '${order.status}' tidak bisa cancel item.`, 409);
+        }
+
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
+
+        const requestedCancelByOrderItemId = new Map<string, number>();
+        for (const row of itemsRaw) {
+            const itemId = String(row?.order_item_id || '').trim();
+            const qty = Math.trunc(Number(row?.cancel_qty || 0));
+            if (!itemId) continue;
+            if (!Number.isFinite(qty) || qty <= 0) continue;
+            requestedCancelByOrderItemId.set(itemId, (requestedCancelByOrderItemId.get(itemId) || 0) + qty);
+        }
+        const requestedItemIds = Array.from(requestedCancelByOrderItemId.keys());
+        if (requestedItemIds.length === 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada qty cancel yang valid.', 400);
+        }
+
+        const orderItems = await OrderItem.findAll({
+            where: { order_id: orderId },
+            include: [{ model: Product, attributes: ['id', 'name', 'sku'], required: false }],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const orderItemById = new Map<string, any>();
+        orderItems.forEach((row: any) => {
+            orderItemById.set(String(row?.id || '').trim(), row);
+        });
+        const missing = requestedItemIds.filter((id) => !orderItemById.has(id));
+        if (missing.length > 0) {
+            await t.rollback();
+            throw new CustomError(`Item tidak ditemukan pada order ini: ${missing.join(', ')}`, 404);
+        }
+
+        const invoiceItems = await InvoiceItem.findAll({
+            where: { order_item_id: { [Op.in]: requestedItemIds } },
+            attributes: ['order_item_id', 'qty'],
+            transaction: t
+        });
+        const invoicedQtyByOrderItemId: Record<string, number> = {};
+        invoiceItems.forEach((row: any) => {
+            const key = String(row?.order_item_id || '').trim();
+            if (!key) return;
+            invoicedQtyByOrderItemId[key] = Number(invoicedQtyByOrderItemId[key] || 0) + Number(row?.qty || 0);
+        });
+
+        const toCents2 = (value: number) => Math.round(value * 100) / 100;
+
+        let beforeSubtotal = 0;
+        let afterSubtotal = 0;
+        const beforeQtyByOrderItemId: Record<string, number> = {};
+        const afterQtyByOrderItemId: Record<string, number> = {};
+
+        for (const row of orderItems as any[]) {
+            const id = String(row?.id || '').trim();
+            const qtyBefore = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const price = Number(row?.price_at_purchase || 0);
+            beforeSubtotal += price * qtyBefore;
+            beforeQtyByOrderItemId[id] = qtyBefore;
+            afterQtyByOrderItemId[id] = qtyBefore;
+        }
+
+        // Validate and apply cancels (in-memory + DB)
+        for (const itemId of requestedItemIds) {
+            const row = orderItemById.get(itemId);
+            const qtyBefore = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const invoicedQty = Math.max(0, Math.trunc(Number(invoicedQtyByOrderItemId[itemId] || 0)));
+            const cancelableQty = Math.max(0, qtyBefore - invoicedQty);
+            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+            if (requestedCancel <= 0) continue;
+            if (requestedCancel > cancelableQty) {
+                await t.rollback();
+                throw new CustomError(
+                    `Qty cancel melebihi batas untuk item ${itemId} (maks ${cancelableQty}, diminta ${requestedCancel}).`,
+                    409
+                );
+            }
+        }
+
+        for (const itemId of requestedItemIds) {
+            const row = orderItemById.get(itemId);
+            const qtyBefore = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+            if (requestedCancel <= 0) continue;
+
+            const qtyAfter = Math.max(0, qtyBefore - requestedCancel);
+            const canceledBefore = Math.max(0, Math.trunc(Number(row?.qty_canceled_manual || 0)));
+            const orderedOriginal = Math.max(0, Math.trunc(Number(row?.ordered_qty_original || 0)));
+            const nextOrderedOriginal = orderedOriginal > 0 ? orderedOriginal : qtyBefore;
+
+            await row.update({
+                qty: qtyAfter,
+                ordered_qty_original: nextOrderedOriginal,
+                qty_canceled_manual: canceledBefore + requestedCancel,
+            }, { transaction: t });
+
+            afterQtyByOrderItemId[itemId] = qtyAfter;
+
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                order_item_id: itemId,
+                event_type: 'order_item_canceled',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason,
+                payload: {
+                    product_id: String(row?.product_id || ''),
+                    sku: String(row?.Product?.sku || ''),
+                    name: String(row?.Product?.name || ''),
+                    unit_price: Number(row?.price_at_purchase || 0),
+                    before: {
+                        qty: qtyBefore,
+                        qty_canceled_manual: canceledBefore,
+                    },
+                    after: {
+                        qty: qtyAfter,
+                        qty_canceled_manual: canceledBefore + requestedCancel,
+                    },
+                    delta: {
+                        canceled_qty: requestedCancel,
+                    }
+                }
+            });
+        }
+
+        // Compute after subtotal based on updated qty values
+        for (const row of orderItems as any[]) {
+            const id = String(row?.id || '').trim();
+            const price = Number(row?.price_at_purchase || 0);
+            const qtyAfter = Math.max(0, Math.trunc(Number(afterQtyByOrderItemId[id] ?? row?.qty ?? 0)));
+            afterSubtotal += price * qtyAfter;
+        }
+
+        const allocations = await OrderAllocation.findAll({
+            where: { order_id: orderId },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+            order: [['createdAt', 'ASC'], ['id', 'ASC']]
+        });
+
+        const allocationsByProductId = new Map<string, any[]>();
+        allocations.forEach((row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return;
+            const list = allocationsByProductId.get(productId) || [];
+            list.push(row);
+            allocationsByProductId.set(productId, list);
+        });
+
+        const orderedByProductAfter = new Map<string, number>();
+        for (const row of orderItems as any[]) {
+            const itemId = String(row?.id || '').trim();
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) continue;
+            const qtyAfter = Math.max(0, Math.trunc(Number(afterQtyByOrderItemId[itemId] ?? row?.qty ?? 0)));
+            orderedByProductAfter.set(productId, Number(orderedByProductAfter.get(productId) || 0) + qtyAfter);
+        }
+
+        const allocatedByProductBefore = new Map<string, number>();
+        allocations.forEach((row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return;
+            allocatedByProductBefore.set(productId, Number(allocatedByProductBefore.get(productId) || 0) + Number(row?.allocated_qty || 0));
+        });
+
+        const productsToAdjust: string[] = [];
+        orderedByProductAfter.forEach((orderedAfter, productId) => {
+            const allocatedBefore = Number(allocatedByProductBefore.get(productId) || 0);
+            if (allocatedBefore > orderedAfter) productsToAdjust.push(productId);
+        });
+
+        if (productsToAdjust.length > 0) {
+            const products = await Product.findAll({
+                where: { id: { [Op.in]: productsToAdjust } },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            const productById = new Map<string, any>();
+            products.forEach((p: any) => productById.set(String(p?.id || '').trim(), p));
+
+            for (const productId of productsToAdjust) {
+                const rows = allocationsByProductId.get(productId) || [];
+                if (rows.length === 0) continue;
+                const orderedAfter = Math.max(0, Math.trunc(Number(orderedByProductAfter.get(productId) || 0)));
+                const allocatedBefore = Math.max(0, Number(allocatedByProductBefore.get(productId) || 0));
+
+                const [primary, ...extras] = rows;
+                await primary.update({ allocated_qty: orderedAfter }, { transaction: t });
+                for (const extra of extras) {
+                    if (Number(extra?.allocated_qty || 0) === 0) continue;
+                    await extra.update({ allocated_qty: 0 }, { transaction: t });
+                }
+
+                const delta = orderedAfter - allocatedBefore;
+                if (delta < 0) {
+                    const product = productById.get(productId);
+                    if (product) {
+                        const absDelta = Math.abs(delta);
+                        const currentStockQty = Number(product?.stock_quantity || 0);
+                        await product.update({
+                            stock_quantity: currentStockQty + absDelta,
+                            allocated_quantity: Math.max(0, Number(product?.allocated_quantity || 0) - absDelta),
+                        }, { transaction: t });
+                    }
+                }
+            }
+        }
+
+        // Sync backorder rows for affected items
+        const affectedItemIds = requestedItemIds;
+        const backorders = await Backorder.findAll({
+            where: { order_item_id: { [Op.in]: affectedItemIds } },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const backorderByItemId = new Map<string, any>();
+        backorders.forEach((b: any) => backorderByItemId.set(String(b?.order_item_id || '').trim(), b));
+
+        // Allocate per item to compute shortage after
+        const allocatedAfterByProductId = new Map<string, number>();
+        allocations.forEach((row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return;
+            allocatedAfterByProductId.set(productId, Number(allocatedAfterByProductId.get(productId) || 0) + Number(row?.allocated_qty || 0));
+        });
+        const remainingByProduct = new Map<string, number>(allocatedAfterByProductId);
+        const sortedItems = [...orderItems].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+        for (const row of sortedItems as any[]) {
+            const itemId = String(row?.id || '').trim();
+            const productId = String(row?.product_id || '').trim();
+            if (!itemId || !productId) continue;
+            const qtyAfter = Math.max(0, Math.trunc(Number(afterQtyByOrderItemId[itemId] ?? row?.qty ?? 0)));
+            const remaining = Math.max(0, Number(remainingByProduct.get(productId) || 0));
+            const allocatedQty = Math.min(qtyAfter, remaining);
+            const shortageQty = Math.max(0, qtyAfter - allocatedQty);
+            remainingByProduct.set(productId, Math.max(0, remaining - allocatedQty));
+
+            const backorder = backorderByItemId.get(itemId);
+            if (!backorder) continue;
+
+            if (shortageQty > 0) {
+                if (String(backorder.status || '') !== 'waiting_stock' || Number(backorder.qty_pending || 0) !== shortageQty) {
+                    await backorder.update({
+                        qty_pending: shortageQty,
+                        status: 'waiting_stock'
+                    }, { transaction: t });
+                }
+                continue;
+            }
+
+            const canceledQtyForItem = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+            const nextStatus = canceledQtyForItem > 0 ? 'canceled' : 'fulfilled';
+            await backorder.update({
+                qty_pending: 0,
+                status: nextStatus,
+                ...(canceledQtyForItem > 0 ? { notes: `Reason: ${reason}` } : {})
+            }, { transaction: t });
+        }
+
+        const shippingFee = Number(order.shipping_fee || 0);
+        const currentDiscount = Number(order.discount_amount || 0);
+        const ratio = beforeSubtotal > 0 ? Math.min(1, Math.max(0, afterSubtotal / beforeSubtotal)) : 0;
+        const nextDiscount = toCents2(Math.max(0, currentDiscount * ratio));
+        const nextTotal = toCents2(Math.max(0, afterSubtotal + shippingFee - nextDiscount));
+
+        const prevStatus = String(order.status || '');
+        let nextStatus = prevStatus;
+        if (afterSubtotal <= 0) {
+            nextStatus = 'canceled';
+        }
+
+        await order.update({
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+            status: nextStatus as any,
+            stock_released: nextStatus === 'canceled' ? true : order.stock_released
+        }, { transaction: t });
+
+        if (prevStatus !== nextStatus) {
+            await recordOrderStatusChanged({
+                transaction: t,
+                order_id: orderId,
+                from_status: prevStatus,
+                to_status: nextStatus,
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason: 'admin_cancel_items',
+            });
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                event_type: 'order_canceled',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason,
+                payload: {
+                    before: { status: prevStatus },
+                    after: { status: nextStatus },
+                }
+            });
+            await emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: prevStatus,
+                to_status: nextStatus,
+                source: String(order.source || ''),
+                payment_method: String(order.payment_method || ''),
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(actorRole || ''),
+                target_roles: ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
+            }, {
+                transaction: t,
+                requestContext: 'admin_cancel_items_status_changed'
+            });
+        }
+
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'admin_cancel_items_refresh_badges'
+        });
+
+        await t.commit();
+        res.json({
+            message: 'Item berhasil dibatalkan',
+            order_id: orderId,
+            status: nextStatus,
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+        });
     } catch (error) {
         try { await t.rollback(); } catch { }
         throw error;

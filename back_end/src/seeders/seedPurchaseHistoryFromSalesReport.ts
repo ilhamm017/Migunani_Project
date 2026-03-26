@@ -283,12 +283,13 @@ export const seedPurchaseHistoryFromSalesReport = async (options?: {
                     orderItem = await OrderItem.create({
                         order_id: String(order.id),
                         product_id: String(product.id),
-                        qty,
-                        ordered_qty_original: qty,
-                        qty_canceled_backorder: 0,
-                        price_at_purchase: unitPaid,
-                        cost_at_purchase: Number(item.cost_per_unit || 0),
-                        pricing_snapshot: {
+	                        qty,
+	                        ordered_qty_original: qty,
+	                        qty_canceled_backorder: 0,
+	                        qty_canceled_manual: 0,
+	                        price_at_purchase: unitPaid,
+	                        cost_at_purchase: Number(item.cost_per_unit || 0),
+	                        pricing_snapshot: {
                             tier: assumedTier,
                             base_price: baseUnit,
                             discount_pct: discountPct,

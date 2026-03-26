@@ -290,6 +290,8 @@ const ORDER_EVENT_TYPE_ENUM_VALUES = [
     'backorder_opened',
     'backorder_reallocated',
     'backorder_canceled',
+    'order_item_canceled',
+    'order_canceled',
     'order_pricing_adjusted',
     'warehouse_checked',
     'warehouse_handed_over',
@@ -754,6 +756,31 @@ const ensureOrderEventTypeEnumReady = async () => {
     }
 };
 
+const ensureOrderItemManualCancelColumnReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
+    try {
+        const [rows] = await sequelize.query(
+            `SELECT COUNT(*) AS cnt
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'order_items'
+               AND COLUMN_NAME = 'qty_canceled_manual'`
+        ) as any;
+        const count = Number(rows?.[0]?.cnt || 0);
+        if (count > 0) return;
+
+        await sequelize.query(
+            `ALTER TABLE order_items
+             ADD COLUMN qty_canceled_manual INT NOT NULL DEFAULT 0 AFTER qty_canceled_backorder`
+        );
+        console.log('Order items schema updated: added qty_canceled_manual');
+    } catch (error) {
+        console.error('Failed to ensure order_items.qty_canceled_manual column:', error);
+        throw error;
+    }
+};
+
 const ensureInvoiceShipmentStatusEnumReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -905,10 +932,11 @@ const startServer = async () => {
 		            await runStartupStep('Ensure orders pricing override columns', ensureOrderPricingOverrideColumnsReady);
 		            await runStartupStep('Ensure users.role enum', ensureUserRoleEnumReady);
 		            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
-		            await runStartupStep('Ensure invoices.shipment_status enum', ensureInvoiceShipmentStatusEnumReady);
-		            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
-		            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
-		            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
+			            await runStartupStep('Ensure invoices.shipment_status enum', ensureInvoiceShipmentStatusEnumReady);
+			            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+			            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
+			            await runStartupStep('Ensure order_items manual cancel column', ensureOrderItemManualCancelColumnReady);
+			            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
 		            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
 	            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
 	        } catch (error: any) {

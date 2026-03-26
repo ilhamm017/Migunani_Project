@@ -575,7 +575,10 @@ export default function AdminOrdersWorkspace({
   const hasRenderableAccess = isAuthenticated && ['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'].includes(normalizedRole);
   const canIssueInvoice = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canAllocate = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
-  const canCancelOrder = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
+  const canCancelOrder = useMemo(
+    () => ['super_admin', 'kasir', 'admin_finance', 'admin_gudang'].includes(normalizedRole),
+    [normalizedRole]
+  );
   const canEditPricing = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canMoveToIndentAction = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
@@ -613,6 +616,15 @@ export default function AdminOrdersWorkspace({
   const [busyInvoice, setBusyInvoice] = useState(false);
   const [allocationConfirm, setAllocationConfirm] = useState<AllocationConfirmState | null>(null);
   const [backorderCancelReason, setBackorderCancelReason] = useState('');
+  const [cancelOrderReason, setCancelOrderReason] = useState('');
+  const [cancelItemsModal, setCancelItemsModal] = useState<{
+    orderId: string;
+    order: AdminOrderListRow;
+    reason: string;
+    drafts: Record<string, number>;
+    saving: boolean;
+    error: string;
+  } | null>(null);
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [deliveryHandoverModal, setDeliveryHandoverModal] = useState<DeliveryHandoverModalState | null>(null);
   const [deliveryHandoverBusy, setDeliveryHandoverBusy] = useState(false);
@@ -1812,8 +1824,12 @@ export default function AdminOrdersWorkspace({
     if (allocationConfirm.action === 'cancel_order') {
       try {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: true }));
-        await api.admin.orderManagement.updateStatus(allocationConfirm.orderId, { status: 'canceled' });
+        await api.admin.orderManagement.updateStatus(allocationConfirm.orderId, {
+          status: 'canceled',
+          ...(cancelOrderReason.trim() ? { reason: cancelOrderReason.trim() } : {}),
+        });
         await loadOrders();
+        setCancelOrderReason('');
         setAllocationConfirm(null);
       } catch (error: unknown) {
         console.error('Cancel order failed:', error);
@@ -2013,8 +2029,73 @@ export default function AdminOrdersWorkspace({
   };
 
   const handleCancelOrder = async (orderId: string) => {
+    setCancelOrderReason('');
     setAllocationConfirm({ orderId, step: 1, action: 'cancel_order' });
   };
+
+  const openCancelItemsModal = useCallback((order: AdminOrderListRow) => {
+    const orderId = String(order?.id || '').trim();
+    if (!orderId) return;
+    if (!canCancelOrder) return;
+    const detail = orderDetails[orderId];
+    if (!detail) {
+      notifyAlert('Detail order belum termuat. Coba muat ulang dulu.');
+      retryLoadOrderDetail(order);
+      return;
+    }
+    setCancelItemsModal({
+      orderId,
+      order,
+      reason: '',
+      drafts: {},
+      saving: false,
+      error: '',
+    });
+  }, [canCancelOrder, orderDetails, retryLoadOrderDetail]);
+
+  const submitCancelItems = useCallback(async () => {
+    if (!cancelItemsModal) return;
+    const orderId = String(cancelItemsModal.orderId || '').trim();
+    const reason = String(cancelItemsModal.reason || '').trim();
+    if (!orderId) return;
+    if (!reason) {
+      setCancelItemsModal((prev) => prev ? { ...prev, error: 'Alasan cancel wajib diisi.' } : prev);
+      return;
+    }
+    const items = Object.entries(cancelItemsModal.drafts || {})
+      .map(([order_item_id, cancel_qty]) => ({
+        order_item_id,
+        cancel_qty: Math.max(0, Math.trunc(Number(cancel_qty || 0))),
+      }))
+      .filter((row) => row.order_item_id && row.cancel_qty > 0);
+    if (items.length === 0) {
+      setCancelItemsModal((prev) => prev ? { ...prev, error: 'Pilih qty cancel minimal 1 item.' } : prev);
+      return;
+    }
+
+    setCancelItemsModal((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
+    try {
+      await api.admin.orderManagement.cancelItems(orderId, { reason, items });
+      notifyOpen({
+        variant: 'success',
+        title: 'Cancel item berhasil',
+        message: 'Perubahan sudah tersimpan dan akan muncul di timeline customer.',
+        autoCloseMs: 6000,
+      });
+      setCancelItemsModal(null);
+      await loadOrders();
+      retryLoadOrderDetail(cancelItemsModal.order);
+    } catch (error: unknown) {
+      console.error('Cancel items failed:', error);
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as any)?.message || error.message || 'Gagal cancel item.')
+        : 'Gagal cancel item.';
+      setCancelItemsModal((prev) => prev ? { ...prev, error: message } : prev);
+      notifyAlert(message);
+    } finally {
+      setCancelItemsModal((prev) => prev ? { ...prev, saving: false } : prev);
+    }
+  }, [cancelItemsModal, loadOrders, retryLoadOrderDetail]);
 
   const buildBackorderEditorModel = (params: {
     orderId: string;
@@ -2847,11 +2928,32 @@ export default function AdminOrdersWorkspace({
                       )}
                     </div>
                   </div>
-                ) : allocationConfirm.action === 'cancel_backorder' ? (
-                  <div className="space-y-3">
-                    <p>
-                      Qty backorder yang dibatalkan <span className="font-black">{Number((allocationConfirmMeta.totals as any)?.canceledQty || 0)}</span> •
-                      Nilai dikurangi <span className="font-black">{formatCurrency(Number((allocationConfirmMeta.totals as any)?.reducedValue || 0))}</span> •
+	                ) : allocationConfirm.action === 'cancel_order' ? (
+	                  <div className="space-y-3">
+	                    <p className="text-[11px] text-slate-700">
+	                      Pembatalan ini akan mengubah status order menjadi <span className="font-black text-rose-700">canceled</span>.
+	                    </p>
+	                    <div>
+	                      <label className="text-[10px] font-black uppercase tracking-widest text-rose-700">
+	                        Alasan Pembatalan (Opsional)
+	                      </label>
+	                      <textarea
+	                        value={cancelOrderReason}
+	                        onChange={(e) => setCancelOrderReason(e.target.value)}
+	                        rows={3}
+	                        placeholder="Contoh: customer membatalkan pesanan / stok tidak tersedia."
+	                        className="mt-2 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-rose-400"
+	                      />
+	                      <p className="mt-1 text-[10px] text-slate-500">
+	                        Jika diisi, alasan ini akan tampil di timeline order customer.
+	                      </p>
+	                    </div>
+	                  </div>
+	                ) : allocationConfirm.action === 'cancel_backorder' ? (
+	                  <div className="space-y-3">
+	                    <p>
+	                      Qty backorder yang dibatalkan <span className="font-black">{Number((allocationConfirmMeta.totals as any)?.canceledQty || 0)}</span> •
+	                      Nilai dikurangi <span className="font-black">{formatCurrency(Number((allocationConfirmMeta.totals as any)?.reducedValue || 0))}</span> •
                       Status berikutnya <span className="font-black">{String(allocationConfirmMeta.projectedStatus || '-')}</span>
                     </p>
                     <div className="space-y-2">
@@ -2986,11 +3088,161 @@ export default function AdminOrdersWorkspace({
             </div>
           </div>
         </div>
-	      )}
-	      {pricingEditor && (
-	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
-	          <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-	            <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+		      )}
+		      {cancelItemsModal && (() => {
+		        const orderId = String(cancelItemsModal.orderId || '').trim();
+		        const detail = orderDetails[orderId];
+		        const items = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+		        const summaries = Array.isArray((detail as any)?.item_summaries) ? (detail as any).item_summaries : [];
+		        type CancelableRow = {
+		          itemId: string;
+		          name: string;
+		          sku: string;
+		          qty: number;
+		          invoiced: number;
+		          maxCancelable: number;
+		          cancelQty: number;
+		          price: number;
+		        };
+		        const invoicedByItemId = new Map<string, number>(
+		          summaries.map((row: any) => [String(row?.order_item_id || ''), Number(row?.invoiced_qty_total || 0)])
+		        );
+		        const cancelableRows: CancelableRow[] = items.map((item: any) => {
+		          const itemId = String(item?.id || '').trim();
+		          const qty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+		          const invoiced = Math.max(0, Math.trunc(Number(invoicedByItemId.get(itemId) || 0)));
+		          const maxCancelable = Math.max(0, qty - invoiced);
+		          const draft = Math.max(0, Math.trunc(Number(cancelItemsModal.drafts?.[itemId] || 0)));
+		          const cancelQty = Math.min(maxCancelable, draft);
+		          return {
+		            itemId,
+		            name: String(item?.Product?.name || 'Produk'),
+		            sku: String(item?.Product?.sku || '-'),
+		            qty,
+		            invoiced,
+		            maxCancelable,
+		            cancelQty,
+		            price: Number(item?.price_at_purchase || 0),
+		          };
+		        }).filter((row: CancelableRow) => row.itemId);
+		        const totalCancelQty = cancelableRows.reduce((sum, row) => sum + Number(row.cancelQty || 0), 0);
+		        const estimatedSubtotalReduction = cancelableRows.reduce(
+		          (sum, row) => sum + Number(row.cancelQty || 0) * Number(row.price || 0),
+		          0
+		        );
+		        const canSubmit = Boolean(cancelItemsModal.reason.trim())
+		          && !cancelItemsModal.saving
+		          && totalCancelQty > 0;
+
+		        return (
+		          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+		            <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+		              <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+		                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-600">Cancel Item</p>
+		                <h3 className="mt-2 text-lg font-black text-slate-900">Batalkan sebagian item (per SKU)</h3>
+		                <p className="mt-1 text-xs text-slate-500">Order #{orderId}</p>
+		              </div>
+
+		              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+		                <div>
+		                  <label className="text-[10px] font-black uppercase tracking-widest text-rose-700">
+		                    Alasan Cancel (Wajib)
+		                  </label>
+		                  <textarea
+		                    value={cancelItemsModal.reason}
+		                    onChange={(e) => setCancelItemsModal((prev) => prev ? { ...prev, reason: e.target.value, error: '' } : prev)}
+		                    rows={3}
+		                    placeholder="Contoh: stok kosong / salah pesan / customer cancel sebagian SKU."
+		                    className="mt-2 w-full rounded-2xl border border-rose-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-rose-400"
+		                  />
+		                </div>
+
+		                {cancelItemsModal.error ? (
+		                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+		                    {cancelItemsModal.error}
+		                  </div>
+		                ) : null}
+
+		                {!detail ? (
+		                  <div className="rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm text-amber-800">
+		                    Detail order belum termuat. Tutup modal lalu muat ulang detail order.
+		                  </div>
+		                ) : (
+		                  <div className="space-y-2">
+		                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
+		                      Total cancel <span className="font-black text-rose-700">{totalCancelQty}</span> qty •
+		                      Estimasi pengurangan subtotal <span className="font-black">{formatCurrency(estimatedSubtotalReduction)}</span>
+		                    </div>
+		                    <div className="space-y-2">
+		                      {cancelableRows.map((row) => (
+		                        <div key={row.itemId} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+		                          <div className="flex flex-wrap items-start justify-between gap-3">
+		                            <div>
+		                              <p className="text-sm font-bold text-slate-900">{row.name}</p>
+		                              <p className="text-[10px] text-slate-500">SKU {row.sku}</p>
+		                              <p className="mt-1 text-[11px] text-slate-600">
+		                                Qty aktif <span className="font-black">{row.qty}</span> •
+		                                Invoice <span className="font-black">{row.invoiced}</span> •
+		                                Max cancel <span className="font-black text-rose-700">{row.maxCancelable}</span>
+		                              </p>
+		                            </div>
+		                            <div className="min-w-[180px] text-right space-y-1">
+		                              <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Qty Cancel</p>
+		                              <input
+		                                type="number"
+		                                min={0}
+		                                max={row.maxCancelable}
+		                                value={row.cancelQty}
+		                                disabled={row.maxCancelable <= 0 || cancelItemsModal.saving}
+		                                onChange={(e) => {
+		                                  const parsed = Number(e.target.value);
+		                                  const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+		                                  const nextQty = Math.max(0, Math.min(row.maxCancelable, normalized));
+		                                  setCancelItemsModal((prev) => prev ? {
+		                                    ...prev,
+		                                    drafts: { ...(prev.drafts || {}), [row.itemId]: nextQty },
+		                                    error: '',
+		                                  } : prev);
+		                                }}
+		                                className="w-32 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-right font-black text-rose-800 disabled:opacity-60"
+		                              />
+		                            </div>
+		                          </div>
+		                        </div>
+		                      ))}
+		                    </div>
+		                  </div>
+		                )}
+		              </div>
+
+		              <div className="border-t border-slate-200 bg-white px-5 py-4">
+		                <div className="flex flex-wrap items-center justify-end gap-2">
+		                  <button
+		                    type="button"
+		                    onClick={() => setCancelItemsModal(null)}
+		                    disabled={cancelItemsModal.saving}
+		                    className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600 disabled:opacity-50"
+		                  >
+		                    Tutup
+		                  </button>
+		                  <button
+		                    type="button"
+		                    onClick={() => void submitCancelItems()}
+		                    disabled={!canSubmit}
+		                    className="btn-3d rounded-xl bg-rose-600 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+		                  >
+		                    {cancelItemsModal.saving ? 'Menyimpan...' : 'Simpan Cancel Item'}
+		                  </button>
+		                </div>
+		              </div>
+		            </div>
+		          </div>
+		        );
+		      })()}
+		      {pricingEditor && (
+		        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+		          <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+		            <div className="border-b border-slate-200 px-5 pb-4 pt-5">
 	              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Harga Nego</p>
 	              <h3 className="mt-2 text-lg font-black text-slate-900">Edit harga deal sebelum invoice</h3>
 	              <p className="mt-1 text-xs text-slate-500">Order #{pricingEditor.orderId}</p>
@@ -3963,15 +4215,34 @@ export default function AdminOrdersWorkspace({
                           ? 'Lihat Pengiriman'
                           : 'Proses Gudang';
                       const isBackorder = isOrderBackorder(order, detail, backorderIds);
-                      const isOrderCancelable =
-                        canCancelOrder &&
-                        CANCELABLE_ORDER_STATUSES.has(rawOrderStatus) &&
-                        !isBackorder &&
-                        Number(totals.allocQty || 0) <= 0;
-                      const allocationDirty = groupedItems.some((item) => {
-                        const productId = String(item.product_id || '');
-                        if (!productId) return false;
-                        const draftQty = Number(allocationDraft[productId] ?? 0);
+	                      const isOrderCancelable =
+	                        canCancelOrder &&
+	                        CANCELABLE_ORDER_STATUSES.has(rawOrderStatus) &&
+	                        !isBackorder &&
+	                        Number(totals.allocQty || 0) <= 0;
+	                      const canCancelItems = (() => {
+	                        if (!canCancelOrder) return false;
+	                        const statusLower = String(rawOrderStatus || '').trim().toLowerCase();
+	                        if (['shipped', 'delivered', 'completed', 'expired', 'canceled'].includes(statusLower)) return false;
+	                        if (!detail) return false;
+	                        const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+	                        if (orderItems.length === 0) return false;
+	                        const summaries = Array.isArray((detail as any)?.item_summaries) ? (detail as any).item_summaries : [];
+	                        const invoicedByItemId = new Map<string, number>(
+	                          summaries.map((row: any) => [String(row?.order_item_id || ''), Number(row?.invoiced_qty_total || 0)])
+	                        );
+	                        return orderItems.some((item: any) => {
+	                          const itemId = String(item?.id || '');
+	                          if (!itemId) return false;
+	                          const qty = Number(item?.qty || 0);
+	                          const invoiced = Number(invoicedByItemId.get(itemId) || 0);
+	                          return Math.max(0, qty - invoiced) > 0;
+	                        });
+	                      })();
+	                      const allocationDirty = groupedItems.some((item) => {
+	                        const productId = String(item.product_id || '');
+	                        if (!productId) return false;
+	                        const draftQty = Number(allocationDraft[productId] ?? 0);
                         const persistedQty = Number(persistedAlloc[productId] ?? 0);
                         return draftQty !== persistedQty;
                       });
@@ -4183,19 +4454,29 @@ export default function AdminOrdersWorkspace({
                                     {warehouseActionLabel}
                                   </Link>
                                 )}
-                                {isOrderCancelable && (
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleCancelOrder(String(order.id))}
-                                    disabled={allocationBusy}
-                                    className="btn-3d px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
-                                  >
-                                    Cancel Order
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          )}
+	                                {isOrderCancelable && (
+	                                  <button
+	                                    type="button"
+	                                    onClick={() => void handleCancelOrder(String(order.id))}
+	                                    disabled={allocationBusy}
+	                                    className="btn-3d px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+	                                  >
+	                                    Cancel Order
+	                                  </button>
+	                                )}
+	                                {canCancelItems && (
+	                                  <button
+	                                    type="button"
+	                                    onClick={() => openCancelItemsModal(order)}
+	                                    disabled={allocationBusy}
+	                                    className="btn-3d px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider border border-rose-200 bg-rose-50 text-rose-700 disabled:opacity-50"
+	                                  >
+	                                    Cancel Item
+	                                  </button>
+	                                )}
+	                              </div>
+	                            </div>
+	                          )}
 
                           {showInlineOrderDetailPanel && backorderCard}
 
@@ -4302,20 +4583,30 @@ export default function AdminOrdersWorkspace({
                                     >
                                       {allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                                     </button>
-                                    {isOrderCancelable && (
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleCancelOrder(String(order.id))}
-                                        disabled={allocationBusy}
-                                        className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
-                                      >
-                                        Cancel Order
-                                      </button>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <p className="text-[10px] text-slate-500">Read only untuk role gudang.</p>
-                                )}
+	                                    {isOrderCancelable && (
+	                                      <button
+	                                        type="button"
+	                                        onClick={() => void handleCancelOrder(String(order.id))}
+	                                        disabled={allocationBusy}
+	                                        className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-600 text-white disabled:opacity-50"
+	                                      >
+	                                        Cancel Order
+	                                      </button>
+	                                    )}
+	                                    {canCancelItems && (
+	                                      <button
+	                                        type="button"
+	                                        onClick={() => openCancelItemsModal(order)}
+	                                        disabled={allocationBusy}
+	                                        className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border border-rose-200 bg-rose-50 text-rose-700 disabled:opacity-50"
+	                                      >
+	                                        Cancel Item
+	                                      </button>
+	                                    )}
+	                                  </div>
+	                                ) : (
+	                                  <p className="text-[10px] text-slate-500">Read only untuk role gudang.</p>
+	                                )}
                               </div>
                               {!isAllocatedOnlyView && shortageSummary.shortageTotal > 0 && (
                                 <div

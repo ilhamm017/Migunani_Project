@@ -14,6 +14,8 @@ interface OrderEventAttributes {
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
+    | 'order_item_canceled'
+    | 'order_canceled'
     | 'order_pricing_adjusted'
     | 'warehouse_checked'
     | 'warehouse_handed_over'
@@ -40,6 +42,8 @@ class OrderEvent extends Model<OrderEventAttributes, OrderEventCreationAttribute
     | 'backorder_opened'
     | 'backorder_reallocated'
     | 'backorder_canceled'
+    | 'order_item_canceled'
+    | 'order_canceled'
     | 'order_pricing_adjusted'
     | 'warehouse_checked'
     | 'warehouse_handed_over'
@@ -82,6 +86,8 @@ OrderEvent.init(
                 'backorder_opened',
                 'backorder_reallocated',
                 'backorder_canceled',
+                'order_item_canceled',
+                'order_canceled',
                 'order_pricing_adjusted',
                 'warehouse_checked',
                 'warehouse_handed_over',

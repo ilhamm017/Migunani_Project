@@ -331,6 +331,7 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                 order_id: order.id,
                 ordered_qty_original: Number(itemData.qty || 0),
                 qty_canceled_backorder: 0,
+                qty_canceled_manual: 0,
                 ...itemData
             }, { transaction: t });
         }

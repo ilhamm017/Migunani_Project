@@ -40,6 +40,7 @@ export type OrderItemRow = {
   qty?: number;
   ordered_qty_original?: number;
   qty_canceled_backorder?: number;
+  qty_canceled_manual?: number;
   price_at_purchase?: number;
   Product?: ProductLite | null;
   [key: string]: unknown;
@@ -160,6 +161,7 @@ export type OrderItemSummaryRow = {
   invoiced_qty_total: number;
   backorder_open_qty: number;
   backorder_canceled_qty: number;
+  manual_canceled_qty?: number;
   [key: string]: unknown;
 };
 

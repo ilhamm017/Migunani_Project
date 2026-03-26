@@ -48,7 +48,7 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
         ],
         include: [
             { model: Retur, attributes: ['id', 'status'] },
-            { model: OrderItem, attributes: ['qty', 'ordered_qty_original', 'qty_canceled_backorder'] },
+            { model: OrderItem, attributes: ['qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual'] },
             { model: OrderAllocation, as: 'Allocations', attributes: ['allocated_qty', 'status'] }
         ],
         limit: Number(limit),
@@ -60,7 +60,10 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
         const plain = row.get({ plain: true }) as any;
         const total_qty = (plain.OrderItems || []).reduce((sum: number, item: any) => sum + Number(item.qty || 0), 0);
         const original_total_qty = (plain.OrderItems || []).reduce((sum: number, item: any) => sum + Number(item.ordered_qty_original || item.qty || 0), 0);
-        const canceled_qty = (plain.OrderItems || []).reduce((sum: number, item: any) => sum + Number(item.qty_canceled_backorder || 0), 0);
+        const canceled_qty = (plain.OrderItems || []).reduce(
+            (sum: number, item: any) => sum + Number(item.qty_canceled_backorder || 0) + Number(item.qty_canceled_manual || 0),
+            0
+        );
         const status = String(plain.status || '').toLowerCase();
         const deliveredLikeStatus = ['shipped', 'delivered', 'completed'].includes(status);
         const allocated_qty = (plain.Allocations || []).reduce(
@@ -167,8 +170,8 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         : undefined;
 
     const orderItemAttributes = userRole === 'customer'
-        ? ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'price_at_purchase']
-        : ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'price_at_purchase', 'cost_at_purchase', 'pricing_snapshot'];
+        ? ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual', 'price_at_purchase']
+        : ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual', 'price_at_purchase', 'cost_at_purchase', 'pricing_snapshot'];
 
     let targetOrderId = orderId;
     const directOrder = await Order.findOne({
@@ -257,6 +260,7 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         const invoicedQtyTotal = Math.max(0, Number(invoicedByItemId[itemId] || 0));
         const orderStatus = String(trackedOrder?.status || '').trim().toLowerCase();
         const backorderCanceledQtyBase = Math.max(0, Number(item?.qty_canceled_backorder || 0));
+        const manualCanceledQty = Math.max(0, Number(item?.qty_canceled_manual || 0));
         // For legacy data, some canceled orders didn't write qty_canceled_backorder.
         // Treat remaining qty as canceled so UI doesn't show "Backorder Aktif" on canceled orders.
         const inferredCanceledOnFullCancel = orderStatus === 'canceled'
@@ -265,7 +269,7 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
         const backorderCanceledQty = Math.max(backorderCanceledQtyBase, inferredCanceledOnFullCancel);
         const backorderOpenQty = orderStatus === 'canceled'
             ? 0
-            : Math.max(0, orderedQtyOriginal - allocatedQtyTotal - backorderCanceledQty);
+            : Math.max(0, orderedQtyOriginal - allocatedQtyTotal - backorderCanceledQty - manualCanceledQty);
         return {
             order_item_id: itemId,
             ordered_qty_original: orderedQtyOriginal,
@@ -273,6 +277,7 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
             invoiced_qty_total: invoicedQtyTotal,
             backorder_open_qty: backorderOpenQty,
             backorder_canceled_qty: backorderCanceledQty,
+            manual_canceled_qty: manualCanceledQty,
         };
     });
 

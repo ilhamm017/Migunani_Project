@@ -395,7 +395,7 @@ export const api = {
             }) => apiClient.patch(`/admin/discount-vouchers/${encodeURIComponent(code)}`, data),
             remove: (code: string) => apiClient.delete(`/admin/discount-vouchers/${encodeURIComponent(code)}`),
         },
-        orderManagement: {
+	        orderManagement: {
             getAll: (params?: {
                 page?: number;
                 limit?: number;
@@ -411,17 +411,22 @@ export const api = {
                 apiClient.get<AdminOrderListResponse>('/orders/admin/list', { params }),
             getStats: () => apiClient.get('/orders/admin/stats'),
             getCouriers: () => apiClient.get('/orders/admin/couriers'),
-            updateStatus: (id: string, data: {
-                status: string;
-                courier_id?: string;
-                issue_type?: 'shortage';
-                issue_note?: string;
-                resolution_note?: string;
-            }) => apiClient.patch(`/orders/admin/${id}/status`, data),
-            updatePricing: (id: string, data: {
-                items: Array<{ order_item_id: string; unit_price_override: number; reason?: string }>;
-                reason?: string;
-            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
+	            updateStatus: (id: string, data: {
+	                status: string;
+	                reason?: string;
+	                courier_id?: string;
+	                issue_type?: 'shortage';
+	                issue_note?: string;
+	                resolution_note?: string;
+	            }) => apiClient.patch(`/orders/admin/${id}/status`, data),
+	            cancelItems: (id: string, data: {
+	                reason: string;
+	                items: Array<{ order_item_id: string; cancel_qty: number }>;
+	            }) => apiClient.post(`/orders/admin/${id}/cancel-items`, data),
+	            updatePricing: (id: string, data: {
+	                items: Array<{ order_item_id: string; unit_price_override: number; reason?: string }>;
+	                reason?: string;
+	            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
             moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
         },
         inventory: {

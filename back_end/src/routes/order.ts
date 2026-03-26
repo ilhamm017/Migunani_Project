@@ -24,5 +24,6 @@ router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', '
 router.patch('/admin/:id/status', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.updateOrderStatus);
 router.patch('/admin/:id/pricing', authenticateToken, authorizeRoles('super_admin', 'kasir'), OrderController.updateOrderPricing);
 router.post('/admin/:id/move-to-indent', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.moveOrderToIndent);
+router.post('/admin/:id/cancel-items', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), OrderController.cancelOrderItems);
 
 export default router;

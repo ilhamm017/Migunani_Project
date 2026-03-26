@@ -281,6 +281,8 @@ export default function OrderDetailPage() {
     if (eventType === 'backorder_opened') return 'Backorder terbuka';
     if (eventType === 'backorder_reallocated') return 'Backorder berkurang';
     if (eventType === 'backorder_canceled') return 'Backorder dibatalkan';
+    if (eventType === 'order_item_canceled') return 'Item dibatalkan';
+    if (eventType === 'order_canceled') return 'Order dibatalkan';
     if (eventType === 'order_status_changed') return 'Status order berubah';
     return eventType || 'Event';
   };
@@ -555,17 +557,23 @@ export default function OrderDetailPage() {
             const orderedOriginal = Number(summary?.ordered_qty_original ?? itemQty ?? 0);
             const allocatedTotal = Number(summary?.allocated_qty_total ?? sentQty ?? 0);
             const invoicedTotal = Number(summary?.invoiced_qty_total ?? 0);
-            const backorderOpen = Number(summary?.backorder_open_qty ?? Math.max(0, orderedOriginal - allocatedTotal));
-            const backorderCanceled = Number(summary?.backorder_canceled_qty ?? 0);
+	            const backorderOpen = Number(summary?.backorder_open_qty ?? Math.max(0, orderedOriginal - allocatedTotal));
+	            const backorderCanceled = Number(summary?.backorder_canceled_qty ?? 0);
+	            const manualCanceled = Number((summary as any)?.manual_canceled_qty ?? (item as any)?.qty_canceled_manual ?? 0);
 
             return (
               <div key={item.id} className="bg-slate-50 rounded-2xl px-4 py-3 space-y-2">
-                <div className="flex justify-between items-center">
+	                <div className="flex justify-between items-center">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">{item.Product?.name || 'Produk'}</p>
-                    <div className="flex gap-4 mt-1">
-                      <p className="text-xs text-slate-500">Qty Aktif: <span className="font-bold text-slate-700">{itemQty}</span></p>
-                      {isAllocatedStatus ? (
+	                    <div className="flex gap-4 mt-1">
+	                      <p className="text-xs text-slate-500">Qty Aktif: <span className="font-bold text-slate-700">{itemQty}</span></p>
+	                      {manualCanceled > 0 && (
+	                        <p className="text-xs text-rose-700 font-bold">
+	                          Dibatalkan: {manualCanceled}
+	                        </p>
+	                      )}
+	                      {isAllocatedStatus ? (
                         <p className={`text-xs ${isPartial ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'}`}>
                           {progressLabel}: {sentQty}
                         </p>
@@ -581,7 +589,7 @@ export default function OrderDetailPage() {
                     )}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px]">
+	                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px]">
                   <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
                     <p className="text-slate-500">Pesanan Awal</p>
                     <p className="font-bold text-slate-900">{orderedOriginal}</p>
@@ -594,15 +602,15 @@ export default function OrderDetailPage() {
                     <p className="text-slate-500">Invoice</p>
                     <p className="font-bold text-slate-900">{invoicedTotal}</p>
                   </div>
-                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
-                    <p className="text-slate-500">Backorder Aktif</p>
-                    <p className="font-bold text-amber-700">{backorderOpen}</p>
-                  </div>
-                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
-                    <p className="text-slate-500">Backorder Dibatalkan</p>
-                    <p className="font-bold text-rose-700">{backorderCanceled}</p>
-                  </div>
-                </div>
+	                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+	                    <p className="text-slate-500">Backorder Aktif</p>
+	                    <p className="font-bold text-amber-700">{backorderOpen}</p>
+	                  </div>
+	                  <div className="rounded-lg bg-white border border-slate-200 px-2 py-1">
+	                    <p className="text-slate-500">Backorder Dibatalkan</p>
+	                    <p className="font-bold text-rose-700">{backorderCanceled}</p>
+	                  </div>
+	                </div>
               </div>
             );
           })}
@@ -615,30 +623,39 @@ export default function OrderDetailPage() {
               Belum ada histori tindakan yang tercatat.
             </div>
           )}
-          {timeline.map((evt: any) => {
-            const eventType = String(evt?.event_type || '');
-            const orderItemId = String(evt?.order_item_id || '');
-            const payload = evt?.payload || {};
-            const delta = payload?.delta || {};
-            const itemName = orderItemId ? itemNameById[orderItemId] || `Item #${orderItemId}` : null;
-            return (
-              <div key={evt?.id || `${eventType}-${evt?.occurred_at || ''}`} className="bg-slate-50 rounded-2xl px-4 py-3 space-y-1">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm font-semibold text-slate-900">{eventLabel(eventType)}</p>
-                  <p className="text-xs font-bold text-slate-800">{evt?.actor_role || '-'}</p>
-                </div>
-                {itemName && <p className="text-xs text-slate-600">Item: <span className="font-semibold">{itemName}</span></p>}
-                {evt?.reason && <p className="text-xs text-rose-700">Alasan: <span className="font-semibold">{evt.reason}</span></p>}
-                <p className="text-[11px] text-slate-500">
-                  {evt?.occurred_at ? formatDateTime(evt.occurred_at) : '-'}{evt?.actor_role ? ` • oleh ${evt.actor_role}` : ''}
-                </p>
-                {Object.keys(delta || {}).length > 0 && (
-                  <p className="text-[11px] text-slate-600">Perubahan: {JSON.stringify(delta)}</p>
-                )}
-              </div>
-            );
-          })}
-        </div>
+	          {timeline.map((evt: any) => {
+	            const eventType = String(evt?.event_type || '');
+	            const orderItemId = String(evt?.order_item_id || '');
+	            const payload = evt?.payload || {};
+	            const delta = payload?.delta || {};
+	            const itemName = orderItemId ? itemNameById[orderItemId] || `Item #${orderItemId}` : null;
+	            const canceledQty = Number(delta?.canceled_qty ?? 0);
+	            const skuSnapshot = String(payload?.sku || '');
+	            const nameSnapshot = String(payload?.name || '');
+	            return (
+	              <div key={evt?.id || `${eventType}-${evt?.occurred_at || ''}`} className="bg-slate-50 rounded-2xl px-4 py-3 space-y-1">
+	                <div className="flex items-start justify-between gap-3">
+	                  <p className="text-sm font-semibold text-slate-900">{eventLabel(eventType)}</p>
+	                  <p className="text-xs font-bold text-slate-800">{evt?.actor_role || '-'}</p>
+	                </div>
+	                {itemName && <p className="text-xs text-slate-600">Item: <span className="font-semibold">{itemName}</span></p>}
+	                {(eventType === 'order_item_canceled' && canceledQty > 0) && (
+	                  <p className="text-xs text-rose-700">
+	                    Dibatalkan <span className="font-semibold">{canceledQty}</span>
+	                    {(skuSnapshot || nameSnapshot) ? ` • ${[skuSnapshot, nameSnapshot].filter(Boolean).join(' - ')}` : ''}
+	                  </p>
+	                )}
+	                {evt?.reason && <p className="text-xs text-rose-700">Alasan: <span className="font-semibold">{evt.reason}</span></p>}
+	                <p className="text-[11px] text-slate-500">
+	                  {evt?.occurred_at ? formatDateTime(evt.occurred_at) : '-'}{evt?.actor_role ? ` • oleh ${evt.actor_role}` : ''}
+	                </p>
+	                {Object.keys(delta || {}).length > 0 && eventType !== 'order_item_canceled' && (
+	                  <p className="text-[11px] text-slate-600">Perubahan: {JSON.stringify(delta)}</p>
+	                )}
+	              </div>
+	            );
+	          })}
+	        </div>
 
         <div className="bg-slate-900 rounded-3xl p-4 text-white flex justify-between items-center">
           <span className="text-sm">Total</span>

@@ -321,12 +321,13 @@ export const seedPurchaseHistoryFromBackorderReport = async (options?: {
                 const orderItem = await OrderItem.create({
                     order_id: String(order.id),
                     product_id: String(product.id),
-                    qty: qtyRequested,
-                    ordered_qty_original: qtyRequested,
-                    qty_canceled_backorder: 0,
-                    price_at_purchase: unitPaid,
-                    cost_at_purchase: Number(item.cost_per_unit || 0),
-                    pricing_snapshot: {
+	                    qty: qtyRequested,
+	                    ordered_qty_original: qtyRequested,
+	                    qty_canceled_backorder: 0,
+	                    qty_canceled_manual: 0,
+	                    price_at_purchase: unitPaid,
+	                    cost_at_purchase: Number(item.cost_per_unit || 0),
+	                    pricing_snapshot: {
                         imported_invoice: invoice.invoice_no,
                         qty_requested: qtyRequested,
                         qty_display: qtyDisplay,
