@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { User, LogOut, MapPin, Phone, Mail, ChevronRight, Settings, HelpCircle, Shield, ArrowRight, Sparkles, RotateCcw } from 'lucide-react';
+import { User, LogOut, MapPin, Phone, Mail, ChevronRight, Settings, HelpCircle, Shield, ArrowRight, Sparkles, RotateCcw, Wallet } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 
 export default function ProfilePage() {
@@ -53,6 +53,7 @@ export default function ProfilePage() {
 
     const menuItems = [
         { icon: RotateCcw, label: 'Status Retur', desc: 'Lacak pengembalian barang Anda', href: '/retur' },
+        { icon: Wallet, label: 'Saldo Saya', desc: 'Lihat saldo dan riwayat', href: '/profile/balance' },
         { icon: User, label: 'Edit Profil', desc: 'Ubah nama, foto profil', href: '/profile/edit' },
         { icon: MapPin, label: 'Alamat Saya', desc: 'Kelola alamat pengiriman', href: '/profile/addresses' },
         { icon: Shield, label: 'Keamanan', desc: 'Password, verifikasi', href: '/profile/security' },

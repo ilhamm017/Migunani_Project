@@ -51,6 +51,7 @@ router.get('/reports/cash-flow', authorizeRoles('super_admin', 'admin_finance'),
 router.get('/reports/inventory-value', authorizeRoles('super_admin', 'admin_finance'), ReportController.getInventoryValue);
 router.get('/reports/aging-ap', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsPayableAging);
 router.get('/reports/aging-ar', authorizeRoles('super_admin', 'admin_finance'), ReportController.getAccountsReceivableAging);
+router.get('/reports/customer-balance', authorizeRoles('super_admin', 'admin_finance'), ReportController.getCustomerBalanceReport);
 router.get('/reports/backorders', authorizeRoles('super_admin', 'kasir'), ReportController.getBackorderPreorderReport);
 router.get('/reports/backorders/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportBackorderPreorderReportExcel);
 router.get('/reports/stock-reduction', authorizeRoles('super_admin', 'kasir'), ReportController.getStockReductionReport);

@@ -26,7 +26,7 @@ type ApiErrorWithMessage = {
 };
 
 export default function AdminSalesHubPage() {
-  const allowed = useRequireRoles(['super_admin', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_finance']);
 
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
 

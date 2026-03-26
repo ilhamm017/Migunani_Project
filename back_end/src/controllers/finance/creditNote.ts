@@ -15,6 +15,7 @@ import {
 } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { CustomerBalanceService } from '../../services/CustomerBalanceService';
 
 export const createCreditNote = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -97,6 +98,11 @@ export const postCreditNote = asyncWrapper(async (req: Request, res: Response) =
             await t.rollback();
             throw new CustomError('Invoice terkait tidak ditemukan', 404);
         }
+        const customerId = String((invoice as any).customer_id || '').trim();
+        if (!customerId) {
+            await t.rollback();
+            throw new CustomError('Invoice tidak memiliki customer_id. Data harus dibenahi sebelum posting credit note.', 409);
+        }
 
         const salesReturnAcc = await Account.findOne({ where: { code: '4101' }, transaction: t });
         const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
@@ -127,6 +133,18 @@ export const postCreditNote = asyncWrapper(async (req: Request, res: Response) =
             }, t);
         }
 
+        // Customer balance: credit note increases customer credit.
+        await CustomerBalanceService.createEntry({
+            customer_id: customerId,
+            amount: Math.round(amount * 100) / 100,
+            entry_type: 'credit_note_posted',
+            reference_type: 'credit_note',
+            reference_id: String(cn.id),
+            created_by: String(userId),
+            note: `Credit note ${cn.credit_note_number} diposting (mode=${cn.mode}).`,
+            idempotency_key: `balance_credit_note_post_${cn.id}`,
+        }, { transaction: t });
+
         if (payNow && cn.mode === 'cash_refund' && refundPayableAcc && paymentAcc) {
             await JournalService.createEntry({
                 description: `Refund payout Credit Note ${cn.credit_note_number}`,
@@ -139,6 +157,16 @@ export const postCreditNote = asyncWrapper(async (req: Request, res: Response) =
                     { account_id: paymentAcc.id, debit: 0, credit: amount }
                 ]
             }, t);
+            await CustomerBalanceService.createEntry({
+                customer_id: customerId,
+                amount: -Math.round(amount * 100) / 100,
+                entry_type: 'credit_note_refund_paid',
+                reference_type: 'credit_note',
+                reference_id: String(cn.id),
+                created_by: String(userId),
+                note: `Refund credit note ${cn.credit_note_number} dibayar (akun=${paymentAccountCode}).`,
+                idempotency_key: `balance_credit_note_refund_${cn.id}`,
+            }, { transaction: t });
             await cn.update({ status: 'refunded', posted_at: new Date(), posted_by: userId }, { transaction: t });
         } else {
             await cn.update({ status: 'posted', posted_at: new Date(), posted_by: userId }, { transaction: t });

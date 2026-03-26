@@ -21,6 +21,7 @@ async function seedAccounts() {
             { code: '2201', name: 'PPN Keluaran', type: 'liability' },
             { code: '2202', name: 'PPN Masukan', type: 'asset' },
             { code: '2203', name: 'Hutang Refund', type: 'liability' },
+            { code: '2105', name: 'Saldo Customer (Kredit Customer)', type: 'liability' },
             { code: '2300', name: 'Pendapatan Ditangguhkan', type: 'liability' },
             // EQUITY
             { code: '3100', name: 'Modal', type: 'equity' },

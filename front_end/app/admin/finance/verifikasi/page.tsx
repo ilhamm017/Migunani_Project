@@ -220,11 +220,35 @@ export default function FinanceVerifyPage() {
 
   if (!allowed) return null;
 
-  const handleAction = async (id: string, verifyAction?: 'approve' | 'reject') => {
+  const handleAction = async (
+    id: string,
+    verifyAction?: 'approve' | 'reject',
+    opts?: { collectible_total?: number; payment_method?: string }
+  ) => {
     const action = verifyAction || 'approve';
     try {
       setBusyId(id);
-      await api.admin.finance.verifyPayment(id, action);
+      let amountReceived: number | undefined = undefined;
+      if (action === 'approve') {
+        const suggested = Number(opts?.collectible_total ?? 0);
+        const input = prompt('Masukkan amount_received (kosong = sesuai tagihan):', suggested > 0 ? String(suggested) : '');
+        if (input === null) {
+          setBusyId(null);
+          return;
+        }
+        const trimmed = input.trim();
+        if (trimmed) {
+          const parsed = Number(trimmed);
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            notifyOpen({ variant: 'error', title: 'Input tidak valid', message: 'amount_received harus angka >= 0' });
+            setBusyId(null);
+            return;
+          }
+          amountReceived = parsed;
+        }
+      }
+
+      await api.admin.finance.verifyPayment(id, action, amountReceived);
       await load();
       notifyOpen({
         variant: 'success',
@@ -326,8 +350,18 @@ export default function FinanceVerifyPage() {
                         </button>
                       ) : null}
                       <button
-                        onClick={() => handleAction(String(o.Invoice?.id || o.id), 'approve')}
-                        disabled={busyId === String(o.Invoice?.id || o.id) || !proofUrl}
+                        onClick={() => handleAction(
+                          String(o.Invoice?.id || o.id),
+                          'approve',
+                          {
+                            collectible_total: Number(o.Invoice?.collectible_total ?? o.Invoice?.total ?? 0),
+                            payment_method: String(o.Invoice?.payment_method || ''),
+                          }
+                        )}
+                        disabled={
+                          busyId === String(o.Invoice?.id || o.id)
+                          || (String(o.Invoice?.payment_method || '').toLowerCase() === 'transfer_manual' && !proofUrl)
+                        }
                         className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-emerald-700 disabled:opacity-50"
                       >
                         Approve

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Filter, Receipt, RefreshCw, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -97,6 +97,14 @@ const defaultFilters = {
 };
 
 export default function CustomerAllInvoicesPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500">Memuat...</div>}>
+      <CustomerAllInvoicesPageInner />
+    </Suspense>
+  );
+}
+
+function CustomerAllInvoicesPageInner() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -619,4 +627,3 @@ export default function CustomerAllInvoicesPage() {
     </div>
   );
 }
-

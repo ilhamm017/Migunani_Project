@@ -9,6 +9,7 @@ interface InvoiceAttributes {
     payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
     amount_paid: number;
+    amount_received?: number | null;
     change_amount: number;
     payment_proof_url?: string | null;
     verified_by?: string | null; // UUID
@@ -41,6 +42,7 @@ class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implem
     declare payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     declare payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
     declare amount_paid: number;
+    declare amount_received: number | null;
     declare change_amount: number;
     declare payment_proof_url: string | null;
     declare verified_by: string | null;
@@ -98,6 +100,10 @@ Invoice.init(
         amount_paid: {
             type: DataTypes.DECIMAL(15, 2),
             defaultValue: 0,
+        },
+        amount_received: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
         },
         change_amount: {
             type: DataTypes.DECIMAL(15, 2),

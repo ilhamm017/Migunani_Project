@@ -10,6 +10,10 @@ router.post('/otp/send', authenticate, requireRole('super_admin', 'kasir'), Cust
 router.post('/create', authenticate, requireRole('super_admin', 'kasir'), CustomerController.createCustomerByAdmin);
 router.get('/:id', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerById);
 router.get('/:id/orders', authenticate, requireRole('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), CustomerController.getCustomerOrders);
+router.get('/:id/balance', authenticate, requireRole('super_admin', 'admin_finance', 'kasir'), CustomerController.getCustomerBalance);
+router.post('/:id/balance/manual-payment', authenticate, requireRole('super_admin', 'admin_finance', 'kasir'), CustomerController.manualPayment);
+router.post('/:id/balance/manual-refund', authenticate, requireRole('super_admin', 'admin_finance', 'kasir'), CustomerController.manualRefund);
+router.post('/:id/balance/manual-adjustment', authenticate, requireRole('super_admin', 'admin_finance', 'kasir'), CustomerController.manualAdjustment);
 router.patch('/:id/email', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerEmailByAdmin);
 router.patch('/:id/password', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerPasswordByAdmin);
 router.patch('/:id/tier', authenticate, requireRole('super_admin', 'kasir'), CustomerController.updateCustomerTier);

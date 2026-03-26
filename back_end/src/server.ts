@@ -604,6 +604,27 @@ const ensureDeliveryHandoverItemEvidenceColumnsReady = async () => {
     }
 };
 
+const ensureInvoiceAmountReceivedColumnReady = async () => {
+    const tableName = 'invoices';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const columnName = 'amount_received';
+    const ok = await columnExists(tableName, columnName);
+    if (ok) return;
+
+    console.warn(`[Startup] Missing column in ${tableName}: ${columnName}. Applying targeted ALTER TABLE...`);
+    try {
+        await sequelize.query(
+            `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` DECIMAL(15, 2) NULL AFTER \`amount_paid\``
+        );
+    } catch (error: any) {
+        const code = error?.parent?.code || error?.original?.code || error?.code;
+        if (code === 'ER_DUP_FIELDNAME') return;
+        throw error;
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -618,6 +639,7 @@ const syncDatabaseWithRetry = async () => {
         await ensureReturHandoverDebtSnapshotColumnsReady();
         await ensureCodSettlementAuditColumnsReady();
         await ensureDeliveryHandoverItemEvidenceColumnsReady();
+        await ensureInvoiceAmountReceivedColumnReady();
         return;
     }
 
@@ -632,6 +654,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureReturHandoverDebtSnapshotColumnsReady();
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
+            await ensureInvoiceAmountReceivedColumnReady();
             return;
         } catch (error) {
             lastError = error;
@@ -649,6 +672,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureReturHandoverDebtSnapshotColumnsReady();
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
+            await ensureInvoiceAmountReceivedColumnReady();
             return;
         }
     }

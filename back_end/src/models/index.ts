@@ -48,6 +48,7 @@ import ProductCostState from './ProductCostState';
 import InventoryCostLedger from './InventoryCostLedger';
 import CreditNote from './CreditNote';
 import CreditNoteLine from './CreditNoteLine';
+import CustomerBalanceEntry from './CustomerBalanceEntry';
 import IdempotencyKey from './IdempotencyKey';
 import NotificationOutbox from './NotificationOutbox';
 import AuditLog from './AuditLog';
@@ -92,6 +93,12 @@ DriverBalanceAdjustment.belongsTo(User, { foreignKey: 'driver_id', as: 'Driver' 
 User.hasMany(DriverBalanceAdjustment, { foreignKey: 'driver_id', as: 'DriverBalanceAdjustments' });
 DriverBalanceAdjustment.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
 User.hasMany(DriverBalanceAdjustment, { foreignKey: 'created_by', as: 'CreatedDriverBalanceAdjustments' });
+
+// Customer Balance Entries
+CustomerBalanceEntry.belongsTo(User, { foreignKey: 'customer_id', as: 'Customer' });
+User.hasMany(CustomerBalanceEntry, { foreignKey: 'customer_id', as: 'CustomerBalanceEntries' });
+CustomerBalanceEntry.belongsTo(User, { foreignKey: 'created_by', as: 'Creator' });
+User.hasMany(CustomerBalanceEntry, { foreignKey: 'created_by', as: 'CreatedCustomerBalanceEntries' });
 
 // Retur Handovers
 ReturHandover.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice' });
@@ -385,6 +392,7 @@ export {
     InventoryCostLedger,
     CreditNote,
     CreditNoteLine,
+    CustomerBalanceEntry,
     IdempotencyKey,
     NotificationOutbox,
     AuditLog,

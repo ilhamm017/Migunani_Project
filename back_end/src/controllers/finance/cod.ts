@@ -20,6 +20,7 @@ import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
+import { CustomerBalanceService } from '../../services/CustomerBalanceService';
 
 // --- Driver COD Deposit ---
 
@@ -439,6 +440,107 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 });
             }
 
+            // Allocate settlement diff to customer balances (pro-rata by expected total per invoice)
+            if (diff !== 0) {
+                const invoiceItemsForCustomer = await InvoiceItem.findAll({
+                    where: { invoice_id: { [Op.in]: invoiceIds } },
+                    attributes: ['invoice_id'],
+                    include: [{
+                        model: OrderItem,
+                        required: true,
+                        attributes: ['order_id']
+                    }],
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+
+                const orderIdsForCustomer = Array.from(new Set(invoiceItemsForCustomer
+                    .map((row: any) => String(row?.OrderItem?.order_id || '').trim())
+                    .filter(Boolean)));
+                const ordersForCustomer = orderIdsForCustomer.length > 0
+                    ? await Order.findAll({
+                        where: { id: { [Op.in]: orderIdsForCustomer } },
+                        attributes: ['id', 'customer_id'],
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    })
+                    : [];
+
+                const orderCustomerById = new Map<string, string>();
+                ordersForCustomer.forEach((o: any) => {
+                    const orderId = String(o?.id || '').trim();
+                    const customerId = String(o?.customer_id || '').trim();
+                    if (orderId && customerId) orderCustomerById.set(orderId, customerId);
+                });
+
+                const orderIdsByInvoiceId = new Map<string, Set<string>>();
+                invoiceItemsForCustomer.forEach((row: any) => {
+                    const invId = String(row?.invoice_id || '').trim();
+                    const orderId = String(row?.OrderItem?.order_id || '').trim();
+                    if (!invId || !orderId) return;
+                    if (!orderIdsByInvoiceId.has(invId)) orderIdsByInvoiceId.set(invId, new Set());
+                    orderIdsByInvoiceId.get(invId)!.add(orderId);
+                });
+
+                const customerByInvoiceId = new Map<string, string>();
+                const missingCustomerInvoices: string[] = [];
+                const multiCustomerInvoices: string[] = [];
+                for (const invId of invoiceIds) {
+                    const orderIds = Array.from(orderIdsByInvoiceId.get(invId) || []);
+                    const customerIds = Array.from(new Set(orderIds.map((oid) => orderCustomerById.get(oid)).filter(Boolean) as string[]));
+                    if (customerIds.length === 0) {
+                        missingCustomerInvoices.push(invId);
+                        continue;
+                    }
+                    if (customerIds.length > 1) {
+                        multiCustomerInvoices.push(invId);
+                        continue;
+                    }
+                    customerByInvoiceId.set(invId, customerIds[0]!);
+                }
+                if (missingCustomerInvoices.length > 0) {
+                    await t.rollback();
+                    throw new CustomError(`COD settlement gagal: tidak bisa resolve customer untuk invoice: ${missingCustomerInvoices.join(', ')}`, 409);
+                }
+                if (multiCustomerInvoices.length > 0) {
+                    await t.rollback();
+                    throw new CustomError(`COD settlement gagal: 1 invoice berisi lebih dari 1 customer: ${multiCustomerInvoices.join(', ')}`, 409);
+                }
+
+                const netTotals = invoiceIds.length > 0
+                    ? await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t })
+                    : new Map<string, any>();
+                const weightsByCustomerId = new Map<string, number>();
+                invoices.forEach((invoice: any) => {
+                    const invId = String(invoice?.id || '').trim();
+                    if (!invId) return;
+                    const customerId = customerByInvoiceId.get(invId);
+                    if (!customerId) return;
+                    const amountPaid = Number(invoice?.amount_paid || 0);
+                    const computedNet = Number(netTotals.get(invId)?.net_total);
+                    const invoiceGross = Number(invoice?.total);
+                    const expected = (Number.isFinite(amountPaid) && amountPaid > 0)
+                        ? amountPaid
+                        : (Number.isFinite(computedNet) && computedNet >= 0 ? computedNet : (Number.isFinite(invoiceGross) ? invoiceGross : 0));
+                    weightsByCustomerId.set(customerId, (weightsByCustomerId.get(customerId) || 0) + Math.max(0, expected));
+                });
+
+                const allocations = CustomerBalanceService.allocateDiffProRata(diff, weightsByCustomerId);
+                for (const [customerId, amount] of allocations.entries()) {
+                    if (!amount) continue;
+                    await CustomerBalanceService.createEntry({
+                        customer_id: customerId,
+                        amount,
+                        entry_type: 'cod_settlement_delta',
+                        reference_type: 'cod_settlement',
+                        reference_id: String(settlement.id),
+                        created_by: verifierId,
+                        note: `Selisih COD settlement #${settlement.id}: expected=${totalExpected}, received=${received}, diff=${diff}.`,
+                        idempotency_key: `balance_cod_settlement_${settlement.id}_${customerId}`,
+                    }, { transaction: t });
+                }
+            }
+
             const targetOrderIds = affectedOrderIds.length > 0 ? affectedOrderIds : selectedOrderIds;
             const targetOrders = await Order.findAll({
                 where: { id: { [Op.in]: targetOrderIds } },
@@ -501,29 +603,33 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 });
             }
 
-            // --- Journal Entry for Settlement (Cash vs Piutang Driver) ---
+            // --- Journal Entry for Settlement (Cash vs Piutang Driver, diff goes to customer balances) ---
             if (totalExpected > 0 || received > 0) {
                 const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
                 const piutangDriverAcc = await Account.findOne({ where: { code: '1104' }, transaction: t });
+                const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
+                const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
 
-                if (cashAcc && piutangDriverAcc) {
-                    const journalLines: any[] = [];
+                const expected = Math.max(0, Math.round(Number(totalExpected || 0) * 100) / 100);
+                const recv = Math.max(0, Math.round(Number(received || 0) * 100) / 100);
+                const shortage = Math.max(0, Math.round((expected - recv) * 100) / 100);
+                const surplus = Math.max(0, Math.round((recv - expected) * 100) / 100);
 
-                    // a. Cash Received
-                    if (received > 0) {
-                        journalLines.push({ account_id: cashAcc.id, debit: received, credit: 0 });
+                if (cashAcc && piutangDriverAcc && expected > 0) {
+                    const lines: any[] = [];
+                    if (recv > 0) lines.push({ account_id: cashAcc.id, debit: recv, credit: 0 });
+                    if (shortage > 0 && arAcc) lines.push({ account_id: arAcc.id, debit: shortage, credit: 0 });
+                    lines.push({ account_id: piutangDriverAcc.id, debit: 0, credit: expected });
+                    if (surplus > 0 && customerSaldoAcc) lines.push({ account_id: customerSaldoAcc.id, debit: 0, credit: surplus });
 
-                        // b. Reduce Driver Receivable
-                        journalLines.push({ account_id: piutangDriverAcc.id, debit: 0, credit: received });
-                    }
-
-                    if (journalLines.length >= 2) {
+                    if (lines.length >= 2) {
                         await JournalService.createEntry({
                             description: `Setoran COD Settlement #${settlement.id} (Driver: ${driver.name})`,
                             reference_type: 'cod_settlement',
-                            reference_id: settlement.id.toString(),
+                            reference_id: String(settlement.id),
                             created_by: verifierId,
-                            lines: journalLines
+                            idempotency_key: `cod_settlement_balance_${settlement.id}`,
+                            lines
                         }, t);
                     }
                 }

@@ -150,6 +150,7 @@ export const api = {
     // Profile (Customer)
     profile: {
         getMe: () => apiClient.get('/profile/me'),
+        getBalance: () => apiClient.get('/profile/balance'),
         updateAddresses: (addresses: SavedAddressesPayload) => apiClient.patch('/profile/addresses', { saved_addresses: addresses }),
     },
 
@@ -313,6 +314,14 @@ export const api = {
             }) => apiClient.post('/admin/customers/create', data),
             updateTier: (id: string, tier: 'regular' | 'gold' | 'platinum') =>
                 apiClient.patch(`/admin/customers/${id}/tier`, { tier }),
+            getBalance: (id: string, params?: { limit?: number; offset?: number }) =>
+                apiClient.get(`/admin/customers/${id}/balance`, { params }),
+            manualPayment: (id: string, data: { amount: number; payment_account_code?: '1101' | '1102' | string; note?: string; idempotency_key?: string }) =>
+                apiClient.post(`/admin/customers/${id}/balance/manual-payment`, data),
+            manualRefund: (id: string, data: { amount: number; payment_account_code?: '1101' | '1102' | string; note?: string; idempotency_key?: string }) =>
+                apiClient.post(`/admin/customers/${id}/balance/manual-refund`, data),
+            manualAdjustment: (id: string, data: { amount_signed: number; contra_account_code: string; note: string; idempotency_key?: string }) =>
+                apiClient.post(`/admin/customers/${id}/balance/manual-adjustment`, data),
         },
         shippingMethods: {
             getAll: (params?: { active_only?: boolean }) =>
@@ -527,8 +536,11 @@ export const api = {
                 apiClient.post('/admin/finance/invoices/issue-batch', { order_ids: orderIds }),
             issueInvoiceByItems: (items: Array<{ order_item_id: string | number; qty: number }>) =>
                 apiClient.post('/admin/finance/invoices/issue-items', { items }),
-            verifyPayment: (orderId: string, action: 'approve' | 'reject') =>
-                apiClient.patch(`/admin/finance/orders/${orderId}/verify`, { action }),
+            verifyPayment: (orderId: string, action: 'approve' | 'reject', amount_received?: number) =>
+                apiClient.patch(`/admin/finance/orders/${orderId}/verify`, {
+                    action,
+                    ...(amount_received !== undefined ? { amount_received } : {}),
+                }),
             getAR: () => apiClient.get('/admin/finance/ar'),
             getARById: (invoiceId: string) => apiClient.get(`/admin/finance/ar/${invoiceId}`),
             getInvoiceCostOverrides: (invoiceId: string) =>
@@ -552,6 +564,8 @@ export const api = {
                 apiClient.get('/admin/finance/reports/aging-ap'),
             getARAging: () =>
                 apiClient.get('/admin/finance/reports/aging-ar'),
+            getCustomerBalanceReport: (params?: { q?: string; only_negative?: boolean; only_positive?: boolean; min_abs?: number; limit?: number; offset?: number }) =>
+                apiClient.get('/admin/finance/reports/customer-balance', { params }),
             getBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders', { params }),
             exportBackorderReport: (params?: { startDate?: string; endDate?: string }) =>

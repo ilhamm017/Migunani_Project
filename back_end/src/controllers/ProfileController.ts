@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { User, CustomerProfile } from '../models';
+import { CustomerBalanceService } from '../services/CustomerBalanceService';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
@@ -45,4 +46,30 @@ export const updateAddresses = asyncWrapper(async (req: Request, res: Response) 
     await profile.update({ saved_addresses });
 
     res.json({ message: 'Addresses updated successfully', saved_addresses });
+});
+
+export const getBalance = asyncWrapper(async (req: Request, res: Response) => {
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) {
+        throw new CustomError('Unauthorized', 401);
+    }
+
+    const user = await User.findByPk(userId, {
+        attributes: ['id', 'role']
+    });
+    if (!user) {
+        throw new CustomError('User not found', 404);
+    }
+    if (String((user as any).role || '') !== 'customer') {
+        throw new CustomError('Hanya customer yang memiliki saldo', 403);
+    }
+
+    const summary = await CustomerBalanceService.getSummary(userId);
+    const list = await CustomerBalanceService.listEntries(userId, { limit: 20, offset: 0 });
+
+    res.json({
+        as_of: new Date().toISOString(),
+        ...summary,
+        entries: list.entries,
+    });
 });

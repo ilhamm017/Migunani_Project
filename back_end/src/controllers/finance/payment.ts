@@ -19,6 +19,7 @@ import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
+import { CustomerBalanceService } from '../../services/CustomerBalanceService';
 
 export const verifyPayment = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -67,17 +68,21 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             nextStatusByOrderId[orderId] = status;
         });
         if (action === 'approve') {
-            const isNoProofMethod = ['cod', 'cash_store'].includes(invoice.payment_method);
+            const paymentMethod = String(invoice.payment_method || '').trim().toLowerCase();
+            const isCod = paymentMethod === 'cod';
+            const isTransferManual = paymentMethod === 'transfer_manual';
+            const isCashStore = paymentMethod === 'cash_store';
 
-            if (isNoProofMethod) {
+            if (isCod) {
                 await t.rollback();
-                throw new CustomError('Invoice COD/Cash Store hanya boleh menjadi paid melalui proses settlement.', 409);
+                throw new CustomError('Invoice COD hanya boleh menjadi paid melalui proses settlement.', 409);
             }
 
-            if (!isNoProofMethod && !invoice.payment_proof_url) {
+            if (isTransferManual && !invoice.payment_proof_url) {
                 await t.rollback();
                 throw new CustomError('Bukti transfer belum tersedia untuk diverifikasi', 400);
             }
+            // cash_store: no proof required
 
             if (invoice.payment_status === 'paid') {
                 await t.rollback();
@@ -86,31 +91,79 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
 
             const computedTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
             const collectibleTotal = Math.max(0, Math.round(Number(computedTotals?.net_total || 0) * 100) / 100);
+            const receivedRaw = req.body?.amount_received;
+            const receivedParsed = receivedRaw === undefined || receivedRaw === null || receivedRaw === ''
+                ? collectibleTotal
+                : Number(receivedRaw);
+            if (!Number.isFinite(receivedParsed) || receivedParsed < 0) {
+                await t.rollback();
+                throw new CustomError('amount_received tidak valid', 400);
+            }
+            const amountReceived = Math.round(receivedParsed * 100) / 100;
+            const delta = Math.round((amountReceived - collectibleTotal) * 100) / 100;
 
             await invoice.update({
                 payment_status: 'paid',
                 verified_by: verifierId,
                 verified_at: new Date(),
-                amount_paid: collectibleTotal
+                amount_paid: collectibleTotal,
+                amount_received: amountReceived,
+                change_amount: Math.max(0, delta),
             }, { transaction: t });
 
-            const totalAmount = collectibleTotal;
-            const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
+            const customerIds = Array.from(new Set((orders as any[]).map((o) => String(o?.customer_id || '').trim()).filter(Boolean)));
+            if (customerIds.length !== 1) {
+                await t.rollback();
+                throw new CustomError('Invoice terkait memiliki customer tidak valid atau berbeda-beda.', 409);
+            }
+            const customerId = customerIds[0]!;
+
+            if (delta !== 0) {
+                await CustomerBalanceService.createEntry({
+                    customer_id: customerId,
+                    amount: delta,
+                    entry_type: 'payment_delta_non_cod',
+                    reference_type: 'invoice',
+                    reference_id: String(invoice.id),
+                    created_by: verifierId,
+                    note: `Selisih pembayaran invoice ${invoice.invoice_number}: received=${amountReceived}, collectible=${collectibleTotal}.`,
+                    idempotency_key: `balance_invoice_delta_${invoice.id}`,
+                }, { transaction: t });
+            }
+
+            const paymentAccCode = isTransferManual ? '1102' : '1101';
             const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
             const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
+            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+            const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
+            const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
 
-            if (paymentAcc && arAcc && totalAmount > 0) {
-                await JournalService.createEntry({
-                    description: `Verifikasi Pembayaran Invoice #${invoice.invoice_number}`,
-                    reference_type: 'payment_verify',
-                    reference_id: invoice.id.toString(),
-                    created_by: verifierId,
-                    idempotency_key: `payment_verify_${invoice.id}`,
-                    lines: [
-                        { account_id: paymentAcc.id, debit: totalAmount, credit: 0 },
-                        { account_id: arAcc.id, debit: 0, credit: totalAmount }
-                    ]
-                }, t);
+            const vat = Math.max(0, Math.round(Number((invoice as any).tax_amount || 0) * 100) / 100);
+            const dpp = Math.max(0, Math.round((collectibleTotal - vat) * 100) / 100);
+
+            if (revenueAcc) {
+                const lines: any[] = [];
+                if (amountReceived > 0 && paymentAcc) {
+                    lines.push({ account_id: paymentAcc.id, debit: amountReceived, credit: 0 });
+                }
+                if (delta < 0 && arAcc) {
+                    lines.push({ account_id: arAcc.id, debit: Math.abs(delta), credit: 0 });
+                }
+                if (dpp > 0) lines.push({ account_id: revenueAcc.id, debit: 0, credit: dpp });
+                if (vat > 0 && ppnOutputAcc) lines.push({ account_id: ppnOutputAcc.id, debit: 0, credit: vat });
+                if (delta > 0 && customerSaldoAcc) {
+                    lines.push({ account_id: customerSaldoAcc.id, debit: 0, credit: delta });
+                }
+                if (lines.length >= 2) {
+                    await JournalService.createEntry({
+                        description: `Settlement Pembayaran Invoice #${invoice.invoice_number}${isCashStore ? ' (Cash Store)' : ''}`,
+                        reference_type: 'invoice_payment_settlement',
+                        reference_id: String(invoice.id),
+                        created_by: verifierId,
+                        idempotency_key: `invoice_payment_settlement_${invoice.id}`,
+                        lines
+                    }, t);
+                }
             }
 
             const toCompletedIds: string[] = [];

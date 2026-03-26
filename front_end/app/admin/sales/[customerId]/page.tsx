@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { MessageSquare, RefreshCw, ShieldOff, ShieldCheck, Pencil, X, KeyRound, Mail } from 'lucide-react';
+import { MessageSquare, RefreshCw, ShieldOff, ShieldCheck, Pencil, X, KeyRound, Mail, Wallet } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
@@ -35,6 +35,26 @@ type ApiErrorWithMessage = {
   response?: { data?: { message?: string } };
 };
 
+type BalanceEntry = {
+  id: number;
+  amount: string | number;
+  entry_type: string;
+  reference_type?: string | null;
+  reference_id?: string | null;
+  note?: string | null;
+  created_by?: string | null;
+  createdAt: string;
+};
+
+type CustomerBalanceResponse = {
+  balance: number;
+  total_credit: number;
+  total_debt: number;
+  last_entry_at?: string | null;
+  entries: BalanceEntry[];
+  paging?: { total: number; limit: number; offset: number };
+};
+
 const TIER_OPTIONS: Array<{ value: TierType; label: string }> = [
   { value: 'regular', label: 'Regular' },
   { value: 'gold', label: 'Gold' },
@@ -42,7 +62,7 @@ const TIER_OPTIONS: Array<{ value: TierType; label: string }> = [
 ];
 
 export default function AdminCustomerDetailPage() {
-  const allowed = useRequireRoles(['super_admin', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_finance']);
   const params = useParams();
   const searchParams = useSearchParams();
   const customerId = String(params?.customerId || '');
@@ -60,6 +80,17 @@ export default function AdminCustomerDetailPage() {
   const [editPassword, setEditPassword] = useState('');
   const [updatingEmail, setUpdatingEmail] = useState(false);
   const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [loadingBalance, setLoadingBalance] = useState(false);
+  const [balanceData, setBalanceData] = useState<CustomerBalanceResponse | null>(null);
+  const [balanceOffset, setBalanceOffset] = useState(0);
+  const [balanceLimit] = useState(30);
+  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [balanceModalMode, setBalanceModalMode] = useState<'manual_payment' | 'manual_refund' | 'manual_adjustment'>('manual_payment');
+  const [balanceAmount, setBalanceAmount] = useState('');
+  const [balanceAccountCode, setBalanceAccountCode] = useState<'1101' | '1102'>('1101');
+  const [balanceContraCode, setBalanceContraCode] = useState('');
+  const [balanceNote, setBalanceNote] = useState('');
+  const [submittingBalance, setSubmittingBalance] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
 
@@ -86,6 +117,28 @@ export default function AdminCustomerDetailPage() {
     if (!allowed) return;
     void loadCustomerDetail();
   }, [allowed, loadCustomerDetail]);
+
+  const loadCustomerBalance = useCallback(async (nextOffset?: number) => {
+    if (!customerId) return;
+    try {
+      setLoadingBalance(true);
+      const offset = Number.isFinite(nextOffset as number) ? (nextOffset as number) : balanceOffset;
+      const res = await api.admin.customers.getBalance(customerId, { limit: balanceLimit, offset });
+      setBalanceData((res.data || null) as CustomerBalanceResponse | null);
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setBalanceData(null);
+      setError(err?.response?.data?.message || 'Gagal memuat saldo customer');
+    } finally {
+      setLoadingBalance(false);
+    }
+  }, [balanceLimit, balanceOffset, customerId]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    setBalanceOffset(0);
+    void loadCustomerBalance(0);
+  }, [allowed, customerId, loadCustomerBalance]);
 
   useEffect(() => {
     const currentTier = String(selectedCustomer?.CustomerProfile?.tier || 'regular').toLowerCase();
@@ -393,6 +446,151 @@ export default function AdminCustomerDetailPage() {
             </div>
           </div>
 
+          <div id="saldo-customer" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Saldo Customer</p>
+                <p className="mt-2 text-xs text-slate-500">Minus = customer berhutang, plus = customer punya kredit.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadCustomerBalance(balanceOffset)}
+                disabled={loadingBalance}
+                className="btn-3d inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200/70 disabled:opacity-50"
+              >
+                <RefreshCw size={12} /> Refresh
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div className={`rounded-2xl border p-3 ${Number(balanceData?.balance || 0) < 0 ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Saldo</p>
+                  <div className="w-9 h-9 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-500">
+                    <Wallet size={16} />
+                  </div>
+                </div>
+                <p className={`mt-2 text-lg font-black ${Number(balanceData?.balance || 0) < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {formatCurrency(Number(balanceData?.balance || 0))}
+                </p>
+                <p className="mt-1 text-[10px] text-slate-500">
+                  Kredit: <span className="font-bold">{formatCurrency(Number(balanceData?.total_credit || 0))}</span> • Hutang: <span className="font-bold">{formatCurrency(Number(balanceData?.total_debt || 0))}</span>
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 md:col-span-2 space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aksi</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBalanceModalMode('manual_payment');
+                      setBalanceAmount('');
+                      setBalanceNote('');
+                      setBalanceAccountCode('1101');
+                      setBalanceModalOpen(true);
+                    }}
+                    className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white"
+                  >
+                    Input Pembayaran Tambahan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBalanceModalMode('manual_refund');
+                      setBalanceAmount('');
+                      setBalanceNote('');
+                      setBalanceAccountCode('1101');
+                      setBalanceModalOpen(true);
+                    }}
+                    className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-3 py-2 rounded-xl bg-rose-600 text-white"
+                  >
+                    Refund Saldo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBalanceModalMode('manual_adjustment');
+                      setBalanceAmount('');
+                      setBalanceContraCode('');
+                      setBalanceNote('');
+                      setBalanceModalOpen(true);
+                    }}
+                    className="btn-3d inline-flex items-center justify-center text-center whitespace-nowrap text-[11px] font-bold px-3 py-2 rounded-xl bg-slate-900 text-white"
+                  >
+                    Adjustment (Finance)
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500">Gunakan Adjustment hanya untuk koreksi dengan alasan jelas.</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Statement</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={loadingBalance || balanceOffset <= 0}
+                    onClick={() => {
+                      const next = Math.max(0, balanceOffset - balanceLimit);
+                      setBalanceOffset(next);
+                      void loadCustomerBalance(next);
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-bold disabled:opacity-40"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loadingBalance || (balanceData?.entries?.length || 0) < balanceLimit}
+                    onClick={() => {
+                      const next = balanceOffset + balanceLimit;
+                      setBalanceOffset(next);
+                      void loadCustomerBalance(next);
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-bold disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+              {loadingBalance ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-500">Memuat statement...</div>
+              ) : !balanceData || !Array.isArray(balanceData.entries) || balanceData.entries.length === 0 ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-500">Belum ada pergerakan saldo.</div>
+              ) : (
+                <div className="space-y-2 max-h-[38vh] overflow-y-auto pr-1">
+                  {balanceData.entries.map((row) => {
+                    const amt = Number(row.amount || 0);
+                    const date = row.createdAt ? new Date(row.createdAt) : null;
+                    const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().replace('T', ' ').slice(0, 19) : '-';
+                    return (
+                      <div key={row.id} className="border border-slate-200 rounded-2xl p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-black text-slate-900">{row.entry_type}</p>
+                            <p className="text-[11px] text-slate-500 mt-1">{dateStr}</p>
+                            {(row.reference_type || row.reference_id) && (
+                              <p className="text-[11px] text-slate-500 mt-1">
+                                Ref: <span className="font-bold text-slate-700">{row.reference_type || '-'}</span> • <span className="font-bold text-slate-700">{row.reference_id || '-'}</span>
+                              </p>
+                            )}
+                            {row.note ? <p className="text-[11px] text-slate-600 mt-1">{row.note}</p> : null}
+                          </div>
+                          <div className={`text-sm font-black ${amt < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            {formatCurrency(amt)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
         </>
       )}
 
@@ -550,6 +748,117 @@ export default function AdminCustomerDetailPage() {
           </div>
         </div>
       )}
+
+      {balanceModalOpen && selectedCustomer ? (
+        <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/70 p-4 md:items-center">
+          <div className="w-full max-w-lg rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">Kelola Saldo Customer</p>
+                <p className="mt-2 text-sm font-black text-slate-900">{selectedCustomer.name || 'Customer'}</p>
+                <p className="mt-1 text-xs text-slate-500">{selectedCustomer.whatsapp_number || selectedCustomer.id}</p>
+              </div>
+              <button
+                type="button"
+                data-no-3d="true"
+                onClick={() => setBalanceModalOpen(false)}
+                className="p-2 rounded-full bg-slate-50 text-slate-500 hover:bg-slate-100"
+                aria-label="Tutup"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                {balanceModalMode === 'manual_payment' ? 'Manual Payment' : balanceModalMode === 'manual_refund' ? 'Manual Refund' : 'Manual Adjustment'}
+              </p>
+
+              <div className="grid grid-cols-1 gap-2">
+                <input
+                  value={balanceAmount}
+                  onChange={(e) => setBalanceAmount(e.target.value)}
+                  placeholder={balanceModalMode === 'manual_adjustment' ? 'Nominal (boleh minus), contoh: -5000' : 'Nominal, contoh: 5000'}
+                  className="h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm"
+                />
+
+                {(balanceModalMode === 'manual_payment' || balanceModalMode === 'manual_refund') && (
+                  <select
+                    value={balanceAccountCode}
+                    onChange={(e) => setBalanceAccountCode(e.target.value as '1101' | '1102')}
+                    className="h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm"
+                  >
+                    <option value="1101">1101 - Kas</option>
+                    <option value="1102">1102 - Bank</option>
+                  </select>
+                )}
+
+                {balanceModalMode === 'manual_adjustment' && (
+                  <input
+                    value={balanceContraCode}
+                    onChange={(e) => setBalanceContraCode(e.target.value)}
+                    placeholder="Kode akun kontra, contoh: 4100"
+                    className="h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm"
+                  />
+                )}
+
+                <textarea
+                  value={balanceNote}
+                  onChange={(e) => setBalanceNote(e.target.value)}
+                  placeholder="Catatan (wajib untuk adjustment)"
+                  className="min-h-[88px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+
+              <button
+                type="button"
+                disabled={submittingBalance}
+                onClick={async () => {
+                  if (!customerId) return;
+                  const amt = Number(balanceAmount);
+                  if (!Number.isFinite(amt) || amt === 0) {
+                    setError('Nominal tidak valid.');
+                    return;
+                  }
+                  if (balanceModalMode === 'manual_adjustment' && !balanceNote.trim()) {
+                    setError('Catatan wajib diisi untuk adjustment.');
+                    return;
+                  }
+                  if (balanceModalMode === 'manual_adjustment' && !balanceContraCode.trim()) {
+                    setError('Kode akun kontra wajib diisi.');
+                    return;
+                  }
+                  try {
+                    setSubmittingBalance(true);
+                    setError('');
+                    setActionMessage('');
+                    if (balanceModalMode === 'manual_payment') {
+                      await api.admin.customers.manualPayment(customerId, { amount: amt, payment_account_code: balanceAccountCode, note: balanceNote.trim() || undefined });
+                      setActionMessage('Manual payment berhasil dicatat.');
+                    } else if (balanceModalMode === 'manual_refund') {
+                      await api.admin.customers.manualRefund(customerId, { amount: amt, payment_account_code: balanceAccountCode, note: balanceNote.trim() || undefined });
+                      setActionMessage('Manual refund berhasil dicatat.');
+                    } else {
+                      await api.admin.customers.manualAdjustment(customerId, { amount_signed: amt, contra_account_code: balanceContraCode.trim(), note: balanceNote.trim() });
+                      setActionMessage('Manual adjustment berhasil dicatat.');
+                    }
+                    setBalanceModalOpen(false);
+                    await loadCustomerBalance(balanceOffset);
+                  } catch (e: unknown) {
+                    const err = e as ApiErrorWithMessage;
+                    setError(err?.response?.data?.message || 'Gagal menyimpan perubahan saldo');
+                  } finally {
+                    setSubmittingBalance(false);
+                  }
+                }}
+                className="w-full h-11 rounded-2xl bg-slate-900 text-white text-xs font-black uppercase disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {submittingBalance ? 'Menyimpan...' : 'Simpan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

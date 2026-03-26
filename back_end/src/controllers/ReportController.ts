@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
 import { ReportService } from '../services/ReportService';
+import { CustomerBalanceService } from '../services/CustomerBalanceService';
 import { Invoice, InvoiceItem, OrderItem, Product, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
@@ -84,6 +85,30 @@ export const getAccountsReceivableAging = asyncWrapper(async (req: Request, res:
             throw error;
         }
         throw new CustomError('Error calculating AR Aging', 500);
+    }
+});
+
+export const getCustomerBalanceReport = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const q = String(req.query?.q || '').trim();
+        const onlyNegative = String(req.query?.only_negative || '').trim().toLowerCase() === 'true';
+        const onlyPositive = String(req.query?.only_positive || '').trim().toLowerCase() === 'true';
+        const minAbs = req.query?.min_abs !== undefined ? Number(req.query.min_abs) : undefined;
+        const limit = req.query?.limit !== undefined ? Number(req.query.limit) : undefined;
+        const offset = req.query?.offset !== undefined ? Number(req.query.offset) : undefined;
+
+        const result = await CustomerBalanceService.getCustomerBalancesReport({
+            q,
+            only_negative: onlyNegative,
+            only_positive: onlyPositive,
+            min_abs: minAbs,
+            limit,
+            offset,
+        });
+        res.json(result);
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error calculating customer balance report', 500);
     }
 });
 
