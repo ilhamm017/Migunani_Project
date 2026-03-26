@@ -438,7 +438,7 @@ export const api = {
                 id: string,
                 data: { regular_price: number; gold_price: number; platinum_price: number }
             ) => apiClient.patch(`/admin/products/${id}/tier-pricing`, data),
-            updateTierDiscountBulk: (data: { gold_discount_pct: number; premium_discount_pct: number; status?: 'active' | 'inactive' | 'all'; product_ids?: string[]; search?: string }) =>
+            updateTierDiscountBulk: (data: { regular_discount_pct?: number; gold_discount_pct: number; premium_discount_pct: number; status?: 'active' | 'inactive' | 'all'; product_ids?: string[]; search?: string }) =>
                 apiClient.patch('/admin/products/tier-pricing/bulk-discount', data),
             uploadProductImage: (formData: FormData) =>
                 apiClient.post('/admin/products/upload-image', formData, {
@@ -570,6 +570,8 @@ export const api = {
                 apiClient.get('/admin/finance/reports/backorders', { params }),
             exportBackorderReport: (params?: { startDate?: string; endDate?: string }) =>
                 apiClient.get('/admin/finance/reports/backorders/export', { params, responseType: 'blob' }),
+            printBackorderReportThermal: (params?: { startDate?: string; endDate?: string }) =>
+                apiClient.get('/admin/finance/reports/backorders/print', { params, responseType: 'blob' }),
             getStockReductionReport: (params?: {
                 startDate?: string;
                 endDate?: string;

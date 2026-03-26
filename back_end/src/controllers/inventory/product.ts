@@ -595,6 +595,13 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
             throw new CustomError('Hanya admin sales/kasir yang bisa memodifikasi diskon tier.', 403);
         }
 
+        const regularDiscountRaw =
+            req.body?.regular_discount_pct ??
+            req.body?.regular_discount ??
+            req.body?.regular;
+        const regularDiscount = regularDiscountRaw === undefined
+            ? 0
+            : toPercentageNumber(regularDiscountRaw);
         const goldDiscount = toPercentageNumber(req.body?.gold_discount_pct ?? req.body?.gold_discount ?? req.body?.gold);
         const premiumDiscount = toPercentageNumber(
             req.body?.premium_discount_pct ??
@@ -605,9 +612,9 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
             req.body?.platinum
         );
 
-        if (goldDiscount === null || premiumDiscount === null) {
+        if (regularDiscount === null || goldDiscount === null || premiumDiscount === null) {
             await t.rollback();
-            throw new CustomError('gold_discount_pct dan premium_discount_pct/platinum_discount_pct wajib angka valid antara 0 sampai 100.', 400);
+            throw new CustomError('regular_discount_pct (optional), gold_discount_pct, dan premium_discount_pct/platinum_discount_pct wajib angka valid antara 0 sampai 100.', 400);
         }
 
         const rawProductIds = req.body?.product_ids ?? req.body?.productIds;
@@ -650,8 +657,12 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
         let updatedCount = 0;
 
         for (const product of products) {
-            let regularPrice = roundPrice(Number(product.price || 0));
-            if (regularPrice <= 0) {
+            const previousVariant = toObjectOrEmpty(product.varian_harga);
+            const previousPrices = toObjectOrEmpty(previousVariant.prices);
+            const previousDiscounts = toObjectOrEmpty(previousVariant.discounts_pct);
+
+            let baseRegularPrice = roundPrice(Number((previousVariant.base_price ?? previousPrices.base_price ?? product.price) ?? 0));
+            if (baseRegularPrice <= 0) {
                 const variant = toObjectOrEmpty(product.varian_harga);
                 const prices = toObjectOrEmpty(variant.prices);
                 const candidates: unknown[] = [
@@ -665,17 +676,14 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
                 for (const candidate of candidates) {
                     const parsed = Number(candidate);
                     if (Number.isFinite(parsed) && parsed > 0) {
-                        regularPrice = roundPrice(parsed);
+                        baseRegularPrice = roundPrice(parsed);
                         break;
                     }
                 }
             }
+            const regularPrice = roundPrice(baseRegularPrice * (1 - (regularDiscount / 100)));
             const goldPrice = roundPrice(regularPrice * (1 - (goldDiscount / 100)));
             const premiumPrice = roundPrice(regularPrice * (1 - (premiumDiscount / 100)));
-
-            const previousVariant = toObjectOrEmpty(product.varian_harga);
-            const previousPrices = toObjectOrEmpty(previousVariant.prices);
-            const previousDiscounts = toObjectOrEmpty(previousVariant.discounts_pct);
 
             const nextVariantHarga = {
                 ...previousVariant,
@@ -683,9 +691,10 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
                 gold: goldPrice,
                 platinum: premiumPrice,
                 premium: premiumPrice,
-                base_price: regularPrice,
+                base_price: baseRegularPrice,
                 prices: {
                     ...previousPrices,
+                    base_price: baseRegularPrice,
                     regular: regularPrice,
                     gold: goldPrice,
                     platinum: premiumPrice,
@@ -693,7 +702,7 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
                 },
                 discounts_pct: {
                     ...previousDiscounts,
-                    regular: 0,
+                    regular: regularDiscount,
                     gold: goldDiscount,
                     platinum: premiumDiscount,
                     premium: premiumDiscount
@@ -701,6 +710,7 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
             };
 
             await product.update({
+                price: regularPrice,
                 varian_harga: nextVariantHarga
             }, { transaction: t });
             updatedCount += 1;
@@ -711,7 +721,7 @@ export const bulkUpdateTierDiscounts = asyncWrapper(async (req: Request, res: Re
             message: `Diskon tier berhasil diterapkan ke ${updatedCount} produk.`,
             updated_count: updatedCount,
             discounts_pct: {
-                regular: 0,
+                regular: regularDiscount,
                 gold: goldDiscount,
                 premium: premiumDiscount,
                 platinum: premiumDiscount

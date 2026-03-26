@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
-import { ArrowLeft, Download, Filter, Package, Users } from 'lucide-react';
+import { ArrowLeft, Download, Filter, Package, Printer, Users } from 'lucide-react';
 import Link from 'next/link';
 import { notifyAlert } from '@/lib/notify';
 
@@ -48,13 +48,18 @@ interface BackorderReportData {
     details?: BackorderDetailItem[];
 }
 
-const toDateInputValue = (date: Date) => date.toISOString().slice(0, 10);
+const toDateInputValue = (date: Date) => {
+    const d = new Date(date);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 10);
+};
 
 export default function BackorderReportPage() {
     const allowed = useRequireRoles(['super_admin', 'kasir']);
     const [data, setData] = useState<BackorderReportData | null>(null);
     const [loading, setLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
+    const [printing, setPrinting] = useState(false);
     const [selectedProduct, setSelectedProduct] = useState<BackorderTopProduct | null>(null);
 
     const [startDate, setStartDate] = useState(() => {
@@ -107,6 +112,49 @@ export default function BackorderReportPage() {
         }
     }, [filterParams]);
 
+    const handlePrintThermal = useCallback(async () => {
+        try {
+            setPrinting(true);
+            const res = await api.admin.finance.printBackorderReportThermal(filterParams);
+            const blob = new Blob([res.data], { type: 'application/pdf' });
+            const url = window.URL.createObjectURL(blob);
+
+            const iframe = document.createElement('iframe');
+            iframe.style.position = 'fixed';
+            iframe.style.right = '0';
+            iframe.style.bottom = '0';
+            iframe.style.width = '0';
+            iframe.style.height = '0';
+            iframe.style.border = '0';
+            iframe.src = url;
+
+            const cleanup = () => {
+                window.URL.revokeObjectURL(url);
+                iframe.remove();
+            };
+
+            iframe.onload = () => {
+                try {
+                    iframe.contentWindow?.focus();
+                    iframe.contentWindow?.print();
+                } catch (e) {
+                    console.error(e);
+                    notifyAlert('Gagal memunculkan dialog print');
+                } finally {
+                    // Give the print dialog time to spawn before cleaning up.
+                    window.setTimeout(cleanup, 60_000);
+                }
+            };
+
+            document.body.appendChild(iframe);
+        } catch (e) {
+            console.error(e);
+            notifyAlert('Gagal print PDF');
+        } finally {
+            setPrinting(false);
+        }
+    }, [filterParams]);
+
     useEffect(() => {
         if (allowed) load();
     }, [allowed, load]);
@@ -139,15 +187,26 @@ export default function BackorderReportPage() {
                         </Link>
                         <h1 className="font-bold text-lg text-slate-900">Laporan Backorder / Preorder</h1>
                     </div>
-                    <button
-                        type="button"
-                        onClick={handleExport}
-                        disabled={exporting || loading}
-                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-60"
-                    >
-                        <Download size={14} />
-                        {exporting ? 'Exporting...' : 'Export Excel'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={handlePrintThermal}
+                            disabled={printing || loading || exporting}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-700 disabled:opacity-60 hover:bg-slate-50"
+                        >
+                            <Printer size={14} />
+                            {printing ? 'Printing...' : 'Print Thermal'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleExport}
+                            disabled={exporting || loading || printing}
+                            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-white disabled:opacity-60"
+                        >
+                            <Download size={14} />
+                            {exporting ? 'Exporting...' : 'Export Excel'}
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -199,7 +258,7 @@ export default function BackorderReportPage() {
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                                                Customer Pemesan
+                                                Produk
                                             </p>
                                             <h3 className="mt-1 font-black text-slate-900 truncate">{selectedProduct.name}</h3>
                                             <p className="text-[11px] text-slate-500 font-mono">{selectedProduct.sku}</p>
@@ -336,7 +395,7 @@ export default function BackorderReportPage() {
                         <div>
                             <div className="flex items-center justify-between mb-3 px-1">
                                 <h3 className="font-bold text-slate-900">Daftar Rincian</h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase">{data.details?.length} Order</p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase">{data.details?.length} Item</p>
                             </div>
                             <div className="space-y-3">
                                 {data.details?.map((item) => (

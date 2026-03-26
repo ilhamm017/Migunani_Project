@@ -7,6 +7,18 @@ import { Invoice, InvoiceItem, OrderItem, Product, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
+const PDFDocument = require('pdfkit');
+
+const formatLocalYmd = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const formatLocalYmdHm = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${formatLocalYmd(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { startDate, endDate } = req.query;
@@ -264,6 +276,133 @@ export const exportBackorderPreorderReportExcel = asyncWrapper(async (req: Reque
             throw error;
         }
         throw new CustomError('Error exporting Backorder report', 500);
+    }
+});
+
+export const printBackorderPreorderReportThermalPdf = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const startRaw = typeof startDate === 'string' && startDate.trim() ? startDate.trim() : undefined;
+        const endRaw = typeof endDate === 'string' && endDate.trim() ? endDate.trim() : undefined;
+
+        const startParsed = startRaw ? new Date(startRaw) : null;
+        const endParsed = endRaw ? new Date(endRaw) : null;
+        if (startParsed && !Number.isFinite(startParsed.getTime())) {
+            throw new CustomError('StartDate tidak valid', 400);
+        }
+        if (endParsed && !Number.isFinite(endParsed.getTime())) {
+            throw new CustomError('EndDate tidak valid', 400);
+        }
+        if (startParsed && endParsed && startParsed.getTime() > endParsed.getTime()) {
+            throw new CustomError('StartDate tidak boleh lebih besar dari EndDate', 400);
+        }
+
+        const report = await ReportService.calculateBackorderPreorderReport(startRaw, endRaw);
+        const details = Array.isArray((report as any)?.details) ? ((report as any).details as any[]) : [];
+
+        type ThermalRow = {
+            sku: string;
+            name: string;
+            qty_total: number;
+            qty_backorder: number;
+            qty_preorder: number;
+        };
+
+        const grouped = new Map<string, ThermalRow>();
+        for (const row of details) {
+            const sku = String(row?.sku || '').trim();
+            if (!sku || sku === '-') continue;
+            const productName = String(row?.product_name || '').trim() || '-';
+            const qty = Number(row?.qty || 0);
+            const type = String(row?.type || '').trim();
+
+            const existing = grouped.get(sku) || {
+                sku,
+                name: productName,
+                qty_total: 0,
+                qty_backorder: 0,
+                qty_preorder: 0,
+            };
+            existing.qty_total += qty;
+            if (type === 'preorder') existing.qty_preorder += qty;
+            else existing.qty_backorder += qty;
+            if (!existing.name || existing.name === '-' || existing.name === 'Unknown Product') existing.name = productName;
+            grouped.set(sku, existing);
+        }
+
+        const rows = Array.from(grouped.values())
+            .sort((a, b) => (b.qty_total - a.qty_total) || a.sku.localeCompare(b.sku))
+            .filter((r) => r.qty_total > 0);
+
+        const totalQty = rows.reduce((sum, r) => sum + r.qty_total, 0);
+        const totalBo = rows.reduce((sum, r) => sum + r.qty_backorder, 0);
+        const totalPo = rows.reduce((sum, r) => sum + r.qty_preorder, 0);
+
+        const periodStart = formatLocalYmd(report.period.start);
+        const periodEnd = formatLocalYmd(report.period.end);
+        const printedAt = formatLocalYmdHm(new Date());
+
+        const paperWidthPt = 226.77; // 80mm thermal (approx)
+        const marginPt = 10;
+        const lineHeightPt = 12;
+        const headerLines = 9;
+        const footerLines = 2;
+        const perRowLines = 4;
+        const estHeight = (marginPt * 2) + (lineHeightPt * (headerLines + footerLines + (rows.length * perRowLines)));
+        const pageHeightPt = Math.max(240, Math.min(14400, Math.ceil(estHeight)));
+
+        const timestamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+        const fileName = `print-backorder-thermal-${fileSuffix}.pdf`;
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+
+        const doc = new PDFDocument({
+            size: [paperWidthPt, pageHeightPt],
+            margin: marginPt,
+        });
+        doc.pipe(res);
+
+        const truncate = (s: string, maxLen: number) => {
+            const str = String(s || '').replace(/\s+/g, ' ').trim();
+            if (str.length <= maxLen) return str;
+            return `${str.slice(0, Math.max(0, maxLen - 1))}…`;
+        };
+
+        const rule = () => doc.text('-'.repeat(32));
+
+        const ensureSpace = (linesNeeded: number) => {
+            const bottomY = doc.page.height - doc.page.margins.bottom;
+            const needed = linesNeeded * lineHeightPt;
+            if (doc.y + needed > bottomY) {
+                doc.addPage({ size: [paperWidthPt, pageHeightPt], margin: marginPt });
+            }
+        };
+
+        doc.font('Courier').fontSize(10).text('LAPORAN BACKORDER', { align: 'center' });
+        doc.moveDown(0.2);
+        doc.fontSize(8);
+        doc.text(`Periode: ${periodStart} s/d ${periodEnd}`);
+        doc.text(`Printed: ${printedAt}`);
+        doc.text(`Total SKU: ${rows.length}`);
+        doc.text(`Total Qty: ${totalQty} (BO:${totalBo} PO:${totalPo})`);
+        rule();
+        doc.fontSize(9);
+
+        for (const r of rows) {
+            ensureSpace(perRowLines + 1);
+            doc.text(`${truncate(r.sku, 16)}  QTY:${r.qty_total}`);
+            doc.text(`BO:${r.qty_backorder}  PO:${r.qty_preorder}`);
+            doc.text(truncate(r.name, 32));
+            rule();
+        }
+
+        doc.end();
+    } catch (error) {
+        if (error instanceof CustomError) throw error;
+        throw new CustomError('Error printing Backorder report', 500);
     }
 });
 

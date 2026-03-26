@@ -23,6 +23,7 @@ type TierPrice = {
 };
 
 type TierDiscount = {
+  regular: number;
   gold: number;
   premium: number;
 };
@@ -85,7 +86,21 @@ const resolveRegularPrice = (product: ProductTierRow): number => {
   return Math.max(0, Number(product.price || 0));
 };
 
+const resolveBaseRegularPrice = (product: ProductTierRow): number => {
+  const source = toObjectOrEmpty(product.varian_harga);
+  const prices = toObjectOrEmpty(source.prices);
+  const candidates: unknown[] = [prices.base_price, source.base_price, prices.regular, source.regular, product.price, prices.price, source.price];
+
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  return Math.max(0, Number(product.price || 0));
+};
+
 const resolveStoredDiscounts = (product: ProductTierRow): TierDiscount => {
+  const baseRegular = resolveBaseRegularPrice(product);
   const regular = resolveRegularPrice(product);
   const source = toObjectOrEmpty(product.varian_harga);
   const discountsBlock = toObjectOrEmpty(source.discounts_pct);
@@ -93,8 +108,15 @@ const resolveStoredDiscounts = (product: ProductTierRow): TierDiscount => {
 
   const inferDiscountFromPrice = (tierPriceRaw: unknown): number | null => {
     const tierPrice = toNullableNumber(tierPriceRaw);
-    if (tierPrice === null || regular <= 0) return null;
-    return clampPercentage(((regular - tierPrice) / regular) * 100);
+    if (tierPrice === null || baseRegular <= 0) return null;
+    return clampPercentage(((baseRegular - tierPrice) / baseRegular) * 100);
+  };
+
+  const resolveRegularDiscount = (): number => {
+    const directFromDiscounts = toNullableNumber(discountsBlock.regular);
+    if (directFromDiscounts !== null) return clampPercentage(directFromDiscounts);
+    if (baseRegular > 0) return clampPercentage(((baseRegular - regular) / baseRegular) * 100);
+    return 0;
   };
 
   const resolveTierDiscount = (tier: 'gold' | 'platinum', aliases: string[] = []): number => {
@@ -132,13 +154,15 @@ const resolveStoredDiscounts = (product: ProductTierRow): TierDiscount => {
   };
 
   return {
+    regular: resolveRegularDiscount(),
     gold: resolveTierDiscount('gold'),
     premium: resolveTierDiscount('platinum', ['premium']),
   };
 };
 
 const calculateTierPrice = (product: ProductTierRow, discounts: TierDiscount): TierPrice => {
-  const regular = resolveRegularPrice(product);
+  const baseRegular = resolveBaseRegularPrice(product);
+  const regular = Math.max(0, Math.round((baseRegular * (1 - clampPercentage(discounts.regular) / 100)) * 100) / 100);
   const gold = Math.max(0, Math.round((regular * (1 - clampPercentage(discounts.gold) / 100)) * 100) / 100);
   const premium = Math.max(0, Math.round((regular * (1 - clampPercentage(discounts.premium) / 100)) * 100) / 100);
 
@@ -158,6 +182,7 @@ export default function SalesTierPricingPage() {
   const [products, setProducts] = useState<ProductTierRow[]>([]);
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [applyToAllMatching, setApplyToAllMatching] = useState(false);
+  const [regularDiscount, setRegularDiscount] = useState('');
   const [goldDiscount, setGoldDiscount] = useState('');
   const [premiumDiscount, setPremiumDiscount] = useState('');
   const [discountsInitialized, setDiscountsInitialized] = useState(false);
@@ -172,14 +197,16 @@ export default function SalesTierPricingPage() {
   const [actionMessage, setActionMessage] = useState('');
 
   const parsedDiscounts = useMemo<TierDiscount>(() => {
+    const regular = toNullableNumber(regularDiscount);
     const gold = toNullableNumber(goldDiscount);
     const premium = toNullableNumber(premiumDiscount);
 
     return {
+      regular: clampPercentage(regular === null ? 0 : regular),
       gold: clampPercentage(gold === null ? 0 : gold),
       premium: clampPercentage(premium === null ? 0 : premium),
     };
-  }, [goldDiscount, premiumDiscount]);
+  }, [regularDiscount, goldDiscount, premiumDiscount]);
 
   const loadProducts = useCallback(async () => {
     try {
@@ -198,6 +225,7 @@ export default function SalesTierPricingPage() {
 
       if (!discountsInitialized && rows.length > 0) {
         const fallback = resolveStoredDiscounts(rows[0]);
+        setRegularDiscount(String(Math.round(fallback.regular * 100) / 100));
         setGoldDiscount(String(Math.round(fallback.gold * 100) / 100));
         setPremiumDiscount(String(Math.round(fallback.premium * 100) / 100));
         setDiscountsInitialized(true);
@@ -260,9 +288,14 @@ export default function SalesTierPricingPage() {
   }, [products, parsedDiscounts]);
 
   const handleApplyBulkDiscount = async () => {
+    const regular = Number(regularDiscount);
     const gold = Number(goldDiscount);
     const premium = Number(premiumDiscount);
 
+    if (!Number.isFinite(regular) || regular < 0 || regular > 100) {
+      setError('Diskon Reguler harus angka valid antara 0 sampai 100.');
+      return;
+    }
     if (!Number.isFinite(gold) || gold < 0 || gold > 100) {
       setError('Diskon Gold harus angka valid antara 0 sampai 100.');
       return;
@@ -283,12 +316,13 @@ export default function SalesTierPricingPage() {
       }
 
       const res = await api.admin.inventory.updateTierDiscountBulk({
+        regular_discount_pct: regular,
         gold_discount_pct: gold,
         premium_discount_pct: premium,
         status: 'active',
         ...(applyToAllMatching ? {} : { product_ids: Array.from(selectedProductIds) }),
         ...(applyToAllMatching ? { search: search.trim() || undefined } : {}),
-      } as any);
+      });
 
       setActionMessage(res.data?.message || 'Diskon tier berhasil diterapkan.');
       setSelectedProductIds(new Set());
@@ -402,7 +436,7 @@ export default function SalesTierPricingPage() {
 
       <div className="bg-white border border-slate-200 rounded-[28px] p-5 shadow-sm">
         <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.2em]">Modifikasi Diskon Tier</p>
-        <h1 className="text-2xl font-black text-slate-900 mt-1">Atur Diskon Persentase Gold & Premium</h1>
+        <h1 className="text-2xl font-black text-slate-900 mt-1">Atur Diskon Persentase Reguler, Gold & Premium</h1>
         <p className="text-sm text-slate-600 mt-2">
           Cukup set persentase diskon sekali, lalu terapkan ke semua produk aktif tanpa edit satu per satu.
         </p>
@@ -541,7 +575,10 @@ export default function SalesTierPricingPage() {
                       </td>
                       <td className="px-3 py-2 font-semibold text-slate-800">{row.name}</td>
                       <td className="px-3 py-2 text-slate-600">{row.sku}</td>
-                      <td className="px-3 py-2 text-slate-700">{formatCurrency(row.previewRegular)}</td>
+                      <td className="px-3 py-2 text-slate-700">
+                        <span className="font-semibold">{formatCurrency(row.previewRegular)}</span>
+                        <span className="ml-1 text-[10px] text-slate-500">(saat ini {formatCurrency(row.currentRegular)})</span>
+                      </td>
                       <td className="px-3 py-2 text-slate-700">
                         <span className="font-semibold">{formatCurrency(row.previewGold)}</span>
                         <span className="ml-1 text-[10px] text-slate-500">(saat ini {formatCurrency(row.currentGold)})</span>
@@ -560,16 +597,19 @@ export default function SalesTierPricingPage() {
 
         <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
           <h2 className="text-sm font-black text-slate-900">Atur Diskon Tier</h2>
-          <p className="text-xs text-slate-500">Diskon dihitung dari harga reguler setiap produk.</p>
+          <p className="text-xs text-slate-500">Diskon Gold/Premium dihitung dari harga reguler (setelah diskon reguler).</p>
 
           <div className="space-y-2">
             <label className="block">
-              <span className="text-[11px] font-semibold text-slate-600">Reguler</span>
+              <span className="text-[11px] font-semibold text-slate-600">Diskon Reguler (%)</span>
               <input
-                type="text"
-                value="0% (harga dasar)"
-                disabled
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={regularDiscount}
+                onChange={(e) => setRegularDiscount(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
               />
             </label>
             <label className="block">

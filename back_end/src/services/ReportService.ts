@@ -582,8 +582,39 @@ export class ReportService {
     }
 
     static async calculateBackorderPreorderReport(startDate?: string, endDate?: string) {
-        const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        const end = endDate ? new Date(endDate) : new Date();
+        const parseBound = (raw: string, bound: 'start' | 'end') => {
+            const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (m) {
+                const year = Number(m[1]);
+                const month = Number(m[2]);
+                const day = Number(m[3]);
+                if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+                    throw new Error(`Invalid date: ${raw}`);
+                }
+                if (bound === 'start') return new Date(year, month - 1, day, 0, 0, 0, 0);
+                return new Date(year, month - 1, day, 23, 59, 59, 999);
+            }
+            const dt = new Date(raw);
+            if (!Number.isFinite(dt.getTime())) throw new Error(`Invalid date: ${raw}`);
+            return dt;
+        };
+
+        const now = new Date();
+        const start = startDate
+            ? parseBound(startDate, 'start')
+            : (() => {
+                const d = new Date(now);
+                d.setDate(d.getDate() - 7);
+                d.setHours(0, 0, 0, 0);
+                return d;
+            })();
+        const end = endDate
+            ? parseBound(endDate, 'end')
+            : (() => {
+                const d = new Date(now);
+                d.setHours(23, 59, 59, 999);
+                return d;
+            })();
 
         const backorders = await Backorder.findAll({
             where: {
