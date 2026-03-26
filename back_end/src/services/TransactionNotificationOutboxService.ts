@@ -2,6 +2,7 @@ import { Op, Transaction } from 'sequelize';
 import { NotificationOutbox, sequelize } from '../models';
 import { io } from '../server';
 import { sendWhatsappSafe } from './WhatsappSendService';
+import { normalizeNullableUuid } from '../utils/uuid';
 
 export type AdminRefreshBadgesEventPayload = Record<string, never>;
 export type OrderStatusChangedEventPayload = {
@@ -84,6 +85,13 @@ const normalizeStringArray = (value: unknown): string[] => {
         .filter((item): item is string => Boolean(item));
 };
 
+const normalizeUuidArray = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item) => normalizeNullableUuid(item))
+        .filter((item): item is string => Boolean(item));
+};
+
 const normalizeNumber = (value: unknown): number | null => {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
@@ -106,11 +114,11 @@ const dispatchOrderStatusChanged = (payload: OrderStatusChangedEventPayload) => 
         to_status: String(payload.to_status),
         source: normalizeString(payload.source),
         payment_method: normalizeString(payload.payment_method),
-        courier_id: normalizeString(payload.courier_id),
+        courier_id: normalizeNullableUuid(payload.courier_id),
         triggered_by_role: normalizeString(payload.triggered_by_role),
         triggered_at: normalizeString(payload.triggered_at) || new Date().toISOString(),
         target_roles: normalizeStringArray(payload.target_roles),
-        target_user_ids: normalizeStringArray(payload.target_user_ids),
+        target_user_ids: normalizeUuidArray(payload.target_user_ids),
     };
 
     io.emit('order:status_changed', normalizedPayload);
@@ -123,11 +131,11 @@ const dispatchReturStatusChanged = (payload: ReturStatusChangedEventPayload) => 
         order_id: String(payload.order_id),
         from_status: normalizeString(payload.from_status),
         to_status: String(payload.to_status),
-        courier_id: normalizeString(payload.courier_id),
+        courier_id: normalizeNullableUuid(payload.courier_id),
         triggered_by_role: normalizeString(payload.triggered_by_role),
         triggered_at: normalizeString(payload.triggered_at) || new Date().toISOString(),
         target_roles: normalizeStringArray(payload.target_roles),
-        target_user_ids: normalizeStringArray(payload.target_user_ids),
+        target_user_ids: normalizeUuidArray(payload.target_user_ids),
     };
 
     io.emit('retur:status_changed', normalizedPayload);
@@ -136,7 +144,7 @@ const dispatchReturStatusChanged = (payload: ReturStatusChangedEventPayload) => 
 
 const dispatchCodSettlementUpdated = (payload: CodSettlementUpdatedEventPayload) => {
     const normalizedPayload = {
-        driver_id: String(payload.driver_id),
+        driver_id: normalizeNullableUuid(payload.driver_id) || '',
         order_ids: normalizeStringArray(payload.order_ids),
         invoice_ids: normalizeStringArray(payload.invoice_ids),
         total_expected: normalizeNumber(payload.total_expected),
@@ -146,7 +154,7 @@ const dispatchCodSettlementUpdated = (payload: CodSettlementUpdatedEventPayload)
         settled_at: normalizeString(payload.settled_at) || new Date().toISOString(),
         triggered_by_role: normalizeString(payload.triggered_by_role),
         target_roles: normalizeStringArray(payload.target_roles),
-        target_user_ids: normalizeStringArray(payload.target_user_ids),
+        target_user_ids: normalizeUuidArray(payload.target_user_ids),
     };
 
     io.emit('cod:settlement_updated', normalizedPayload);

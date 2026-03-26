@@ -9,6 +9,7 @@ import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 export const completeDelivery = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -78,6 +79,16 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
                 updatePayload.delivery_proof_url = file.path;
             }
             await order.update(updatePayload, { transaction: t });
+            await recordOrderStatusChanged({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: String(invoice.id || ''),
+                from_status: previousOrderStatus,
+                to_status: nextOrderStatus,
+                actor_user_id: String(userId),
+                actor_role: String(req.user?.role || 'driver'),
+                reason: 'driver_complete_delivery',
+            });
             affectedOrderIds.push(String(order.id));
 
             await emitOrderStatusChanged({

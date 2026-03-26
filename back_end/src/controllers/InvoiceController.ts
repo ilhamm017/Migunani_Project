@@ -9,7 +9,8 @@ import { enqueueWhatsappNotification } from '../services/TransactionNotification
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../utils/invoiceNetTotals';
-import { recordOrderEvent } from '../utils/orderEvent';
+import { recordOrderEvent, recordOrderStatusChanged } from '../utils/orderEvent';
+import { normalizeNullableUuid } from '../utils/uuid';
 
 const toObjectOrEmpty = (value: unknown): Record<string, any> => {
     if (!value) return {};
@@ -583,6 +584,16 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
         for (const orderId of relatedOrderIds) {
             const previousStatus = previousStatuses.get(String(orderId)) || '';
             if (previousStatus !== 'waiting_admin_verification') {
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: String(orderId),
+                    invoice_id: invoiceId,
+                    from_status: previousStatus || null,
+                    to_status: 'waiting_admin_verification',
+                    actor_user_id: String(req.user?.id || '').trim() || null,
+                    actor_role: String(req.user?.role || '').trim() || null,
+                    reason: 'invoice_payment_proof_upload',
+                });
                 await emitOrderStatusChanged({
                     order_id: String(orderId),
                     from_status: previousStatus || null,
@@ -660,6 +671,10 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
         if (!courier_id) {
             throw new CustomError('Pilih driver terlebih dahulu', 400);
         }
+        const courierId = normalizeNullableUuid(courier_id);
+        if (!courierId) {
+            throw new CustomError('Driver tidak valid.', 400);
+        }
 
         const invoice = await Invoice.findByPk(invoiceId, {
             transaction: t,
@@ -671,7 +686,7 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
         }
 
         const courier = await User.findOne({
-            where: { id: courier_id, role: 'driver', status: 'active' },
+            where: { id: courierId, role: 'driver', status: 'active' },
             transaction: t
         });
 

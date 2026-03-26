@@ -10,7 +10,7 @@ import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { useAuthStore } from '@/store/authStore';
-import { notifyOpen, notifyAlert } from '@/lib/notify';
+import { notifyClose, notifyOpen, notifyAlert } from '@/lib/notify';
 import axios from 'axios';
 import type { AdminOrderListRow, InvoiceDetailResponse, OrderDetailResponse, ProductLite } from '@/lib/apiTypes';
 
@@ -606,6 +606,7 @@ export default function AdminOrdersWorkspace({
     error: string;
   } | null>(null);
   const ordersRef = useRef<AdminOrderListRow[]>([]);
+  const focusModeInitDoneRef = useRef(false);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
   const sectionFilterOptions = useMemo<OrderSectionFilter[]>(
@@ -1206,9 +1207,34 @@ export default function AdminOrdersWorkspace({
     return filteredGroupedOrders.backorder;
   }, [filteredGroupedOrders.backorder, forcedCustomerId]);
 
+  const renderSectionOptions = useMemo<OrderSection[]>(() => {
+    if (!warehouseCustomerFocusMode) return sectionOptions;
+    if (orderSectionFilter === 'all') return sectionOptions;
+    const active = orderSectionFilter as OrderSection;
+    if (sectionOptions.includes(active)) return sectionOptions;
+    if (!ORDER_SECTION_OPTIONS_ALL.includes(active)) return sectionOptions;
+    return [active, ...sectionOptions];
+  }, [orderSectionFilter, sectionOptions, warehouseCustomerFocusMode]);
+
+  useEffect(() => {
+    if (!warehouseCustomerFocusMode) {
+      focusModeInitDoneRef.current = false;
+      return;
+    }
+    if (focusModeInitDoneRef.current) return;
+    focusModeInitDoneRef.current = true;
+    if (initialSection) return;
+
+    const primaryFilters: OrderSectionFilter[] = ['allocated', 'gudang', 'checker', 'pengiriman'];
+    if (!primaryFilters.includes(orderSectionFilter)) {
+      setOrderSectionFilter('gudang');
+    }
+  }, [initialSection, orderSectionFilter, warehouseCustomerFocusMode]);
+
   useEffect(() => {
     if (warehouseCustomerFocusMode) {
-      if (!['allocated', 'gudang', 'checker', 'pengiriman'].includes(orderSectionFilter)) setOrderSectionFilter('gudang');
+      const allowedFilters: OrderSectionFilter[] = ['allocated', 'gudang', 'checker', 'pengiriman', 'baru', 'pembayaran', 'selesai', 'backorder'];
+      if (!allowedFilters.includes(orderSectionFilter)) setOrderSectionFilter('gudang');
       return;
     }
     if (!isWarehouseRole) return;
@@ -1722,8 +1748,13 @@ export default function AdminOrdersWorkspace({
       notifyOpen({
         variant: 'success',
         title: 'Alokasi tersimpan',
-        message: 'Qty alokasi sudah tersimpan dan data order diperbarui.',
-        autoCloseMs: 1600,
+        message: "Qty alokasi sudah tersimpan. Jika order berpindah stage, cek tab 'Sudah Dialokasikan'.",
+        primaryLabel: 'Buka Sudah Dialokasikan',
+        onPrimary: () => {
+          setOrderSectionFilter('allocated');
+          notifyClose();
+        },
+        autoCloseMs: 8000,
       });
       return true;
     } catch (error: unknown) {
@@ -2939,7 +2970,59 @@ export default function AdminOrdersWorkspace({
                       </button>
                     );
                   })}
+                  {warehouseCustomerFocusMode
+                    && orderSectionFilter !== 'all'
+                    && !sectionFilterOptions.includes(orderSectionFilter)
+                    && (() => {
+                      const filter = orderSectionFilter;
+                      const label = getSectionFilterLabel(filter);
+                      const count = selectedGroup ? selectedGroup.counts[filter as OrderSection] || 0 : 0;
+                      return (
+                        <button
+                          key={`temp-filter:${filter}`}
+                          type="button"
+                          onClick={() => setOrderSectionFilter(filter)}
+                          className="btn-3d px-2 py-1 rounded-full text-[10px] font-bold border border-amber-300 bg-amber-50 text-amber-800"
+                          title="Filter aktif (sementara)"
+                        >
+                          <span>{label}</span>
+                          <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })()}
                 </div>
+                {warehouseCustomerFocusMode && (() => {
+                  const hiddenFilters: OrderSectionFilter[] = ['baru', 'pembayaran', 'selesai', 'backorder'];
+                  const hidden = hiddenFilters
+                    .map((filter) => ({
+                      filter,
+                      count: selectedGroup ? selectedGroup.counts[filter as OrderSection] || 0 : 0,
+                    }))
+                    .filter((row) => row.count > 0);
+                  if (hidden.length === 0) return null;
+                  return (
+                    <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Ada order di stage lain</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {hidden.map(({ filter, count }) => (
+                          <button
+                            key={`hidden-filter:${filter}`}
+                            type="button"
+                            onClick={() => setOrderSectionFilter(filter)}
+                            className="btn-3d px-2 py-1 rounded-full text-[10px] font-bold border border-amber-200 bg-white text-amber-800 hover:bg-amber-50"
+                          >
+                            <span>{getSectionFilterLabel(filter)}</span>
+                            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-[9px] font-black text-white">
+                              {count}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="space-y-2">
@@ -3204,8 +3287,7 @@ export default function AdminOrdersWorkspace({
                 <div className="text-xs text-slate-400">Memuat detail order...</div>
               )}
 
-              {sectionOptions.map((section) => {
-                if (forcedCustomerId && section === 'backorder') return null;
+              {renderSectionOptions.map((section) => {
                 if (orderSectionFilter !== 'all' && orderSectionFilter !== section) return null;
                 const label = getSectionLabel(section);
                 const list = filteredGroupedOrders[section] as AdminOrderListRow[];

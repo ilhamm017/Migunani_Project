@@ -7,6 +7,7 @@ import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoi
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -96,6 +97,15 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             status: 'hold',
             courier_id: null as any,
         }, { transaction: t });
+        await recordOrderStatusChanged({
+            transaction: t,
+            order_id: String(order.id),
+            from_status: previousStatus || null,
+            to_status: 'hold',
+            actor_user_id: String(userId),
+            actor_role: String(req.user?.role || 'driver'),
+            reason: 'driver_report_issue',
+        });
 
         let paymentMethod: string | null = null;
         try {

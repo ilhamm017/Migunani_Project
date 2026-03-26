@@ -11,6 +11,7 @@ import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 import { enqueueWhatsappNotification } from '../../services/TransactionNotificationOutboxService';
 import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
     const userId = req.user!.id;
@@ -341,7 +342,6 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
             await t.rollback();
             throw new CustomError('Order not found', 404);
         }
-        const prevStatus = String(order.status || '');
 
         let invoice = null;
         if (requestedInvoiceId) {
@@ -409,48 +409,75 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
             relatedOrderIds.push(String(order.id));
         }
 
+        const nextStatus = 'waiting_admin_verification';
         const ordersToUpdate = await Order.findAll({
-            where: { id: { [Op.in]: relatedOrderIds } },
-            attributes: ['id', 'status'],
+            where: { id: { [Op.in]: relatedOrderIds }, customer_id: userId },
+            attributes: ['id', 'status', 'source', 'courier_id'],
             transaction: t,
             lock: t.LOCK.UPDATE
         });
+        if (ordersToUpdate.length === 0) {
+            await t.rollback();
+            throw new CustomError('Invoice tidak memiliki order terkait untuk akun ini.', 403);
+        }
+        const previousStatusByOrderId: Record<string, string> = {};
         for (const row of ordersToUpdate as any[]) {
             const currentStatus = String(row?.status || '').toLowerCase();
-            if (!isOrderTransitionAllowed(currentStatus, 'waiting_admin_verification')) {
+            previousStatusByOrderId[String(row?.id || '')] = String(row?.status || '');
+            if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
                 await t.rollback();
                 throw new CustomError(
-                    `Order ${String(row?.id || '')} tidak bisa masuk status waiting_admin_verification dari status '${currentStatus}'.`,
+                    `Order ${String(row?.id || '')} tidak bisa masuk status ${nextStatus} dari status '${currentStatus}'.`,
                     409
                 );
             }
         }
 
         await Order.update(
-            { status: 'waiting_admin_verification' },
-            { where: { id: { [Op.in]: relatedOrderIds } }, transaction: t }
+            { status: nextStatus },
+            { where: { id: { [Op.in]: ordersToUpdate.map((row) => String((row as any)?.id || '')).filter(Boolean) }, customer_id: userId }, transaction: t }
         );
         // After upload, status becomes waiting_admin_verification until finance approves.
 
-        if (prevStatus !== 'waiting_admin_verification') {
-            await emitOrderStatusChanged({
-                order_id: String(order.id),
-                from_status: prevStatus || null,
-                to_status: 'waiting_admin_verification',
-                source: String(order.source || ''),
-                payment_method: String(invoice.payment_method || ''),
-                courier_id: String(order.courier_id || ''),
-                triggered_by_role: String(req.user?.role || 'customer'),
-                target_roles: ['admin_finance', 'customer'],
-            }, {
-                transaction: t,
-                requestContext: 'order_payment_proof_status_changed'
-            });
-        } else {
+        const changedOrderIds = ordersToUpdate
+            .map((row: any) => String(row?.id || ''))
+            .filter((orderId: string) => Boolean(orderId) && previousStatusByOrderId[orderId] !== nextStatus);
+
+        if (changedOrderIds.length === 0) {
             await emitAdminRefreshBadges({
                 transaction: t,
                 requestContext: 'order_payment_proof_refresh_badges'
             });
+        } else {
+            for (const row of ordersToUpdate as any[]) {
+                const orderId = String(row?.id || '');
+                if (!orderId) continue;
+                const prev = previousStatusByOrderId[orderId] || '';
+                if (prev === nextStatus) continue;
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: orderId,
+                    invoice_id: String(invoice.id || ''),
+                    from_status: prev || null,
+                    to_status: nextStatus,
+                    actor_user_id: String(userId),
+                    actor_role: String(req.user?.role || 'customer'),
+                    reason: 'order_payment_proof_upload',
+                });
+                await emitOrderStatusChanged({
+                    order_id: orderId,
+                    from_status: prev || null,
+                    to_status: nextStatus,
+                    source: String(row?.source || ''),
+                    payment_method: String(invoice.payment_method || ''),
+                    courier_id: String(row?.courier_id || ''),
+                    triggered_by_role: String(req.user?.role || 'customer'),
+                    target_roles: ['admin_finance', 'customer'],
+                }, {
+                    transaction: t,
+                    requestContext: `order_payment_proof_status_changed:${invoice.id}:${orderId}`
+                });
+            }
         }
 
         await t.commit();

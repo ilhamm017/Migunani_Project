@@ -7,7 +7,7 @@ import { AccountingPostingService } from '../../services/AccountingPostingServic
 import { JournalService } from '../../services/JournalService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
-import { recordOrderEvent } from '../../utils/orderEvent';
+import { recordOrderEvent, recordOrderStatusChanged } from '../../utils/orderEvent';
 import { DELIVERY_EMPLOYEE_ROLES, withOrderTrackingFields, normalizeIssueNote, ISSUE_SLA_HOURS, resolveEmployeeDisplayName, ORDER_STATUS_OPTIONS } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
@@ -384,6 +384,15 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             updatePayload.courier_id = courierIdToSave;
         }
         await order.update(updatePayload, { transaction: t });
+        await recordOrderStatusChanged({
+            transaction: t,
+            order_id: orderId,
+            from_status: prevStatus || null,
+            to_status: nextStatus,
+            actor_user_id: String(req.user?.id || '').trim() || null,
+            actor_role: userRole || null,
+            reason: 'admin_update_order_status',
+        });
 
         if (nextStatus === 'shipped') {
             const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });

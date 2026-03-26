@@ -5,9 +5,10 @@ import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../utils/orderNotification';
-import { recordOrderEvent } from '../utils/orderEvent';
+import { recordOrderEvent, recordOrderStatusChanged } from '../utils/orderEvent';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { AccountingPostingService } from '../services/AccountingPostingService';
+import { normalizeNullableUuid } from '../utils/uuid';
 
 type RawHandoverItemInput = {
     product_id?: unknown;
@@ -163,7 +164,7 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
         });
 
         const shouldFail = checkResult === 'fail' || hasMismatch;
-        const courierId = invoice.courier_id ? String(invoice.courier_id) : null;
+        const courierId = normalizeNullableUuid(invoice.courier_id);
         if (!courierId) throw new CustomError('Invoice belum ditugaskan ke driver.', 409);
         const handover = await DeliveryHandover.create({
             invoice_id: invoiceId,
@@ -215,6 +216,16 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
             }
 
             await order.update({ status: nextOrderStatus }, { transaction: t });
+            await recordOrderStatusChanged({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: invoiceId,
+                from_status: prevStatus,
+                to_status: nextOrderStatus,
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason: 'delivery_handover_check',
+            });
 
             await emitOrderStatusChanged({
                 order_id: String(order.id),
@@ -346,8 +357,8 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
         const shipmentStatus = String(invoice.shipment_status || '').trim().toLowerCase();
         if (shipmentStatus !== 'checked') throw new CustomError('Invoice belum berstatus checked.', 409);
 
-        const courierId = String(invoice.courier_id || '').trim();
-        if (!courierId) throw new CustomError('Invoice belum ditugaskan ke driver.', 409);
+        const courierId = normalizeNullableUuid(invoice.courier_id);
+        if (!courierId) throw new CustomError('Invoice belum ditugaskan ke driver (courier_id tidak valid).', 409);
 
         const relatedOrderIds = await findOrderIdsByInvoiceId(invoiceId, { transaction: t });
         if (relatedOrderIds.length === 0) throw new CustomError('Order terkait invoice tidak ditemukan.', 409);
@@ -364,6 +375,16 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
                 throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> 'shipped'`, 409);
             }
             await order.update({ status: 'shipped', courier_id: courierId }, { transaction: t });
+            await recordOrderStatusChanged({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: invoiceId,
+                from_status: prevStatus,
+                to_status: 'shipped',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason: 'delivery_handover_handed_over',
+            });
 
             await emitOrderStatusChanged({
                 order_id: String(order.id),

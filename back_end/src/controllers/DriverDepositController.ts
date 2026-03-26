@@ -26,6 +26,7 @@ import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChange
 import { JournalService } from '../services/JournalService';
 import { ReturService } from '../services/ReturService';
 import { bulkUpdateReturHandoversSafe, findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
+import { recordOrderStatusChanged } from '../utils/orderEvent';
 
 type DriverDepositCodInvoiceRow = {
     invoice_id: string;
@@ -812,6 +813,15 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             }
 
             for (const row of finalizedOrderResults) {
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: row.orderId,
+                    from_status: previousStatusByOrderId[row.orderId] || null,
+                    to_status: row.nextStatus,
+                    actor_user_id: actor.id,
+                    actor_role: actor.role,
+                    reason: 'driver_deposit_cod_settlement',
+                });
                 await emitOrderStatusChanged({
                     order_id: row.orderId,
                     from_status: previousStatusByOrderId[row.orderId] || null,

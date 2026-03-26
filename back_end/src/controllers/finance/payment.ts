@@ -18,6 +18,7 @@ import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 export const verifyPayment = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -199,6 +200,16 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             const prevStatus = String(previousStatusByOrderId[orderId] || order.status || '');
             const nextStatus = String(nextStatusByOrderId[orderId] || prevStatus);
             if (prevStatus !== nextStatus) {
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: orderId,
+                    invoice_id: String(invoice.id || ''),
+                    from_status: prevStatus,
+                    to_status: nextStatus,
+                    actor_user_id: verifierId,
+                    actor_role: verifierRole,
+                    reason: action === 'approve' ? 'finance_verify_payment_approve' : 'finance_verify_payment_reject',
+                });
                 await emitOrderStatusChanged({
                     order_id: orderId,
                     from_status: prevStatus,
@@ -378,6 +389,16 @@ export const voidPayment = asyncWrapper(async (req: Request, res: Response) => {
         for (const order of orders as any[]) {
             const previousStatus = previousOrderStatusById[String(order.id)] || '';
             if (previousStatus !== nextOrderStatus && order.status !== 'canceled') {
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: String(order.id),
+                    invoice_id: String(invoice.id || ''),
+                    from_status: previousStatus,
+                    to_status: nextOrderStatus,
+                    actor_user_id: userId,
+                    actor_role: String(req.user?.role || ''),
+                    reason: 'finance_void_payment',
+                });
                 await emitOrderStatusChanged({
                     order_id: String(order.id),
                     from_status: previousStatus,

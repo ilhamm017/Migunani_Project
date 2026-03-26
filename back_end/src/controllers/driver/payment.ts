@@ -11,6 +11,7 @@ import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 export const recordPayment = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -177,6 +178,16 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 const prevStatus = previousStatusByOrderId[orderId] || '';
                 if (prevStatus === 'completed') continue;
                 const mainInvoice = unpaidCodInvoices[0];
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: orderId,
+                    invoice_id: mainInvoice?.id ? String(mainInvoice.id) : null,
+                    from_status: prevStatus || null,
+                    to_status: 'completed',
+                    actor_user_id: String(userId),
+                    actor_role: String(req.user?.role || 'driver'),
+                    reason: 'driver_record_payment',
+                });
                 await emitOrderStatusChanged({
                     order_id: orderId,
                     from_status: prevStatus || null,

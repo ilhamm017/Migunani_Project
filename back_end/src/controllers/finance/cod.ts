@@ -19,6 +19,7 @@ import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
+import { recordOrderStatusChanged } from '../../utils/orderEvent';
 
 // --- Driver COD Deposit ---
 
@@ -542,6 +543,16 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 const inv = orderToInvoiceMap.get(orderId);
                 const orderData = orderById.get(orderId);
                 const courierId = String(orderData?.courier_id || '');
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: orderId,
+                    invoice_id: (inv as any)?.id ? String((inv as any).id) : null,
+                    from_status: result.previousStatus || null,
+                    to_status: result.nextStatus,
+                    actor_user_id: verifierId,
+                    actor_role: String(req.user?.role || ''),
+                    reason: 'finance_verify_cod',
+                });
                 await emitOrderStatusChanged({
                     order_id: orderId,
                     from_status: result.previousStatus || null,
