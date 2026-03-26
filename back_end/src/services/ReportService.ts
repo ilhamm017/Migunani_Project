@@ -93,7 +93,7 @@ export class ReportService {
                  FROM inventory_cost_ledger l
                  INNER JOIN products p ON p.id = l.product_id
                  WHERE l.movement_type = 'out'
-                   AND l.reference_type = 'order'
+                   AND l.reference_type IN ('order', 'pos_sale')
                    AND l.qty > 0
                    AND l.createdAt BETWEEN :startDate AND :endDate
                  ORDER BY l.createdAt DESC`,

@@ -54,6 +54,8 @@ import NotificationOutbox from './NotificationOutbox';
 import AuditLog from './AuditLog';
 import SupplierPreorder from './SupplierPreorder';
 import SupplierPreorderItem from './SupplierPreorderItem';
+import PosSale from './PosSale';
+import PosSaleItem from './PosSaleItem';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -341,6 +343,14 @@ Product.hasMany(PurchaseOrderItem, { foreignKey: 'product_id' });
 Backorder.belongsTo(OrderItem, { foreignKey: 'order_item_id' });
 OrderItem.hasOne(Backorder, { foreignKey: 'order_item_id' });
 
+// POS Sales (Kasir Offline)
+PosSale.hasMany(PosSaleItem, { foreignKey: 'pos_sale_id', as: 'Items' });
+PosSaleItem.belongsTo(PosSale, { foreignKey: 'pos_sale_id', as: 'Sale' });
+PosSale.belongsTo(User, { foreignKey: 'cashier_user_id', as: 'Cashier' });
+User.hasMany(PosSale, { foreignKey: 'cashier_user_id', as: 'PosSales' });
+PosSaleItem.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+Product.hasMany(PosSaleItem, { foreignKey: 'product_id', as: 'PosSaleItems' });
+
 export {
     sequelize,
     User,
@@ -397,5 +407,7 @@ export {
     NotificationOutbox,
     AuditLog,
     SupplierPreorder,
-    SupplierPreorderItem
+    SupplierPreorderItem,
+    PosSale,
+    PosSaleItem
 };

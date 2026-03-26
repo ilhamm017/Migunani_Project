@@ -56,6 +56,71 @@ export type InvoiceLite = {
   [key: string]: unknown;
 };
 
+export type PosSaleItemRow = {
+  id?: string;
+  pos_sale_id?: string;
+  product_id?: string;
+  sku_snapshot?: string;
+  name_snapshot?: string;
+  unit_snapshot?: string;
+  qty?: number;
+  unit_price?: number;
+  line_total?: number;
+  unit_cost?: number;
+  cogs_total?: number;
+  [key: string]: unknown;
+};
+
+export type PosSaleRow = {
+  id?: string;
+  receipt_no?: string | number;
+  receipt_number?: string | null;
+  cashier_user_id?: string;
+  customer_name?: string | null;
+  note?: string | null;
+  status?: 'paid' | 'voided' | string;
+  subtotal?: number;
+  discount_amount?: number;
+  discount_percent?: number;
+  tax_percent?: number;
+  tax_amount?: number;
+  total?: number;
+  amount_received?: number;
+  change_amount?: number;
+  paid_at?: string;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  Cashier?: UserLite | null;
+  Items?: PosSaleItemRow[];
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+export type PosSaleListResponse = {
+  page: number;
+  limit: number;
+  total: number;
+  rows: PosSaleRow[];
+  period?: { start: string; end: string };
+};
+
+export type PosDailySummaryResponse = {
+  date: string;
+  period: { start: string; end: string };
+  summary: { total_transactions: number; total_revenue: number; total_qty: number };
+  top_items: Array<{
+    product_id: string;
+    sku: string;
+    product_name: string;
+    unit: string;
+    qty_sold: number;
+    revenue: number;
+    cogs: number;
+  }>;
+};
+
 export type AdminOrderListRow = {
   id?: string;
   status?: string;

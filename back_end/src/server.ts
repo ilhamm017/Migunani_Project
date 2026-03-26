@@ -205,7 +205,7 @@ import orderRoutes from './routes/order';
 import cartRoutes from './routes/cart';
 import financeRoutes from './routes/finance';
 import invoiceRoutes from './routes/invoice';
-// import posRoutes from './routes/pos';
+import posRoutes from './routes/pos';
 import driverRoutes from './routes/driver';
 import chatRoutes from './routes/chat';
 import whatsappRoutes from './routes/whatsapp';
@@ -230,7 +230,7 @@ app.use('/api/v1/cart', cartRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/admin/finance', financeRoutes);
-// app.use('/api/v1/pos', posRoutes); // Removed
+app.use('/api/v1/admin/pos', posRoutes);
 app.use('/api/v1/driver', driverRoutes);
 app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);

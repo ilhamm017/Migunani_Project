@@ -83,6 +83,22 @@ Jalankan SQL ini untuk menambah kolom catatan nego level order (`orders.pricing_
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_orders_pricing_override_note.sql
 ```
 
+## Add POS sales tables (Kasir Offline)
+
+Jalankan SQL ini untuk menambah tabel POS kasir offline (`pos_sales`, `pos_sale_items`) untuk transaksi eceran di toko:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_tables.sql
+```
+
+## Add POS discount percent (Kasir Offline)
+
+Jalankan SQL ini untuk menambah kolom diskon persen pada `pos_sales`:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_discount_percent.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

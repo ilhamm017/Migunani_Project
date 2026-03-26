@@ -254,6 +254,34 @@ export const api = {
 
     // Admin
     admin: {
+        pos: {
+            createSale: (data: {
+                customer_name?: string;
+                note?: string;
+                discount_percent?: number;
+                amount_received: number;
+                items: Array<{
+                    product_id: string;
+                    qty: number;
+                    unit_price_override?: number;
+                    override_reason?: string;
+                }>;
+            }) => apiClient.post('/admin/pos/sales', data),
+            listSales: (params?: {
+                page?: number;
+                limit?: number;
+                q?: string;
+                startDate?: string;
+                endDate?: string;
+                cashier_user_id?: string;
+                status?: 'paid' | 'voided' | string;
+            }) => apiClient.get('/admin/pos/sales', { params }),
+            getSaleById: (id: string) => apiClient.get(`/admin/pos/sales/${id}`),
+            voidSale: (id: string, data: { reason?: string }) =>
+                apiClient.post(`/admin/pos/sales/${id}/void`, data),
+            getDailySummary: (params?: { date?: string }) =>
+                apiClient.get('/admin/pos/reports/daily-summary', { params }),
+        },
         driverDeposit: {
             getList: () => apiClient.get('/admin/driver-deposit'),
             getHistory: (params?: {

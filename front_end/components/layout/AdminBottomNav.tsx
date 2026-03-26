@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ClipboardList, LayoutDashboard, MessageSquare, Users, Wallet } from 'lucide-react';
+import { ClipboardList, LayoutDashboard, MessageSquare, ShoppingCart, Users, Wallet } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
 import { useAdminActionBadges } from '@/lib/useAdminActionBadges';
@@ -10,6 +10,7 @@ import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 
 const navItems = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard },
+  { href: '/admin/pos', label: 'POS', icon: ShoppingCart },
   { href: '/admin/sales', label: 'Customer', icon: Users },
   { href: '/admin/orders', label: 'Order', icon: ClipboardList },
   { href: '/admin/finance', label: 'Finance', icon: Wallet },
@@ -66,7 +67,7 @@ export default function AdminBottomNav() {
     }
 
     if (role === 'kasir') {
-      return ['Customer', 'Order'].includes(item.label);
+      return ['POS', 'Customer', 'Order'].includes(item.label);
     }
 
     return false;
