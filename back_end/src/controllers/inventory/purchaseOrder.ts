@@ -252,6 +252,7 @@ export const verifyInboundStep2AndPost = asyncWrapper(async (req: Request, res: 
                 product_id: productId,
                 type: 'in',
                 qty: delta,
+                reference_type: 'inbound_post',
                 reference_id: `INB-${po.id}`,
                 note: `Inbound verified #${po.id}${varianceNote}${costReason ? ` - ${costReason}` : ''}`
             }, { transaction: t });

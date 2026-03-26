@@ -99,6 +99,30 @@ Jalankan SQL ini untuk menambah kolom diskon persen pada `pos_sales`:
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_discount_percent.sql
 ```
 
+## Add POS journaling status fields (Kasir Offline)
+
+Jalankan SQL ini untuk menambah kolom status journaling pada `pos_sales` (untuk audit jika posting jurnal gagal):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sales_journaling_fields.sql
+```
+
+## Add stock mutations reference type (Traceability)
+
+Jalankan SQL ini untuk menambah `reference_type` pada `stock_mutations` (agar mutasi stok bisa ditelusuri lintas modul):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_stock_mutations_reference_type.sql
+```
+
+## Add POS sale items override audit fields (Kasir Offline)
+
+Jalankan SQL ini untuk menambah kolom audit override harga pada `pos_sale_items`:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sale_items_override_audit.sql
+```
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

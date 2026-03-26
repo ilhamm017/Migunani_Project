@@ -39,6 +39,7 @@ export const createStockMutation = asyncWrapper(async (req: Request, res: Respon
             product_id,
             type,
             qty: type === 'out' ? -Math.abs(qty) : Math.abs(qty), // Store logic based on type, ensuring adjustments follow sign logic or explicit type
+            reference_type: 'stock_mutation',
             note,
             reference_id
         }, { transaction: t });

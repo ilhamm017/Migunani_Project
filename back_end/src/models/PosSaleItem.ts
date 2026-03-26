@@ -9,6 +9,9 @@ interface PosSaleItemAttributes {
     name_snapshot: string;
     unit_snapshot: string;
     qty: number;
+    unit_price_normal_snapshot: number;
+    unit_price_override?: number | null;
+    override_reason?: string | null;
     unit_price: number;
     line_total: number;
     unit_cost: number;
@@ -17,7 +20,7 @@ interface PosSaleItemAttributes {
     updatedAt?: Date;
 }
 
-interface PosSaleItemCreationAttributes extends Optional<PosSaleItemAttributes, 'id' | 'unit_snapshot' | 'unit_cost' | 'cogs_total'> { }
+interface PosSaleItemCreationAttributes extends Optional<PosSaleItemAttributes, 'id' | 'unit_snapshot' | 'unit_cost' | 'cogs_total' | 'unit_price_override' | 'override_reason'> { }
 
 class PosSaleItem extends Model<PosSaleItemAttributes, PosSaleItemCreationAttributes> implements PosSaleItemAttributes {
     declare id: string;
@@ -27,6 +30,9 @@ class PosSaleItem extends Model<PosSaleItemAttributes, PosSaleItemCreationAttrib
     declare name_snapshot: string;
     declare unit_snapshot: string;
     declare qty: number;
+    declare unit_price_normal_snapshot: number;
+    declare unit_price_override: number | null;
+    declare override_reason: string | null;
     declare unit_price: number;
     declare line_total: number;
     declare unit_cost: number;
@@ -68,6 +74,19 @@ PosSaleItem.init(
             type: DataTypes.INTEGER,
             allowNull: false,
         },
+        unit_price_normal_snapshot: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: false,
+            defaultValue: 0,
+        },
+        unit_price_override: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+        },
+        override_reason: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
         unit_price: {
             type: DataTypes.DECIMAL(15, 2),
             allowNull: false,
@@ -94,4 +113,3 @@ PosSaleItem.init(
 );
 
 export default PosSaleItem;
-

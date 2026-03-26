@@ -1285,6 +1285,7 @@ export const commitNormalizedRows = async (
                         product_id: createdProduct.id,
                         type: 'initial',
                         qty: row.stockQuantity,
+                        reference_type: 'inventory_import',
                         note: 'Initial stock from inventory import',
                         reference_id: batchReference
                     }, { transaction });
@@ -1310,6 +1311,7 @@ export const commitNormalizedRows = async (
                     product_id: existingProduct.id,
                     type: 'adjustment',
                     qty: stockDelta,
+                    reference_type: 'inventory_import',
                     note: `Stock adjusted by import (${previousStock} -> ${row.stockQuantity})`,
                     reference_id: batchReference
                 }, { transaction });
@@ -1450,7 +1452,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
 
 
 

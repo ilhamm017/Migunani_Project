@@ -9,6 +9,12 @@ import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 
 const round2 = (value: unknown) => Math.round(Number(value || 0) * 100) / 100;
+const joinError = (e: unknown) => {
+    if (e instanceof Error) return e.message;
+    if (typeof e === 'string') return e;
+    try { return JSON.stringify(e); } catch { }
+    return String(e);
+};
 
 type CreatePosSaleItemInput = {
     product_id: string;
@@ -200,10 +206,6 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const taxAmount = round2(computedTax.tax_amount);
         const total = round2(computedTax.total);
 
-        if (amountReceived < total) {
-            await t.rollback();
-            throw new CustomError(`Uang diterima kurang. Total: ${total}`, 400);
-        }
         const changeAmount = round2(amountReceived - total);
 
         const paidAt = new Date();
@@ -231,6 +233,7 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
         for (const line of lines) {
             const product = line.product;
+            const normalPrice = round2(product?.price);
             const currentStock = Number(product?.stock_quantity || 0);
             const newStock = currentStock - line.qty;
             if (newStock < 0) {
@@ -244,6 +247,7 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
                 product_id: line.product_id,
                 type: 'out',
                 qty: -Math.abs(line.qty),
+                reference_type: 'pos_sale',
                 reference_id: String(sale.id),
                 note: `POS sale ${receiptNumber || String(sale.id).slice(-8)}`
             }, { transaction: t });
@@ -268,6 +272,9 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
                 name_snapshot: String(product?.name || ''),
                 unit_snapshot: String(product?.unit || 'Pcs'),
                 qty: line.qty,
+                unit_price_normal_snapshot: normalPrice,
+                unit_price_override: line.unit_price_override,
+                override_reason: line.override_reason,
                 unit_price: line.unit_price,
                 line_total: line.line_total,
                 unit_cost: unitCost,
@@ -277,9 +284,11 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
         await PosSaleItem.bulkCreate(itemRows, { transaction: t });
 
-        // Optional: journaling
+        // Journaling (tracked on pos_sales)
+        const journalErrors: string[] = [];
         try {
             const cashAcc = await getAccountByCode('1101', t);
+            const arAcc = await getAccountByCode('1103', t);
             const revenueAcc = await getAccountByCode('4100', t);
             const vatAcc = await getAccountByCode('2201', t);
             const hppAcc = await getAccountByCode('5100', t);
@@ -287,11 +296,23 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
             const dpp = Math.max(0, round2(total - taxAmount));
 
-            if (cashAcc && revenueAcc && (dpp > 0 || taxAmount > 0)) {
+            // Settlement
+            if (!cashAcc) journalErrors.push('Akun kas (1101) tidak ditemukan');
+            if (!revenueAcc) journalErrors.push('Akun penjualan (4100) tidak ditemukan');
+            if (taxAmount > 0 && !vatAcc) journalErrors.push('Akun PPN keluaran (2201) tidak ditemukan');
+            const underpay = changeAmount < 0;
+            if (underpay && !arAcc) journalErrors.push('Akun piutang usaha (1103) tidak ditemukan untuk transaksi kurang bayar');
+
+            if (journalErrors.length === 0 && cashAcc && revenueAcc) {
                 const journalLines: any[] = [];
-                journalLines.push({ account_id: cashAcc.id, debit: total, credit: 0 });
+                if (!underpay) {
+                    journalLines.push({ account_id: cashAcc.id, debit: total, credit: 0 });
+                } else {
+                    journalLines.push({ account_id: cashAcc.id, debit: amountReceived, credit: 0 });
+                    journalLines.push({ account_id: arAcc!.id, debit: round2(total - amountReceived), credit: 0 });
+                }
                 if (dpp > 0) journalLines.push({ account_id: revenueAcc.id, debit: 0, credit: dpp });
-                if (taxAmount > 0 && vatAcc) journalLines.push({ account_id: vatAcc.id, debit: 0, credit: taxAmount });
+                if (taxAmount > 0) journalLines.push({ account_id: vatAcc!.id, debit: 0, credit: taxAmount });
 
                 if (journalLines.length >= 2) {
                     await JournalService.createEntry({
@@ -305,23 +326,41 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
                 }
             }
 
+            // COGS
             const safeCogs = Math.max(0, Number(totalCogs || 0));
-            if (hppAcc && inventoryAcc && safeCogs > 0) {
-                await JournalService.createEntry({
-                    description: `POS Sale HPP ${receiptNumber || String(sale.id).slice(-8)}`,
-                    reference_type: 'pos_sale',
-                    reference_id: String(sale.id),
-                    created_by: userId,
-                    idempotency_key: `pos_sale_cogs_${sale.id}`,
-                    lines: [
-                        { account_id: hppAcc.id, debit: safeCogs, credit: 0 },
-                        { account_id: inventoryAcc.id, debit: 0, credit: safeCogs }
-                    ]
-                }, t);
+            if (safeCogs > 0) {
+                if (!hppAcc || !inventoryAcc) {
+                    journalErrors.push('Akun HPP (5100) atau persediaan (1300) tidak ditemukan');
+                } else {
+                    await JournalService.createEntry({
+                        description: `POS Sale HPP ${receiptNumber || String(sale.id).slice(-8)}`,
+                        reference_type: 'pos_sale',
+                        reference_id: String(sale.id),
+                        created_by: userId,
+                        idempotency_key: `pos_sale_cogs_${sale.id}`,
+                        lines: [
+                            { account_id: hppAcc.id, debit: safeCogs, credit: 0 },
+                            { account_id: inventoryAcc.id, debit: 0, credit: safeCogs }
+                        ]
+                    }, t);
+                }
             }
         } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn('POS journaling skipped:', e);
+            journalErrors.push(joinError(e));
+        }
+
+        if (journalErrors.length === 0) {
+            await sale.update({
+                journal_status: 'posted',
+                journal_posted_at: new Date(),
+                journal_error: null
+            }, { transaction: t });
+        } else {
+            await sale.update({
+                journal_status: 'failed',
+                journal_posted_at: null,
+                journal_error: journalErrors.slice(0, 8).join('\n')
+            }, { transaction: t });
         }
 
         await t.commit();
@@ -507,6 +546,7 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
                 product_id: productId,
                 type: 'in',
                 qty: Math.abs(qty),
+                reference_type: 'pos_sale_void',
                 reference_id: String(sale.id),
                 note: `VOID POS sale ${receiptNumber || String(sale.id).slice(-8)}`
             }, { transaction: t });
@@ -531,23 +571,36 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
             void_reason: reason
         }, { transaction: t });
 
-        // Optional: journal reversals
+        // Journal reversals (tracked on pos_sales)
+        const journalErrors: string[] = [];
         try {
             const cashAcc = await getAccountByCode('1101', t);
+            const arAcc = await getAccountByCode('1103', t);
             const revenueAcc = await getAccountByCode('4100', t);
             const vatAcc = await getAccountByCode('2201', t);
             const hppAcc = await getAccountByCode('5100', t);
             const inventoryAcc = await getAccountByCode('1300', t);
 
             const total = round2((sale as any).total);
+            const amountReceived = round2((sale as any).amount_received);
             const taxAmount = round2((sale as any).tax_amount);
             const dpp = Math.max(0, round2(total - taxAmount));
+            const underpay = amountReceived < total;
 
-            if (cashAcc && revenueAcc && (dpp > 0 || taxAmount > 0)) {
+            if (!cashAcc) journalErrors.push('Akun kas (1101) tidak ditemukan');
+            if (!revenueAcc) journalErrors.push('Akun penjualan (4100) tidak ditemukan');
+            if (taxAmount > 0 && !vatAcc) journalErrors.push('Akun PPN keluaran (2201) tidak ditemukan');
+            if (underpay && !arAcc) journalErrors.push('Akun piutang usaha (1103) tidak ditemukan untuk void transaksi kurang bayar');
+
+            if (journalErrors.length === 0 && cashAcc && revenueAcc && (dpp > 0 || taxAmount > 0)) {
                 const journalLines: any[] = [];
                 if (dpp > 0) journalLines.push({ account_id: revenueAcc.id, debit: dpp, credit: 0 });
                 if (taxAmount > 0 && vatAcc) journalLines.push({ account_id: vatAcc.id, debit: taxAmount, credit: 0 });
-                journalLines.push({ account_id: cashAcc.id, debit: 0, credit: total });
+                const cashCredit = underpay ? amountReceived : total;
+                journalLines.push({ account_id: cashAcc.id, debit: 0, credit: cashCredit });
+                if (underpay) {
+                    journalLines.push({ account_id: arAcc!.id, debit: 0, credit: round2(total - amountReceived) });
+                }
 
                 if (journalLines.length >= 2) {
                     await JournalService.createEntry({
@@ -576,8 +629,26 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
                 }, t);
             }
         } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn('POS void journaling skipped:', e);
+            journalErrors.push(joinError(e));
+        }
+
+        if (journalErrors.length === 0) {
+            await sale.update({
+                journal_status: 'posted',
+                journal_posted_at: new Date(),
+                journal_error: null
+            }, { transaction: t });
+        } else {
+            const existing = String((sale as any).journal_error || '').trim();
+            const merged = [
+                existing ? existing : null,
+                `VOID: ${journalErrors.slice(0, 8).join('\n')}`
+            ].filter(Boolean).join('\n');
+            await sale.update({
+                journal_status: 'failed',
+                journal_posted_at: null,
+                journal_error: merged
+            }, { transaction: t });
         }
 
         await t.commit();

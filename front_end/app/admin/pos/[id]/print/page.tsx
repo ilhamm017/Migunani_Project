@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
@@ -12,7 +12,10 @@ import type { PosSaleRow } from '@/lib/apiTypes';
 export default function PosSalePrintPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const id = String(params?.id || '').trim();
+  const autoPrint = (searchParams?.get('autoPrint') || '') === '1';
+  const hasPrintedRef = useRef(false);
 
   const [sale, setSale] = useState<PosSaleRow | null>(null);
   const [loading, setLoading] = useState(false);
@@ -39,6 +42,15 @@ export default function PosSalePrintPage() {
     if (!allowed) return;
     void load();
   }, [allowed, load]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (!autoPrint) return;
+    if (loading || error || !sale) return;
+    if (hasPrintedRef.current) return;
+    hasPrintedRef.current = true;
+    window.setTimeout(() => window.print(), 250);
+  }, [allowed, autoPrint, error, loading, sale]);
 
   const receipt = useMemo(() => String(sale?.receipt_number || '').trim() || '-', [sale]);
   const paidAt = useMemo(() => (sale as any)?.paid_at || (sale as any)?.paidAt || sale?.createdAt, [sale]);

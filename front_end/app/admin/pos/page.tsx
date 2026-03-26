@@ -3,10 +3,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Barcode, Minus, Plus, Printer, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, Minus, Plus, Printer, Search, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
-import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { formatCurrency } from '@/lib/utils';
 
 type CartLine = {
   product_id: string;
@@ -18,6 +18,7 @@ type CartLine = {
   price: number;
   qty: number;
   unit_price_override?: number;
+  override_reason?: string;
 };
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -27,10 +28,7 @@ export default function AdminPosPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
   const router = useRouter();
 
-  const scanInputRef = useRef<HTMLInputElement | null>(null);
-  const [scanCode, setScanCode] = useState('');
-  const [scanLoading, setScanLoading] = useState(false);
-  const [scanError, setScanError] = useState('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchText, setSearchText] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -46,10 +44,6 @@ export default function AdminPosPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
-  const [todaySalesLoading, setTodaySalesLoading] = useState(false);
-  const [todaySalesError, setTodaySalesError] = useState('');
-  const [todaySales, setTodaySales] = useState<any[]>([]);
-
   const subtotal = useMemo(() => round2(cart.reduce((sum, line) => {
     const unitPrice = Number.isFinite(line.unit_price_override) ? Number(line.unit_price_override) : line.price;
     return sum + (unitPrice * line.qty);
@@ -61,8 +55,6 @@ export default function AdminPosPage() {
   }, [discountPercent, subtotal]);
 
   const subtotalAfterDiscountEst = useMemo(() => round2(Math.max(0, subtotal - discountAmountEst)), [subtotal, discountAmountEst]);
-
-  const changeAmount = useMemo(() => round2(Math.max(0, amountReceived - subtotalAfterDiscountEst)), [amountReceived, subtotalAfterDiscountEst]);
 
   const addToCart = useCallback((product: any) => {
     const productId = String(product?.id || '').trim();
@@ -88,53 +80,18 @@ export default function AdminPosPage() {
     });
   }, []);
 
-  const handleScanAdd = useCallback(async () => {
-    const code = scanCode.trim();
-    if (!code) return;
-    try {
-      setScanLoading(true);
-      setScanError('');
-      const res = await api.admin.inventory.scanBySku(code);
-      addToCart(res.data);
-      setScanCode('');
-      scanInputRef.current?.focus();
-    } catch (e: unknown) {
-      const message = typeof e === 'object' && e && 'response' in e
-        ? String((e as any).response?.data?.message || '')
-        : '';
-      setScanError(message || 'Produk tidak ditemukan.');
-    } finally {
-      setScanLoading(false);
-    }
-  }, [addToCart, scanCode]);
+  const handleSelectSearchResult = useCallback((product: any) => {
+    addToCart(product);
+    setSearchText('');
+    setSearchResults([]);
+    setSearchError('');
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  }, [addToCart]);
 
   useEffect(() => {
     if (!allowed) return;
-    scanInputRef.current?.focus();
+    searchInputRef.current?.focus();
   }, [allowed]);
-
-  const loadTodaySales = useCallback(async () => {
-    try {
-      setTodaySalesLoading(true);
-      setTodaySalesError('');
-      const today = new Date().toISOString().slice(0, 10);
-      const res = await api.admin.pos.listSales({ startDate: today, endDate: today, page: 1, limit: 20 });
-      const payload = res.data || {};
-      setTodaySales(Array.isArray(payload.rows) ? payload.rows : []);
-    } catch (e: unknown) {
-      const message = typeof e === 'object' && e && 'response' in e
-        ? String((e as any).response?.data?.message || '')
-        : '';
-      setTodaySalesError(message || 'Gagal memuat riwayat POS hari ini.');
-    } finally {
-      setTodaySalesLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!allowed) return;
-    void loadTodaySales();
-  }, [allowed, loadTodaySales]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -180,7 +137,7 @@ export default function AdminPosPage() {
     setCart((prev) => prev.map((row) => {
       if (row.product_id !== productId) return row;
       if (!value.trim()) {
-        const { unit_price_override, ...rest } = row;
+        const { unit_price_override, override_reason, ...rest } = row;
         return rest as CartLine;
       }
       return {
@@ -190,15 +147,21 @@ export default function AdminPosPage() {
     }));
   };
 
-  const handleSubmit = async () => {
+  const updateOverrideReason = (productId: string, value: string) => {
+    setCart((prev) => prev.map((row) => row.product_id === productId ? { ...row, override_reason: value } : row));
+  };
+
+  const handleSubmit = async (options?: { print: boolean }) => {
+    const shouldPrint = !!options?.print;
+    const printWindow = shouldPrint ? window.open('about:blank', '_blank') : null;
     try {
       setSubmitting(true);
       setSubmitError('');
-      setScanError('');
       setSearchError('');
 
       if (cart.length === 0) {
         setSubmitError('Keranjang kosong.');
+        try { printWindow?.close(); } catch { }
         return;
       }
 
@@ -211,6 +174,7 @@ export default function AdminPosPage() {
           product_id: row.product_id,
           qty: row.qty,
           ...(Number.isFinite(row.unit_price_override) ? { unit_price_override: Number(row.unit_price_override) } : {}),
+          ...(row.override_reason && row.override_reason.trim() ? { override_reason: row.override_reason.trim() } : {}),
         })),
       };
 
@@ -218,6 +182,7 @@ export default function AdminPosPage() {
       const id = String(res.data?.id || '').trim();
       if (!id) {
         setSubmitError('Transaksi tersimpan, tapi response id kosong.');
+        try { printWindow?.close(); } catch { }
         return;
       }
       setCart([]);
@@ -225,9 +190,22 @@ export default function AdminPosPage() {
       setCustomerName('');
       setNote('');
       setDiscountPercent(0);
-      await loadTodaySales();
+
+      if (shouldPrint) {
+        const printUrl = `/admin/pos/${encodeURIComponent(id)}/print?autoPrint=1`;
+        if (printWindow) {
+          printWindow.location.href = printUrl;
+          printWindow.focus();
+          searchInputRef.current?.focus();
+          return;
+        }
+        router.push(printUrl);
+        return;
+      }
+
       router.push(`/admin/pos/${encodeURIComponent(id)}`);
     } catch (e: unknown) {
+      try { printWindow?.close(); } catch { }
       const message = typeof e === 'object' && e && 'response' in e
         ? String((e as any).response?.data?.message || '')
         : '';
@@ -250,14 +228,22 @@ export default function AdminPosPage() {
           <p className="text-slate-500 text-sm">Transaksi eceran offline + keluar barang otomatis</p>
         </div>
         <div className="ml-auto">
-          <Link
-            href="/admin/pos"
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-slate-700"
-            onClick={() => scanInputRef.current?.focus()}
-          >
-            <Printer size={14} />
-            Fokus Scan
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/pos/history"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-slate-700"
+            >
+              Riwayat
+            </Link>
+            <Link
+              href="/admin/pos"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-slate-700"
+              onClick={() => searchInputRef.current?.focus()}
+            >
+              <Printer size={14} />
+              Fokus Cari
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -265,66 +251,41 @@ export default function AdminPosPage() {
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
             <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
-              <Barcode size={14} />
-              Scan SKU / Barcode
-            </div>
-            <div className="flex gap-2">
-              <input
-                ref={scanInputRef}
-                value={scanCode}
-                onChange={(e) => setScanCode(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleScanAdd();
-                }}
-                placeholder="Scan lalu Enter..."
-                className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              <button
-                type="button"
-                onClick={handleScanAdd}
-                disabled={scanLoading || !scanCode.trim()}
-                className="rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white disabled:opacity-60"
-              >
-                {scanLoading ? '...' : 'Tambah'}
-              </button>
-            </div>
-            {scanError ? <p className="text-xs text-rose-600">{scanError}</p> : null}
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
               <Search size={14} />
               Cari Produk
-            </div>
-            <input
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Ketik nama / SKU..."
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            {searchLoading ? <p className="text-xs text-slate-500">Mencari...</p> : null}
-            {searchError ? <p className="text-xs text-rose-600">{searchError}</p> : null}
-            {searchResults.length > 0 ? (
-              <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 overflow-hidden">
-                {searchResults.map((p) => (
-                  <button
-                    key={String(p?.id || Math.random())}
-                    type="button"
-                    onClick={() => addToCart(p)}
-                    className="w-full text-left px-4 py-3 hover:bg-slate-50"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-black text-slate-900">{String(p?.name || 'Produk')}</p>
-                        <p className="text-[11px] text-slate-500">SKU: {String(p?.sku || '-')} • Stok: {String(p?.stock_quantity ?? '-')}</p>
-                      </div>
-                      <div className="text-sm font-black text-slate-900">{formatCurrency(n(p?.price))}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+	            </div>
+	            <div className="relative">
+	              <input
+	                ref={searchInputRef}
+	                value={searchText}
+	                onChange={(e) => setSearchText(e.target.value)}
+	                placeholder="Ketik nama / SKU..."
+	                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+	              />
+	              {searchResults.length > 0 ? (
+	                <div className="absolute z-20 mt-2 w-full divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden max-h-72 overflow-y-auto">
+	                  {searchResults.map((p, idx) => (
+	                    <button
+	                      key={String(p?.id || p?.sku || idx)}
+	                      type="button"
+	                      onClick={() => handleSelectSearchResult(p)}
+	                      className="w-full text-left px-4 py-3 hover:bg-slate-50"
+	                    >
+	                      <div className="flex items-center justify-between gap-3">
+	                        <div>
+	                          <p className="text-sm font-black text-slate-900">{String(p?.name || 'Produk')}</p>
+	                          <p className="text-[11px] text-slate-500">SKU: {String(p?.sku || '-')} • Stok: {String(p?.stock_quantity ?? '-')}</p>
+	                        </div>
+	                        <div className="text-sm font-black text-slate-900">{formatCurrency(n(p?.price))}</div>
+	                      </div>
+	                    </button>
+	                  ))}
+	                </div>
+	              ) : null}
+	            </div>
+	            {searchLoading ? <p className="text-xs text-slate-500">Mencari...</p> : null}
+	            {searchError ? <p className="text-xs text-rose-600">{searchError}</p> : null}
+	          </div>
 
           <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
             <div className="flex items-center justify-between">
@@ -383,19 +344,28 @@ export default function AdminPosPage() {
                             </button>
                           </div>
                         </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase">Harga (Override)</label>
-                          <input
-                            value={Number.isFinite(row.unit_price_override) ? String(row.unit_price_override) : ''}
-                            onChange={(e) => updateOverride(row.product_id, e.target.value)}
-                            placeholder={`Normal: ${row.price}`}
-                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                          />
-                          {overrideInvalid ? (
-                            <p className="mt-1 text-[11px] text-rose-600">
-                              Override tidak valid (maks {formatCurrency(row.price)} / min modal {formatCurrency(row.base_price)}).
-                            </p>
-                          ) : null}
+	                        <div>
+	                          <label className="text-[10px] font-bold text-slate-500 uppercase">Harga (Override)</label>
+	                          <input
+	                            value={Number.isFinite(row.unit_price_override) ? String(row.unit_price_override) : ''}
+	                            onChange={(e) => updateOverride(row.product_id, e.target.value)}
+	                            placeholder={`Normal: ${row.price}`}
+	                            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+	                          />
+	                          {Number.isFinite(row.unit_price_override) ? (
+	                            <textarea
+	                              value={row.override_reason || ''}
+	                              onChange={(e) => updateOverrideReason(row.product_id, e.target.value)}
+	                              placeholder="Alasan override (opsional)"
+	                              rows={2}
+	                              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+	                            />
+	                          ) : null}
+	                          {overrideInvalid ? (
+	                            <p className="mt-1 text-[11px] text-rose-600">
+	                              Override tidak valid (maks {formatCurrency(row.price)} / min modal {formatCurrency(row.base_price)}).
+	                            </p>
+	                          ) : null}
                         </div>
                         <div>
                           <label className="text-[10px] font-bold text-slate-500 uppercase">Line Total</label>
@@ -444,12 +414,8 @@ export default function AdminPosPage() {
                 <span className="text-sm font-black text-slate-900">{formatCurrency(subtotalAfterDiscountEst)}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500">Uang diterima</span>
+                <span className="text-xs font-bold text-slate-500">Uang dibayar</span>
                 <span className="text-sm font-black text-slate-900">{formatCurrency(amountReceived)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500">Kembalian (estimasi)</span>
-                <span className="text-sm font-black text-emerald-700">{formatCurrency(changeAmount)}</span>
               </div>
               <p className="text-[11px] text-slate-500 mt-2">
                 Catatan: total final dihitung oleh backend (termasuk pajak jika aktif).
@@ -468,12 +434,12 @@ export default function AdminPosPage() {
                 />
               </div>
               <div className="col-span-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase">Uang diterima</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Uang dibayar</label>
                 <input
                   type="number"
                   value={amountReceived}
                   onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-                  placeholder="Uang diterima"
+                  placeholder="Nominal dibayar customer"
                   className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
                 />
               </div>
@@ -481,56 +447,26 @@ export default function AdminPosPage() {
 
             {submitError ? <p className="text-xs text-rose-600 whitespace-pre-wrap">{submitError}</p> : null}
 
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={submitting || cart.length === 0}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white disabled:opacity-60"
-            >
-              <Printer size={16} />
-              {submitting ? 'Menyimpan...' : 'Bayar & Simpan'}
-            </button>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-black uppercase tracking-widest text-slate-500">Riwayat Hari Ini</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={loadTodaySales}
-                disabled={todaySalesLoading}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-700 disabled:opacity-60"
+                onClick={() => void handleSubmit({ print: true })}
+                disabled={submitting || cart.length === 0}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white disabled:opacity-60"
+                title="Simpan transaksi dan buka struk untuk print (pilih printer thermal bluetooth dari dialog print browser)."
               >
-                {todaySalesLoading ? '...' : 'Refresh'}
+                <Printer size={16} />
+                {submitting ? 'Menyimpan...' : 'Bayar & Print'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmit({ print: false })}
+                disabled={submitting || cart.length === 0}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 disabled:opacity-60"
+              >
+                {submitting ? 'Menyimpan...' : 'Bayar & Simpan'}
               </button>
             </div>
-
-            {todaySalesError ? <p className="text-xs text-rose-600">{todaySalesError}</p> : null}
-            {todaySales.length === 0 ? (
-              <p className="text-sm text-slate-500">{todaySalesLoading ? 'Memuat...' : 'Belum ada transaksi.'}</p>
-            ) : (
-              <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 overflow-hidden">
-                {todaySales.map((s) => (
-                  <button
-                    key={String(s?.id || Math.random())}
-                    type="button"
-                    onClick={() => router.push(`/admin/pos/${encodeURIComponent(String(s?.id || ''))}`)}
-                    className="w-full text-left px-4 py-3 hover:bg-slate-50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-black text-slate-900">{String(s?.receipt_number || '-')}</p>
-                        <p className="text-[11px] text-slate-500">
-                          {formatDateTime(String(s?.paid_at || s?.paidAt || s?.createdAt || ''))}
-                          {s?.status ? ` • ${String(s.status)}` : ''}
-                        </p>
-                      </div>
-                      <div className="text-sm font-black text-slate-900">{formatCurrency(n(s?.total))}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </div>

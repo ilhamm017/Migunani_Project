@@ -68,6 +68,9 @@ export default function FinanceARDetailPage() {
     );
   }
 
+  const isPosRow = row.id?.startsWith('pos-') || row.order?.source === 'pos_store';
+  const posId = row.id?.startsWith('pos-') ? row.id.slice(4) : null;
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex flex-wrap items-center gap-3">
@@ -75,7 +78,7 @@ export default function FinanceARDetailPage() {
           ← Kembali ke daftar piutang
         </Link>
         <div className="flex-1" />
-        {role === 'super_admin' && (
+        {!isPosRow && role === 'super_admin' && (
           <Link
             href={`/admin/finance/invoices/hpp/${row.id}`}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-700 px-4 py-2 text-xs font-bold hover:bg-slate-50"
@@ -83,12 +86,29 @@ export default function FinanceARDetailPage() {
             Atur HPP
           </Link>
         )}
-        <Link
-          href={`/invoices/${row.id}/print`}
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold shadow-lg shadow-slate-200"
-        >
-          Cetak Invoice
-        </Link>
+        {isPosRow && posId ? (
+          <>
+            <Link
+              href={`/admin/pos/${encodeURIComponent(posId)}`}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-700 px-4 py-2 text-xs font-bold hover:bg-slate-50"
+            >
+              Buka Transaksi POS
+            </Link>
+            <Link
+              href={`/admin/pos/${encodeURIComponent(posId)}/print`}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold shadow-lg shadow-slate-200"
+            >
+              Print Struk
+            </Link>
+          </>
+        ) : (
+          <Link
+            href={`/invoices/${row.id}/print`}
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold shadow-lg shadow-slate-200"
+          >
+            Cetak Invoice
+          </Link>
+        )}
       </div>
 
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">

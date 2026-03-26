@@ -6,8 +6,9 @@ interface StockMutationAttributes {
     product_id: string; // UUID
     type: 'in' | 'out' | 'adjustment' | 'initial';
     qty: number;
-    reference_id?: string;
-    note?: string;
+    reference_type?: string | null;
+    reference_id?: string | null;
+    note?: string | null;
 }
 
 interface StockMutationCreationAttributes extends Optional<StockMutationAttributes, 'id'> { }
@@ -17,8 +18,9 @@ class StockMutation extends Model<StockMutationAttributes, StockMutationCreation
     declare product_id: string;
     declare type: 'in' | 'out' | 'adjustment' | 'initial';
     declare qty: number;
-    declare reference_id: string;
-    declare note: string;
+    declare reference_type: string | null;
+    declare reference_id: string | null;
+    declare note: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -42,6 +44,10 @@ StockMutation.init(
         qty: {
             type: DataTypes.INTEGER,
             allowNull: false,
+        },
+        reference_type: {
+            type: DataTypes.STRING(64),
+            allowNull: true,
         },
         reference_id: {
             type: DataTypes.STRING,

@@ -23,11 +23,14 @@ interface PosSaleAttributes {
     voided_at?: Date | null;
     voided_by?: string | null;
     void_reason?: string | null;
+    journal_status?: 'posted' | 'failed' | null;
+    journal_posted_at?: Date | null;
+    journal_error?: string | null;
     createdAt?: Date;
     updatedAt?: Date;
 }
 
-interface PosSaleCreationAttributes extends Optional<PosSaleAttributes, 'id' | 'receipt_no' | 'receipt_number' | 'customer_name' | 'note' | 'status' | 'discount_amount' | 'discount_percent' | 'tax_percent' | 'tax_amount' | 'change_amount' | 'voided_at' | 'voided_by' | 'void_reason'> { }
+interface PosSaleCreationAttributes extends Optional<PosSaleAttributes, 'id' | 'receipt_no' | 'receipt_number' | 'customer_name' | 'note' | 'status' | 'discount_amount' | 'discount_percent' | 'tax_percent' | 'tax_amount' | 'change_amount' | 'voided_at' | 'voided_by' | 'void_reason' | 'journal_status' | 'journal_posted_at' | 'journal_error'> { }
 
 class PosSale extends Model<PosSaleAttributes, PosSaleCreationAttributes> implements PosSaleAttributes {
     declare id: string;
@@ -49,6 +52,9 @@ class PosSale extends Model<PosSaleAttributes, PosSaleCreationAttributes> implem
     declare voided_at: Date | null;
     declare voided_by: string | null;
     declare void_reason: string | null;
+    declare journal_status: 'posted' | 'failed' | null;
+    declare journal_posted_at: Date | null;
+    declare journal_error: string | null;
 
     declare readonly createdAt: Date;
     declare readonly updatedAt: Date;
@@ -141,6 +147,18 @@ PosSale.init(
             allowNull: true,
         },
         void_reason: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        journal_status: {
+            type: DataTypes.ENUM('posted', 'failed'),
+            allowNull: true,
+        },
+        journal_posted_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+        },
+        journal_error: {
             type: DataTypes.TEXT,
             allowNull: true,
         },

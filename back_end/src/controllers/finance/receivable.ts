@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting } from '../../models';
+import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, PosSale, PosSaleItem } from '../../models';
 import { Op } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -83,7 +83,53 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
             };
         });
 
-        res.json([...invoiceRows, ...driverRows]);
+        // 3. Get POS underpay (change_amount < 0)
+        const posSales = await PosSale.findAll({
+            where: {
+                status: 'paid',
+                change_amount: { [Op.lt]: 0 }
+            },
+            order: [['paid_at', 'ASC'], ['createdAt', 'ASC']],
+        });
+
+        const posRows = (posSales as any[]).map((sale) => {
+            const total = Number(sale.total || 0);
+            const received = Number(sale.amount_received || 0);
+            const due = Math.max(0, Math.round((total - received) * 100) / 100);
+            const paidAt = sale.paid_at ? new Date(sale.paid_at) : new Date(sale.createdAt || Date.now());
+            const agingDays = Math.max(0, Math.floor((Date.now() - paidAt.getTime()) / (24 * 60 * 60 * 1000)));
+            const receipt = String(sale.receipt_number || '').trim() || `POS-${String(sale.id || '').slice(-8)}`;
+            const customerName = String(sale.customer_name || '').trim() || 'Walk-in';
+
+            return {
+                id: `pos-${sale.id}`,
+                invoice_number: receipt,
+                payment_method: 'cash_store',
+                payment_status: 'unpaid',
+                payment_proof_url: null,
+                amount_paid: received,
+                amount_due: due,
+                aging_days: agingDays,
+                createdAt: paidAt,
+                updatedAt: sale.updatedAt || paidAt,
+                verified_at: null,
+                order: {
+                    id: String(sale.id),
+                    customer_name: customerName,
+                    source: 'pos_store',
+                    status: String(sale.status || 'paid'),
+                    total_amount: total,
+                    createdAt: paidAt,
+                    updatedAt: sale.updatedAt || paidAt,
+                    expiry_date: null,
+                    customer: null,
+                    courier: null,
+                    items: []
+                }
+            };
+        });
+
+        res.json([...invoiceRows, ...driverRows, ...posRows]);
     } catch (error) {
         throw new CustomError('Error fetching AR', 500);
     }
@@ -143,6 +189,70 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
                         whatsapp_number: driver.whatsapp_number
                     },
                     items: []
+                }
+            };
+            return res.json(row);
+        }
+
+        // Handle pseudo-ID for POS underpay
+        if (invoiceId.startsWith('pos-')) {
+            const posId = invoiceId.replace('pos-', '');
+            if (!posId.trim()) throw new CustomError('pos id tidak valid', 400);
+
+            const sale = await PosSale.findByPk(posId);
+            if (!sale) throw new CustomError('Data piutang POS tidak ditemukan', 404);
+
+            const total = Number((sale as any).total || 0);
+            const received = Number((sale as any).amount_received || 0);
+            const due = Math.max(0, Math.round((total - received) * 100) / 100);
+            if (due <= 0) {
+                throw new CustomError('Transaksi POS ini tidak memiliki sisa piutang.', 409);
+            }
+
+            const paidAt = (sale as any).paid_at ? new Date((sale as any).paid_at) : new Date((sale as any).createdAt || Date.now());
+            const agingDays = Math.max(0, Math.floor((Date.now() - paidAt.getTime()) / (24 * 60 * 60 * 1000)));
+            const receipt = String((sale as any).receipt_number || '').trim() || `POS-${String(posId).slice(-8)}`;
+            const customerName = String((sale as any).customer_name || '').trim() || 'Walk-in';
+
+            const items = await PosSaleItem.findAll({
+                where: { pos_sale_id: posId },
+                order: [['id', 'ASC']]
+            });
+
+            const row = {
+                id: invoiceId,
+                invoice_number: receipt,
+                payment_method: 'cash_store',
+                payment_status: 'unpaid',
+                payment_proof_url: null,
+                amount_paid: received,
+                amount_due: due,
+                aging_days: agingDays,
+                createdAt: paidAt,
+                updatedAt: (sale as any).updatedAt || paidAt,
+                verified_at: null,
+                order: {
+                    id: String(posId),
+                    customer_name: customerName,
+                    source: 'pos_store',
+                    status: String((sale as any).status || 'paid'),
+                    total_amount: total,
+                    createdAt: paidAt,
+                    updatedAt: (sale as any).updatedAt || paidAt,
+                    expiry_date: null,
+                    customer: null,
+                    courier: null,
+                    items: (items as any[]).map((it) => ({
+                        id: String(it.id),
+                        qty: Number(it.qty || 0),
+                        price_at_purchase: Number(it.unit_price || 0),
+                        subtotal: Number(it.line_total || 0),
+                        product: {
+                            id: String(it.product_id),
+                            sku: String(it.sku_snapshot || ''),
+                            name: String(it.name_snapshot || ''),
+                        }
+                    }))
                 }
             };
             return res.json(row);

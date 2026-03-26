@@ -76,6 +76,9 @@ export default function PosSaleDetailPage() {
             <ArrowLeft size={16} />
             Kembali
           </Link>
+          <Link href="/admin/pos/history" className="text-sm font-semibold text-slate-500 hover:text-slate-700">
+            Riwayat
+          </Link>
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
             <h1 className="text-xl font-black text-slate-900">{receipt}</h1>
