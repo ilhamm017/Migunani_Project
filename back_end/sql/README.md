@@ -131,6 +131,31 @@ Jalankan SQL ini untuk menambah kolom audit override harga pada `pos_sale_items`
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sale_items_override_audit.sql
 ```
 
+## One-shot: run all safe SQL migrations (recommended)
+
+Jika ingin deploy ulang tanpa menjalankan file SQL satu per satu, gunakan runner ini. Runner akan:
+- Menjalankan semua file `*.sql` di folder ini secara berurutan (berdasarkan nama file).
+- Men-skip file yang ditandai `MANUAL_ONLY` atau yang termasuk data-fix manual.
+- Menyimpan histori di tabel `manual_sql_migrations` agar tidak double-run.
+
+Dev (ts-node):
+
+```bash
+cd back_end
+npm run migrate:sql
+```
+
+Production (setelah `npm run build` / image `runner`):
+
+```bash
+cd back_end
+npm run migrate:sql:prod
+```
+
+Catatan:
+- Jalankan runner ini hanya untuk migrasi yang idempotent & aman. Untuk skrip data-fix, tetap jalankan manual sesuai instruksi file masing-masing.
+- Runner ini menggunakan tabel `manual_sql_migrations` untuk mencegah double-run.
+
 ## Add FIFO cost layers + clearance promos (Promo "Cepat Habis")
 
 Jalankan SQL ini untuk menambah:

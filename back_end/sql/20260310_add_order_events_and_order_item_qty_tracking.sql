@@ -1,6 +1,41 @@
-ALTER TABLE order_items
-    ADD COLUMN IF NOT EXISTS ordered_qty_original INT NOT NULL DEFAULT 0 AFTER qty,
-    ADD COLUMN IF NOT EXISTS qty_canceled_backorder INT NOT NULL DEFAULT 0 AFTER ordered_qty_original;
+-- NOTE: MySQL 8 does not support `ADD COLUMN IF NOT EXISTS`.
+-- This migration is written to be idempotent via information_schema checks.
+
+SET @db := DATABASE();
+
+SET @has_ordered_qty_original := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'order_items'
+    AND COLUMN_NAME = 'ordered_qty_original'
+);
+
+SET @ddl := IF(
+  @has_ordered_qty_original = 0,
+  'ALTER TABLE `order_items` ADD COLUMN `ordered_qty_original` INT NOT NULL DEFAULT 0 AFTER `qty`',
+  'SELECT \"skip order_items.ordered_qty_original\"'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_qty_canceled_backorder := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'order_items'
+    AND COLUMN_NAME = 'qty_canceled_backorder'
+);
+
+SET @ddl := IF(
+  @has_qty_canceled_backorder = 0,
+  'ALTER TABLE `order_items` ADD COLUMN `qty_canceled_backorder` INT NOT NULL DEFAULT 0 AFTER `ordered_qty_original`',
+  'SELECT \"skip order_items.qty_canceled_backorder\"'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE order_items
 SET ordered_qty_original = qty

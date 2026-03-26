@@ -1,6 +1,8 @@
 -- Repoint product references in transaction tables from one SKU to another.
 -- Edit the two SKU values below, then run:
 --   mysql -u root -p migunani_motor_db < back_end/sql/20260325_repoint_product_transactions_by_sku.sql
+--
+-- MANUAL_ONLY: This is a data-fix script and is intentionally excluded from automated migration runners.
 
 START TRANSACTION;
 

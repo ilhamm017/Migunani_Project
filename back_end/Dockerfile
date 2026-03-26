@@ -67,6 +67,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 COPY package*.json ./
 RUN npm ci --omit=dev --no-audit
 COPY --from=builder /app/dist ./dist
+COPY sql ./sql
 
 RUN mkdir -p /app/uploads /app/.wwebjs_auth /app/.wwebjs_cache
 
@@ -125,6 +126,7 @@ COPY package*.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json ./
 COPY src ./src
+COPY sql ./sql
 
 EXPOSE 5000
 CMD ["npm", "run", "dev"]
