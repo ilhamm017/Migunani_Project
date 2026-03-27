@@ -407,6 +407,32 @@ export const api = {
             }) => apiClient.patch(`/admin/discount-vouchers/${encodeURIComponent(code)}`, data),
             remove: (code: string) => apiClient.delete(`/admin/discount-vouchers/${encodeURIComponent(code)}`),
         },
+        clearancePromos: {
+            getAll: (params?: { include_inactive?: boolean }) =>
+                apiClient.get('/admin/clearance-promos', { params }),
+            create: (data: {
+                name: string;
+                product_id: string;
+                target_unit_cost: number;
+                pricing_mode: 'fixed_price' | 'percent_off';
+                promo_unit_price?: number;
+                discount_pct?: number;
+                starts_at: string;
+                ends_at: string;
+                is_active?: boolean;
+            }) => apiClient.post('/admin/clearance-promos', data),
+            update: (id: string, data: {
+                name?: string;
+                product_id?: string;
+                target_unit_cost?: number;
+                pricing_mode?: 'fixed_price' | 'percent_off';
+                promo_unit_price?: number;
+                discount_pct?: number;
+                starts_at?: string;
+                ends_at?: string;
+                is_active?: boolean;
+            }) => apiClient.patch(`/admin/clearance-promos/${encodeURIComponent(id)}`, data),
+        },
 	        orderManagement: {
             getAll: (params?: {
                 page?: number;

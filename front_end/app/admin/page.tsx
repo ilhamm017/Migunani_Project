@@ -943,16 +943,24 @@ export default function AdminOverviewPage() {
       { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Verifikasi retur produk.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0, tone: 'bg-fuchsia-100 text-fuchsia-700 group-hover:bg-fuchsia-700 group-hover:text-white' },
     ];
 
-    if (user?.role === 'super_admin') {
-      quickActionCards.push({
-        href: '/admin/finance/invoices/hpp',
-        title: 'Override HPP Invoice',
-        desc: 'Koreksi harga beli per invoice.',
-        icon: Settings,
-        badge: 0,
-        tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white'
-      });
-    }
+	    if (user?.role === 'super_admin') {
+	      quickActionCards.push({
+	        href: '/admin/finance/invoices/hpp',
+	        title: 'Override HPP Invoice',
+	        desc: 'Koreksi harga beli per invoice.',
+	        icon: Settings,
+	        badge: 0,
+	        tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white'
+	      });
+	      quickActionCards.push({
+	        href: '/admin/sales/clearance-promos',
+	        title: 'Promo Cepat Habis',
+	        desc: 'Atur promo berbasis modal batch.',
+	        icon: Layers,
+	        badge: 0,
+	        tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white'
+	      });
+	    }
 
     quickActionCards = quickActionCards.filter((item) => {
       if (item.href === '/admin/setoran-driver') return canAccessSetoranDriver;
@@ -999,11 +1007,12 @@ export default function AdminOverviewPage() {
         { href: '/admin/chat', title: 'Customer Chat', desc: 'Inbox customer support.', icon: MessageSquare, badge: summary.chats },
         { href: '/admin/chat/broadcast', title: 'Broadcast Chat', desc: 'Kirim pesan massal.', icon: Megaphone },
         { href: '/admin/chat/whatsapp', title: 'WA Engine', desc: 'Status bot dan OTP.', icon: MessageSquare },
-        { href: '/admin/sales/tier-pricing', title: 'Pricing Master', desc: 'Atur harga tier.', icon: DollarSign },
-        { href: '/admin/sales/discount-vouchers', title: 'Promosi & Voucher', desc: 'Kupon diskon sistem.', icon: Percent },
-        { href: '/admin/sales/shipping-methods', title: 'Metode Kirim', desc: 'Pilihan dan biaya kirim.', icon: Truck },
-        { href: '/admin/sales/customer-purchases', title: 'Belanja Customer', desc: 'Lihat barang yang dibeli per periode.', icon: ShoppingCart },
-        { href: '/admin/sales/karyawan', title: 'Regis Karyawan', desc: 'Pendaftaran user internal.', icon: Shield },
+	        { href: '/admin/sales/tier-pricing', title: 'Pricing Master', desc: 'Atur harga tier.', icon: DollarSign },
+	        { href: '/admin/sales/discount-vouchers', title: 'Promosi & Voucher', desc: 'Kupon diskon sistem.', icon: Percent },
+	        { href: '/admin/sales/clearance-promos', title: 'Promo Cepat Habis', desc: 'Promo berbasis modal batch.', icon: Layers },
+	        { href: '/admin/sales/shipping-methods', title: 'Metode Kirim', desc: 'Pilihan dan biaya kirim.', icon: Truck },
+	        { href: '/admin/sales/customer-purchases', title: 'Belanja Customer', desc: 'Lihat barang yang dibeli per periode.', icon: ShoppingCart },
+	        { href: '/admin/sales/karyawan', title: 'Regis Karyawan', desc: 'Pendaftaran user internal.', icon: Shield },
         { href: '/admin/finance/laporan/backorder', title: 'Laporan Backorder', desc: 'Pantau stok kurang.', icon: ClipboardList },
         { href: '/admin/reports/stock-reduction', title: 'Pengurangan Stok + IPO', desc: 'Monitor stok keluar & export excel IPO.', icon: ShoppingCart },
       ]
