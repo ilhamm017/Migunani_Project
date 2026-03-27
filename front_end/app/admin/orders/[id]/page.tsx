@@ -761,14 +761,25 @@ export default function AdminInvoiceDetailPage() {
                       })()} • Source {row.source}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
-                      <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
-                      <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Tersuplai {row.suppliedQty}</span>
-                      <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {row.backorderQty}</span>
-                      <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
-                      <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
+                      {row.status === 'canceled' ? (
+                        <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-700">Dibatalkan</span>
+                      ) : (
+                        <>
+                          <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
+                          {row.backorderQty > 0 ? (
+                            <>
+                              <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Tersuplai {row.suppliedQty}</span>
+                              <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {row.backorderQty}</span>
+                              <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
+                              <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
+                            </>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                     {(() => {
                       const targetOrder = orders.find((order) => String(asRecord(order).id || '') === row.id);
+                      if (row.status === 'canceled') return null;
                       const orderItems = Array.isArray(asRecord(targetOrder).OrderItems)
                         ? (asRecord(targetOrder).OrderItems as LooseRecord[])
                         : [];
@@ -781,7 +792,7 @@ export default function AdminInvoiceDetailPage() {
                           const product = asRecord(itemRow.Product);
                           const productName = String(product.name || 'Produk');
                           const sku = String(product.sku || '-');
-                          const orderedQty = Number(itemRow.qty || 0);
+                          const orderedQtyOriginal = Number(itemRow.ordered_qty_original || itemRow.qty || 0);
                           const suppliedQty = getOrderItemSuppliedQty(
                             targetOrder,
                             invoice,
@@ -793,7 +804,7 @@ export default function AdminInvoiceDetailPage() {
                             : null;
                           const backorderQty = summaryRow
                             ? Number(asRecord(summaryRow).backorder_open_qty || 0)
-                            : Math.max(0, orderedQty - suppliedQty);
+                            : Math.max(0, orderedQtyOriginal - suppliedQty);
                           return (
                             <div key={itemId} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                               <div className="flex items-start justify-between gap-3">
@@ -802,9 +813,13 @@ export default function AdminInvoiceDetailPage() {
                                   <p className="text-[10px] text-slate-500">SKU {sku}</p>
                                 </div>
                                 <div className="text-right text-[10px] font-bold">
-                                  <p className="text-slate-700">Diminta {orderedQty}</p>
-                                  <p className="text-emerald-700">Tersuplai {suppliedQty}</p>
-                                  <p className="text-amber-700">Backorder {backorderQty}</p>
+                                  <p className="text-slate-700">Qty {orderedQtyOriginal}</p>
+                                  {backorderQty > 0 ? (
+                                    <>
+                                      <p className="text-emerald-700">Dialokasikan {suppliedQty}</p>
+                                      <p className="text-amber-700">Backorder {backorderQty}</p>
+                                    </>
+                                  ) : null}
                                 </div>
                               </div>
                             </div>
