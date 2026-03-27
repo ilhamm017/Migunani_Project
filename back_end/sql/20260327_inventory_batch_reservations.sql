@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS `inventory_batch_reservations` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `order_id` CHAR(36) NOT NULL,
   `order_item_id` BIGINT NOT NULL,
-  `product_id` CHAR(36) NOT NULL,
+  `product_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `batch_id` BIGINT NOT NULL,
   `qty_reserved` INT NOT NULL,
   `createdAt` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -30,4 +30,3 @@ CREATE TABLE IF NOT EXISTS `inventory_batch_reservations` (
 ALTER TABLE `order_items`
   ADD COLUMN `preferred_unit_cost` DECIMAL(15,4) NULL AFTER `clearance_promo_id`,
   ADD KEY `idx_order_items_preferred_unit_cost` (`preferred_unit_cost`);
-
