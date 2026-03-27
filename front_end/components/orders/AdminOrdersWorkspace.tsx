@@ -601,6 +601,14 @@ export default function AdminOrdersWorkspace({
     cost_at_purchase: number | null;
   };
 
+  type PricingEditorDraft = {
+    unit_price_override: string;
+    preferred_unit_cost: string;
+    reason: string;
+    deal_mode: 'price' | 'percent';
+    discount_pct: string;
+  };
+
   type PricingCostLayerRow = {
     unit_cost: number;
     qty_on_hand: number;
@@ -648,7 +656,7 @@ export default function AdminOrdersWorkspace({
     orderId: string;
     orderReason: string;
     items: PricingEditorItem[];
-    drafts: Record<string, { unit_price_override: string; preferred_unit_cost: string; reason: string }>;
+    drafts: Record<string, PricingEditorDraft>;
     saving: boolean;
     error: string;
   } | null>(null);
@@ -1090,12 +1098,19 @@ export default function AdminOrdersWorkspace({
         };
       }).filter((row: PricingEditorItem) => Boolean(row.order_item_id));
 
-      const drafts: Record<string, { unit_price_override: string; preferred_unit_cost: string; reason: string }> = {};
+      const drafts: Record<string, PricingEditorDraft> = {};
       items.forEach((row) => {
+        const baseline = Math.max(0, Number(row.baseline_unit_price || 0));
+        const current = Math.max(0, Number(row.current_unit_price || 0));
+        const derivedPct = baseline > 0 && current > 0 && current <= baseline
+          ? Math.max(0, Math.min(100, (1 - current / baseline) * 100))
+          : 0;
         drafts[row.order_item_id] = {
           unit_price_override: String(row.current_unit_price || 0),
           preferred_unit_cost: row.preferred_unit_cost !== null ? Number(row.preferred_unit_cost).toFixed(4) : '',
-          reason: ''
+          reason: '',
+          deal_mode: 'price',
+          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
         };
       });
 
@@ -1146,9 +1161,25 @@ export default function AdminOrdersWorkspace({
       return Number.isFinite(n) ? n : null;
     };
 
+    let dealModeError = '';
     const payloadItems = pricingEditor.items.map((item) => {
       const draft = pricingEditor.drafts[item.order_item_id];
-      const unitPrice = toFinite(draft?.unit_price_override);
+      const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
+      let unitPrice: number | null = null;
+      if (dealMode === 'percent') {
+        const pctRaw = String(draft?.discount_pct ?? '').trim();
+        const pct = toFinite(pctRaw);
+        if (pct === null) {
+          if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
+        } else if (pct < 0 || pct > 100) {
+          if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
+        } else {
+          const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
+          unitPrice = Math.round(baseline * (1 - pct / 100));
+        }
+      } else {
+        unitPrice = toFinite(draft?.unit_price_override);
+      }
       const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
       const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
       const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
@@ -1160,6 +1191,10 @@ export default function AdminOrdersWorkspace({
       };
     });
 
+    if (dealModeError) {
+      setPricingEditor((prev) => prev ? { ...prev, error: dealModeError } : prev);
+      return;
+    }
     if (payloadItems.some((row) => !row.order_item_id)) {
       setPricingEditor((prev) => prev ? { ...prev, error: 'Order item tidak valid.' } : prev);
       return;
@@ -3333,6 +3368,13 @@ export default function AdminOrdersWorkspace({
 	              <div className="space-y-2">
 	                {pricingEditor.items.map((row) => {
 	                  const draft = pricingEditor.drafts[row.order_item_id];
+	                  const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
+	                  const baselineUnitPrice = Math.max(0, Number(row.baseline_unit_price || 0));
+	                  const discountPctRaw = String(draft?.discount_pct ?? '').trim();
+	                  const discountPct = Number(discountPctRaw);
+	                  const computedDealPrice = dealMode === 'percent' && Number.isFinite(discountPct)
+	                    ? Math.round(baselineUnitPrice * (1 - discountPct / 100))
+	                    : null;
 	                  const layers = pricingCostLayersByProductId[row.product_id] || [];
 	                  const isPromoLocked = Boolean(row.clearance_promo_id);
 	                  return (
@@ -3349,26 +3391,127 @@ export default function AdminOrdersWorkspace({
 	                        <div className="flex flex-col items-end gap-2">
 	                          <div className="flex items-center gap-2">
 	                            <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
-	                            <input
-	                              type="number"
-	                              min={0}
-	                              value={draft?.unit_price_override ?? ''}
-	                              onChange={(e) => {
-	                                const value = e.target.value;
-	                                setPricingEditor((prev) => {
-	                                  if (!prev) return prev;
-	                                  return {
-	                                    ...prev,
-	                                    drafts: {
-	                                      ...prev.drafts,
-	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), unit_price_override: value }
-	                                    }
-	                                  };
-	                                });
-	                              }}
-	                              className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-	                            />
+	                            <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-[10px]">
+	                              <button
+	                                type="button"
+	                                disabled={pricingEditor.saving}
+	                                onClick={() => {
+	                                  setPricingEditor((prev) => {
+	                                    if (!prev) return prev;
+	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
+	                                    const pct = Number(String(currentDraft.discount_pct ?? '').trim());
+	                                    const computed = baselineUnitPrice > 0 && Number.isFinite(pct)
+	                                      ? Math.round(baselineUnitPrice * (1 - pct / 100))
+	                                      : Number(String(currentDraft.unit_price_override ?? '').trim());
+	                                    const nextUnitPrice = Number.isFinite(computed) && computed > 0
+	                                      ? String(Math.trunc(computed))
+	                                      : String(currentDraft.unit_price_override || row.current_unit_price || 0);
+	                                    return {
+	                                      ...prev,
+	                                      drafts: {
+	                                        ...prev.drafts,
+	                                        [row.order_item_id]: {
+	                                          ...currentDraft,
+	                                          deal_mode: 'price',
+	                                          unit_price_override: nextUnitPrice,
+	                                        }
+	                                      }
+	                                    };
+	                                  });
+	                                }}
+	                                className={`rounded-lg px-2 py-1 font-black ${dealMode === 'price' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
+	                              >
+	                                Rp
+	                              </button>
+	                              <button
+	                                type="button"
+	                                disabled={pricingEditor.saving}
+	                                onClick={() => {
+	                                  setPricingEditor((prev) => {
+	                                    if (!prev) return prev;
+	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
+	                                    const currentPrice = Number(String(currentDraft.unit_price_override ?? '').trim());
+	                                    const safePrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : Number(row.current_unit_price || 0);
+	                                    const derivedPct = baselineUnitPrice > 0 && safePrice > 0
+	                                      ? Math.max(0, Math.min(100, (1 - safePrice / baselineUnitPrice) * 100))
+	                                      : 0;
+	                                    return {
+	                                      ...prev,
+	                                      drafts: {
+	                                        ...prev.drafts,
+	                                        [row.order_item_id]: {
+	                                          ...currentDraft,
+	                                          deal_mode: 'percent',
+	                                          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
+	                                        }
+	                                      }
+	                                    };
+	                                  });
+	                                }}
+	                                className={`rounded-lg px-2 py-1 font-black ${dealMode === 'percent' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
+	                              >
+	                                %
+	                              </button>
+	                            </div>
+
+	                            {dealMode === 'price' ? (
+	                              <input
+	                                type="number"
+	                                min={0}
+	                                value={draft?.unit_price_override ?? ''}
+	                                disabled={pricingEditor.saving}
+	                                onChange={(e) => {
+	                                  const value = e.target.value;
+	                                  setPricingEditor((prev) => {
+	                                    if (!prev) return prev;
+	                                    return {
+	                                      ...prev,
+	                                      drafts: {
+	                                        ...prev.drafts,
+	                                        [row.order_item_id]: {
+	                                          ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }),
+	                                          unit_price_override: value,
+	                                          deal_mode: 'price',
+	                                        }
+	                                      }
+	                                    };
+	                                  });
+	                                }}
+	                                className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+	                              />
+	                            ) : (
+	                              <input
+	                                type="number"
+	                                min={0}
+	                                max={100}
+	                                value={draft?.discount_pct ?? ''}
+	                                disabled={pricingEditor.saving}
+	                                onChange={(e) => {
+	                                  const value = e.target.value;
+	                                  setPricingEditor((prev) => {
+	                                    if (!prev) return prev;
+	                                    return {
+	                                      ...prev,
+	                                      drafts: {
+	                                        ...prev.drafts,
+	                                        [row.order_item_id]: {
+	                                          ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'percent', discount_pct: '0' }),
+	                                          deal_mode: 'percent',
+	                                          discount_pct: value,
+	                                        }
+	                                      }
+	                                    };
+	                                  });
+	                                }}
+	                                className="w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+	                              />
+	                            )}
 	                          </div>
+	                          {dealMode === 'percent' ? (
+	                            <p className="text-[10px] text-slate-500 text-right">
+	                              Harga deal ≈ {computedDealPrice !== null ? formatCurrency(computedDealPrice) : '-'}
+	                            </p>
+	                          ) : null}
 	                          <div className="flex items-center gap-2">
 	                            <label className="text-[10px] font-bold text-slate-500">Layer modal</label>
 	                            <select
@@ -3382,7 +3525,7 @@ export default function AdminOrdersWorkspace({
 	                                    ...prev,
 	                                    drafts: {
 	                                      ...prev.drafts,
-	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), preferred_unit_cost: value }
+	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }), preferred_unit_cost: value }
 	                                    }
 	                                  };
 	                                });
@@ -3419,7 +3562,7 @@ export default function AdminOrdersWorkspace({
 	                                  ...prev,
 	                                  drafts: {
 	                                    ...prev.drafts,
-	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), reason: value }
+	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }), reason: value }
 	                                  }
 	                                };
 	                              });
