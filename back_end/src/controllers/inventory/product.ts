@@ -361,6 +361,11 @@ export const createProduct = asyncWrapper(async (req: Request, res: Response) =>
 
         // Handles initial stock via mutation if provided
         if (stock_quantity && stock_quantity > 0) {
+            if (!Number.isFinite(Number(base_price)) || Number(base_price) <= 0) {
+                await t.rollback();
+                throw new CustomError('Harga beli (base_price) wajib > 0 jika stok awal > 0 (untuk pencatatan HPP/profit).', 400);
+            }
+
             await StockMutation.create({
                 product_id: product.id,
                 type: 'initial',
@@ -370,6 +375,16 @@ export const createProduct = asyncWrapper(async (req: Request, res: Response) =>
             }, { transaction: t });
 
             await product.update({ stock_quantity }, { transaction: t });
+
+            await InventoryCostService.recordInbound({
+                product_id: String(product.id),
+                qty: stock_quantity,
+                unit_cost: Number(base_price),
+                reference_type: 'product_create',
+                reference_id: 'INIT-' + normalizedSku,
+                note: 'Initial Stock via Create Product',
+                transaction: t
+            });
         }
 
         await t.commit();

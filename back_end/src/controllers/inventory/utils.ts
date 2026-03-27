@@ -1274,6 +1274,9 @@ export const commitNormalizedRows = async (
             });
 
             if (!existingProduct) {
+                if (row.stockQuantity > 0 && row.basePrice <= 0) {
+                    throw new Error('HARGA BELI wajib > 0 jika STOK > 0 (untuk pencatatan HPP/profit).');
+                }
                 const createdProduct = await Product.create({
                     ...importPayload,
                     stock_quantity: row.stockQuantity
@@ -1289,6 +1292,16 @@ export const commitNormalizedRows = async (
                         note: 'Initial stock from inventory import',
                         reference_id: batchReference
                     }, { transaction });
+
+                    await InventoryCostService.recordInbound({
+                        product_id: String(createdProduct.id),
+                        qty: row.stockQuantity,
+                        unit_cost: row.basePrice,
+                        reference_type: 'inventory_import',
+                        reference_id: batchReference,
+                        note: 'Initial stock from inventory import',
+                        transaction
+                    });
                 }
 
                 summary.created_count += 1;
@@ -1315,6 +1328,19 @@ export const commitNormalizedRows = async (
                     note: `Stock adjusted by import (${previousStock} -> ${row.stockQuantity})`,
                     reference_id: batchReference
                 }, { transaction });
+
+                if (stockDelta > 0 && row.basePrice <= 0) {
+                    throw new Error('HARGA BELI wajib > 0 jika STOK bertambah (untuk pencatatan HPP/profit).');
+                }
+
+                await InventoryCostService.recordAdjustment({
+                    product_id: String(existingProduct.id),
+                    qty_diff: stockDelta,
+                    reference_type: 'inventory_import',
+                    reference_id: batchReference,
+                    note: `Stock adjusted by import (${previousStock} -> ${row.stockQuantity})`,
+                    transaction
+                });
             }
 
             summary.updated_count += 1;
@@ -1452,7 +1478,6 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
 
 
 
