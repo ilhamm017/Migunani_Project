@@ -477,6 +477,10 @@ export const api = {
                 apiClient.get('/admin/products', { params }),
             getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>
                 apiClient.get('/admin/products/restock-suggestions', { params }),
+            getProductAliases: (id: string) =>
+                apiClient.get(`/admin/products/${encodeURIComponent(id)}/aliases`),
+            updateProductAliases: (id: string, aliases: string[]) =>
+                apiClient.put(`/admin/products/${encodeURIComponent(id)}/aliases`, { aliases }),
             getVehicleTypes: () => apiClient.get('/admin/vehicle-types'),
             createVehicleType: (data: { name: string }) => apiClient.post('/admin/vehicle-types', data),
             renameVehicleType: (data: { from: string; to: string }) => apiClient.patch('/admin/vehicle-types/rename', data),

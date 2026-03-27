@@ -2,6 +2,7 @@ import sequelize from '../config/database';
 import User from './User';
 import CustomerProfile from './CustomerProfile';
 import Product from './Product';
+import ProductAlias from './ProductAlias';
 import Category from './Category';
 import ProductCategory from './ProductCategory';
 import Supplier from './Supplier';
@@ -155,6 +156,8 @@ Category.hasMany(Product, { foreignKey: 'category_id' });
 Product.belongsTo(Category, { foreignKey: 'category_id' });
 Product.hasMany(ProductCategory, { foreignKey: 'product_id' });
 ProductCategory.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasMany(ProductAlias, { foreignKey: 'product_id', as: 'Aliases', onDelete: 'CASCADE' });
+ProductAlias.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 Category.hasMany(ProductCategory, { foreignKey: 'category_id' });
 ProductCategory.belongsTo(Category, { foreignKey: 'category_id' });
 Product.belongsToMany(Category, {
@@ -370,6 +373,7 @@ export {
     User,
     CustomerProfile,
     Product,
+    ProductAlias,
     Category,
     ProductCategory,
     Supplier,

@@ -12,6 +12,7 @@ import { syncProductCategories, toObjectOrEmpty, ensureProductColumnsReady, PROD
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { VEHICLE_TYPES_SETTING_KEY, buildCanonicalVehicleMap, canonicalizeVehicleList, parseVehicleCompatibilityInput, toVehicleCompatibilityDbValue } from '../../utils/vehicleCompatibility';
+import { applyTokenSearch, splitSearchTokens } from '../../utils/productSearch';
 
 export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -29,14 +30,6 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
         const normalizedStockFilter = String(stock_filter ?? 'all').toLowerCase();
         if (!['all', 'empty', 'low'].includes(normalizedStockFilter)) {
             throw new CustomError('stock_filter tidak valid (gunakan: all|empty|low)', 400);
-        }
-
-        if (search) {
-            whereClause[Op.or] = [
-                { name: { [Op.like]: `%${search}%` } },
-                { sku: { [Op.like]: `%${search}%` } },
-                { barcode: { [Op.like]: `%${search}%` } }
-            ];
         }
 
         if (category_id) {
@@ -65,52 +58,72 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
         const normalizedPage = Math.max(1, Number(page) || 1);
         const normalizedLimit = Math.max(1, Number(limit) || 10);
 
-        const buildWhereWithAnd = (extras: any[]) => {
+        const tokens = splitSearchTokens(search);
+        const buildSearchWhere = (mode: 'and' | 'or') => {
             const next: any = { ...whereClause };
-            const existing = next[Op.and];
-            const andParts: any[] = [];
-            if (Array.isArray(existing)) andParts.push(...existing);
-            else if (existing) andParts.push(existing);
-            andParts.push(...extras);
-            next[Op.and] = andParts;
+            const andVal = next[Op.and];
+            if (Array.isArray(andVal)) next[Op.and] = [...andVal];
+            applyTokenSearch({ sequelize, whereClause: next, tokens, mode, productTableAlias: 'Product' });
             return next;
         };
 
-        const listWhere = (() => {
-            if (normalizedStockFilter === 'empty') {
-                return buildWhereWithAnd([{ stock_quantity: { [Op.lte]: 0 } }]);
-            }
-            if (normalizedStockFilter === 'low') {
-                return buildWhereWithAnd([
-                    { stock_quantity: { [Op.gt]: 0 } },
-                    where(col('stock_quantity'), Op.lte, col('min_stock'))
-                ]);
-            }
-            return whereClause;
-        })();
+        const runQuery = async (searchMode: 'and' | 'or') => {
+            const whereForQuery = tokens.length > 0 ? buildSearchWhere(searchMode) : whereClause;
 
-        const [listResult, emptyStockCount, lowStockCount] = await Promise.all([
-            Product.findAndCountAll({
-                where: listWhere,
-                include: [
-                    { model: Category, attributes: ['id', 'name'] },
-                    { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
-                ],
-                limit: normalizedLimit,
-                offset: (normalizedPage - 1) * normalizedLimit,
-                order: [['name', 'ASC']],
-                distinct: true
-            }),
-            Product.count({
-                where: { ...whereClause, stock_quantity: 0 }
-            }),
-            Product.count({
-                where: buildWhereWithAnd([
-                    { stock_quantity: { [Op.gt]: 0 } },
-                    where(col('stock_quantity'), Op.lte, col('min_stock'))
-                ])
-            })
-        ]);
+            const buildWhereWithAndFrom = (source: any, extras: any[]) => {
+                const next: any = { ...source };
+                const existing = next[Op.and];
+                const andParts: any[] = [];
+                if (Array.isArray(existing)) andParts.push(...existing);
+                else if (existing) andParts.push(existing);
+                andParts.push(...extras);
+                next[Op.and] = andParts;
+                return next;
+            };
+
+            const listWhere = (() => {
+                if (normalizedStockFilter === 'empty') {
+                    return buildWhereWithAndFrom(whereForQuery, [{ stock_quantity: { [Op.lte]: 0 } }]);
+                }
+                if (normalizedStockFilter === 'low') {
+                    return buildWhereWithAndFrom(whereForQuery, [
+                        { stock_quantity: { [Op.gt]: 0 } },
+                        where(col('stock_quantity'), Op.lte, col('min_stock'))
+                    ]);
+                }
+                return whereForQuery;
+            })();
+
+            const [listResult, emptyStockCount, lowStockCount] = await Promise.all([
+                Product.findAndCountAll({
+                    where: listWhere,
+                    include: [
+                        { model: Category, attributes: ['id', 'name'] },
+                        { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
+                    ],
+                    limit: normalizedLimit,
+                    offset: (normalizedPage - 1) * normalizedLimit,
+                    order: [['name', 'ASC']],
+                    distinct: true
+                }),
+                Product.count({
+                    where: { ...whereForQuery, stock_quantity: 0 }
+                }),
+                Product.count({
+                    where: buildWhereWithAndFrom(whereForQuery, [
+                        { stock_quantity: { [Op.gt]: 0 } },
+                        where(col('stock_quantity'), Op.lte, col('min_stock'))
+                    ])
+                })
+            ]);
+
+            return { listResult, emptyStockCount, lowStockCount };
+        };
+
+        let { listResult, emptyStockCount, lowStockCount } = await runQuery('and');
+        if (tokens.length > 1 && Number((listResult as any)?.count || 0) === 0) {
+            ({ listResult, emptyStockCount, lowStockCount } = await runQuery('or'));
+        }
 
         const { count, rows } = listResult;
 
@@ -147,54 +160,63 @@ export const getRestockSuggestions = asyncWrapper(async (req: Request, res: Resp
             whereClause.status = normalizedStatus;
         }
 
-        if (search) {
-            whereClause[Op.or] = [
-                { name: { [Op.like]: `%${search}%` } },
-                { sku: { [Op.like]: `%${search}%` } },
-                { barcode: { [Op.like]: `%${search}%` } }
-            ];
-        }
-
-        const buildWhereWithAnd = (extras: any[]) => {
+        const tokens = splitSearchTokens(search);
+        const buildSearchWhere = (mode: 'and' | 'or') => {
             const next: any = { ...whereClause };
-            const existing = next[Op.and];
-            const andParts: any[] = [];
-            if (Array.isArray(existing)) andParts.push(...existing);
-            else if (existing) andParts.push(existing);
-            andParts.push(...extras);
-            next[Op.and] = andParts;
+            const andVal = next[Op.and];
+            if (Array.isArray(andVal)) next[Op.and] = [...andVal];
+            applyTokenSearch({ sequelize, whereClause: next, tokens, mode, productTableAlias: 'Product' });
             return next;
         };
 
-        const restockWhere = buildWhereWithAnd([
-            {
-                [Op.or]: [
-                    { stock_quantity: { [Op.lte]: 0 } },
-                    {
-                        [Op.and]: [
-                            { min_stock: { [Op.not]: null } },
-                            where(col('stock_quantity'), Op.lte, col('min_stock'))
-                        ]
-                    }
-                ]
-            }
-        ]);
+        const runQuery = async (mode: 'and' | 'or') => {
+            const whereForQuery = tokens.length > 0 ? buildSearchWhere(mode) : whereClause;
+            const buildWhereWithAndFrom = (source: any, extras: any[]) => {
+                const next: any = { ...source };
+                const existing = next[Op.and];
+                const andParts: any[] = [];
+                if (Array.isArray(existing)) andParts.push(...existing);
+                else if (existing) andParts.push(existing);
+                andParts.push(...extras);
+                next[Op.and] = andParts;
+                return next;
+            };
 
-        const result = await Product.findAndCountAll({
-            where: restockWhere,
-            include: [
-                { model: Category, attributes: ['id', 'name'] },
-                { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
-            ],
-            limit: normalizedLimit,
-            offset: (normalizedPage - 1) * normalizedLimit,
-            order: [
-                [sequelize.literal('CASE WHEN stock_quantity <= 0 THEN 1 ELSE 0 END'), 'DESC'],
-                [sequelize.literal('(COALESCE(min_stock, 0) - stock_quantity)'), 'DESC'],
-                ['name', 'ASC']
-            ],
-            distinct: true
-        });
+            const restockWhereForQuery = buildWhereWithAndFrom(whereForQuery, [
+                {
+                    [Op.or]: [
+                        { stock_quantity: { [Op.lte]: 0 } },
+                        {
+                            [Op.and]: [
+                                { min_stock: { [Op.not]: null } },
+                                where(col('stock_quantity'), Op.lte, col('min_stock'))
+                            ]
+                        }
+                    ]
+                }
+            ]);
+
+            return Product.findAndCountAll({
+                where: restockWhereForQuery,
+                include: [
+                    { model: Category, attributes: ['id', 'name'] },
+                    { model: Category, as: 'Categories', attributes: ['id', 'name'], through: { attributes: [] }, required: false }
+                ],
+                limit: normalizedLimit,
+                offset: (normalizedPage - 1) * normalizedLimit,
+                order: [
+                    [sequelize.literal('CASE WHEN stock_quantity <= 0 THEN 1 ELSE 0 END'), 'DESC'],
+                    [sequelize.literal('(COALESCE(min_stock, 0) - stock_quantity)'), 'DESC'],
+                    ['name', 'ASC']
+                ],
+                distinct: true
+            });
+        };
+
+        let result = await runQuery('and');
+        if (tokens.length > 1 && Number((result as any)?.count || 0) === 0) {
+            result = await runQuery('or');
+        }
 
         res.json({
             total: result.count,

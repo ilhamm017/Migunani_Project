@@ -10,6 +10,7 @@ import Image from 'next/image';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { notifyOpen, notifyAlert } from '@/lib/notify';
+import ProductAliasModal from '@/components/admin/products/ProductAliasModal';
 
 type ChatContextMessage = {
     id?: string;
@@ -74,6 +75,9 @@ function ManualOrderContent() {
     const canManageShippingConfig = ['super_admin', 'kasir'].includes(String(user?.role || ''));
     const canOverridePricing = ['super_admin', 'kasir'].includes(String(user?.role || '').trim());
     const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+    const canManageAliases = ['super_admin', 'kasir', 'admin_gudang'].includes(String(user?.role || '').trim());
+    const [aliasModalOpen, setAliasModalOpen] = useState(false);
+    const [aliasModalProduct, setAliasModalProduct] = useState<{ id: string; name?: string; sku?: string } | null>(null);
 
     const showSubmitPopup = useCallback((tone: 'success' | 'error' | 'info', title: string, message: string, ttlMs = 1800) => {
         notifyOpen({
@@ -964,10 +968,22 @@ function ManualOrderContent() {
 	                                            <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
 	                                            <button onClick={() => updateQty(item.product_id, 1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">+</button>
 	                                        </div>
-                                        <button
-                                            onClick={() => removeFromCart(item.product_id)}
-                                            className="text-rose-500 hover:text-rose-700 p-1"
-                                        >
+                                        {canManageAliases ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setAliasModalProduct({ id: item.product_id, name: item.product?.name });
+                                                    setAliasModalOpen(true);
+                                                }}
+                                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+                                            >
+                                                Alias
+                                            </button>
+                                        ) : null}
+	                                        <button
+	                                            onClick={() => removeFromCart(item.product_id)}
+	                                            className="text-rose-500 hover:text-rose-700 p-1"
+	                                        >
                                             <Trash2 size={16} />
                                         </button>
                                     </div>
@@ -978,10 +994,16 @@ function ManualOrderContent() {
 		                </div>
 		            </div>
 
-                    {submitConfirmOpen && (
-                        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
-                            <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-                                <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+                    <ProductAliasModal
+                        open={aliasModalOpen}
+                        onClose={() => setAliasModalOpen(false)}
+                        product={aliasModalProduct}
+                    />
+
+	                    {submitConfirmOpen && (
+	                        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
+	                            <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+	                                <div className="border-b border-slate-200 px-5 pb-4 pt-5">
                                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600">Konfirmasi</p>
                                     <h3 className="mt-2 text-lg font-black text-slate-900">Buat pesanan ini?</h3>
                                     <p className="mt-1 text-xs text-slate-500">Periksa ringkasan sebelum lanjut.</p>

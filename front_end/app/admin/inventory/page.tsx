@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { normalizeProductImageUrl } from '@/lib/image';
 import NextImage from 'next/image';
+import ProductAliasModal from '@/components/admin/products/ProductAliasModal';
 
 interface ProductRow {
   id: string;
@@ -175,6 +176,8 @@ export default function InventoryAdminPage() {
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
   const [selectedProduct, setSelectedProduct] = useState<ProductRow | null>(null);
   const [form, setForm] = useState<EditFormState | null>(null);
+  const [aliasModalOpen, setAliasModalOpen] = useState(false);
+  const [aliasModalProduct, setAliasModalProduct] = useState<{ id: string; name?: string; sku?: string } | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
@@ -276,6 +279,8 @@ export default function InventoryAdminPage() {
     setCameraError('');
     setSelectedProduct(null);
     setForm(null);
+    setAliasModalOpen(false);
+    setAliasModalProduct(null);
   };
 
   const updateForm = (key: keyof EditFormState, value: string) => {
@@ -648,7 +653,20 @@ export default function InventoryAdminPage() {
           <div className="w-full max-w-4xl bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden">
             <div className="flex items-center justify-between p-5 border-b border-slate-200">
               <h3 className="text-lg font-black text-slate-900">Edit Produk: {selectedProduct.sku}</h3>
-              <button onClick={closeEditor} disabled={isSaving || isUploadingImage} className="rounded-lg bg-slate-100 p-2 text-slate-500"><X size={16} /></button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAliasModalProduct({ id: selectedProduct.id, sku: selectedProduct.sku, name: selectedProduct.name });
+                    setAliasModalOpen(true);
+                  }}
+                  disabled={isSaving || isUploadingImage}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Alias
+                </button>
+                <button onClick={closeEditor} disabled={isSaving || isUploadingImage} className="rounded-lg bg-slate-100 p-2 text-slate-500 disabled:opacity-60"><X size={16} /></button>
+              </div>
             </div>
 
             <div className="p-5 max-h-[70vh] overflow-auto">
@@ -776,6 +794,12 @@ export default function InventoryAdminPage() {
           </div>
         </div>
       )}
+
+      <ProductAliasModal
+        open={aliasModalOpen}
+        onClose={() => setAliasModalOpen(false)}
+        product={aliasModalProduct}
+      />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
-import { Product, Category, ProductCategory } from '../models';
+import { Product, Category, ProductCategory, sequelize } from '../models';
 import { Op, fn, col } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
+import { applyTokenSearch, splitSearchTokens } from '../utils/productSearch';
 
 // Public Catalog API - Safe for Customers (Hides base_price/COGS)
 
@@ -12,13 +13,6 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = { status: 'active' };
-
-        if (search) {
-            whereClause[Op.or] = [
-                { name: { [Op.like]: `%${search}%` } },
-                // Maybe descriptive tags?
-            ];
-        }
 
         if (category_id) {
             const categoryId = Number(category_id);
@@ -53,18 +47,42 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         if (sort === 'price_desc') order = [['price', 'DESC']];
         if (sort === 'newest') order = [['createdAt', 'DESC']];
 
-        const { count, rows } = await Product.findAndCountAll({
-            where: whereClause,
-            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'], // Explicit attributes (hide stock from public)
-            include: [
-                { model: Category, attributes: ['id', 'name', 'icon'] },
-                { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
-            ],
-            limit: Number(limit),
-            offset: Number(offset),
-            order,
-            distinct: true
-        });
+        const tokens = splitSearchTokens(search);
+        const buildSearchWhere = (mode: 'and' | 'or') => {
+            const next: any = { ...whereClause };
+            const andVal = next[Op.and];
+            if (Array.isArray(andVal)) next[Op.and] = [...andVal];
+            applyTokenSearch({ sequelize, whereClause: next, tokens, mode, productTableAlias: 'Product' });
+            return next;
+        };
+
+        const tokensPresent = tokens.length > 0;
+        const orderWithStock = tokensPresent
+            ? [[sequelize.literal('GREATEST(`Product`.`stock_quantity` - `Product`.`allocated_quantity`, 0)'), 'DESC'], ...order]
+            : order;
+
+        const runQuery = async (mode: 'and' | 'or') => {
+            const whereForQuery = tokensPresent ? buildSearchWhere(mode) : whereClause;
+            return Product.findAndCountAll({
+                where: whereForQuery,
+                attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'], // Explicit attributes (hide stock from public)
+                include: [
+                    { model: Category, attributes: ['id', 'name', 'icon'] },
+                    { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
+                ],
+                limit: Number(limit),
+                offset: Number(offset),
+                order: orderWithStock,
+                distinct: true
+            });
+        };
+
+        let result = await runQuery('and');
+        if (tokens.length > 1 && Number((result as any)?.count || 0) === 0) {
+            result = await runQuery('or');
+        }
+
+        const { count, rows } = result;
 
         res.json({
             total: count,
