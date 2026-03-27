@@ -55,8 +55,8 @@ router.get('/reports/customer-balance', authorizeRoles('super_admin', 'admin_fin
 router.get('/reports/backorders', authorizeRoles('super_admin', 'kasir'), ReportController.getBackorderPreorderReport);
 router.get('/reports/backorders/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportBackorderPreorderReportExcel);
 router.get('/reports/backorders/print', authorizeRoles('super_admin', 'kasir'), ReportController.printBackorderPreorderReportThermalPdf);
-router.get('/reports/stock-reduction', authorizeRoles('super_admin', 'kasir'), ReportController.getStockReductionReport);
-router.get('/reports/stock-reduction/export', authorizeRoles('super_admin', 'kasir'), ReportController.exportStockReductionReportExcel);
+router.get('/reports/stock-reduction', authorizeRoles('super_admin', 'kasir', 'admin_gudang'), ReportController.getStockReductionReport);
+router.get('/reports/stock-reduction/export', authorizeRoles('super_admin', 'kasir', 'admin_gudang'), ReportController.exportStockReductionReportExcel);
 router.get('/reports/tax-summary', authorizeRoles('super_admin', 'admin_finance'), ReportController.getTaxSummary);
 router.get('/reports/vat-monthly', authorizeRoles('super_admin', 'admin_finance'), ReportController.getVatMonthlyReport);
 router.get('/reports/products-sold', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.getProductsSoldReport);

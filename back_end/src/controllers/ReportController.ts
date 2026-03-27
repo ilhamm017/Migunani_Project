@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
 import { ReportService } from '../services/ReportService';
 import { CustomerBalanceService } from '../services/CustomerBalanceService';
-import { Invoice, InvoiceItem, OrderItem, Product, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
@@ -571,54 +571,197 @@ export const getProductsSoldReport = asyncWrapper(async (req: Request, res: Resp
 
         const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
 
-        const rows = await InvoiceItem.findAll({
-            attributes: [
-                [sequelize.col('OrderItem.product_id'), 'product_id'],
-                [sequelize.col('OrderItem.Product.sku'), 'sku'],
-                [sequelize.col('OrderItem.Product.name'), 'product_name'],
-                [sequelize.col('OrderItem.Product.unit'), 'unit'],
-                [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
-                [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
-                [sequelize.fn('SUM', sequelize.literal(`InvoiceItem.qty * COALESCE((
-                    SELECT ico.unit_cost_override
-                    FROM invoice_cost_overrides ico
-                    WHERE ico.invoice_id = InvoiceItem.invoice_id
-                      AND ico.product_id = OrderItem.product_id
-                    LIMIT 1
-                ), InvoiceItem.unit_cost)`)), 'cogs'],
-            ],
-            include: [
-                {
-                    model: Invoice,
-                    attributes: [],
-                    where: {
-                        payment_status: 'paid',
-                        verified_at: { [Op.between]: [start, end] }
+        const sourceLimit = Math.min(2000, Math.max(limitNum * 5, limitNum));
+        const toNumberSafe = (value: unknown) => {
+            const parsed = Number(value || 0);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        type SourceRow = {
+            product_id?: string;
+            sku?: string | null;
+            product_name?: string | null;
+            unit?: string | null;
+            qty_sold?: unknown;
+            revenue?: unknown;
+            cogs?: unknown;
+            tx_count?: unknown;
+        };
+
+        const [invoiceRows, posRows] = await Promise.all([
+            InvoiceItem.findAll({
+                attributes: [
+                    [sequelize.col('OrderItem.product_id'), 'product_id'],
+                    [sequelize.col('OrderItem.Product.sku'), 'sku'],
+                    [sequelize.col('OrderItem.Product.name'), 'product_name'],
+                    [sequelize.col('OrderItem.Product.unit'), 'unit'],
+                    [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
+                    [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
+                    [sequelize.fn('SUM', sequelize.literal(`InvoiceItem.qty * COALESCE((
+                        SELECT ico.unit_cost_override
+                        FROM invoice_cost_overrides ico
+                        WHERE ico.invoice_id = InvoiceItem.invoice_id
+                          AND ico.product_id = OrderItem.product_id
+                        LIMIT 1
+                    ), InvoiceItem.unit_cost)`)), 'cogs'],
+                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('InvoiceItem.invoice_id'))), 'tx_count'],
+                ],
+                include: [
+                    {
+                        model: Invoice,
+                        attributes: [],
+                        where: {
+                            payment_status: 'paid',
+                            verified_at: { [Op.between]: [start, end] }
+                        }
+                    },
+                    {
+                        model: OrderItem,
+                        attributes: [],
+                        include: [
+                            { model: Product, attributes: [] }
+                        ]
                     }
-                },
-                {
-                    model: OrderItem,
-                    attributes: [],
-                    include: [
-                        { model: Product, attributes: [] }
-                    ]
-                }
-            ],
-            group: [
-                sequelize.col('OrderItem.product_id'),
-                sequelize.col('OrderItem.Product.id'),
-                sequelize.col('OrderItem.Product.sku'),
-                sequelize.col('OrderItem.Product.name'),
-                sequelize.col('OrderItem.Product.unit'),
-            ],
-            order: [[sequelize.literal('qty_sold'), 'DESC']],
-            limit: limitNum,
-            raw: true,
-        });
+                ],
+                group: [
+                    sequelize.col('OrderItem.product_id'),
+                    sequelize.col('OrderItem.Product.id'),
+                    sequelize.col('OrderItem.Product.sku'),
+                    sequelize.col('OrderItem.Product.name'),
+                    sequelize.col('OrderItem.Product.unit'),
+                ],
+                order: [[sequelize.literal('qty_sold'), 'DESC']],
+                limit: sourceLimit,
+                raw: true,
+            }) as unknown as SourceRow[],
+            PosSaleItem.findAll({
+                attributes: [
+                    [sequelize.col('PosSaleItem.product_id'), 'product_id'],
+                    [sequelize.col('Product.sku'), 'sku'],
+                    [sequelize.col('Product.name'), 'product_name'],
+                    [sequelize.col('Product.unit'), 'unit'],
+                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.qty')), 'qty_sold'],
+                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.line_total')), 'revenue'],
+                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.cogs_total')), 'cogs'],
+                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('PosSaleItem.pos_sale_id'))), 'tx_count'],
+                ],
+                include: [
+                    {
+                        model: PosSale,
+                        as: 'Sale',
+                        attributes: [],
+                        where: {
+                            status: 'paid',
+                            paid_at: { [Op.between]: [start, end] }
+                        }
+                    },
+                    {
+                        model: Product,
+                        as: 'Product',
+                        attributes: [],
+                    }
+                ],
+                group: [
+                    sequelize.col('PosSaleItem.product_id'),
+                    sequelize.col('Product.id'),
+                    sequelize.col('Product.sku'),
+                    sequelize.col('Product.name'),
+                    sequelize.col('Product.unit'),
+                ],
+                order: [[sequelize.literal('qty_sold'), 'DESC']],
+                limit: sourceLimit,
+                raw: true,
+            }) as unknown as SourceRow[],
+        ]);
+
+        type Bucket = {
+            product_id: string;
+            sku: string | null;
+            product_name: string | null;
+            unit: string | null;
+            qty_invoice: number;
+            qty_pos: number;
+            revenue_invoice: number;
+            revenue_pos: number;
+            cogs_invoice: number;
+            cogs_pos: number;
+            tx_invoice: number;
+            tx_pos: number;
+        };
+
+        const byProduct = new Map<string, Bucket>();
+        const ensureBucket = (row: SourceRow) => {
+            const productId = String(row.product_id || '').trim();
+            if (!productId) return null;
+            const existing = byProduct.get(productId);
+            if (existing) return existing;
+            const next: Bucket = {
+                product_id: productId,
+                sku: row.sku ?? null,
+                product_name: row.product_name ?? null,
+                unit: row.unit ?? null,
+                qty_invoice: 0,
+                qty_pos: 0,
+                revenue_invoice: 0,
+                revenue_pos: 0,
+                cogs_invoice: 0,
+                cogs_pos: 0,
+                tx_invoice: 0,
+                tx_pos: 0,
+            };
+            byProduct.set(productId, next);
+            return next;
+        };
+
+        for (const row of invoiceRows) {
+            const bucket = ensureBucket(row);
+            if (!bucket) continue;
+            bucket.sku = bucket.sku ?? row.sku ?? null;
+            bucket.product_name = bucket.product_name ?? row.product_name ?? null;
+            bucket.unit = bucket.unit ?? row.unit ?? null;
+            bucket.qty_invoice += Math.max(0, toNumberSafe(row.qty_sold));
+            bucket.revenue_invoice += Math.max(0, toNumberSafe(row.revenue));
+            bucket.cogs_invoice += Math.max(0, toNumberSafe(row.cogs));
+            bucket.tx_invoice += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+        }
+
+        for (const row of posRows) {
+            const bucket = ensureBucket(row);
+            if (!bucket) continue;
+            bucket.sku = bucket.sku ?? row.sku ?? null;
+            bucket.product_name = bucket.product_name ?? row.product_name ?? null;
+            bucket.unit = bucket.unit ?? row.unit ?? null;
+            bucket.qty_pos += Math.max(0, toNumberSafe(row.qty_sold));
+            bucket.revenue_pos += Math.max(0, toNumberSafe(row.revenue));
+            bucket.cogs_pos += Math.max(0, toNumberSafe(row.cogs));
+            bucket.tx_pos += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+        }
+
+        const mergedRows = Array.from(byProduct.values())
+            .map((bucket) => ({
+                product_id: bucket.product_id,
+                sku: bucket.sku,
+                product_name: bucket.product_name,
+                unit: bucket.unit,
+                qty_sold: bucket.qty_invoice + bucket.qty_pos,
+                revenue: bucket.revenue_invoice + bucket.revenue_pos,
+                cogs: bucket.cogs_invoice + bucket.cogs_pos,
+                qty_invoice: bucket.qty_invoice,
+                qty_pos: bucket.qty_pos,
+                revenue_invoice: bucket.revenue_invoice,
+                revenue_pos: bucket.revenue_pos,
+                cogs_invoice: bucket.cogs_invoice,
+                cogs_pos: bucket.cogs_pos,
+                tx_invoice: bucket.tx_invoice,
+                tx_pos: bucket.tx_pos,
+                order_count: bucket.tx_invoice + bucket.tx_pos,
+            }))
+            .sort((a, b) => toNumberSafe(b.qty_sold) - toNumberSafe(a.qty_sold))
+            .slice(0, limitNum);
 
         res.json({
             period: { startDate: String(startDate), endDate: String(endDate) },
-            rows,
+            rows: mergedRows,
         });
     } catch (error) {
         if (error instanceof CustomError) {

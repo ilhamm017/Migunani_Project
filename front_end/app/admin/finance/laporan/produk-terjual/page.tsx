@@ -82,7 +82,7 @@ export default function LaporanProdukTerjualPage() {
           </button>
         </div>
         <p className="text-[10px] text-slate-500 mt-2">
-          Sumber data: invoice yang sudah <span className="font-bold">paid</span> pada periode (verified_at).
+          Sumber data: invoice <span className="font-bold">paid</span> (verified_at) + POS <span className="font-bold">paid</span> (paid_at) pada periode.
         </p>
       </div>
 

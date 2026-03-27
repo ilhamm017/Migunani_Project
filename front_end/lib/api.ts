@@ -333,6 +333,12 @@ export const api = {
                 endDate?: string;
                 include_collectible_total?: boolean;
             }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
+            getTopProducts: (id: string, params?: {
+                startDate?: string;
+                endDate?: string;
+                limit?: number;
+                include_inactive?: boolean;
+            }) => apiClient.get(`/admin/customers/${id}/top-products`, { params }),
             updateEmail: (id: string, email: string) =>
                 apiClient.patch(`/admin/customers/${id}/email`, { email }),
             updatePassword: (id: string, password: string) =>

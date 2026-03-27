@@ -41,14 +41,14 @@ type StockReductionPayload = {
 const toDateInputValue = (date: Date) => date.toISOString().slice(0, 10);
 
 export default function StockReductionReportPage() {
-  const allowed = useRequireRoles(['super_admin', 'kasir']);
+  const allowed = useRequireRoles(['super_admin', 'kasir', 'admin_gudang']);
   const [rows, setRows] = useState<StockReductionRow[]>([]);
   const [summary, setSummary] = useState({ total_qty_reduced: 0, total_products: 0, total_orders: 0 });
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
 
-  const [eventType, setEventType] = useState<EventType>('all');
+  const [eventType, setEventType] = useState<EventType>('goods_out');
   const [search, setSearch] = useState('');
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();

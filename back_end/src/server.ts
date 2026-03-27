@@ -392,6 +392,77 @@ const columnExists = async (tableName: string, columnName: string): Promise<bool
     return Array.isArray(rows) && rows.length > 0;
 };
 
+const indexExists = async (tableName: string, indexName: string): Promise<boolean> => {
+    if (sequelize.getDialect() !== 'mysql') return true;
+    const [rows] = await sequelize.query(
+        `SELECT 1
+         FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = :tableName
+           AND INDEX_NAME = :indexName
+         LIMIT 1`,
+        { replacements: { tableName, indexName } }
+    ) as any;
+    return Array.isArray(rows) && rows.length > 0;
+};
+
+const ensureReportIndexesReady = async () => {
+    if (sequelize.getDialect() !== 'mysql') return;
+
+    type IndexSpec = { table: string; indexName: string; columns: string[]; createSql: string };
+    const specs: IndexSpec[] = [
+        {
+            table: 'invoices',
+            indexName: 'idx_invoices_payment_verified_at',
+            columns: ['payment_status', 'verified_at'],
+            createSql: 'CREATE INDEX `idx_invoices_payment_verified_at` ON `invoices` (`payment_status`, `verified_at`)',
+        },
+        {
+            table: 'invoices',
+            indexName: 'idx_invoices_customer_payment_verified_at',
+            columns: ['customer_id', 'payment_status', 'verified_at'],
+            createSql: 'CREATE INDEX `idx_invoices_customer_payment_verified_at` ON `invoices` (`customer_id`, `payment_status`, `verified_at`)',
+        },
+        {
+            table: 'pos_sales',
+            indexName: 'idx_pos_sales_status_paid_at',
+            columns: ['status', 'paid_at'],
+            createSql: 'CREATE INDEX `idx_pos_sales_status_paid_at` ON `pos_sales` (`status`, `paid_at`)',
+        },
+        {
+            table: 'pos_sales',
+            indexName: 'idx_pos_sales_customer_status_paid_at',
+            columns: ['customer_id', 'status', 'paid_at'],
+            createSql: 'CREATE INDEX `idx_pos_sales_customer_status_paid_at` ON `pos_sales` (`customer_id`, `status`, `paid_at`)',
+        },
+        {
+            table: 'pos_sale_items',
+            indexName: 'idx_pos_sale_items_sale_product',
+            columns: ['pos_sale_id', 'product_id'],
+            createSql: 'CREATE INDEX `idx_pos_sale_items_sale_product` ON `pos_sale_items` (`pos_sale_id`, `product_id`)',
+        },
+    ];
+
+    for (const spec of specs) {
+        const exists = await tableExists(spec.table);
+        if (!exists) continue;
+        const hasColumns = await Promise.all(spec.columns.map((col) => columnExists(spec.table, col)));
+        if (hasColumns.some((ok) => !ok)) continue;
+
+        const already = await indexExists(spec.table, spec.indexName);
+        if (already) continue;
+
+        console.warn(`[Startup] Missing index on ${spec.table}: ${spec.indexName}. Applying CREATE INDEX...`);
+        try {
+            await sequelize.query(spec.createSql);
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code === 'ER_DUP_KEYNAME') continue;
+            throw error;
+        }
+    }
+};
+
 const ensureCriticalTablesReady = async () => {
     const criticalTables = ['users', 'orders'];
 
@@ -644,6 +715,7 @@ const syncDatabaseWithRetry = async () => {
         await ensureCodSettlementAuditColumnsReady();
         await ensureDeliveryHandoverItemEvidenceColumnsReady();
         await ensureInvoiceAmountReceivedColumnReady();
+        await ensureReportIndexesReady();
         return;
     }
 
@@ -659,6 +731,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
+            await ensureReportIndexesReady();
             return;
         } catch (error) {
             lastError = error;
@@ -677,6 +750,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
+            await ensureReportIndexesReady();
             return;
         }
     }

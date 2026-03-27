@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice } from '../../models';
+import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice, PosSale, PosSaleItem } from '../../models';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { OPEN_ORDER_STATUSES } from './types';
@@ -311,5 +311,229 @@ export const getCustomerOrders = asyncWrapper(async (req: Request, res: Response
             throw error;
         }
         throw new CustomError('Error fetching customer orders', 500);
+    }
+});
+
+export const getCustomerTopProducts = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const customerId = normalizeId(req.params?.id);
+        if (!customerId) {
+            throw new CustomError('ID customer tidak valid', 400);
+        }
+
+        const customer = await User.findOne({
+            where: { id: customerId, role: 'customer' },
+            attributes: ['id'],
+        });
+        if (!customer) {
+            throw new CustomError('Customer tidak ditemukan', 404);
+        }
+
+        const limitNum = parsePositiveNumber(req.query.limit, 10, 50);
+        const includeInactive = String(req.query.include_inactive || '').trim().toLowerCase() === 'true';
+
+        const defaultEnd = new Date();
+        const defaultStart = new Date(defaultEnd.getTime() - (365 * 24 * 60 * 60 * 1000));
+
+        const startDateInput = typeof req.query.startDate === 'string' && req.query.startDate.trim()
+            ? req.query.startDate.trim()
+            : defaultStart.toISOString().slice(0, 10);
+        const endDateInput = typeof req.query.endDate === 'string' && req.query.endDate.trim()
+            ? req.query.endDate.trim()
+            : defaultEnd.toISOString().slice(0, 10);
+
+        const start = new Date(startDateInput);
+        const end = new Date(endDateInput);
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new CustomError('StartDate/EndDate tidak valid', 400);
+        }
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        if (start > end) {
+            throw new CustomError('Rentang tanggal tidak valid', 400);
+        }
+
+        const toNum = (value: unknown) => {
+            const parsed = Number(value || 0);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+        const toIso = (value: unknown): string | null => {
+            if (!value) return null;
+            const ts = Date.parse(String(value));
+            if (!Number.isFinite(ts)) return null;
+            return new Date(ts).toISOString();
+        };
+        const toTs = (value: unknown): number => {
+            const ts = Date.parse(String(value || ''));
+            return Number.isFinite(ts) ? ts : 0;
+        };
+
+        type AggRow = {
+            product_id: string;
+            qty_total: unknown;
+            tx_count: unknown;
+            last_at: unknown;
+        };
+
+        const [invoiceRows, posRows] = await Promise.all([
+            InvoiceItem.findAll({
+                attributes: [
+                    [sequelize.col('OrderItem.product_id'), 'product_id'],
+                    [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_total'],
+                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('InvoiceItem.invoice_id'))), 'tx_count'],
+                    [sequelize.fn('MAX', sequelize.col('Invoice.verified_at')), 'last_at'],
+                ],
+                include: [
+                    {
+                        model: Invoice,
+                        attributes: [],
+                        where: {
+                            customer_id: customerId,
+                            payment_status: 'paid',
+                            verified_at: { [Op.between]: [start, end] },
+                        },
+                    },
+                    {
+                        model: OrderItem,
+                        attributes: [],
+                    }
+                ],
+                group: [sequelize.col('OrderItem.product_id')],
+                raw: true,
+            }) as unknown as AggRow[],
+            PosSaleItem.findAll({
+                attributes: [
+                    [sequelize.col('PosSaleItem.product_id'), 'product_id'],
+                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.qty')), 'qty_total'],
+                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('PosSaleItem.pos_sale_id'))), 'tx_count'],
+                    [sequelize.fn('MAX', sequelize.col('Sale.paid_at')), 'last_at'],
+                ],
+                include: [
+                    {
+                        model: PosSale,
+                        as: 'Sale',
+                        attributes: [],
+                        where: {
+                            customer_id: customerId,
+                            status: 'paid',
+                            paid_at: { [Op.between]: [start, end] },
+                        }
+                    }
+                ],
+                group: [sequelize.col('PosSaleItem.product_id')],
+                raw: true,
+            }) as unknown as AggRow[],
+        ]);
+
+        type PerSource = { tx_count: number; qty_total: number; last_at: string | null };
+        type Bucket = {
+            product_id: string;
+            invoice: PerSource;
+            pos: PerSource;
+            order_count: number;
+            qty_total: number;
+            last_bought_at: string | null;
+            last_bought_ts: number;
+        };
+
+        const byProduct = new Map<string, Bucket>();
+        const ensureBucket = (productId: string) => {
+            const existing = byProduct.get(productId);
+            if (existing) return existing;
+            const next: Bucket = {
+                product_id: productId,
+                invoice: { tx_count: 0, qty_total: 0, last_at: null },
+                pos: { tx_count: 0, qty_total: 0, last_at: null },
+                order_count: 0,
+                qty_total: 0,
+                last_bought_at: null,
+                last_bought_ts: 0,
+            };
+            byProduct.set(productId, next);
+            return next;
+        };
+
+        for (const row of invoiceRows) {
+            const productId = String((row as any)?.product_id || '').trim();
+            if (!productId) continue;
+            const bucket = ensureBucket(productId);
+            bucket.invoice.tx_count = Math.max(0, Math.trunc(toNum((row as any)?.tx_count)));
+            bucket.invoice.qty_total = Math.max(0, toNum((row as any)?.qty_total));
+            bucket.invoice.last_at = toIso((row as any)?.last_at);
+        }
+        for (const row of posRows) {
+            const productId = String((row as any)?.product_id || '').trim();
+            if (!productId) continue;
+            const bucket = ensureBucket(productId);
+            bucket.pos.tx_count = Math.max(0, Math.trunc(toNum((row as any)?.tx_count)));
+            bucket.pos.qty_total = Math.max(0, toNum((row as any)?.qty_total));
+            bucket.pos.last_at = toIso((row as any)?.last_at);
+        }
+
+        const merged = Array.from(byProduct.values()).map((bucket) => {
+            bucket.order_count = Math.max(0, Math.trunc(bucket.invoice.tx_count + bucket.pos.tx_count));
+            bucket.qty_total = Math.max(0, bucket.invoice.qty_total + bucket.pos.qty_total);
+            const invoiceTs = toTs(bucket.invoice.last_at);
+            const posTs = toTs(bucket.pos.last_at);
+            const lastTs = Math.max(invoiceTs, posTs);
+            bucket.last_bought_ts = lastTs;
+            bucket.last_bought_at = lastTs > 0 ? new Date(lastTs).toISOString() : null;
+            return bucket;
+        });
+
+        merged.sort((a, b) => {
+            const orderDiff = (b.order_count || 0) - (a.order_count || 0);
+            if (orderDiff !== 0) return orderDiff;
+            const qtyDiff = (b.qty_total || 0) - (a.qty_total || 0);
+            if (qtyDiff !== 0) return qtyDiff;
+            return (b.last_bought_ts || 0) - (a.last_bought_ts || 0);
+        });
+
+        const candidateStats = merged.slice(0, Math.min(200, Math.max(limitNum * 5, limitNum)));
+        const candidateIds = candidateStats.map((row) => row.product_id);
+
+        const products = candidateIds.length > 0
+            ? await Product.findAll({
+                where: {
+                    id: { [Op.in]: candidateIds },
+                    ...(includeInactive ? {} : { status: 'active' }),
+                } as any,
+                attributes: ['id', 'sku', 'name', 'image_url', 'stock_quantity', 'price', 'base_price', 'varian_harga', 'unit', 'status'],
+            })
+            : [];
+
+        const productById = new Map<string, any>();
+        for (const product of products as any[]) {
+            const plain = product?.get ? product.get({ plain: true }) : product;
+            if (!plain?.id) continue;
+            productById.set(String(plain.id), plain);
+        }
+
+        const rows = [];
+        for (const stat of candidateStats) {
+            const product = productById.get(String(stat.product_id));
+            if (!product) continue;
+            rows.push({
+                product,
+                stats: {
+                    order_count: stat.order_count,
+                    qty_total: stat.qty_total,
+                    last_bought_at: stat.last_bought_at,
+                    invoice: stat.invoice,
+                    pos: stat.pos,
+                }
+            });
+            if (rows.length >= limitNum) break;
+        }
+
+        res.json({
+            period: { startDate: startDateInput, endDate: endDateInput },
+            rows,
+        });
+    } catch (error) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error fetching customer top products', 500);
     }
 });

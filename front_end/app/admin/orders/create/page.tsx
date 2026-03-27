@@ -11,6 +11,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { notifyOpen, notifyAlert } from '@/lib/notify';
 import ProductAliasModal from '@/components/admin/products/ProductAliasModal';
+import CustomerTopProductsCard from '@/components/admin/orders/CustomerTopProductsCard';
 
 type ChatContextMessage = {
     id?: string;
@@ -820,6 +821,12 @@ function ManualOrderContent() {
 		                                        </p>
 		                                    )}
 		                                </div>
+		                                {selectedCustomer ? (
+		                                    <CustomerTopProductsCard
+		                                        customerId={selectedCustomer.id}
+		                                        onPick={addToCart}
+		                                    />
+		                                ) : null}
 		                            </div>
 
 		                            <div className="h-px bg-slate-200" />
