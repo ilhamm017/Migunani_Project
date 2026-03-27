@@ -1565,6 +1565,172 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
     }
 });
 
+export const updateOrderCostLayerPreference = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const userRole = String(req.user?.role || '').trim();
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = userRole || null;
+
+        if (!['super_admin', 'kasir'].includes(userRole)) {
+            await t.rollback();
+            throw new CustomError('Tidak memiliki akses', 403);
+        }
+
+        const orderId = String(req.params.id || '').trim();
+        if (!orderId) {
+            await t.rollback();
+            throw new CustomError('Order id wajib diisi', 400);
+        }
+
+        const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+        if (rawItems.length === 0) {
+            await t.rollback();
+            throw new CustomError('Items wajib diisi', 400);
+        }
+
+        const orderReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+        const requestedItems = rawItems
+            .map((row: any) => {
+                const order_item_id = String(row?.order_item_id || '').trim();
+                const preferred_unit_cost_present = Object.prototype.hasOwnProperty.call(row || {}, 'preferred_unit_cost');
+                const preferred_unit_cost = preferred_unit_cost_present ? (row as any).preferred_unit_cost : undefined;
+                const reason = typeof row?.reason === 'string' ? row.reason.trim() : '';
+                return { order_item_id, preferred_unit_cost_present, preferred_unit_cost, reason };
+            })
+            .filter((row: any) => Boolean(row.order_item_id));
+
+        if (requestedItems.length === 0) {
+            await t.rollback();
+            throw new CustomError('Order item tidak valid.', 400);
+        }
+
+        if (requestedItems.some((row: any) => row.preferred_unit_cost_present && (() => {
+            const raw = row.preferred_unit_cost;
+            if (raw === null || raw === undefined) return false;
+            if (typeof raw === 'string' && raw.trim() === '') return false;
+            const parsed = Number(raw);
+            return !Number.isFinite(parsed) || parsed <= 0;
+        })())) {
+            await t.rollback();
+            throw new CustomError('Layer modal (preferred_unit_cost) tidak valid', 400);
+        }
+
+        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!order) {
+            await t.rollback();
+            throw new CustomError('Order tidak ditemukan', 404);
+        }
+
+        if ((order as any).goods_out_posted_at) {
+            await t.rollback();
+            throw new CustomError('Layer modal tidak bisa diubah karena goods-out sudah diposting.', 409);
+        }
+
+        const currentStatus = String(order.status || '').trim().toLowerCase();
+        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'completed', 'delivered', 'shipped']);
+        if (IMMUTABLE_STATUSES.has(currentStatus)) {
+            await t.rollback();
+            throw new CustomError(`Layer modal tidak bisa diubah pada status '${currentStatus}'.`, 409);
+        }
+
+        const orderItemIds: string[] = Array.from(
+            new Set(requestedItems.map((row: any) => String(row.order_item_id || '').trim()).filter(Boolean))
+        );
+        const orderItems = await OrderItem.findAll({
+            where: { id: { [Op.in]: orderItemIds }, order_id: orderId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        if (orderItems.length !== orderItemIds.length) {
+            await t.rollback();
+            throw new CustomError('Sebagian item order tidak ditemukan atau tidak sesuai order.', 400);
+        }
+
+        const byId = new Map(orderItems.map((row: any) => [String(row.id), row]));
+        const changes: any[] = [];
+
+        for (const reqItem of requestedItems) {
+            const row = byId.get(reqItem.order_item_id);
+            if (!row) continue;
+            if (!reqItem.preferred_unit_cost_present) continue;
+
+            if (String((row as any).clearance_promo_id || '').trim()) {
+                await t.rollback();
+                throw new CustomError('Layer modal dikunci oleh promo cepat habis.', 409);
+            }
+
+            const oldPreferredRaw = (row as any).preferred_unit_cost;
+            const oldPreferredUnitCost = oldPreferredRaw === null || oldPreferredRaw === undefined || String(oldPreferredRaw).trim() === ''
+                ? null
+                : round4(Number(oldPreferredRaw));
+
+            let nextPreferredUnitCost: number | null = null;
+            const raw = reqItem.preferred_unit_cost;
+            if (raw === null || raw === undefined || String(raw).trim() === '') {
+                nextPreferredUnitCost = null;
+            } else {
+                const parsed = Number(raw);
+                nextPreferredUnitCost = Number.isFinite(parsed) && parsed > 0 ? round4(parsed) : null;
+            }
+
+            if (oldPreferredUnitCost === nextPreferredUnitCost) continue;
+
+            await row.update({ preferred_unit_cost: nextPreferredUnitCost }, { transaction: t });
+            changes.push({
+                order_item_id: String(row.id),
+                product_id: String((row as any).product_id || ''),
+                before_preferred_unit_cost: oldPreferredUnitCost,
+                after_preferred_unit_cost: nextPreferredUnitCost,
+                reason: reqItem.reason || orderReason || null,
+            });
+        }
+
+        const hasAnyAllocation = await OrderAllocation.findOne({
+            where: { order_id: orderId, allocated_qty: { [Op.gt]: 0 } },
+            attributes: ['id'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        let reservationSummary: any = null;
+        if (hasAnyAllocation) {
+            reservationSummary = await InventoryReservationService.syncReservationsForOrder({ order_id: orderId, transaction: t });
+        }
+
+        if (changes.length > 0 || orderReason) {
+            await recordOrderEvent({
+                transaction: t,
+                order_id: orderId,
+                event_type: 'order_pricing_adjusted',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason: orderReason || null,
+                payload: {
+                    delta: { preferred_unit_cost_changed: changes.length > 0 },
+                    items: changes
+                }
+            });
+        }
+
+        await emitAdminRefreshBadges({
+            transaction: t,
+            requestContext: 'admin_order_cost_layer_preference_refresh_badges'
+        });
+
+        await t.commit();
+        res.json({
+            message: changes.length > 0 ? 'Layer modal berhasil diperbarui' : 'Tidak ada perubahan layer modal',
+            order_id: orderId,
+            updated_items: changes.length,
+            reservation_summary: reservationSummary
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        throw error;
+    }
+});
+
 export const getDashboardStats = asyncWrapper(async (req: Request, res: Response) => {
     const counts = await Order.findAll({
         attributes: [

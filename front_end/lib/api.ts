@@ -462,13 +462,17 @@ export const api = {
 	                reason: string;
 	                items: Array<{ order_item_id: string; cancel_qty?: number }>;
 	            }) => apiClient.post(`/orders/admin/${id}/cancel-items`, data),
-		            updatePricing: (id: string, data: {
-		                items: Array<{ order_item_id: string; unit_price_override: number; preferred_unit_cost?: number | null; reason?: string }>;
-		                reason?: string;
-		            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
-            moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
-        },
-        inventory: {
+			            updatePricing: (id: string, data: {
+			                items: Array<{ order_item_id: string; unit_price_override: number; preferred_unit_cost?: number | null; reason?: string }>;
+			                reason?: string;
+			            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
+			            updateCostLayerPreference: (id: string, data: {
+			                items: Array<{ order_item_id: string; preferred_unit_cost?: number | null; reason?: string }>;
+			                reason?: string;
+			            }) => apiClient.patch(`/orders/admin/${id}/cost-layer`, data),
+	            moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
+	        },
+	        inventory: {
             getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive'; stock_filter?: 'all' | 'empty' | 'low' }) =>
                 apiClient.get('/admin/products', { params }),
             getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>

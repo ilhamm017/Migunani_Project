@@ -652,14 +652,18 @@ export default function AdminOrdersWorkspace({
   const [selectedWarehouseInvoiceGroups, setSelectedWarehouseInvoiceGroups] = useState<string[]>([]);
   const [warehouseBatchAssigning, setWarehouseBatchAssigning] = useState(false);
   const [warehouseAssignConfirm, setWarehouseAssignConfirm] = useState<WarehouseAssignConfirmState | null>(null);
-  const [pricingEditor, setPricingEditor] = useState<{
-    orderId: string;
-    orderReason: string;
-    items: PricingEditorItem[];
-    drafts: Record<string, PricingEditorDraft>;
-    saving: boolean;
-    error: string;
-  } | null>(null);
+	  const [pricingEditor, setPricingEditor] = useState<{
+	    orderId: string;
+	    invoiceId: string | null;
+	    invoiceNumber: string | null;
+	    orderStatus: string;
+	    goodsOutPostedAt: string | null;
+	    orderReason: string;
+	    items: PricingEditorItem[];
+	    drafts: Record<string, PricingEditorDraft>;
+	    saving: boolean;
+	    error: string;
+	  } | null>(null);
   const [pricingCostLayersByProductId, setPricingCostLayersByProductId] = useState<Record<string, PricingCostLayerRow[]>>({});
   const [pricingCostLayersLoading, setPricingCostLayersLoading] = useState(false);
   const ordersRef = useRef<AdminOrderListRow[]>([]);
@@ -1064,18 +1068,25 @@ export default function AdminOrdersWorkspace({
       return {};
     };
 
-    try {
-      const cached = orderDetails[orderId];
-      const detail = cached || (await api.orders.getOrderById(orderId)).data;
-      if (!cached && detail && typeof detail === 'object') {
-        setOrderDetails((prev) => ({ ...prev, [orderId]: detail }));
-      }
+	    try {
+	      const cached = orderDetails[orderId];
+	      const detail = cached || (await api.orders.getOrderById(orderId)).data;
+	      if (!cached && detail && typeof detail === 'object') {
+	        setOrderDetails((prev) => ({ ...prev, [orderId]: detail }));
+	      }
 
-      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
-      if (orderItems.length === 0) {
-        notifyAlert('Order belum memiliki item.');
-        return;
-      }
+	      const invoiceObj = (detail as any)?.Invoice || (detail as any)?.invoice || null;
+	      const invoiceId = String(invoiceObj?.id || (detail as any)?.invoice_id || '').trim() || null;
+	      const invoiceNumber = String(invoiceObj?.invoice_number || invoiceObj?.invoiceNumber || (detail as any)?.invoice_number || '').trim() || null;
+	      const orderStatus = String((detail as any)?.status || '').trim();
+	      const goodsOutPostedAtRaw = (detail as any)?.goods_out_posted_at;
+	      const goodsOutPostedAt = goodsOutPostedAtRaw ? String(goodsOutPostedAtRaw) : null;
+
+	      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+	      if (orderItems.length === 0) {
+	        notifyAlert('Order belum memiliki item.');
+	        return;
+	      }
 
       const items: PricingEditorItem[] = orderItems.map((row: any) => {
         const snapshot = toObjectOrEmpty(row?.pricing_snapshot);
@@ -1114,14 +1125,18 @@ export default function AdminOrdersWorkspace({
         };
       });
 
-      setPricingEditor({
-        orderId,
-        orderReason: String((detail as any)?.pricing_override_note || '').trim(),
-        items,
-        drafts,
-        saving: false,
-        error: ''
-      });
+	      setPricingEditor({
+	        orderId,
+	        invoiceId,
+	        invoiceNumber,
+	        orderStatus,
+	        goodsOutPostedAt,
+	        orderReason: String((detail as any)?.pricing_override_note || '').trim(),
+	        items,
+	        drafts,
+	        saving: false,
+	        error: ''
+	      });
 
       const uniqueProductIds = Array.from(new Set(items.map((row) => String(row.product_id || '').trim()).filter(Boolean)));
       setPricingCostLayersByProductId({});
@@ -1151,94 +1166,153 @@ export default function AdminOrdersWorkspace({
     }
   }, [canEditPricing, orderDetails]);
 
-  const savePricingEditor = useCallback(async () => {
-    if (!pricingEditor) return;
-    if (!canEditPricing) return;
+	  const savePricingEditor = useCallback(async () => {
+	    if (!pricingEditor) return;
+	    if (!canEditPricing) return;
 
-    const orderId = pricingEditor.orderId;
-    const toFinite = (value: unknown) => {
-      const n = Number(value);
-      return Number.isFinite(n) ? n : null;
-    };
+	    const orderId = pricingEditor.orderId;
+	    const statusLower = String(pricingEditor.orderStatus || '').trim().toLowerCase();
+	    const hasInvoiceRef = Boolean(String(pricingEditor.invoiceId || '').trim() || String(pricingEditor.invoiceNumber || '').trim());
+	    const priceEditable =
+	      !hasInvoiceRef &&
+	      ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(statusLower);
+	    const layerEditable =
+	      !pricingEditor.goodsOutPostedAt &&
+	      !['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(statusLower);
+	    if (!priceEditable && !layerEditable) {
+	      setPricingEditor((prev) => prev ? { ...prev, error: `Tidak bisa mengubah harga/layer pada status '${statusLower || '-'}'.` } : prev);
+	      return;
+	    }
+	    const toFinite = (value: unknown) => {
+	      const n = Number(value);
+	      return Number.isFinite(n) ? n : null;
+	    };
 
-    let dealModeError = '';
-    const payloadItems = pricingEditor.items.map((item) => {
-      const draft = pricingEditor.drafts[item.order_item_id];
-      const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
-      let unitPrice: number | null = null;
-      if (dealMode === 'percent') {
-        const pctRaw = String(draft?.discount_pct ?? '').trim();
-        const pct = toFinite(pctRaw);
-        if (pct === null) {
-          if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
-        } else if (pct < 0 || pct > 100) {
-          if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
-        } else {
-          const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
-          unitPrice = Math.round(baseline * (1 - pct / 100));
-        }
-      } else {
-        unitPrice = toFinite(draft?.unit_price_override);
-      }
-      const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
-      const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
-      const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
-      return {
-        order_item_id: item.order_item_id,
-        unit_price_override: unitPrice ?? 0,
-        preferred_unit_cost: preferredUnitCost,
-        ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
-      };
-    });
+	    setPricingEditor((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
+	    try {
+	      const reason = pricingEditor.orderReason.trim();
+	      if (priceEditable) {
+	        let dealModeError = '';
+	        const payloadItems = pricingEditor.items.map((item) => {
+	          const draft = pricingEditor.drafts[item.order_item_id];
+	          const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
+	          let unitPrice: number | null = null;
+	          if (dealMode === 'percent') {
+	            const pctRaw = String(draft?.discount_pct ?? '').trim();
+	            const pct = toFinite(pctRaw);
+	            if (pct === null) {
+	              if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
+	            } else if (pct < 0 || pct > 100) {
+	              if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
+	            } else {
+	              const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
+	              unitPrice = Math.round(baseline * (1 - pct / 100));
+	            }
+	          } else {
+	            unitPrice = toFinite(draft?.unit_price_override);
+	          }
+	          const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
+	          const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
+	          const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
+	          return {
+	            order_item_id: item.order_item_id,
+	            unit_price_override: unitPrice ?? 0,
+	            preferred_unit_cost: preferredUnitCost,
+	            ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
+	          };
+	        });
 
-    if (dealModeError) {
-      setPricingEditor((prev) => prev ? { ...prev, error: dealModeError } : prev);
-      return;
-    }
-    if (payloadItems.some((row) => !row.order_item_id)) {
-      setPricingEditor((prev) => prev ? { ...prev, error: 'Order item tidak valid.' } : prev);
-      return;
-    }
-    if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
-      setPricingEditor((prev) => prev ? { ...prev, error: 'Harga deal harus > 0.' } : prev);
-      return;
-    }
-    if (pricingEditor.items.some((item) => {
-      const draft = pricingEditor.drafts[item.order_item_id];
-      const raw = String(draft?.preferred_unit_cost ?? '').trim();
-      if (!raw) return false;
-      const parsed = Number(raw);
-      return !Number.isFinite(parsed) || parsed <= 0;
-    })) {
-      setPricingEditor((prev) => prev ? { ...prev, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
-      return;
-    }
+	        if (dealModeError) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: dealModeError } : prev);
+	          return;
+	        }
+	        if (payloadItems.some((row) => !row.order_item_id)) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Order item tidak valid.' } : prev);
+	          return;
+	        }
+	        if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Harga deal harus > 0.' } : prev);
+	          return;
+	        }
+	        if (pricingEditor.items.some((item) => {
+	          const draft = pricingEditor.drafts[item.order_item_id];
+	          const raw = String(draft?.preferred_unit_cost ?? '').trim();
+	          if (!raw) return false;
+	          const parsed = Number(raw);
+	          return !Number.isFinite(parsed) || parsed <= 0;
+	        })) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
+	          return;
+	        }
 
-    setPricingEditor((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
-    try {
-      const reason = pricingEditor.orderReason.trim();
-      await api.admin.orderManagement.updatePricing(orderId, {
-        items: payloadItems,
-        ...(reason ? { reason } : {})
-      });
-      await loadOrders();
+	        await api.admin.orderManagement.updatePricing(orderId, {
+	          items: payloadItems,
+	          ...(reason ? { reason } : {})
+	        });
+	      } else if (layerEditable) {
+	        if (pricingEditor.items.some((item) => {
+	          const draft = pricingEditor.drafts[item.order_item_id];
+	          const raw = String(draft?.preferred_unit_cost ?? '').trim();
+	          if (!raw) return false;
+	          const parsed = Number(raw);
+	          return !Number.isFinite(parsed) || parsed <= 0;
+	        })) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
+	          return;
+	        }
 
-      try {
-        const refreshed = await api.orders.getOrderById(orderId);
+	        const layerItems = pricingEditor.items.map((item) => {
+	          const draft = pricingEditor.drafts[item.order_item_id];
+	          const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
+	          const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
+	          const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
+	          return {
+	            order_item_id: item.order_item_id,
+	            preferred_unit_cost: preferredUnitCost,
+	            ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
+	          };
+	        });
+
+	        const hasAnyLayerChange = layerItems.some((row) => {
+	          const existing = pricingEditor.items.find((i) => i.order_item_id === row.order_item_id)?.preferred_unit_cost ?? null;
+	          const existingNormalized = existing !== null ? Number(Number(existing).toFixed(4)) : null;
+	          const nextNormalized = row.preferred_unit_cost !== null && row.preferred_unit_cost !== undefined
+	            ? Number(Number(row.preferred_unit_cost).toFixed(4))
+	            : null;
+	          return existingNormalized !== nextNormalized;
+	        });
+
+	        if (!hasAnyLayerChange && !reason) {
+	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Tidak ada perubahan layer modal.' } : prev);
+	          return;
+	        }
+
+	        await api.admin.orderManagement.updateCostLayerPreference(orderId, {
+	          items: layerItems,
+	          ...(reason ? { reason } : {})
+	        });
+	      }
+	      await loadOrders();
+
+	      try {
+	        const refreshed = await api.orders.getOrderById(orderId);
         setOrderDetails((prev) => ({ ...prev, [orderId]: refreshed.data }));
       } catch { }
 
       setPricingEditor(null);
       setPricingCostLayersByProductId({});
       setPricingCostLayersLoading(false);
-    } catch (error: unknown) {
-      console.error('Failed to save pricing editor:', error);
-      const message = axios.isAxiosError(error)
-        ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan harga nego.')
-        : 'Gagal menyimpan harga nego.';
-      setPricingEditor((prev) => prev ? { ...prev, saving: false, error: message } : prev);
-    }
-  }, [pricingEditor, canEditPricing, loadOrders]);
+	    } catch (error: unknown) {
+	      console.error('Failed to save pricing editor:', error);
+	      const fallbackMessage = priceEditable
+	        ? 'Gagal menyimpan harga nego.'
+	        : 'Gagal menyimpan layer modal.';
+	      const message = axios.isAxiosError(error)
+	        ? String((error.response?.data as any)?.message || error.message || fallbackMessage)
+	        : fallbackMessage;
+	      setPricingEditor((prev) => prev ? { ...prev, saving: false, error: message } : prev);
+	    }
+	  }, [pricingEditor, canEditPricing, loadOrders]);
 
   useEffect(() => {
     if (!selectedGroup) return;
@@ -2306,27 +2380,38 @@ export default function AdminOrdersWorkspace({
   };
 
   const renderBackorderEditor = (model: BackorderEditorModel, variant: 'panel' | 'embedded') => {
-    const wrapperClassName =
-      variant === 'panel'
-        ? `rounded-2xl border bg-amber-50/40 p-4 shadow-sm ${
-            model.orderId === initialFocusOrderId
-              ? 'border-amber-400 ring-2 ring-amber-200'
-              : 'border-amber-200'
-          }`
-        : 'mt-3 space-y-2';
-    const pricingStatusLower = String(model.rawOrderStatus || '').trim().toLowerCase();
-    const pricingAllowedStatuses = ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'];
-    const pricingStatusOk = pricingAllowedStatuses.includes(pricingStatusLower);
-    const pricingHasInvoiceRef = Boolean(model.invoiceId || model.invoiceNumber);
-    const pricingEnabled = Boolean(canEditPricing) && !pricingHasInvoiceRef && pricingStatusOk;
-    const pricingDisabledReason = !canEditPricing
-      ? ''
-      : pricingHasInvoiceRef
-        ? 'Harga nego terkunci karena invoice sudah terbit.'
-        : pricingStatusOk
-          ? ''
-          : `Harga nego hanya bisa diubah sebelum invoice (status saat ini '${pricingStatusLower || '-'}').`;
-    const showPricingEditorButton = variant === 'panel' && Boolean(canEditPricing);
+	    const wrapperClassName =
+	      variant === 'panel'
+	        ? `rounded-2xl border bg-amber-50/40 p-4 shadow-sm ${
+	            model.orderId === initialFocusOrderId
+	              ? 'border-amber-400 ring-2 ring-amber-200'
+	              : 'border-amber-200'
+	          }`
+	        : 'mt-3 space-y-2';
+	    const pricingStatusLower = String(model.rawOrderStatus || '').trim().toLowerCase();
+	    const pricingAllowedStatuses = [
+	      'pending',
+	      'waiting_invoice',
+	      'allocated',
+	      'hold',
+	      'partially_fulfilled',
+	      'debt_pending',
+	      'waiting_payment',
+	      'processing',
+	      'checked',
+	      'ready_to_ship',
+	    ];
+	    const pricingStatusOk = pricingAllowedStatuses.includes(pricingStatusLower);
+	    const pricingHasInvoiceRef = Boolean(model.invoiceId || model.invoiceNumber);
+	    const pricingEnabled = Boolean(canEditPricing) && pricingStatusOk;
+	    const pricingHelperText = !canEditPricing
+	      ? ''
+	      : !pricingStatusOk
+	        ? `Harga nego/layer modal tidak bisa dibuka pada status '${pricingStatusLower || '-'}'.`
+	        : pricingHasInvoiceRef
+	          ? 'Invoice sudah terbit: harga deal terkunci, tapi layer modal masih bisa diubah.'
+	          : '';
+	    const showPricingEditorButton = variant === 'panel' && Boolean(canEditPricing);
 
     return (
       <div className={wrapperClassName}>
@@ -2346,21 +2431,21 @@ export default function AdminOrdersWorkspace({
               </span>
               {showPricingEditorButton && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => pricingEnabled ? void openPricingEditor(model.orderId) : undefined}
-                    disabled={!pricingEnabled}
-                    className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Harga Nego
-                  </button>
-                  {!pricingEnabled && pricingDisabledReason ? (
-                    <p className="max-w-[240px] text-right text-[10px] text-slate-500">
-                      {pricingDisabledReason}
-                    </p>
-                  ) : null}
-                </>
-              )}
+	                  <button
+	                    type="button"
+	                    onClick={() => pricingEnabled ? void openPricingEditor(model.orderId) : undefined}
+	                    disabled={!pricingEnabled}
+	                    className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+	                  >
+	                    Harga Nego
+	                  </button>
+	                  {pricingHelperText ? (
+	                    <p className="max-w-[240px] text-right text-[10px] text-slate-500">
+	                      {pricingHelperText}
+	                    </p>
+	                  ) : null}
+	                </>
+	              )}
             </div>
           </div>
         )}
@@ -2938,9 +3023,9 @@ export default function AdminOrdersWorkspace({
     };
   }, [allocationConfirm, allocationDrafts, groupedItemsByOrderId, persistedAllocByOrderId, readyOrderIds, orderDetails, availabilityByOrderId, selectedGroup?.customer_name, invoiceableAmountByOrderId, backorderTopupDrafts]);
 
-  if (!allowed && !hasRenderableAccess) {
-    return (
-      <div className="space-y-4 p-5 pb-24">
+	  if (!allowed && !hasRenderableAccess) {
+	    return (
+	      <div className="space-y-4 p-5 pb-24">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm font-semibold text-slate-700">
             {!isAuthenticated ? 'Sesi login belum aktif.' : 'Memeriksa akses detail order customer...'}
@@ -2955,10 +3040,26 @@ export default function AdminOrdersWorkspace({
         </div>
       </div>
     );
-  }
+	  }
 
-  return (
-    <div className="p-5 pb-24 space-y-5">
+	  const pricingEditorStatusLower = String(pricingEditor?.orderStatus || '').trim().toLowerCase();
+	  const pricingEditorHasInvoiceRef = Boolean(String(pricingEditor?.invoiceId || '').trim() || String(pricingEditor?.invoiceNumber || '').trim());
+	  const pricingEditorPriceEditable = Boolean(pricingEditor) && !pricingEditorHasInvoiceRef && ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(pricingEditorStatusLower);
+	  const pricingEditorLayerEditable = Boolean(pricingEditor) && !pricingEditor?.goodsOutPostedAt && !['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(pricingEditorStatusLower);
+	  const pricingEditorSaveDisabled = Boolean(pricingEditor?.saving) || (!pricingEditorPriceEditable && !pricingEditorLayerEditable);
+	  const pricingEditorModalTitle = pricingEditorPriceEditable
+	    ? 'Edit harga deal sebelum invoice'
+	    : pricingEditorHasInvoiceRef
+	      ? 'Invoice sudah terbit: harga deal terkunci'
+	      : 'Atur layer modal';
+	  const pricingEditorSaveLabel = pricingEditorPriceEditable ? 'Simpan Harga' : 'Simpan Layer Modal';
+	  const canManageCreditNote = ['super_admin', 'admin_finance'].includes(normalizedRole);
+	  const creditNoteHref = pricingEditor?.invoiceId
+	    ? `/admin/finance/credit-note?invoice_id=${encodeURIComponent(pricingEditor.invoiceId)}`
+	    : '/admin/finance/credit-note';
+
+	  return (
+	    <div className="p-5 pb-24 space-y-5">
 		      {allocationConfirm && allocationConfirmMeta && (
 		        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
           <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
@@ -3369,33 +3470,71 @@ export default function AdminOrdersWorkspace({
 		      })()}
 		      {pricingEditor && (
 		        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 pb-28 sm:p-6">
-		          <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-		            <div className="border-b border-slate-200 px-5 pb-4 pt-5">
-	              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Harga Nego</p>
-	              <h3 className="mt-2 text-lg font-black text-slate-900">Edit harga deal sebelum invoice</h3>
-	              <p className="mt-1 text-xs text-slate-500">Order #{pricingEditor.orderId}</p>
-	            </div>
+			          <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+			            <div className="border-b border-slate-200 px-5 pb-4 pt-5">
+		              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Harga Nego</p>
+		              <h3 className="mt-2 text-lg font-black text-slate-900">{pricingEditorModalTitle}</h3>
+		              <p className="mt-1 text-xs text-slate-500">
+		                Order #{pricingEditor.orderId}
+		                {pricingEditorHasInvoiceRef ? ` • Invoice ${pricingEditor.invoiceNumber || pricingEditor.invoiceId || '-'}` : ''}
+		              </p>
+		            </div>
 
-	            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-	              <div>
-	                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Keterangan Nego (Opsional)</label>
-	                <textarea
-	                  value={pricingEditor.orderReason}
-	                  onChange={(e) => setPricingEditor((prev) => prev ? { ...prev, orderReason: e.target.value } : prev)}
-	                  rows={2}
-	                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-	                  placeholder="Mis: harga khusus kenalan / diskon nego..."
-	                />
-	                <p className="mt-1 text-[11px] text-slate-500">
-	                  Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).
-	                </p>
-	              </div>
+		            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+		              <div>
+		                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+		                  {pricingEditorPriceEditable ? 'Keterangan Nego (Opsional)' : 'Keterangan (Opsional)'}
+		                </label>
+		                <textarea
+		                  value={pricingEditor.orderReason}
+		                  onChange={(e) => setPricingEditor((prev) => prev ? { ...prev, orderReason: e.target.value } : prev)}
+		                  rows={2}
+		                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+		                  placeholder={pricingEditorPriceEditable ? 'Mis: harga khusus kenalan / diskon nego...' : 'Mis: pilih layer modal tertentu untuk picking...'}
+		                />
+		                <p className="mt-1 text-[11px] text-slate-500">
+		                  {pricingEditorPriceEditable
+		                    ? 'Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
+		                    : pricingEditorHasInvoiceRef
+		                      ? (pricingEditorLayerEditable
+		                        ? 'Invoice sudah terbit: harga deal terkunci. Kamu masih bisa pilih layer modal untuk alokasi/picking sebelum barang keluar gudang. Untuk diskon setelah invoice, gunakan credit note.'
+		                        : 'Invoice sudah terbit dan barang sudah keluar gudang: harga deal & layer modal tidak bisa diubah.')
+		                      : 'Harga deal tidak bisa diubah pada status ini, tapi layer modal masih bisa dipilih sebelum barang keluar gudang.'}
+		                </p>
+		              </div>
 
-	              {pricingEditor.error ? (
-	                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-	                  {pricingEditor.error}
-	                </div>
-	              ) : null}
+		              {pricingEditorHasInvoiceRef ? (
+		                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800">
+		                  <p className="font-black">Diskon setelah invoice</p>
+		                  <p className="mt-1">
+		                    Untuk diskon setelah invoice terbit, gunakan <span className="font-bold">Credit Note</span> supaya riwayat & laporan profit tetap rapih.
+		                  </p>
+		                  {canManageCreditNote ? (
+		                    <Link
+		                      href={creditNoteHref}
+		                      className="mt-2 inline-flex items-center rounded-xl bg-amber-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-amber-800"
+		                    >
+		                      Buka Credit Note
+		                    </Link>
+		                  ) : (
+		                    <p className="mt-2 text-[10px] text-amber-800/90">
+		                      (Butuh role finance/super admin untuk membuat credit note.)
+		                    </p>
+		                  )}
+		                </div>
+		              ) : null}
+
+		              {pricingEditor.goodsOutPostedAt ? (
+		                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] text-rose-700">
+		                  Goods-out sudah diposting. Layer modal tidak bisa diubah.
+		                </div>
+		              ) : null}
+
+		              {pricingEditor.error ? (
+		                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+		                  {pricingEditor.error}
+		                </div>
+		              ) : null}
 
 	              <div className="space-y-2">
 	                {pricingEditor.items.map((row) => {
@@ -3424,12 +3563,12 @@ export default function AdminOrdersWorkspace({
 	                          <div className="flex items-center gap-2">
 	                            <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
 	                            <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-[10px]">
-	                              <button
-	                                type="button"
-	                                disabled={pricingEditor.saving}
-	                                onClick={() => {
-	                                  setPricingEditor((prev) => {
-	                                    if (!prev) return prev;
+		                              <button
+		                                type="button"
+		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
+		                                onClick={() => {
+		                                  setPricingEditor((prev) => {
+		                                    if (!prev) return prev;
 	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
 	                                    const pct = Number(String(currentDraft.discount_pct ?? '').trim());
 	                                    const computed = baselineUnitPrice > 0 && Number.isFinite(pct)
@@ -3455,12 +3594,12 @@ export default function AdminOrdersWorkspace({
 	                              >
 	                                Rp
 	                              </button>
-	                              <button
-	                                type="button"
-	                                disabled={pricingEditor.saving}
-	                                onClick={() => {
-	                                  setPricingEditor((prev) => {
-	                                    if (!prev) return prev;
+		                              <button
+		                                type="button"
+		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
+		                                onClick={() => {
+		                                  setPricingEditor((prev) => {
+		                                    if (!prev) return prev;
 	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
 	                                    const currentPrice = Number(String(currentDraft.unit_price_override ?? '').trim());
 	                                    const safePrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : Number(row.current_unit_price || 0);
@@ -3487,14 +3626,14 @@ export default function AdminOrdersWorkspace({
 	                            </div>
 
 	                            {dealMode === 'price' ? (
-	                              <input
-	                                type="number"
-	                                min={0}
-	                                value={draft?.unit_price_override ?? ''}
-	                                disabled={pricingEditor.saving}
-	                                onChange={(e) => {
-	                                  const value = e.target.value;
-	                                  setPricingEditor((prev) => {
+		                              <input
+		                                type="number"
+		                                min={0}
+		                                value={draft?.unit_price_override ?? ''}
+		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
+		                                onChange={(e) => {
+		                                  const value = e.target.value;
+		                                  setPricingEditor((prev) => {
 	                                    if (!prev) return prev;
 	                                    return {
 	                                      ...prev,
@@ -3512,15 +3651,15 @@ export default function AdminOrdersWorkspace({
 	                                className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
 	                              />
 	                            ) : (
-	                              <input
-	                                type="number"
-	                                min={0}
-	                                max={100}
-	                                value={draft?.discount_pct ?? ''}
-	                                disabled={pricingEditor.saving}
-	                                onChange={(e) => {
-	                                  const value = e.target.value;
-	                                  setPricingEditor((prev) => {
+		                              <input
+		                                type="number"
+		                                min={0}
+		                                max={100}
+		                                value={draft?.discount_pct ?? ''}
+		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
+		                                onChange={(e) => {
+		                                  const value = e.target.value;
+		                                  setPricingEditor((prev) => {
 	                                    if (!prev) return prev;
 	                                    return {
 	                                      ...prev,
@@ -3546,12 +3685,12 @@ export default function AdminOrdersWorkspace({
 	                          ) : null}
 	                          <div className="flex items-center gap-2">
 	                            <label className="text-[10px] font-bold text-slate-500">Layer modal</label>
-	                            <select
-	                              value={draft?.preferred_unit_cost ?? ''}
-	                              disabled={pricingEditor.saving || pricingCostLayersLoading || isPromoLocked}
-	                              onChange={(e) => {
-	                                const value = e.target.value;
-	                                setPricingEditor((prev) => {
+		                            <select
+		                              value={draft?.preferred_unit_cost ?? ''}
+		                              disabled={pricingEditor.saving || pricingCostLayersLoading || isPromoLocked || !pricingEditorLayerEditable}
+		                              onChange={(e) => {
+		                                const value = e.target.value;
+		                                setPricingEditor((prev) => {
 	                                  if (!prev) return prev;
 	                                  return {
 	                                    ...prev,
@@ -3622,14 +3761,14 @@ export default function AdminOrdersWorkspace({
 	              >
 	                Batal
 	              </button>
-	              <button
-	                type="button"
-	                onClick={() => void savePricingEditor()}
-	                disabled={pricingEditor.saving}
-	                className="btn-3d rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
-	              >
-	                {pricingEditor.saving ? 'Menyimpan...' : 'Simpan Harga'}
-	              </button>
+		              <button
+		                type="button"
+		                onClick={() => void savePricingEditor()}
+		                disabled={pricingEditorSaveDisabled}
+		                className="btn-3d rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+		              >
+		                {pricingEditor.saving ? 'Menyimpan...' : pricingEditorSaveLabel}
+		              </button>
 	            </div>
 	          </div>
 	        </div>
@@ -4645,15 +4784,24 @@ export default function AdminOrdersWorkspace({
 	                                >
 	                                  {warehouseActionLabel}
 	                                </Link>
-	                              )}
-	                              {canEditPricing
-	                                && !invoiceId
-	                                && !invoiceNumber
-	                                && ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(String(rawOrderStatus || '').trim().toLowerCase())
-	                                && (
-	                                  <button
-	                                    type="button"
-	                                    onClick={() => void openPricingEditor(String(order.id))}
+		                              )}
+		                              {canEditPricing
+		                                && [
+		                                  'pending',
+		                                  'waiting_invoice',
+		                                  'allocated',
+		                                  'hold',
+		                                  'partially_fulfilled',
+		                                  'debt_pending',
+		                                  'waiting_payment',
+		                                  'processing',
+		                                  'checked',
+		                                  'ready_to_ship',
+		                                ].includes(String(rawOrderStatus || '').trim().toLowerCase())
+		                                && (
+		                                  <button
+		                                    type="button"
+		                                    onClick={() => void openPricingEditor(String(order.id))}
 	                                    className="btn-3d mt-1 inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
 	                                  >
 	                                    Harga Nego

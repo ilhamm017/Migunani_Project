@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { notifyAlert } from '@/lib/notify';
@@ -19,6 +20,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 
 export default function CreditNotePage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
+    const searchParams = useSearchParams();
     const [invoiceId, setInvoiceId] = useState('');
     const [reason, setReason] = useState('');
     const [amount, setAmount] = useState<number>(0);
@@ -28,6 +30,12 @@ export default function CreditNotePage() {
     const [postingId, setPostingId] = useState<number | ''>('');
     const [payNow, setPayNow] = useState(false);
     const [loading, setLoading] = useState(false);
+
+    const invoiceIdPrefill = String(searchParams.get('invoice_id') || '').trim();
+    useEffect(() => {
+        if (!invoiceIdPrefill) return;
+        setInvoiceId((prev) => (prev.trim() ? prev : invoiceIdPrefill));
+    }, [invoiceIdPrefill]);
 
     if (!allowed) return null;
 
