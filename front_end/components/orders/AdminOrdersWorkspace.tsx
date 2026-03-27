@@ -2314,12 +2314,19 @@ export default function AdminOrdersWorkspace({
               : 'border-amber-200'
           }`
         : 'mt-3 space-y-2';
-    const canShowPricingEditorButton =
-      variant === 'panel' &&
-      canEditPricing &&
-      !model.invoiceId &&
-      !model.invoiceNumber &&
-      ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(String(model.rawOrderStatus || '').trim().toLowerCase());
+    const pricingStatusLower = String(model.rawOrderStatus || '').trim().toLowerCase();
+    const pricingAllowedStatuses = ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'];
+    const pricingStatusOk = pricingAllowedStatuses.includes(pricingStatusLower);
+    const pricingHasInvoiceRef = Boolean(model.invoiceId || model.invoiceNumber);
+    const pricingEnabled = Boolean(canEditPricing) && !pricingHasInvoiceRef && pricingStatusOk;
+    const pricingDisabledReason = !canEditPricing
+      ? ''
+      : pricingHasInvoiceRef
+        ? 'Harga nego terkunci karena invoice sudah terbit.'
+        : pricingStatusOk
+          ? ''
+          : `Harga nego hanya bisa diubah sebelum invoice (status saat ini '${pricingStatusLower || '-'}').`;
+    const showPricingEditorButton = variant === 'panel' && Boolean(canEditPricing);
 
     return (
       <div className={wrapperClassName}>
@@ -2337,14 +2344,22 @@ export default function AdminOrdersWorkspace({
               <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
                 {model.items.length} item backorder
               </span>
-              {canShowPricingEditorButton && (
-                <button
-                  type="button"
-                  onClick={() => void openPricingEditor(model.orderId)}
-                  className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
-                >
-                  Harga Nego
-                </button>
+              {showPricingEditorButton && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => pricingEnabled ? void openPricingEditor(model.orderId) : undefined}
+                    disabled={!pricingEnabled}
+                    className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Harga Nego
+                  </button>
+                  {!pricingEnabled && pricingDisabledReason ? (
+                    <p className="max-w-[240px] text-right text-[10px] text-slate-500">
+                      {pricingDisabledReason}
+                    </p>
+                  ) : null}
+                </>
               )}
             </div>
           </div>
