@@ -12,7 +12,7 @@ import { syncProductCategories, toObjectOrEmpty, ensureProductColumnsReady, PROD
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { VEHICLE_TYPES_SETTING_KEY, buildCanonicalVehicleMap, canonicalizeVehicleList, parseVehicleCompatibilityInput, toVehicleCompatibilityDbValue } from '../../utils/vehicleCompatibility';
-import { applyTokenSearch, splitSearchTokens } from '../../utils/productSearch';
+import { applyTokenSearch, buildProductMatchCountLiteral, getCountNumber, splitSearchTokens } from '../../utils/productSearch';
 
 export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -59,6 +59,9 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
         const normalizedLimit = Math.max(1, Number(limit) || 10);
 
         const tokens = splitSearchTokens(search);
+        const matchCountLiteral = tokens.length > 0
+            ? buildProductMatchCountLiteral({ sequelize, tokens, productTableAlias: 'Product' })
+            : null;
         const buildSearchWhere = (mode: 'and' | 'or') => {
             const next: any = { ...whereClause };
             const andVal = next[Op.and];
@@ -103,7 +106,9 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
                     ],
                     limit: normalizedLimit,
                     offset: (normalizedPage - 1) * normalizedLimit,
-                    order: [['name', 'ASC']],
+                    order: matchCountLiteral
+                        ? [[matchCountLiteral, 'DESC'], ['name', 'ASC']]
+                        : [['name', 'ASC']],
                     distinct: true
                 }),
                 Product.count({
@@ -121,7 +126,7 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
         };
 
         let { listResult, emptyStockCount, lowStockCount } = await runQuery('and');
-        if (tokens.length > 1 && Number((listResult as any)?.count || 0) === 0) {
+        if (tokens.length > 1 && getCountNumber((listResult as any)?.count) === 0) {
             ({ listResult, emptyStockCount, lowStockCount } = await runQuery('or'));
         }
 
@@ -161,6 +166,9 @@ export const getRestockSuggestions = asyncWrapper(async (req: Request, res: Resp
         }
 
         const tokens = splitSearchTokens(search);
+        const matchCountLiteral = tokens.length > 0
+            ? buildProductMatchCountLiteral({ sequelize, tokens, productTableAlias: 'Product' })
+            : null;
         const buildSearchWhere = (mode: 'and' | 'or') => {
             const next: any = { ...whereClause };
             const andVal = next[Op.and];
@@ -207,6 +215,7 @@ export const getRestockSuggestions = asyncWrapper(async (req: Request, res: Resp
                 order: [
                     [sequelize.literal('CASE WHEN stock_quantity <= 0 THEN 1 ELSE 0 END'), 'DESC'],
                     [sequelize.literal('(COALESCE(min_stock, 0) - stock_quantity)'), 'DESC'],
+                    ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
                     ['name', 'ASC']
                 ],
                 distinct: true
@@ -214,7 +223,7 @@ export const getRestockSuggestions = asyncWrapper(async (req: Request, res: Resp
         };
 
         let result = await runQuery('and');
-        if (tokens.length > 1 && Number((result as any)?.count || 0) === 0) {
+        if (tokens.length > 1 && getCountNumber((result as any)?.count) === 0) {
             result = await runQuery('or');
         }
 

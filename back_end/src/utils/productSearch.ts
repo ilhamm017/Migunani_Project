@@ -59,6 +59,23 @@ export const sqlNormalizeExpr = (expr: any) => {
     return out;
 };
 
+const toAsciiCode = (ch: string): number => {
+    if (ch.length === 1) return ch.charCodeAt(0);
+    // Special case: we store backslash as '\\\\' in SQL_STRIP_CHARS.
+    if (ch === '\\\\') return '\\'.charCodeAt(0);
+    return ch.charCodeAt(0);
+};
+
+// MySQL normalization but expressed as a SQL string, useful for literal subqueries.
+// The char set must match `SQL_STRIP_CHARS` to avoid false negatives.
+export const sqlNormalizeString = (exprSql: string): string => {
+    let out = `LOWER(${exprSql})`;
+    for (const ch of SQL_STRIP_CHARS) {
+        out = `REPLACE(${out}, CHAR(${toAsciiCode(ch)}), '')`;
+    }
+    return out;
+};
+
 export const buildProductTokenClause = (args: {
     sequelize: Sequelize;
     token: string;
@@ -69,6 +86,8 @@ export const buildProductTokenClause = (args: {
     const needle = `%${token}%`;
 
     const aliasSubquery = `(SELECT product_id FROM product_aliases WHERE alias_normalized LIKE ${sequelize.escape(needle)})`;
+    const primaryCategorySubquery = `(SELECT id FROM categories WHERE ${sqlNormalizeString('categories.name')} LIKE ${sequelize.escape(needle)})`;
+    const taggedCategorySubquery = `(SELECT pc.product_id FROM product_categories pc JOIN categories c ON c.id = pc.category_id WHERE ${sqlNormalizeString('c.name')} LIKE ${sequelize.escape(needle)})`;
 
     return {
         [Op.or]: [
@@ -76,6 +95,8 @@ export const buildProductTokenClause = (args: {
             where(sqlNormalizeExpr(col(`${productAlias}.sku`)), Op.like, needle),
             where(sqlNormalizeExpr(col(`${productAlias}.barcode`)), Op.like, needle),
             { id: { [Op.in]: literal(aliasSubquery) } },
+            { category_id: { [Op.in]: literal(primaryCategorySubquery) } },
+            { id: { [Op.in]: literal(taggedCategorySubquery) } },
         ]
     };
 };
@@ -106,3 +127,53 @@ export const applyTokenSearch = (args: {
     whereClause[Op.and] = andParts;
 };
 
+export const getCountNumber = (count: unknown): number => {
+    if (typeof count === 'number') return count;
+    if (typeof count === 'string') return Number(count) || 0;
+    if (Array.isArray(count)) {
+        return count.reduce((sum, row) => {
+            if (typeof row === 'number') return sum + row;
+            if (typeof row === 'string') return sum + (Number(row) || 0);
+            const candidate = (row as any)?.count;
+            if (typeof candidate === 'number') return sum + candidate;
+            if (typeof candidate === 'string') return sum + (Number(candidate) || 0);
+            return sum;
+        }, 0);
+    }
+    return Number(count as any) || 0;
+};
+
+export const buildProductMatchCountLiteral = (args: {
+    sequelize: Sequelize;
+    tokens: string[];
+    productTableAlias?: string; // default: Product
+}): ReturnType<typeof literal> => {
+    const productAlias = args.productTableAlias || 'Product';
+    const tokens = Array.isArray(args.tokens) ? args.tokens.filter(Boolean) : [];
+    if (tokens.length === 0) return literal('0');
+
+    const q = (colName: string) => `\`${productAlias}\`.\`${colName}\``;
+    const normalized = (exprSql: string) => sqlNormalizeString(exprSql);
+
+    const cases = tokens.map((token) => {
+        const needle = `%${token}%`;
+        const escapedNeedle = args.sequelize.escape(needle);
+
+        const aliasSubquery = `(SELECT product_id FROM product_aliases WHERE alias_normalized LIKE ${escapedNeedle})`;
+        const primaryCategorySubquery = `(SELECT id FROM categories WHERE ${sqlNormalizeString('categories.name')} LIKE ${escapedNeedle})`;
+        const taggedCategorySubquery = `(SELECT pc.product_id FROM product_categories pc JOIN categories c ON c.id = pc.category_id WHERE ${sqlNormalizeString('c.name')} LIKE ${escapedNeedle})`;
+
+        const conditions = [
+            `${normalized(q('name'))} LIKE ${escapedNeedle}`,
+            `${normalized(q('sku'))} LIKE ${escapedNeedle}`,
+            `${normalized(q('barcode'))} LIKE ${escapedNeedle}`,
+            `${q('id')} IN ${aliasSubquery}`,
+            `${q('category_id')} IN ${primaryCategorySubquery}`,
+            `${q('id')} IN ${taggedCategorySubquery}`,
+        ];
+
+        return `CASE WHEN (${conditions.join(' OR ')}) THEN 1 ELSE 0 END`;
+    });
+
+    return literal(`(${cases.join(' + ')})`);
+};

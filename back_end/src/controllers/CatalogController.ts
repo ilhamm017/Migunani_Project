@@ -3,7 +3,7 @@ import { Product, Category, ProductCategory, sequelize } from '../models';
 import { Op, fn, col } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
-import { applyTokenSearch, splitSearchTokens } from '../utils/productSearch';
+import { applyTokenSearch, buildProductMatchCountLiteral, getCountNumber, splitSearchTokens } from '../utils/productSearch';
 
 // Public Catalog API - Safe for Customers (Hides base_price/COGS)
 
@@ -48,6 +48,9 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         if (sort === 'newest') order = [['createdAt', 'DESC']];
 
         const tokens = splitSearchTokens(search);
+        const matchCountLiteral = tokens.length > 0
+            ? buildProductMatchCountLiteral({ sequelize, tokens, productTableAlias: 'Product' })
+            : null;
         const buildSearchWhere = (mode: 'and' | 'or') => {
             const next: any = { ...whereClause };
             const andVal = next[Op.and];
@@ -57,8 +60,13 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         };
 
         const tokensPresent = tokens.length > 0;
-        const orderWithStock = tokensPresent
-            ? [[sequelize.literal('GREATEST(`Product`.`stock_quantity` - `Product`.`allocated_quantity`, 0)'), 'DESC'], ...order]
+        const availableStockLiteral = sequelize.literal('GREATEST(`Product`.`stock_quantity` - `Product`.`allocated_quantity`, 0)');
+        const orderForSearch = tokensPresent
+            ? [
+                ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
+                [availableStockLiteral, 'DESC'],
+                ...order
+            ]
             : order;
 
         const runQuery = async (mode: 'and' | 'or') => {
@@ -72,13 +80,13 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 ],
                 limit: Number(limit),
                 offset: Number(offset),
-                order: orderWithStock,
+                order: orderForSearch,
                 distinct: true
             });
         };
 
         let result = await runQuery('and');
-        if (tokens.length > 1 && Number((result as any)?.count || 0) === 0) {
+        if (tokens.length > 1 && getCountNumber((result as any)?.count) === 0) {
             result = await runQuery('or');
         }
 

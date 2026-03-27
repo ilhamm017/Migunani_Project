@@ -406,7 +406,8 @@ function ManualOrderContent() {
 	                return prev.map(item => item.product_id === product.id ? { ...item, qty: item.qty + 1 } : item);
 	            }
 	            const baseline = getProductPrice(product);
-	            return [...prev, { product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '' }];
+	            // New picked product should appear on top (most recently added first).
+	            return [{ product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '' }, ...prev];
 	        });
 	        setProductSearch('');
 	        setProducts([]);
@@ -957,8 +958,10 @@ function ManualOrderContent() {
 
                                                         {canOverridePricing ? (
                                                             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
-                                                                <div className="flex flex-wrap items-center gap-2">
-                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Harga deal</label>
+                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px_1fr] sm:items-center">
+                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
+                                                                        Harga deal
+                                                                    </label>
                                                                     <input
                                                                         type="number"
                                                                         min={0}
@@ -970,7 +973,7 @@ function ManualOrderContent() {
                                                                                 ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
                                                                                 : row));
                                                                         }}
-                                                                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right"
+                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
                                                                     />
                                                                     <input
                                                                         type="text"
@@ -982,7 +985,7 @@ function ManualOrderContent() {
                                                                                 ? { ...row, unit_price_override_reason: next }
                                                                                 : row));
                                                                         }}
-                                                                        className="flex-1 min-w-[160px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                                                                        className="min-w-0 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs sm:w-auto"
                                                                     />
                                                                 </div>
                                                                 <p className="text-[10px] text-slate-500">
