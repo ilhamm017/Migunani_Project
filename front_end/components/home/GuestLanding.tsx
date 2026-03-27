@@ -153,6 +153,22 @@ export default function GuestLanding() {
         </div>
       </section>
 
+      <Link
+        href="/promo/cepat-habis"
+        className="block bg-emerald-50 border border-emerald-100 rounded-[32px] p-5 shadow-sm active:scale-[0.99] transition-transform"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Promo</p>
+            <h2 className="text-sm font-black text-slate-900">Promo Cepat Habis</h2>
+            <p className="text-xs text-slate-600 mt-1">Harga spesial untuk stok tertentu. Selama persediaan masih ada.</p>
+          </div>
+          <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+            <ArrowRight size={18} />
+          </div>
+        </div>
+      </Link>
+
       <section className="grid grid-cols-3 gap-3">
         <div className="bg-white p-4 rounded-3xl border border-slate-200 text-center flex flex-col items-center gap-2 shadow-sm">
           <ShieldCheck size={20} className="text-emerald-600" />

@@ -199,6 +199,7 @@ io.on('connection', (socket) => {
 });
 
 import inventoryRoutes from './routes/inventory';
+import clearancePromoRoutes from './routes/clearancePromos';
 
 import authRoutes from './routes/auth';
 import orderRoutes from './routes/order';
@@ -239,6 +240,7 @@ import catalogRoutes from './routes/catalog';
 
 app.use('/api/v1/catalog', catalogRoutes); // Public Product Catalog
 app.use('/api/v1', inventoryRoutes); // /api/v1/products, /api/v1/admin/inventory...
+app.use('/api/v1', clearancePromoRoutes); // /api/v1/clearance-promos, /api/v1/admin/clearance-promos
 app.use('/api/v1', procurementRoutes); // /api/v1/admin/procurement...
 app.use('/api/v1/inventory/audit', stockOpnameRoutes);
 app.use('/api/v1/allocation', allocationRoutes);

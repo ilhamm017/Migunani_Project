@@ -3,6 +3,8 @@ import {
     Product,
     ProductCostState,
     InventoryCostLedger,
+    InventoryBatch,
+    InventoryBatchConsumption,
     Backorder,
     OrderItem,
     OrderAllocation,
@@ -10,6 +12,9 @@ import {
     sequelize
 } from '../models';
 import { findInvoicesByOrderId } from '../utils/invoiceLookup';
+
+const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
+const toQtyInt = (value: unknown) => Math.max(0, Math.trunc(Number(value || 0)));
 
 export class InventoryCostService {
     static BACKORDER_FILL_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +61,54 @@ export class InventoryCostService {
         return state;
     }
 
+    static async ensureBootstrapBatchFromState(productId: string, t?: Transaction) {
+        const state = await this.ensureState(productId, t);
+        const qty = toQtyInt(state.on_hand_qty);
+        if (qty <= 0) return;
+
+        const existing = await InventoryBatch.findOne({
+            where: { product_id: productId },
+            attributes: ['id'],
+            transaction: t,
+            ...(t ? { lock: t.LOCK.SHARE } : {})
+        });
+        if (existing) return;
+
+        await InventoryBatch.create({
+            product_id: productId,
+            unit_cost: round4(state.avg_cost),
+            qty_on_hand: qty,
+            source_type: 'legacy_bootstrap',
+            source_id: null,
+            note: 'Auto bootstrap from product_cost_states (moving average)'
+        }, { transaction: t });
+    }
+
+    static async syncStateFromBatches(productId: string, t?: Transaction) {
+        const state = await this.ensureState(productId, t);
+
+        const agg = await InventoryBatch.findOne({
+            where: { product_id: productId, qty_on_hand: { [Op.gt]: 0 } },
+            attributes: [
+                [sequelize.fn('SUM', sequelize.col('qty_on_hand')), 'qty_sum'],
+                [sequelize.fn('SUM', sequelize.literal('qty_on_hand * unit_cost')), 'value_sum']
+            ],
+            transaction: t,
+            raw: true,
+        }) as any;
+
+        const qtySum = toQtyInt(agg?.qty_sum);
+        const valueSum = Number(agg?.value_sum || 0);
+        const avgCost = qtySum > 0 ? (valueSum / qtySum) : 0;
+
+        await state.update({
+            on_hand_qty: qtySum,
+            avg_cost: round4(avgCost)
+        }, { transaction: t });
+
+        return { on_hand_qty: qtySum, avg_cost: avgCost };
+    }
+
     static async recordInbound(params: {
         product_id: string;
         qty: number;
@@ -66,36 +119,94 @@ export class InventoryCostService {
         transaction?: Transaction;
     }) {
         const t = params.transaction;
-        const qtyIn = Math.max(0, Number(params.qty || 0));
+        const qtyIn = toQtyInt(params.qty);
         const unitCostIn = Math.max(0, Number(params.unit_cost || 0));
         if (qtyIn <= 0) return null;
 
-        const state = await this.ensureState(params.product_id, t);
-        const qtyOld = Number(state.on_hand_qty || 0);
-        const avgOld = Number(state.avg_cost || 0);
-        const qtyNew = qtyOld + qtyIn;
-        const avgNew = qtyNew > 0
-            ? (((qtyOld * avgOld) + (qtyIn * unitCostIn)) / qtyNew)
-            : 0;
-
-        await state.update({
-            on_hand_qty: qtyNew,
-            avg_cost: Number(avgNew.toFixed(4))
+        await InventoryBatch.create({
+            product_id: params.product_id,
+            unit_cost: round4(unitCostIn),
+            qty_on_hand: qtyIn,
+            source_type: params.reference_type || null,
+            source_id: params.reference_id || null,
+            note: params.note || null
         }, { transaction: t });
 
-        const totalCost = Number((qtyIn * unitCostIn).toFixed(4));
+        const totalCost = round4(qtyIn * unitCostIn);
         await InventoryCostLedger.create({
             product_id: params.product_id,
             movement_type: 'in',
             qty: qtyIn,
-            unit_cost: Number(unitCostIn.toFixed(4)),
+            unit_cost: round4(unitCostIn),
             total_cost: totalCost,
             reference_type: params.reference_type || null,
             reference_id: params.reference_id || null,
             note: params.note || null
         }, { transaction: t });
 
-        return { qty: qtyIn, unit_cost: unitCostIn, total_cost: totalCost, avg_cost_after: avgNew };
+        const nextState = await this.syncStateFromBatches(params.product_id, t);
+        return { qty: qtyIn, unit_cost: unitCostIn, total_cost: totalCost, avg_cost_after: nextState.avg_cost };
+    }
+
+    static async consumeFromBatches(params: {
+        product_id: string;
+        qty: number;
+        reference_type: string;
+        reference_id: string;
+        order_item_id?: string | null;
+        transaction?: Transaction;
+        note?: string;
+        batchWhere?: Record<string, unknown>;
+    }) {
+        const t = params.transaction;
+        const qtyOut = toQtyInt(params.qty);
+        if (qtyOut <= 0) return { consumed_qty: 0, total_cost: 0 };
+
+        const batches = await InventoryBatch.findAll({
+            where: {
+                product_id: params.product_id,
+                qty_on_hand: { [Op.gt]: 0 },
+                ...(params.batchWhere || {})
+            } as any,
+            order: [['createdAt', 'ASC'], ['id', 'ASC']],
+            transaction: t,
+            ...(t ? { lock: t.LOCK.UPDATE } : {})
+        });
+
+        let remaining = qtyOut;
+        let totalCost = 0;
+
+        for (const batch of batches as any[]) {
+            if (remaining <= 0) break;
+            const available = toQtyInt(batch.qty_on_hand);
+            if (available <= 0) continue;
+
+            const take = Math.min(available, remaining);
+            if (take <= 0) continue;
+
+            const unitCost = Number(batch.unit_cost || 0);
+            const cost = round4(take * unitCost);
+
+            await batch.update({
+                qty_on_hand: available - take
+            }, { transaction: t });
+
+            await InventoryBatchConsumption.create({
+                batch_id: String(batch.id),
+                product_id: params.product_id,
+                qty: take,
+                unit_cost: round4(unitCost),
+                total_cost: cost,
+                reference_type: params.reference_type,
+                reference_id: params.reference_id,
+                order_item_id: params.order_item_id ?? null,
+            }, { transaction: t });
+
+            totalCost = round4(totalCost + cost);
+            remaining -= take;
+        }
+
+        return { consumed_qty: qtyOut - remaining, total_cost: totalCost };
     }
 
     static async consumeOutbound(params: {
@@ -103,33 +214,124 @@ export class InventoryCostService {
         qty: number;
         reference_type?: string;
         reference_id?: string;
+        order_item_id?: string | null;
         note?: string;
         transaction?: Transaction;
     }) {
         const t = params.transaction;
-        const qtyOut = Math.max(0, Number(params.qty || 0));
+        const qtyOut = toQtyInt(params.qty);
         if (qtyOut <= 0) return { qty: 0, unit_cost: 0, total_cost: 0 };
 
-        const state = await this.ensureState(params.product_id, t);
-        const qtyOld = Number(state.on_hand_qty || 0);
-        const avgCost = Number(state.avg_cost || 0);
-        const qtyNew = Math.max(0, qtyOld - qtyOut);
+        const referenceType = String(params.reference_type || '').trim() || 'unknown';
+        const referenceId = String(params.reference_id || '').trim() || 'unknown';
 
-        await state.update({ on_hand_qty: qtyNew }, { transaction: t });
+        await this.ensureBootstrapBatchFromState(params.product_id, t);
 
-        const totalCost = Number((qtyOut * avgCost).toFixed(4));
+        const consumed = await this.consumeFromBatches({
+            product_id: params.product_id,
+            qty: qtyOut,
+            reference_type: referenceType,
+            reference_id: referenceId,
+            order_item_id: params.order_item_id ?? null,
+            note: params.note,
+            transaction: t
+        });
+        if (consumed.consumed_qty !== qtyOut) {
+            throw new Error(`Insufficient inventory batches for product ${params.product_id} (need ${qtyOut}, got ${consumed.consumed_qty}). Run SQL migration bootstrap if needed.`);
+        }
+
+        const totalCost = round4(consumed.total_cost);
+        const weightedUnitCost = qtyOut > 0 ? (totalCost / qtyOut) : 0;
+
         await InventoryCostLedger.create({
             product_id: params.product_id,
             movement_type: 'out',
             qty: qtyOut,
-            unit_cost: Number(avgCost.toFixed(4)),
+            unit_cost: round4(weightedUnitCost),
             total_cost: totalCost,
             reference_type: params.reference_type || null,
             reference_id: params.reference_id || null,
             note: params.note || null
         }, { transaction: t });
 
-        return { qty: qtyOut, unit_cost: avgCost, total_cost: totalCost };
+        await this.syncStateFromBatches(params.product_id, t);
+
+        return { qty: qtyOut, unit_cost: weightedUnitCost, total_cost: totalCost };
+    }
+
+    static async consumeOutboundPreferUnitCost(params: {
+        product_id: string;
+        qty: number;
+        preferred_unit_cost: number;
+        reference_type?: string;
+        reference_id?: string;
+        order_item_id?: string | null;
+        note?: string;
+        transaction?: Transaction;
+    }) {
+        const t = params.transaction;
+        const qtyOut = toQtyInt(params.qty);
+        if (qtyOut <= 0) return { qty: 0, unit_cost: 0, total_cost: 0 };
+
+        const referenceType = String(params.reference_type || '').trim() || 'unknown';
+        const referenceId = String(params.reference_id || '').trim() || 'unknown';
+
+        await this.ensureBootstrapBatchFromState(params.product_id, t);
+
+        const preferredCost = round4(Math.max(0, Number(params.preferred_unit_cost || 0)));
+
+        let remaining = qtyOut;
+        let totalCost = 0;
+
+        if (Number.isFinite(preferredCost)) {
+            const first = await this.consumeFromBatches({
+                product_id: params.product_id,
+                qty: remaining,
+                reference_type: referenceType,
+                reference_id: referenceId,
+                order_item_id: params.order_item_id ?? null,
+                note: params.note,
+                transaction: t,
+                batchWhere: { unit_cost: preferredCost }
+            });
+            remaining = Math.max(0, remaining - first.consumed_qty);
+            totalCost = round4(totalCost + first.total_cost);
+        }
+
+        if (remaining > 0) {
+            const second = await this.consumeFromBatches({
+                product_id: params.product_id,
+                qty: remaining,
+                reference_type: referenceType,
+                reference_id: referenceId,
+                order_item_id: params.order_item_id ?? null,
+                note: params.note,
+                transaction: t,
+            });
+            remaining = Math.max(0, remaining - second.consumed_qty);
+            totalCost = round4(totalCost + second.total_cost);
+        }
+
+        if (remaining > 0) {
+            throw new Error(`Insufficient inventory batches for product ${params.product_id} (need ${qtyOut}, remaining ${remaining}). Run SQL migration bootstrap if needed.`);
+        }
+
+        const weightedUnitCost = qtyOut > 0 ? (totalCost / qtyOut) : 0;
+
+        await InventoryCostLedger.create({
+            product_id: params.product_id,
+            movement_type: 'out',
+            qty: qtyOut,
+            unit_cost: round4(weightedUnitCost),
+            total_cost: round4(totalCost),
+            reference_type: params.reference_type || null,
+            reference_id: params.reference_id || null,
+            note: params.note || null
+        }, { transaction: t });
+
+        await this.syncStateFromBatches(params.product_id, t);
+
+        return { qty: qtyOut, unit_cost: weightedUnitCost, total_cost: round4(totalCost) };
     }
 
     static async recordAdjustment(params: {
@@ -143,27 +345,72 @@ export class InventoryCostService {
         const t = params.transaction;
         const diff = Number(params.qty_diff || 0);
         if (!diff) return { total_cost: 0, unit_cost: 0 };
-        const state = await this.ensureState(params.product_id, t);
-        const avgCost = Number(state.avg_cost || 0);
-        const qtyOld = Number(state.on_hand_qty || 0);
-        const qtyNew = Math.max(0, qtyOld + diff);
 
-        await state.update({ on_hand_qty: qtyNew }, { transaction: t });
+        const referenceType = String(params.reference_type || '').trim() || 'stock_opname';
+        const referenceId = String(params.reference_id || '').trim() || 'unknown';
 
-        const movementType = diff > 0 ? 'adjustment_plus' : 'adjustment_minus';
-        const qty = Math.abs(diff);
-        const totalCost = Number((qty * avgCost).toFixed(4));
+        await this.ensureBootstrapBatchFromState(params.product_id, t);
+
+        const qty = toQtyInt(Math.abs(diff));
+        const nextMovementType = diff > 0 ? 'adjustment_plus' : 'adjustment_minus';
+
+        if (diff > 0) {
+            const current = await this.syncStateFromBatches(params.product_id, t);
+            const unitCost = round4(current.avg_cost);
+            const totalCost = round4(qty * unitCost);
+
+            await InventoryBatch.create({
+                product_id: params.product_id,
+                unit_cost: unitCost,
+                qty_on_hand: qty,
+                source_type: referenceType,
+                source_id: params.reference_id || null,
+                note: params.note || null
+            }, { transaction: t });
+
+            await InventoryCostLedger.create({
+                product_id: params.product_id,
+                movement_type: nextMovementType,
+                qty,
+                unit_cost: unitCost,
+                total_cost: totalCost,
+                reference_type: params.reference_type || null,
+                reference_id: params.reference_id || null,
+                note: params.note || null
+            }, { transaction: t });
+
+            await this.syncStateFromBatches(params.product_id, t);
+            return { total_cost: totalCost, unit_cost: unitCost };
+        }
+
+        const consumed = await this.consumeFromBatches({
+            product_id: params.product_id,
+            qty,
+            reference_type: referenceType,
+            reference_id: referenceId,
+            transaction: t,
+            note: params.note,
+        });
+        if (consumed.consumed_qty !== qty) {
+            throw new Error(`Insufficient inventory batches for product ${params.product_id} (need ${qty}, got ${consumed.consumed_qty}).`);
+        }
+
+        const totalCost = round4(consumed.total_cost);
+        const weightedUnitCost = qty > 0 ? (totalCost / qty) : 0;
+
         await InventoryCostLedger.create({
             product_id: params.product_id,
-            movement_type: movementType,
+            movement_type: nextMovementType,
             qty,
-            unit_cost: Number(avgCost.toFixed(4)),
+            unit_cost: round4(weightedUnitCost),
             total_cost: totalCost,
             reference_type: params.reference_type || null,
             reference_id: params.reference_id || null,
             note: params.note || null
         }, { transaction: t });
-        return { total_cost: totalCost, unit_cost: avgCost };
+
+        await this.syncStateFromBatches(params.product_id, t);
+        return { total_cost: totalCost, unit_cost: weightedUnitCost };
     }
 
     static async autoAllocateBackordersForProduct(productId: string, transaction?: Transaction) {

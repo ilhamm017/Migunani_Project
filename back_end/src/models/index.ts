@@ -56,6 +56,9 @@ import SupplierPreorder from './SupplierPreorder';
 import SupplierPreorderItem from './SupplierPreorderItem';
 import PosSale from './PosSale';
 import PosSaleItem from './PosSaleItem';
+import InventoryBatch from './InventoryBatch';
+import InventoryBatchConsumption from './InventoryBatchConsumption';
+import ClearancePromo from './ClearancePromo';
 
 // Stock Opname
 StockOpname.hasMany(StockOpnameItem, { foreignKey: 'opname_id', as: 'Items' });
@@ -175,6 +178,12 @@ Product.hasOne(ProductCostState, { foreignKey: 'product_id', as: 'CostState' });
 ProductCostState.belongsTo(Product, { foreignKey: 'product_id' });
 Product.hasMany(InventoryCostLedger, { foreignKey: 'product_id', as: 'CostLedgers' });
 InventoryCostLedger.belongsTo(Product, { foreignKey: 'product_id' });
+Product.hasMany(InventoryBatch, { foreignKey: 'product_id', as: 'InventoryBatches' });
+InventoryBatch.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
+InventoryBatch.hasMany(InventoryBatchConsumption, { foreignKey: 'batch_id', as: 'Consumptions' });
+InventoryBatchConsumption.belongsTo(InventoryBatch, { foreignKey: 'batch_id', as: 'Batch' });
+Product.hasMany(ClearancePromo, { foreignKey: 'product_id', as: 'ClearancePromos' });
+ClearancePromo.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 
 // Transactions
 User.hasMany(Order, { foreignKey: 'customer_id', as: 'CustomerOrders' });
@@ -411,5 +420,8 @@ export {
     SupplierPreorder,
     SupplierPreorderItem,
     PosSale,
-    PosSaleItem
+    PosSaleItem,
+    InventoryBatch,
+    InventoryBatchConsumption,
+    ClearancePromo
 };

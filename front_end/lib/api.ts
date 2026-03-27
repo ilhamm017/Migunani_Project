@@ -126,6 +126,7 @@ export const api = {
             items?: Array<{
                 product_id: string;
                 qty: number;
+                clearance_promo_id?: string;
                 unit_price_override?: number;
                 unit_price_override_reason?: string;
             }>;
@@ -157,6 +158,10 @@ export const api = {
     // Promos
     promos: {
         validate: (code: string) => apiClient.get(`/promos/validate/${code}`),
+    },
+
+    clearancePromos: {
+        getActive: () => apiClient.get('/clearance-promos/active'),
     },
 
     // Shipping Methods (Public)
@@ -263,6 +268,7 @@ export const api = {
                 items: Array<{
                     product_id: string;
                     qty: number;
+                    clearance_promo_id?: string;
                     unit_price_override?: number;
                     override_reason?: string;
                 }>;
@@ -484,6 +490,8 @@ export const api = {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 }),
             createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
+            getCostLayers: (productId: string, params?: { include_batches?: boolean }) =>
+                apiClient.get(`/admin/inventory/cost-layers/${productId}`, { params }),
             // Inbound Gudang (canonical)
             createInbound: (data: JsonRecord) => apiClient.post('/admin/inventory/inbound', data),
             getInbounds: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>

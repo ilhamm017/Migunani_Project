@@ -1,5 +1,5 @@
 import { Transaction } from 'sequelize';
-import { Account, Invoice, Order, OrderItem, OrderAllocation } from '../models';
+import { Account, ClearancePromo, Invoice, InvoiceItem, Order, OrderItem, OrderAllocation } from '../models';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
 import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
@@ -20,24 +20,94 @@ export class AccountingPostingService {
         const orderItems = await OrderItem.findAll({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
         const allocations = await OrderAllocation.findAll({ where: { order_id: orderId }, transaction: t });
 
+        const allocatedByProduct = new Map<string, number>();
+        allocations.forEach((allocation: any) => {
+            const productId = String(allocation?.product_id || '').trim();
+            if (!productId) return;
+            const prev = Number(allocatedByProduct.get(productId) || 0);
+            allocatedByProduct.set(productId, prev + n(allocation?.allocated_qty));
+        });
+
+        const itemsByProduct = new Map<string, any[]>();
+        (orderItems as any[]).forEach((item: any) => {
+            const productId = String(item?.product_id || '').trim();
+            if (!productId) return;
+            const bucket = itemsByProduct.get(productId) || [];
+            bucket.push(item);
+            itemsByProduct.set(productId, bucket);
+        });
+
         let cogs = 0;
-        for (const item of orderItems) {
-            let qtyOut = n(item.qty);
-            const alloc = allocations.find((a) => a.product_id === item.product_id);
-            if (alloc) qtyOut = Math.min(qtyOut, n(alloc.allocated_qty));
-            if (qtyOut <= 0) continue;
-
-            const valuation = await InventoryCostService.consumeOutbound({
-                product_id: item.product_id,
-                qty: qtyOut,
-                reference_type: 'order',
-                reference_id: String(order.id),
-                note: 'Goods out valuation',
-                transaction: t
+        for (const [productId, group] of itemsByProduct.entries()) {
+            const sorted = [...group].sort((a: any, b: any) => {
+                const aId = Number(a?.id);
+                const bId = Number(b?.id);
+                if (Number.isFinite(aId) && Number.isFinite(bId)) return aId - bId;
+                return String(a?.id || '').localeCompare(String(b?.id || ''));
             });
-            cogs += n(valuation.total_cost);
 
-            await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
+            const hasAllocation = allocatedByProduct.has(productId);
+            let remainingAlloc = hasAllocation ? Math.max(0, n(allocatedByProduct.get(productId))) : 0;
+
+            for (const item of sorted as any[]) {
+                let qtyOut = Math.max(0, n(item?.qty));
+                if (hasAllocation) {
+                    qtyOut = Math.min(qtyOut, remainingAlloc);
+                    remainingAlloc = Math.max(0, remainingAlloc - qtyOut);
+                }
+                if (qtyOut <= 0) continue;
+
+                const clearancePromoId = String(item?.clearance_promo_id || '').trim();
+                let valuation: { qty: number; unit_cost: number; total_cost: number };
+
+                if (clearancePromoId) {
+                    const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
+                    const targetUnitCost = promo && String((promo as any).product_id) === String(item?.product_id)
+                        ? Number((promo as any).target_unit_cost || 0)
+                        : null;
+
+                    valuation = targetUnitCost !== null
+                        ? await InventoryCostService.consumeOutboundPreferUnitCost({
+                            product_id: String(item.product_id),
+                            qty: qtyOut,
+                            preferred_unit_cost: targetUnitCost,
+                            reference_type: 'order_goods_out',
+                            reference_id: String(order.id),
+                            order_item_id: String(item.id),
+                            note: 'Goods out valuation (clearance promo)',
+                            transaction: t
+                        })
+                        : await InventoryCostService.consumeOutbound({
+                            product_id: String(item.product_id),
+                            qty: qtyOut,
+                            reference_type: 'order_goods_out',
+                            reference_id: String(order.id),
+                            order_item_id: String(item.id),
+                            note: 'Goods out valuation',
+                            transaction: t
+                        });
+                } else {
+                    valuation = await InventoryCostService.consumeOutbound({
+                        product_id: String(item.product_id),
+                        qty: qtyOut,
+                        reference_type: 'order_goods_out',
+                        reference_id: String(order.id),
+                        order_item_id: String(item.id),
+                        note: 'Goods out valuation',
+                        transaction: t
+                    });
+                }
+
+                cogs += n(valuation.total_cost);
+
+                await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
+                await InvoiceItem.update({
+                    unit_cost: n(valuation.unit_cost)
+                }, {
+                    where: { order_item_id: String(item.id) },
+                    transaction: t
+                });
+            }
         }
 
         const orderSubtotal = orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0);

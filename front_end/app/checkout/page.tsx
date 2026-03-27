@@ -46,6 +46,32 @@ type ShippingMethod = {
   fee: number;
 };
 
+type ClearanceDraft = {
+  items: Array<{
+    product_id: string;
+    qty: number;
+    clearance_promo_id?: string;
+  }>;
+};
+
+type CheckoutDisplayItem = {
+  id: string;
+  productId: string;
+  productName: string;
+  price: number;
+  quantity: number;
+};
+
+type ClearancePromoRow = {
+  id: string;
+  product_id: string;
+  computed_promo_unit_price: number;
+  Product?: { name?: string } | null;
+  name?: string;
+};
+
+const CLEARANCE_DRAFT_KEY = 'clearance_checkout_draft';
+
 const FALLBACK_SHIPPING_METHODS: ShippingMethod[] = [
   { code: 'kurir_reguler', name: 'Kurir Reguler', fee: 12000 },
   { code: 'same_day', name: 'Same Day', fee: 25000 },
@@ -60,8 +86,10 @@ const ETA_BY_CODE: Record<string, string> = {
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const [isClearanceCheckout, setIsClearanceCheckout] = useState(false);
+  const [queryReady, setQueryReady] = useState(false);
   const { isAuthenticated } = useAuthStore();
-  const { items, totalPrice, totalItems, clearCart, setCart } = useCartStore();
+  const { items, clearCart, setCart } = useCartStore();
 
   const [shippingMethods, setShippingMethods] = useState<ShippingMethod[]>(FALLBACK_SHIPPING_METHODS);
   const [shippingMethod, setShippingMethod] = useState<string>(FALLBACK_SHIPPING_METHODS[0].code);
@@ -78,6 +106,27 @@ export default function CheckoutPage() {
   const [promoData, setPromoData] = useState<PromoPayload | null>(null);
   const [promoError, setPromoError] = useState('');
   const [validatingPromo, setValidatingPromo] = useState(false);
+
+  const [clearanceDraft, setClearanceDraft] = useState<ClearanceDraft | null>(null);
+  const [clearanceItems, setClearanceItems] = useState<CheckoutDisplayItem[]>([]);
+  const [clearanceLoading, setClearanceLoading] = useState(false);
+  const [clearanceError, setClearanceError] = useState('');
+
+  const checkoutItems: CheckoutDisplayItem[] = useMemo(() => {
+    if (isClearanceCheckout) return clearanceItems;
+    return (items as unknown as CheckoutDisplayItem[]) || [];
+  }, [clearanceItems, isClearanceCheckout, items]);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      setIsClearanceCheckout(params.get('clearance') === '1');
+    } catch {
+      setIsClearanceCheckout(false);
+    } finally {
+      setQueryReady(true);
+    }
+  }, []);
 
   const selectedShippingMethod = useMemo(
     () => shippingMethods.find((option) => option.code === shippingMethod) || shippingMethods[0] || FALLBACK_SHIPPING_METHODS[0],
@@ -106,17 +155,22 @@ export default function CheckoutPage() {
   }, [userProfile]);
 
   const itemCount = useMemo(
-    () => items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
-    [items]
+    () => checkoutItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    [checkoutItems]
+  );
+
+  const subtotalPrice = useMemo(
+    () => checkoutItems.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
+    [checkoutItems]
   );
 
   const promoEligibleTotal = useMemo(() => {
     if (!promoData) return 0;
-    return items.reduce((sum, item) => {
+    return checkoutItems.reduce((sum, item) => {
       if (item.productId !== promoData.product_id) return sum;
       return sum + (Number(item.price || 0) * Number(item.quantity || 0));
     }, 0);
-  }, [items, promoData]);
+  }, [checkoutItems, promoData]);
 
   const promoDiscount = useMemo(() => {
     if (!promoData) return 0;
@@ -128,7 +182,7 @@ export default function CheckoutPage() {
     return discount;
   }, [promoData, promoEligibleTotal]);
 
-  const grandTotal = Math.max(0, totalPrice + shippingFee - promoDiscount);
+  const grandTotal = Math.max(0, subtotalPrice + shippingFee - promoDiscount);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -171,6 +225,86 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    if (!queryReady) return;
+    if (!isClearanceCheckout) return;
+    let cancelled = false;
+
+    const loadClearanceDraft = async () => {
+      try {
+        setClearanceLoading(true);
+        setClearanceError('');
+
+        const rawDraft = sessionStorage.getItem(CLEARANCE_DRAFT_KEY);
+        const parsed = rawDraft ? JSON.parse(rawDraft) : null;
+        const draftItemsRaw = Array.isArray(parsed?.items) ? parsed.items : [];
+        const normalized = draftItemsRaw
+          .map((row: any) => ({
+            product_id: String(row?.product_id || '').trim(),
+            qty: Math.max(0, Math.trunc(Number(row?.qty || 0))),
+            clearance_promo_id: typeof row?.clearance_promo_id === 'string' ? String(row.clearance_promo_id).trim() : '',
+          }))
+          .filter((row: any) => Boolean(row.product_id) && Boolean(row.clearance_promo_id) && row.qty > 0);
+
+        if (normalized.length === 0) {
+          if (!cancelled) {
+            setClearanceDraft(null);
+            setClearanceItems([]);
+            setClearanceError('Draft promo cepat habis tidak ditemukan atau kosong.');
+          }
+          return;
+        }
+
+        const draft: ClearanceDraft = {
+          items: normalized.map((row: any) => ({
+            product_id: row.product_id,
+            qty: row.qty,
+            clearance_promo_id: row.clearance_promo_id,
+          })),
+        };
+
+        const promosRes = await api.clearancePromos.getActive();
+        const promos: ClearancePromoRow[] = Array.isArray(promosRes.data?.promos) ? promosRes.data.promos : [];
+        const promoById = new Map<string, ClearancePromoRow>();
+        promos.forEach((p) => promoById.set(String(p.id), p));
+
+        const display: CheckoutDisplayItem[] = draft.items.map((row, idx) => {
+          const promo = promoById.get(String(row.clearance_promo_id || ''));
+          const name = promo?.Product?.name || promo?.name || 'Produk';
+          const price = Number(promo?.computed_promo_unit_price || 0);
+          return {
+            id: `${row.product_id}:${row.clearance_promo_id}:${idx}`,
+            productId: row.product_id,
+            productName: String(name),
+            price,
+            quantity: row.qty,
+          };
+        });
+
+        if (!cancelled) {
+          setClearanceDraft(draft);
+          setClearanceItems(display);
+        }
+      } catch (error) {
+        console.error('Failed to load clearance checkout draft:', error);
+        const backendMessage = typeof (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message === 'string'
+          ? String((error as { response?: { data?: { message?: unknown } } }).response?.data?.message)
+          : null;
+        if (!cancelled) setClearanceError(backendMessage || 'Gagal memuat draft promo cepat habis.');
+      } finally {
+        if (!cancelled) setClearanceLoading(false);
+      }
+    };
+
+    void loadClearanceDraft();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, isClearanceCheckout, queryReady]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (!queryReady) return;
+    if (isClearanceCheckout) return;
     let cancelled = false;
 
     const syncCart = async () => {
@@ -214,7 +348,7 @@ export default function CheckoutPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, setCart]);
+  }, [isAuthenticated, isClearanceCheckout, queryReady, setCart]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -350,8 +484,8 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (items.length === 0) {
-      setFormError('Keranjang masih kosong. Tambahkan produk terlebih dahulu.');
+    if (checkoutItems.length === 0) {
+      setFormError(isClearanceCheckout ? 'Draft promo cepat habis masih kosong.' : 'Keranjang masih kosong. Tambahkan produk terlebih dahulu.');
       return;
     }
 
@@ -363,8 +497,16 @@ export default function CheckoutPage() {
     try {
       setLoading(true);
 
+      if (isClearanceCheckout) {
+        if (!clearanceDraft || !Array.isArray(clearanceDraft.items) || clearanceDraft.items.length === 0) {
+          setCheckoutError('Draft promo cepat habis tidak ditemukan. Kembali ke halaman promo.');
+          return;
+        }
+      }
+
       const res = await api.orders.checkout({
-        from_cart: true,
+        from_cart: !isClearanceCheckout,
+        ...(isClearanceCheckout ? { items: clearanceDraft!.items } : {}),
         shipping_method_code: shippingMethod,
         promo_code: promoData?.code || undefined,
         shipping_address: isPickup ? undefined : address.trim(),
@@ -372,7 +514,11 @@ export default function CheckoutPage() {
       });
 
       await maybeSaveAddressToProfile(address);
-      clearCart();
+      if (isClearanceCheckout) {
+        sessionStorage.removeItem(CLEARANCE_DRAFT_KEY);
+      } else {
+        clearCart();
+      }
       const orderId = res.data?.order_id;
       if (orderId) {
         router.push(`/orders/${orderId}`);
@@ -404,7 +550,7 @@ export default function CheckoutPage() {
     );
   }
 
-  if (cartSyncing) {
+  if (!queryReady) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-5">
         <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -414,13 +560,29 @@ export default function CheckoutPage() {
           <div className="mx-auto w-14 h-14 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center">
             <Package2 size={24} />
           </div>
-          <p className="text-sm text-slate-600">Memuat keranjang...</p>
+          <p className="text-sm text-slate-600">Memuat checkout...</p>
         </div>
       </div>
     );
   }
 
-  if (items.length === 0) {
+  if (cartSyncing || clearanceLoading) {
+    return (
+      <div className="p-6 max-w-2xl mx-auto space-y-5">
+        <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <ArrowLeft size={16} /> Kembali
+        </button>
+        <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm text-center space-y-3">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center">
+            <Package2 size={24} />
+          </div>
+          <p className="text-sm text-slate-600">{clearanceLoading ? 'Memuat promo...' : 'Memuat keranjang...'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (checkoutItems.length === 0) {
     return (
       <div className="p-6 max-w-2xl mx-auto space-y-5">
         <button data-no-3d="true" onClick={() => router.back()} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -430,15 +592,23 @@ export default function CheckoutPage() {
           <div className="mx-auto w-14 h-14 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center">
             <Package2 size={24} />
           </div>
-          <h2 className="text-lg font-black text-slate-900">Keranjang Masih Kosong</h2>
-          <p className="text-sm text-slate-500">Tambahkan produk terlebih dahulu sebelum checkout.</p>
+          <h2 className="text-lg font-black text-slate-900">{isClearanceCheckout ? 'Promo Masih Kosong' : 'Keranjang Masih Kosong'}</h2>
+          <p className="text-sm text-slate-500">{isClearanceCheckout ? (clearanceError || 'Pilih item promo terlebih dahulu sebelum checkout.') : 'Tambahkan produk terlebih dahulu sebelum checkout.'}</p>
           <div className="flex gap-2 justify-center">
-            <Link href="/catalog" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl bg-emerald-600 text-white text-xs font-black uppercase">
-              Lihat Katalog
-            </Link>
-            <Link href="/cart" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl border border-slate-200 text-xs font-black uppercase text-slate-700">
-              Buka Keranjang
-            </Link>
+            {isClearanceCheckout ? (
+              <Link href="/promo/cepat-habis" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl bg-emerald-600 text-white text-xs font-black uppercase">
+                Buka Promo
+              </Link>
+            ) : (
+              <>
+                <Link href="/catalog" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl bg-emerald-600 text-white text-xs font-black uppercase">
+                  Lihat Katalog
+                </Link>
+                <Link href="/cart" className="inline-flex items-center justify-center h-11 px-5 rounded-2xl border border-slate-200 text-xs font-black uppercase text-slate-700">
+                  Buka Keranjang
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -456,7 +626,7 @@ export default function CheckoutPage() {
           <div className="flex items-center justify-between gap-3">
             <h1 className="text-xl font-black text-slate-900">Checkout</h1>
             <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full">
-              {itemCount || totalItems} Item
+              {itemCount} Item
             </span>
           </div>
 
@@ -642,10 +812,10 @@ export default function CheckoutPage() {
         </div>
 
         <aside className="space-y-4 lg:sticky lg:top-20">
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-3">
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-3">
             <h3 className="text-sm font-black text-slate-900">Ringkasan Item</h3>
             <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-              {items.map((item) => (
+              {checkoutItems.map((item) => (
                 <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
                   <p className="text-xs font-bold text-slate-900">{item.productName}</p>
                   <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
@@ -655,15 +825,21 @@ export default function CheckoutPage() {
                 </div>
               ))}
             </div>
-            <Link href="/cart" className="inline-flex text-[11px] font-bold text-emerald-700">
-              Ubah isi keranjang
-            </Link>
+            {isClearanceCheckout ? (
+              <Link href="/promo/cepat-habis" className="inline-flex text-[11px] font-bold text-emerald-700">
+                Ubah pilihan promo
+              </Link>
+            ) : (
+              <Link href="/cart" className="inline-flex text-[11px] font-bold text-emerald-700">
+                Ubah isi keranjang
+              </Link>
+            )}
           </div>
 
           <div className="bg-slate-900 rounded-3xl p-5 text-white space-y-2 shadow-xl shadow-slate-200">
             <div className="flex justify-between text-sm opacity-80">
               <span>Subtotal</span>
-              <span>{formatCurrency(totalPrice)}</span>
+              <span>{formatCurrency(subtotalPrice)}</span>
             </div>
             <div className="flex justify-between text-sm opacity-80">
               <span>Ongkir ({selectedShippingMethod.name})</span>

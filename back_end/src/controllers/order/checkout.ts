@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Category, Setting } from '../../models';
+import { ClearancePromo, InventoryBatch, Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Category, Setting } from '../../models';
 import { Op } from 'sequelize';
 import { resolveShippingMethodByCode } from '../ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../../services/whatsappClient';
@@ -11,6 +11,8 @@ import { resolveEffectiveTierPricing, normalizeShippingMethodCode, CheckoutPayme
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+
+const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
 
 export const checkout = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -123,6 +125,10 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
         // Validate products & Calculate Total
         // NOTE: Stock is NOT decremented here. Stock allocation happens when admin reviews.
         for (const item of finalItems) {
+            const clearancePromoId = typeof (item as any)?.clearance_promo_id === 'string'
+                ? String((item as any).clearance_promo_id).trim()
+                : '';
+
             const product = await Product.findByPk(item.product_id, {
                 include: [{ model: Category, attributes: ['id', 'name', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'], required: false }],
                 transaction: t,
@@ -152,7 +158,11 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
 
             let finalUnitPrice = computedUnitPrice;
             let overridePayload: any = null;
-            if (overrideUnitPrice !== null) {
+            if (clearancePromoId && overrideUnitPrice !== null) {
+                await t.rollback();
+                throw new CustomError('Tidak boleh mengisi unit_price_override jika memakai promo cepat habis.', 400);
+            }
+            if (!clearancePromoId && overrideUnitPrice !== null) {
                 if (!Number.isFinite(overrideUnitPrice) || overrideUnitPrice <= 0) {
                     await t.rollback();
                     throw new CustomError('Harga deal tidak valid', 400);
@@ -176,30 +186,152 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                 };
             }
 
-            const subtotal = finalUnitPrice * item.qty;
-            const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - finalUnitPrice) * item.qty) * 100) / 100);
+            if (!clearancePromoId) {
+                const subtotal = finalUnitPrice * item.qty;
+                const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - finalUnitPrice) * item.qty) * 100) / 100);
 
-            totalAmount += subtotal;
-            totalDiscountAmount += lineDiscount;
+                totalAmount += subtotal;
+                totalDiscountAmount += lineDiscount;
 
-            orderItemsData.push({
-                product_id: product.id,
-                qty: item.qty,
-                price_at_purchase: finalUnitPrice,
-                cost_at_purchase: costAtPurchase,
-                pricing_snapshot: {
-                    tier: String(userTier || 'regular'),
-                    base_price: basePrice,
-                    discount_pct: pricing.discountPct,
-                    discount_source: pricing.discountSource,
-                    category_id: Number((product as any).category_id || 0) || null,
-                    category_name: String((product as any)?.Category?.name || '').trim() || null,
-                    computed_unit_price: computedUnitPrice,
-                    final_unit_price: finalUnitPrice,
-                    override: overridePayload,
-                    override_history: overridePayload ? [overridePayload] : []
+                orderItemsData.push({
+                    product_id: product.id,
+                    qty: item.qty,
+                    price_at_purchase: finalUnitPrice,
+                    cost_at_purchase: costAtPurchase,
+                    pricing_snapshot: {
+                        tier: String(userTier || 'regular'),
+                        base_price: basePrice,
+                        discount_pct: pricing.discountPct,
+                        discount_source: pricing.discountSource,
+                        category_id: Number((product as any).category_id || 0) || null,
+                        category_name: String((product as any)?.Category?.name || '').trim() || null,
+                        computed_unit_price: computedUnitPrice,
+                        final_unit_price: finalUnitPrice,
+                        override: overridePayload,
+                        override_history: overridePayload ? [overridePayload] : []
+                    }
+                });
+                continue;
+            }
+
+            const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
+            if (!promo) {
+                await t.rollback();
+                throw new CustomError('Promo cepat habis tidak ditemukan.', 404);
+            }
+            if (String((promo as any).product_id) !== String(product.id)) {
+                await t.rollback();
+                throw new CustomError('Promo cepat habis tidak cocok untuk produk ini.', 400);
+            }
+            if (!(promo as any).is_active) {
+                await t.rollback();
+                throw new CustomError('Promo cepat habis sedang non-aktif.', 400);
+            }
+            const now = Date.now();
+            const startsAt = new Date((promo as any).starts_at || 0).getTime();
+            const endsAt = new Date((promo as any).ends_at || 0).getTime();
+            if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || now < startsAt || now > endsAt) {
+                await t.rollback();
+                throw new CustomError('Promo cepat habis belum berlaku atau sudah berakhir.', 400);
+            }
+
+            const pricingMode = String((promo as any).pricing_mode || '');
+            let promoUnitPrice = 0;
+            if (pricingMode === 'fixed_price') {
+                promoUnitPrice = Math.round(Number((promo as any).promo_unit_price || 0) * 100) / 100;
+                if (!Number.isFinite(promoUnitPrice) || promoUnitPrice <= 0) {
+                    await t.rollback();
+                    throw new CustomError('promo_unit_price tidak valid untuk promo cepat habis.', 400);
                 }
-            });
+            } else if (pricingMode === 'percent_off') {
+                const pct = Number((promo as any).discount_pct || 0);
+                if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) {
+                    await t.rollback();
+                    throw new CustomError('discount_pct tidak valid untuk promo cepat habis.', 400);
+                }
+                promoUnitPrice = Math.round(computedUnitPrice * (1 - (pct / 100)));
+                promoUnitPrice = Math.round(promoUnitPrice * 100) / 100;
+            } else {
+                await t.rollback();
+                throw new CustomError('pricing_mode tidak valid untuk promo cepat habis.', 400);
+            }
+
+            const targetUnitCost = round4((promo as any).target_unit_cost);
+            const remainingAgg = await InventoryBatch.findOne({
+                where: {
+                    product_id: String(product.id),
+                    unit_cost: targetUnitCost,
+                    qty_on_hand: { [Op.gt]: 0 }
+                },
+                attributes: [[sequelize.fn('SUM', sequelize.col('qty_on_hand')), 'qty_sum']],
+                transaction: t,
+                raw: true,
+            }) as any;
+            const remainingQty = Math.max(0, Math.trunc(Number(remainingAgg?.qty_sum || 0)));
+            const promoQty = Math.max(0, Math.min(item.qty, remainingQty));
+            const normalQty = Math.max(0, item.qty - promoQty);
+
+            if (promoQty > 0) {
+                const subtotal = promoUnitPrice * promoQty;
+                const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - promoUnitPrice) * promoQty) * 100) / 100);
+
+                totalAmount += subtotal;
+                totalDiscountAmount += lineDiscount;
+
+                orderItemsData.push({
+                    product_id: product.id,
+                    clearance_promo_id: String((promo as any).id),
+                    qty: promoQty,
+                    price_at_purchase: promoUnitPrice,
+                    cost_at_purchase: costAtPurchase,
+                    pricing_snapshot: {
+                        tier: String(userTier || 'regular'),
+                        base_price: basePrice,
+                        discount_pct: pricing.discountPct,
+                        discount_source: pricing.discountSource,
+                        category_id: Number((product as any).category_id || 0) || null,
+                        category_name: String((product as any)?.Category?.name || '').trim() || null,
+                        computed_unit_price: computedUnitPrice,
+                        final_unit_price: promoUnitPrice,
+                        override: null,
+                        override_history: [],
+                        clearance_promo: {
+                            id: String((promo as any).id),
+                            pricing_mode: pricingMode,
+                            target_unit_cost: targetUnitCost,
+                            promo_unit_price: pricingMode === 'fixed_price' ? promoUnitPrice : null,
+                            discount_pct: pricingMode === 'percent_off' ? Number((promo as any).discount_pct || 0) : null,
+                        }
+                    }
+                });
+            }
+
+            if (normalQty > 0) {
+                const subtotal = finalUnitPrice * normalQty;
+                const lineDiscount = Math.max(0, Math.round((Math.max(0, basePrice - finalUnitPrice) * normalQty) * 100) / 100);
+
+                totalAmount += subtotal;
+                totalDiscountAmount += lineDiscount;
+
+                orderItemsData.push({
+                    product_id: product.id,
+                    qty: normalQty,
+                    price_at_purchase: finalUnitPrice,
+                    cost_at_purchase: costAtPurchase,
+                    pricing_snapshot: {
+                        tier: String(userTier || 'regular'),
+                        base_price: basePrice,
+                        discount_pct: pricing.discountPct,
+                        discount_source: pricing.discountSource,
+                        category_id: Number((product as any).category_id || 0) || null,
+                        category_name: String((product as any)?.Category?.name || '').trim() || null,
+                        computed_unit_price: computedUnitPrice,
+                        final_unit_price: finalUnitPrice,
+                        override: overridePayload,
+                        override_history: overridePayload ? [overridePayload] : []
+                    }
+                });
+            }
         }
 
         const requestedShippingCode = normalizeShippingMethodCode(shipping_method_code);

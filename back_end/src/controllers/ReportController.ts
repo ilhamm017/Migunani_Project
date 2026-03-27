@@ -579,7 +579,13 @@ export const getProductsSoldReport = asyncWrapper(async (req: Request, res: Resp
                 [sequelize.col('OrderItem.Product.unit'), 'unit'],
                 [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
                 [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
-                [sequelize.fn('SUM', sequelize.literal('InvoiceItem.qty * InvoiceItem.unit_cost')), 'cogs'],
+                [sequelize.fn('SUM', sequelize.literal(`InvoiceItem.qty * COALESCE((
+                    SELECT ico.unit_cost_override
+                    FROM invoice_cost_overrides ico
+                    WHERE ico.invoice_id = InvoiceItem.invoice_id
+                      AND ico.product_id = OrderItem.product_id
+                    LIMIT 1
+                ), InvoiceItem.unit_cost)`)), 'cogs'],
             ],
             include: [
                 {

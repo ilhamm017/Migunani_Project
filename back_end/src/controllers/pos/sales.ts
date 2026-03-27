@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Account, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
+import { Account, ClearancePromo, InventoryBatch, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
@@ -9,6 +9,7 @@ import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 
 const round2 = (value: unknown) => Math.round(Number(value || 0) * 100) / 100;
+const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
 const joinError = (e: unknown) => {
     if (e instanceof Error) return e.message;
     if (typeof e === 'string') return e;
@@ -19,17 +20,21 @@ const joinError = (e: unknown) => {
 type CreatePosSaleItemInput = {
     product_id: string;
     qty: number;
+    clearance_promo_id?: string;
     unit_price_override?: number;
     override_reason?: string;
 };
 
-const parseItems = (raw: unknown): Array<{ product_id: string; qty: number; unit_price_override: number | null; override_reason: string | null }> => {
+const parseItems = (raw: unknown): Array<{ product_id: string; qty: number; clearance_promo_id: string | null; unit_price_override: number | null; override_reason: string | null }> => {
     const incoming = Array.isArray(raw) ? raw : [];
-    const byProduct = new Map<string, { qty: number; unit_price_override: number | null; override_reason: string | null }>();
+    const byProduct = new Map<string, { qty: number; clearance_promo_id: string | null; unit_price_override: number | null; override_reason: string | null }>();
 
     for (const row of incoming as CreatePosSaleItemInput[]) {
         const productId = String((row as any)?.product_id || '').trim();
         const qtyRaw = Number((row as any)?.qty);
+        const clearancePromoIdRaw = typeof (row as any)?.clearance_promo_id === 'string'
+            ? String((row as any).clearance_promo_id).trim()
+            : '';
         const overrideRaw = (row as any)?.unit_price_override;
         const reasonRaw = String((row as any)?.override_reason || '').trim();
 
@@ -45,12 +50,20 @@ const parseItems = (raw: unknown): Array<{ product_id: string; qty: number; unit
             throw new CustomError(`unit_price_override tidak valid untuk produk ${productId}`, 400);
         }
 
+        const clearancePromoId = clearancePromoIdRaw || null;
+        if (clearancePromoId && unitPriceOverride !== null) {
+            throw new CustomError(`Tidak boleh mengisi unit_price_override jika memakai clearance promo (${productId}).`, 400);
+        }
+
         const existing = byProduct.get(productId);
         if (!existing) {
-            byProduct.set(productId, { qty, unit_price_override: unitPriceOverride, override_reason: reasonRaw || null });
+            byProduct.set(productId, { qty, clearance_promo_id: clearancePromoId, unit_price_override: unitPriceOverride, override_reason: reasonRaw || null });
             continue;
         }
 
+        if (existing.clearance_promo_id !== clearancePromoId) {
+            throw new CustomError(`clearance_promo_id berbeda untuk produk yang sama (${productId}).`, 400);
+        }
         if (existing.unit_price_override !== unitPriceOverride) {
             throw new CustomError(`unit_price_override berbeda untuk produk yang sama (${productId}).`, 400);
         }
@@ -61,6 +74,7 @@ const parseItems = (raw: unknown): Array<{ product_id: string; qty: number; unit
     return Array.from(byProduct.entries()).map(([product_id, v]) => ({
         product_id,
         qty: v.qty,
+        clearance_promo_id: v.clearance_promo_id,
         unit_price_override: v.unit_price_override,
         override_reason: v.override_reason,
     }));
@@ -162,9 +176,11 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
             line_total: number;
             unit_price_override: number | null;
             override_reason: string | null;
+            clearance_promo_id: string | null;
         };
         const lines: Line[] = [];
         let subtotal = 0;
+        const promoById = new Map<string, any>();
 
         for (const it of items) {
             const product = productById.get(it.product_id);
@@ -185,17 +201,111 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
                 unitPrice = override;
             }
 
-            const lineTotal = round2(unitPrice * it.qty);
-            subtotal = round2(subtotal + lineTotal);
-            lines.push({
-                product,
-                product_id: it.product_id,
-                qty: it.qty,
-                unit_price: unitPrice,
-                line_total: lineTotal,
-                unit_price_override: it.unit_price_override,
-                override_reason: it.override_reason,
-            });
+            const clearancePromoId = String((it as any)?.clearance_promo_id || '').trim() || null;
+            if (!clearancePromoId) {
+                const lineTotal = round2(unitPrice * it.qty);
+                subtotal = round2(subtotal + lineTotal);
+                lines.push({
+                    product,
+                    product_id: it.product_id,
+                    qty: it.qty,
+                    unit_price: unitPrice,
+                    line_total: lineTotal,
+                    unit_price_override: it.unit_price_override,
+                    override_reason: it.override_reason,
+                    clearance_promo_id: null,
+                });
+                continue;
+            }
+
+            const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
+            if (!promo) {
+                await t.rollback();
+                throw new CustomError('Clearance promo tidak ditemukan atau sudah tidak aktif.', 404);
+            }
+            if (String((promo as any).product_id) !== String(product?.id)) {
+                await t.rollback();
+                throw new CustomError('Clearance promo tidak cocok untuk produk ini.', 400);
+            }
+            if (!(promo as any).is_active) {
+                await t.rollback();
+                throw new CustomError('Clearance promo sedang non-aktif.', 400);
+            }
+            const now = Date.now();
+            const startsAt = new Date((promo as any).starts_at || 0).getTime();
+            const endsAt = new Date((promo as any).ends_at || 0).getTime();
+            if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || now < startsAt || now > endsAt) {
+                await t.rollback();
+                throw new CustomError('Clearance promo belum berlaku atau sudah berakhir.', 400);
+            }
+
+            promoById.set(clearancePromoId, promo);
+
+            const pricingMode = String((promo as any).pricing_mode || '');
+            let promoUnitPrice = 0;
+            if (pricingMode === 'fixed_price') {
+                promoUnitPrice = round2((promo as any).promo_unit_price);
+                if (!Number.isFinite(promoUnitPrice) || promoUnitPrice <= 0) {
+                    await t.rollback();
+                    throw new CustomError('promo_unit_price tidak valid untuk clearance promo.', 400);
+                }
+            } else if (pricingMode === 'percent_off') {
+                const pct = Number((promo as any).discount_pct || 0);
+                if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) {
+                    await t.rollback();
+                    throw new CustomError('discount_pct tidak valid untuk clearance promo.', 400);
+                }
+                promoUnitPrice = Math.round(normalPrice * (1 - (pct / 100)));
+                promoUnitPrice = round2(promoUnitPrice);
+            } else {
+                await t.rollback();
+                throw new CustomError('pricing_mode tidak valid untuk clearance promo.', 400);
+            }
+
+            const targetUnitCost = round4((promo as any).target_unit_cost);
+            const remainingAgg = await InventoryBatch.findOne({
+                where: {
+                    product_id: it.product_id,
+                    unit_cost: targetUnitCost,
+                    qty_on_hand: { [Op.gt]: 0 }
+                },
+                attributes: [[sequelize.fn('SUM', sequelize.col('qty_on_hand')), 'qty_sum']],
+                transaction: t,
+                lock: t.LOCK.UPDATE,
+                raw: true,
+            }) as any;
+            const remainingQty = Math.max(0, Math.trunc(Number(remainingAgg?.qty_sum || 0)));
+            const promoQty = Math.max(0, Math.min(it.qty, remainingQty));
+            const normalQty = Math.max(0, it.qty - promoQty);
+
+            if (promoQty > 0) {
+                const promoLineTotal = round2(promoUnitPrice * promoQty);
+                subtotal = round2(subtotal + promoLineTotal);
+                lines.push({
+                    product,
+                    product_id: it.product_id,
+                    qty: promoQty,
+                    unit_price: promoUnitPrice,
+                    line_total: promoLineTotal,
+                    unit_price_override: null,
+                    override_reason: null,
+                    clearance_promo_id: clearancePromoId,
+                });
+            }
+            if (normalQty > 0) {
+                const normalLineTotal = round2(normalPrice * normalQty);
+                subtotal = round2(subtotal + normalLineTotal);
+                lines.push({
+                    product,
+                    product_id: it.product_id,
+                    qty: normalQty,
+                    unit_price: normalPrice,
+                    line_total: normalLineTotal,
+                    unit_price_override: null,
+                    override_reason: null,
+                    clearance_promo_id: null,
+                });
+            }
         }
 
         const discountAmount = Math.min(
@@ -240,35 +350,56 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const itemRows: any[] = [];
         let totalCogs = 0;
 
+        const totalQtyByProduct = new Map<string, number>();
         for (const line of lines) {
-            const product = line.product;
-            const normalPrice = round2(product?.price);
+            const prev = Number(totalQtyByProduct.get(line.product_id) || 0);
+            totalQtyByProduct.set(line.product_id, prev + Math.max(0, Math.trunc(Number(line.qty || 0))));
+        }
+
+        for (const [productId, qty] of totalQtyByProduct.entries()) {
+            const product = productById.get(productId);
             const currentStock = Number(product?.stock_quantity || 0);
-            const newStock = currentStock - line.qty;
+            const newStock = currentStock - qty;
             if (newStock < 0) {
                 await t.rollback();
-                throw new CustomError(`Stok tidak cukup untuk ${String(product?.sku || line.product_id)}`, 400);
+                throw new CustomError(`Stok tidak cukup untuk ${String(product?.sku || productId)}`, 400);
             }
 
             await product.update({ stock_quantity: newStock }, { transaction: t });
 
             await StockMutation.create({
-                product_id: line.product_id,
+                product_id: productId,
                 type: 'out',
-                qty: -Math.abs(line.qty),
+                qty: -Math.abs(qty),
                 reference_type: 'pos_sale',
                 reference_id: String(sale.id),
                 note: `POS sale ${receiptNumber || String(sale.id).slice(-8)}`
             }, { transaction: t });
+        }
 
-            const valuation = await InventoryCostService.consumeOutbound({
-                product_id: line.product_id,
-                qty: line.qty,
-                reference_type: 'pos_sale',
-                reference_id: String(sale.id),
-                note: `POS sale ${receiptNumber || String(sale.id).slice(-8)}`,
-                transaction: t
-            });
+        for (const line of lines) {
+            const product = line.product;
+            const normalPrice = round2(product?.price);
+
+            const clearancePromoId = String(line.clearance_promo_id || '').trim();
+            const valuation = clearancePromoId
+                ? await InventoryCostService.consumeOutboundPreferUnitCost({
+                    product_id: line.product_id,
+                    qty: line.qty,
+                    preferred_unit_cost: Number((promoById.get(clearancePromoId) as any)?.target_unit_cost || 0),
+                    reference_type: 'pos_sale',
+                    reference_id: String(sale.id),
+                    note: `POS sale ${receiptNumber || String(sale.id).slice(-8)} (clearance promo)`,
+                    transaction: t
+                })
+                : await InventoryCostService.consumeOutbound({
+                    product_id: line.product_id,
+                    qty: line.qty,
+                    reference_type: 'pos_sale',
+                    reference_id: String(sale.id),
+                    note: `POS sale ${receiptNumber || String(sale.id).slice(-8)}`,
+                    transaction: t
+                });
 
             const unitCost = Number(valuation.unit_cost || 0);
             const cogsTotal = Number(valuation.total_cost || 0);
@@ -277,6 +408,7 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
             itemRows.push({
                 pos_sale_id: String(sale.id),
                 product_id: line.product_id,
+                clearance_promo_id: line.clearance_promo_id,
                 sku_snapshot: String(product?.sku || ''),
                 name_snapshot: String(product?.name || ''),
                 unit_snapshot: String(product?.unit || 'Pcs'),

@@ -171,6 +171,19 @@ export default function MemberHome() {
         </div>
       </Link>
 
+      <Link href="/promo/cepat-habis" className="block">
+        <div className="rounded-3xl p-5 bg-emerald-600 text-white flex items-center justify-between shadow-lg shadow-emerald-200 active:scale-[0.98] transition-all">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-90">Promo</p>
+            <h3 className="text-sm font-black">Promo Cepat Habis</h3>
+            <p className="text-[11px] opacity-90 mt-1">Harga spesial untuk stok tertentu.</p>
+          </div>
+          <div className="w-11 h-11 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center">
+            <ArrowRight size={18} />
+          </div>
+        </div>
+      </Link>
+
       <section className="grid grid-cols-2 gap-3">
         {combinedStats.map((stat, i) => {
           const Icon = stat.icon;

@@ -1,6 +1,7 @@
-import { Retur, Order, Product, User, sequelize, OrderItem, Expense, Account, DriverDebtAdjustment } from '../models';
+import { Retur, Order, Product, User, sequelize, OrderItem, InvoiceItem, Expense, Account, DriverDebtAdjustment } from '../models';
 import { Op, Transaction } from 'sequelize';
 import { JournalService } from './JournalService';
+import { InventoryCostService } from './InventoryCostService';
 import { emitReturStatusChanged } from '../utils/orderNotification';
 import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
 import { calculateDriverCodExposure } from '../utils/codExposure';
@@ -46,16 +47,17 @@ export class ReturService {
                 throw new Error('Retur untuk produk ini sudah diajukan dan sedang diproses');
             }
 
-            const orderItem = await sequelize.models.OrderItem.findOne({
+            const orderItems = await OrderItem.findAll({
                 where: { order_id, product_id },
                 transaction: t
-            }) as any;
+            });
 
-            if (!orderItem) {
+            const purchasedQty = (orderItems as any[]).reduce((sum, row: any) => sum + Math.max(0, Number(row?.qty || 0)), 0);
+            if (purchasedQty <= 0) {
                 throw new Error('Produk tidak ditemukan dalam pesanan ini');
             }
 
-            if (Number(qty) > Number(orderItem.qty)) {
+            if (Number(qty) > purchasedQty) {
                 throw new Error('Jumlah retur melebihi jumlah yang dibeli');
             }
 
@@ -326,13 +328,52 @@ export class ReturService {
                     }, { transaction: t });
 
                     // --- Journal for Return to Stock (Persediaan vs HPP Reversal) ---
-                    const orderItem = await OrderItem.findOne({
-                        where: { order_id: retur.order_id, product_id: retur.product_id },
+                    const invoice = await findLatestInvoiceByOrderId(String(retur.order_id), { transaction: t });
+                    const invoiceItems = invoice
+                        ? await InvoiceItem.findAll({
+                            where: { invoice_id: String(invoice.id) },
+                            attributes: ['qty', 'unit_cost'],
+                            include: [{
+                                model: OrderItem,
+                                attributes: ['id', 'order_id', 'product_id'],
+                                required: true,
+                                where: {
+                                    order_id: String(retur.order_id),
+                                    product_id: String(retur.product_id),
+                                }
+                            }],
+                            transaction: t,
+                            lock: t.LOCK.SHARE
+                        })
+                        : [];
+
+                    let weightedUnitCost = 0;
+                    if (invoiceItems.length > 0) {
+                        let totalQty = 0;
+                        let totalCost = 0;
+                        invoiceItems.forEach((row: any) => {
+                            const qty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+                            if (qty <= 0) return;
+                            totalQty += qty;
+                            totalCost += Number(row?.unit_cost || 0) * qty;
+                        });
+                        weightedUnitCost = totalQty > 0 ? (totalCost / totalQty) : 0;
+                    }
+                    if (!Number.isFinite(weightedUnitCost) || weightedUnitCost <= 0) {
+                        weightedUnitCost = Number(product.base_price || 0);
+                    }
+
+                    await InventoryCostService.recordInbound({
+                        product_id: String(retur.product_id),
+                        qty: returnQty,
+                        unit_cost: weightedUnitCost,
+                        reference_type: 'retur_stock',
+                        reference_id: String(retur.id),
+                        note: `Retur back to stock (Order #${String(retur.order_id).slice(0, 8)})`,
                         transaction: t
                     });
 
-                    const unitCost = Number(orderItem?.cost_at_purchase || product.base_price || 0);
-                    const totalCost = unitCost * returnQty;
+                    const totalCost = weightedUnitCost * returnQty;
 
                     if (totalCost > 0) {
                         const inventoryAcc = await Account.findOne({ where: { code: '1300' }, transaction: t });

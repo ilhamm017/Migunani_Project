@@ -131,6 +131,20 @@ Jalankan SQL ini untuk menambah kolom audit override harga pada `pos_sale_items`
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sale_items_override_audit.sql
 ```
 
+## Add FIFO cost layers + clearance promos (Promo "Cepat Habis")
+
+Jalankan SQL ini untuk menambah:
+- `inventory_batches` + `inventory_batch_consumptions` (cost layer FIFO)
+- `clearance_promos` (promo cepat habis berbasis modal)
+- Kolom `clearance_promo_id` pada `order_items` dan `pos_sale_items`
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260327_inventory_batches_and_clearance_promos.sql
+```
+
+Catatan:
+- File migrasi ini juga melakukan bootstrap awal `inventory_batches` dari `product_cost_states` (moving average) untuk stok yang sudah ada, agar sistem tetap bisa berjalan setelah migrasi.
+
 ## Optional internal endpoint for local file path import
 
 Set in `.env` (backend):

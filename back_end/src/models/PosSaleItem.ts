@@ -5,6 +5,7 @@ interface PosSaleItemAttributes {
     id: string; // BIGINT
     pos_sale_id: string; // UUID
     product_id: string; // UUID
+    clearance_promo_id?: string | null; // UUID
     sku_snapshot: string;
     name_snapshot: string;
     unit_snapshot: string;
@@ -26,6 +27,7 @@ class PosSaleItem extends Model<PosSaleItemAttributes, PosSaleItemCreationAttrib
     declare id: string;
     declare pos_sale_id: string;
     declare product_id: string;
+    declare clearance_promo_id: string | null;
     declare sku_snapshot: string;
     declare name_snapshot: string;
     declare unit_snapshot: string;
@@ -56,6 +58,10 @@ PosSaleItem.init(
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        clearance_promo_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
         sku_snapshot: {
             type: DataTypes.STRING(64),

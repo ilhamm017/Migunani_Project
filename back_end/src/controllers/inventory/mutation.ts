@@ -35,7 +35,7 @@ export const createStockMutation = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('Insufficient stock', 400);
         }
 
-        await StockMutation.create({
+        const mutation = await StockMutation.create({
             product_id,
             type,
             qty: type === 'out' ? -Math.abs(qty) : Math.abs(qty), // Store logic based on type, ensuring adjustments follow sign logic or explicit type
@@ -45,13 +45,14 @@ export const createStockMutation = asyncWrapper(async (req: Request, res: Respon
         }, { transaction: t });
 
         const effectiveQty = type === 'out' ? -Math.abs(Number(qty)) : Number(qty);
+        const costReferenceId = reference_id ? String(reference_id) : String((mutation as any).id);
         if (type === 'in' && effectiveQty > 0) {
             await InventoryCostService.recordInbound({
                 product_id,
                 qty: effectiveQty,
                 unit_cost: Number(product.base_price || 0),
                 reference_type: 'stock_mutation',
-                reference_id: reference_id ? String(reference_id) : undefined,
+                reference_id: costReferenceId,
                 note: note || 'Manual stock in',
                 transaction: t
             });
@@ -60,7 +61,7 @@ export const createStockMutation = asyncWrapper(async (req: Request, res: Respon
                 product_id,
                 qty: Math.abs(effectiveQty),
                 reference_type: 'stock_mutation',
-                reference_id: reference_id ? String(reference_id) : undefined,
+                reference_id: costReferenceId,
                 note: note || 'Manual stock out',
                 transaction: t
             });
@@ -69,7 +70,7 @@ export const createStockMutation = asyncWrapper(async (req: Request, res: Respon
                 product_id,
                 qty_diff: effectiveQty,
                 reference_type: 'stock_mutation',
-                reference_id: reference_id ? String(reference_id) : undefined,
+                reference_id: costReferenceId,
                 note: note || 'Manual stock adjustment',
                 transaction: t
             });

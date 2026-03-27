@@ -5,6 +5,7 @@ interface OrderItemAttributes {
     id: string; // BigInt
     order_id: string; // UUID
     product_id: string; // UUID
+    clearance_promo_id?: string | null; // UUID
     qty: number;
     ordered_qty_original: number;
     qty_canceled_backorder: number;
@@ -20,6 +21,7 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes> 
     declare id: string;
     declare order_id: string;
     declare product_id: string;
+    declare clearance_promo_id: string | null;
     declare qty: number;
     declare ordered_qty_original: number;
     declare qty_canceled_backorder: number;
@@ -46,6 +48,10 @@ OrderItem.init(
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        clearance_promo_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
         qty: {
             type: DataTypes.INTEGER,

@@ -17,6 +17,7 @@ export type CheckoutPaymentMethod = (typeof ALLOWED_PAYMENT_METHODS)[number];
 export type NormalizedCheckoutItem = {
     product_id: string;
     qty: number;
+    clearance_promo_id?: string;
     unit_price_override?: number;
     unit_price_override_reason?: string | null;
 };
@@ -158,6 +159,7 @@ export const normalizeCheckoutItems = (value: unknown): NormalizedCheckoutItem[]
         const item = rawItem as Record<string, unknown>;
         const productId = typeof item.product_id === 'string' ? item.product_id.trim() : '';
         const qty = Number(item.qty);
+        const clearancePromoId = typeof item.clearance_promo_id === 'string' ? item.clearance_promo_id.trim() : '';
 
         if (!productId) return null;
         if (!Number.isInteger(qty) || qty <= 0) return null;
@@ -176,6 +178,7 @@ export const normalizeCheckoutItems = (value: unknown): NormalizedCheckoutItem[]
         normalized.push({
             product_id: productId,
             qty,
+            ...(clearancePromoId ? { clearance_promo_id: clearancePromoId } : {}),
             ...(override !== undefined ? { unit_price_override: override } : {}),
             unit_price_override_reason: reason ? reason : null
         });
