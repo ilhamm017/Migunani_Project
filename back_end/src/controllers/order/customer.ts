@@ -171,7 +171,7 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
 
     const orderItemAttributes = userRole === 'customer'
         ? ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual', 'price_at_purchase']
-        : ['id', 'order_id', 'product_id', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual', 'price_at_purchase', 'cost_at_purchase', 'pricing_snapshot'];
+        : ['id', 'order_id', 'product_id', 'clearance_promo_id', 'preferred_unit_cost', 'qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual', 'price_at_purchase', 'cost_at_purchase', 'pricing_snapshot'];
 
     let targetOrderId = orderId;
     const directOrder = await Order.findOne({

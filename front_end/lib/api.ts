@@ -461,10 +461,10 @@ export const api = {
 	                reason: string;
 	                items: Array<{ order_item_id: string; cancel_qty: number }>;
 	            }) => apiClient.post(`/orders/admin/${id}/cancel-items`, data),
-	            updatePricing: (id: string, data: {
-	                items: Array<{ order_item_id: string; unit_price_override: number; reason?: string }>;
-	                reason?: string;
-	            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
+		            updatePricing: (id: string, data: {
+		                items: Array<{ order_item_id: string; unit_price_override: number; preferred_unit_cost?: number | null; reason?: string }>;
+		                reason?: string;
+		            }) => apiClient.patch(`/orders/admin/${id}/pricing`, data),
             moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
         },
         inventory: {
@@ -516,7 +516,7 @@ export const api = {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 }),
             createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
-            getCostLayers: (productId: string, params?: { include_batches?: boolean }) =>
+            getCostLayers: (productId: string, params?: { include_batches?: boolean; order_id?: string }) =>
                 apiClient.get(`/admin/inventory/cost-layers/${productId}`, { params }),
             // Inbound Gudang (canonical)
             createInbound: (data: JsonRecord) => apiClient.post('/admin/inventory/inbound', data),

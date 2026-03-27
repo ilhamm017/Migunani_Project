@@ -5,6 +5,7 @@ import { resolveShippingMethodByCode } from '../ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../../services/whatsappClient';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { JournalService } from '../../services/JournalService';
+import { InventoryReservationService } from '../../services/InventoryReservationService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
 import { recordOrderEvent, recordOrderStatusChanged } from '../../utils/orderEvent';
@@ -550,6 +551,10 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             }
         }
 
+        if (nextStatus === 'canceled') {
+            await InventoryReservationService.releaseReservationsForOrder({ order_id: orderId, transaction: t });
+        }
+
         // If canceled, restore stock from allocations
         if (nextStatus === 'canceled' && order.stock_released === false) {
             const allocations = await OrderAllocation.findAll({
@@ -977,6 +982,8 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
             stock_released: nextStatus === 'canceled' ? true : order.stock_released
         }, { transaction: t });
 
+        await InventoryReservationService.syncReservationsForOrder({ order_id: orderId, transaction: t });
+
         if (prevStatus !== nextStatus) {
             await recordOrderStatusChanged({
                 transaction: t,
@@ -1289,6 +1296,7 @@ export const reportMissingItem = asyncWrapper(async (req: Request, res: Response
 });
 
 const round2 = (value: number) => Math.round(Number(value || 0) * 100) / 100;
+const round4 = (value: number) => Number(Number(value || 0).toFixed(4));
 
 const toObjectOrEmpty = (value: unknown): Record<string, any> => {
     if (!value) return {};
@@ -1342,7 +1350,9 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
         const requestedItems = itemsRaw.map((row: any) => ({
             order_item_id: String(row?.order_item_id || '').trim(),
             unit_price_override: Number(row?.unit_price_override),
-            reason: typeof row?.reason === 'string' ? String(row.reason).trim() : ''
+            reason: typeof row?.reason === 'string' ? String(row.reason).trim() : '',
+            preferred_unit_cost_present: typeof row === 'object' && row !== null && Object.prototype.hasOwnProperty.call(row, 'preferred_unit_cost'),
+            preferred_unit_cost: (row as any)?.preferred_unit_cost,
         }));
 
         if (requestedItems.some((row) => !row.order_item_id)) {
@@ -1352,6 +1362,17 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
         if (requestedItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
             await t.rollback();
             throw new CustomError('Harga deal tidak valid', 400);
+        }
+        if (requestedItems.some((row) => {
+            if (!row.preferred_unit_cost_present) return false;
+            const raw = row.preferred_unit_cost;
+            if (raw === null || raw === undefined) return false;
+            if (typeof raw === 'string' && raw.trim() === '') return false;
+            const parsed = Number(raw);
+            return !Number.isFinite(parsed) || parsed <= 0;
+        })) {
+            await t.rollback();
+            throw new CustomError('Layer modal (preferred_unit_cost) tidak valid', 400);
         }
 
         const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
@@ -1398,6 +1419,20 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
             const newUnit = round2(Number(reqItem.unit_price_override || 0));
             const qty = Math.max(0, Number(row.qty || 0));
             const cost = round2(Number(row.cost_at_purchase || 0));
+            const oldPreferredCostRaw = (row as any).preferred_unit_cost;
+            const oldPreferredUnitCost = oldPreferredCostRaw === null || oldPreferredCostRaw === undefined || String(oldPreferredCostRaw).trim() === ''
+                ? null
+                : round4(Number(oldPreferredCostRaw));
+            let nextPreferredUnitCost: number | null | undefined = undefined;
+            if (reqItem.preferred_unit_cost_present) {
+                const raw = reqItem.preferred_unit_cost;
+                if (raw === null || raw === undefined || String(raw).trim() === '') {
+                    nextPreferredUnitCost = null;
+                } else {
+                    const parsed = Number(raw);
+                    nextPreferredUnitCost = Number.isFinite(parsed) && parsed > 0 ? round4(parsed) : null;
+                }
+            }
 
             if (newUnit <= 0 || !Number.isFinite(newUnit)) {
                 await t.rollback();
@@ -1451,12 +1486,17 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
                 after_unit_price: newUnit,
                 baseline_unit_price: baseline,
                 delta_total: lineDelta,
-                reason: overrideEntry.reason
+                reason: overrideEntry.reason,
+                ...(reqItem.preferred_unit_cost_present ? {
+                    before_preferred_unit_cost: oldPreferredUnitCost,
+                    after_preferred_unit_cost: nextPreferredUnitCost
+                } : {})
             });
 
             await row.update({
                 price_at_purchase: newUnit,
-                pricing_snapshot: nextSnapshot
+                pricing_snapshot: nextSnapshot,
+                ...(reqItem.preferred_unit_cost_present ? { preferred_unit_cost: nextPreferredUnitCost } : {})
             }, { transaction: t });
         }
 
@@ -1496,6 +1536,16 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
                     saved_addresses: []
                 }, { transaction: t });
             }
+        }
+
+        const hasAnyAllocation = await OrderAllocation.findOne({
+            where: { order_id: orderId, allocated_qty: { [Op.gt]: 0 } },
+            attributes: ['id'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (hasAnyAllocation) {
+            await InventoryReservationService.syncReservationsForOrder({ order_id: orderId, transaction: t });
         }
 
         await recordOrderEvent({

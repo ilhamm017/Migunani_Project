@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { api } from '@/lib/api';
+import { formatCurrency } from '@/lib/utils';
 import { Camera, MapPin, Package, RefreshCw, Loader2, Users, Boxes } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
@@ -33,6 +34,7 @@ type CustomerPicklistItem = {
     image_url: string | null;
     bin_location: string | null;
     allocated_qty: number;
+    reserved_layers?: Array<{ unit_cost: number; qty_reserved: number }>;
 };
 
 type CustomerPicklistRow = {
@@ -319,6 +321,14 @@ export default function WarehouseHelperPage() {
                                                             <div className="min-w-0">
                                                                 <p className="font-black text-slate-800 truncate">{item.name}</p>
                                                                 <p className="text-[11px] text-slate-400 font-bold truncate">Status alokasi: {item.allocation_status}</p>
+                                                                {Array.isArray(item.reserved_layers) && item.reserved_layers.length > 0 ? (
+                                                                    <p className="mt-1 text-[11px] text-slate-600 font-bold truncate">
+                                                                        Layer:{' '}
+                                                                        {item.reserved_layers
+                                                                            .map((layer) => `${formatCurrency(layer.unit_cost)} x ${Number(layer.qty_reserved || 0)}`)
+                                                                            .join(', ')}
+                                                                    </p>
+                                                                ) : null}
                                                             </div>
                                                         </div>
                                                     </td>
@@ -336,4 +346,3 @@ export default function WarehouseHelperPage() {
         </div>
     );
 }
-

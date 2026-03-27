@@ -2,6 +2,7 @@ import { Transaction } from 'sequelize';
 import { Account, ClearancePromo, Invoice, InvoiceItem, Order, OrderItem, OrderAllocation } from '../models';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
+import { InventoryReservationService } from './InventoryReservationService';
 import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
 
 const n = (v: unknown) => Number(v || 0);
@@ -38,6 +39,7 @@ export class AccountingPostingService {
         });
 
         let cogs = 0;
+        let didSyncReservations = false;
         for (const [productId, group] of itemsByProduct.entries()) {
             const sorted = [...group].sort((a: any, b: any) => {
                 const aId = Number(a?.id);
@@ -60,42 +62,72 @@ export class AccountingPostingService {
                 const clearancePromoId = String(item?.clearance_promo_id || '').trim();
                 let valuation: { qty: number; unit_cost: number; total_cost: number };
 
-                if (clearancePromoId) {
-                    const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
-                    const targetUnitCost = promo && String((promo as any).product_id) === String(item?.product_id)
-                        ? Number((promo as any).target_unit_cost || 0)
-                        : null;
-
-                    valuation = targetUnitCost !== null
-                        ? await InventoryCostService.consumeOutboundPreferUnitCost({
-                            product_id: String(item.product_id),
-                            qty: qtyOut,
-                            preferred_unit_cost: targetUnitCost,
-                            reference_type: 'order_goods_out',
-                            reference_id: String(order.id),
-                            order_item_id: String(item.id),
-                            note: 'Goods out valuation (clearance promo)',
-                            transaction: t
-                        })
-                        : await InventoryCostService.consumeOutbound({
-                            product_id: String(item.product_id),
-                            qty: qtyOut,
-                            reference_type: 'order_goods_out',
-                            reference_id: String(order.id),
-                            order_item_id: String(item.id),
-                            note: 'Goods out valuation',
-                            transaction: t
-                        });
-                } else {
-                    valuation = await InventoryCostService.consumeOutbound({
-                        product_id: String(item.product_id),
+                try {
+                    valuation = await InventoryReservationService.consumeReservedForOrderItem({
+                        order_item_id: String(item.id),
                         qty: qtyOut,
                         reference_type: 'order_goods_out',
                         reference_id: String(order.id),
-                        order_item_id: String(item.id),
-                        note: 'Goods out valuation',
+                        note: 'Goods out valuation (reserved)',
                         transaction: t
                     });
+                } catch (error: any) {
+                    const message = String(error?.message || error || '');
+                    const noReservations = message.includes('No inventory batch reservations');
+
+                    if (noReservations && !didSyncReservations) {
+                        await InventoryReservationService.syncReservationsForOrder({ order_id: String(order.id), transaction: t });
+                        didSyncReservations = true;
+                        valuation = await InventoryReservationService.consumeReservedForOrderItem({
+                            order_item_id: String(item.id),
+                            qty: qtyOut,
+                            reference_type: 'order_goods_out',
+                            reference_id: String(order.id),
+                            note: 'Goods out valuation (reserved after sync)',
+                            transaction: t
+                        });
+                    } else if (noReservations) {
+                        // Legacy fallback (no allocation/reservation) - still respects other orders' reservations via consumeFromBatches().
+                        if (clearancePromoId) {
+                            const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
+                            const targetUnitCost = promo && String((promo as any).product_id) === String(item?.product_id)
+                                ? Number((promo as any).target_unit_cost || 0)
+                                : null;
+
+                            valuation = targetUnitCost !== null
+                                ? await InventoryCostService.consumeOutboundPreferUnitCost({
+                                    product_id: String(item.product_id),
+                                    qty: qtyOut,
+                                    preferred_unit_cost: targetUnitCost,
+                                    reference_type: 'order_goods_out',
+                                    reference_id: String(order.id),
+                                    order_item_id: String(item.id),
+                                    note: 'Goods out valuation (legacy clearance promo)',
+                                    transaction: t
+                                })
+                                : await InventoryCostService.consumeOutbound({
+                                    product_id: String(item.product_id),
+                                    qty: qtyOut,
+                                    reference_type: 'order_goods_out',
+                                    reference_id: String(order.id),
+                                    order_item_id: String(item.id),
+                                    note: 'Goods out valuation (legacy)',
+                                    transaction: t
+                                });
+                        } else {
+                            valuation = await InventoryCostService.consumeOutbound({
+                                product_id: String(item.product_id),
+                                qty: qtyOut,
+                                reference_type: 'order_goods_out',
+                                reference_id: String(order.id),
+                                order_item_id: String(item.id),
+                                note: 'Goods out valuation (legacy)',
+                                transaction: t
+                            });
+                        }
+                    } else {
+                        throw error;
+                    }
                 }
 
                 cogs += n(valuation.total_cost);

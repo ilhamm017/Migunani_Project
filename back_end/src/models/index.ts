@@ -58,6 +58,7 @@ import PosSale from './PosSale';
 import PosSaleItem from './PosSaleItem';
 import InventoryBatch from './InventoryBatch';
 import InventoryBatchConsumption from './InventoryBatchConsumption';
+import InventoryBatchReservation from './InventoryBatchReservation';
 import ClearancePromo from './ClearancePromo';
 
 // Stock Opname
@@ -182,6 +183,8 @@ Product.hasMany(InventoryBatch, { foreignKey: 'product_id', as: 'InventoryBatche
 InventoryBatch.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 InventoryBatch.hasMany(InventoryBatchConsumption, { foreignKey: 'batch_id', as: 'Consumptions' });
 InventoryBatchConsumption.belongsTo(InventoryBatch, { foreignKey: 'batch_id', as: 'Batch' });
+InventoryBatch.hasMany(InventoryBatchReservation, { foreignKey: 'batch_id', as: 'Reservations' });
+InventoryBatchReservation.belongsTo(InventoryBatch, { foreignKey: 'batch_id', as: 'Batch' });
 Product.hasMany(ClearancePromo, { foreignKey: 'product_id', as: 'ClearancePromos' });
 ClearancePromo.belongsTo(Product, { foreignKey: 'product_id', as: 'Product' });
 
@@ -423,5 +426,6 @@ export {
     PosSaleItem,
     InventoryBatch,
     InventoryBatchConsumption,
+    InventoryBatchReservation,
     ClearancePromo
 };

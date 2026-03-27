@@ -6,6 +6,7 @@ interface OrderItemAttributes {
     order_id: string; // UUID
     product_id: string; // UUID
     clearance_promo_id?: string | null; // UUID
+    preferred_unit_cost?: number | null;
     qty: number;
     ordered_qty_original: number;
     qty_canceled_backorder: number;
@@ -22,6 +23,7 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes> 
     declare order_id: string;
     declare product_id: string;
     declare clearance_promo_id: string | null;
+    declare preferred_unit_cost: number | null;
     declare qty: number;
     declare ordered_qty_original: number;
     declare qty_canceled_backorder: number;
@@ -51,6 +53,10 @@ OrderItem.init(
         },
         clearance_promo_id: {
             type: DataTypes.UUID,
+            allowNull: true,
+        },
+        preferred_unit_cost: {
+            type: DataTypes.DECIMAL(15, 4),
             allowNull: true,
         },
         qty: {

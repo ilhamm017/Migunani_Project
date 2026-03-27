@@ -590,12 +590,24 @@ export default function AdminOrdersWorkspace({
   type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
   type PricingEditorItem = {
     order_item_id: string;
+    product_id: string;
+    clearance_promo_id: string | null;
+    preferred_unit_cost: number | null;
     product_name: string;
     sku: string;
     qty: number;
     baseline_unit_price: number;
     current_unit_price: number;
     cost_at_purchase: number | null;
+  };
+
+  type PricingCostLayerRow = {
+    unit_cost: number;
+    qty_on_hand: number;
+    qty_reserved_total: number;
+    qty_available: number;
+    qty_reserved_for_order?: number;
+    qty_available_for_order?: number;
   };
 
   const [orders, setOrders] = useState<AdminOrderListRow[]>([]);
@@ -636,10 +648,12 @@ export default function AdminOrdersWorkspace({
     orderId: string;
     orderReason: string;
     items: PricingEditorItem[];
-    drafts: Record<string, { unit_price_override: string; reason: string }>;
+    drafts: Record<string, { unit_price_override: string; preferred_unit_cost: string; reason: string }>;
     saving: boolean;
     error: string;
   } | null>(null);
+  const [pricingCostLayersByProductId, setPricingCostLayersByProductId] = useState<Record<string, PricingCostLayerRow[]>>({});
+  const [pricingCostLayersLoading, setPricingCostLayersLoading] = useState(false);
   const ordersRef = useRef<AdminOrderListRow[]>([]);
   const focusModeInitDoneRef = useRef(false);
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
@@ -1060,9 +1074,13 @@ export default function AdminOrdersWorkspace({
         const baseline = toFinite(snapshot?.computed_unit_price ?? snapshot?.computedUnitPrice) ?? toFinite(row?.price_at_purchase) ?? 0;
         const current = toFinite(row?.price_at_purchase) ?? 0;
         const cost = toFinite(row?.cost_at_purchase);
+        const preferredUnitCostRaw = toFinite(row?.preferred_unit_cost);
         const product = row?.Product || {};
         return {
           order_item_id: String(row?.id || ''),
+          product_id: String(row?.product_id || ''),
+          clearance_promo_id: String(row?.clearance_promo_id || '').trim() || null,
+          preferred_unit_cost: preferredUnitCostRaw !== null && preferredUnitCostRaw > 0 ? Number(preferredUnitCostRaw.toFixed(4)) : null,
           product_name: String(product?.name || 'Produk'),
           sku: String(product?.sku || '-'),
           qty: Math.max(0, Number(row?.qty || 0)),
@@ -1072,9 +1090,13 @@ export default function AdminOrdersWorkspace({
         };
       }).filter((row: PricingEditorItem) => Boolean(row.order_item_id));
 
-      const drafts: Record<string, { unit_price_override: string; reason: string }> = {};
+      const drafts: Record<string, { unit_price_override: string; preferred_unit_cost: string; reason: string }> = {};
       items.forEach((row) => {
-        drafts[row.order_item_id] = { unit_price_override: String(row.current_unit_price || 0), reason: '' };
+        drafts[row.order_item_id] = {
+          unit_price_override: String(row.current_unit_price || 0),
+          preferred_unit_cost: row.preferred_unit_cost !== null ? Number(row.preferred_unit_cost).toFixed(4) : '',
+          reason: ''
+        };
       });
 
       setPricingEditor({
@@ -1085,6 +1107,26 @@ export default function AdminOrdersWorkspace({
         saving: false,
         error: ''
       });
+
+      const uniqueProductIds = Array.from(new Set(items.map((row) => String(row.product_id || '').trim()).filter(Boolean)));
+      setPricingCostLayersByProductId({});
+      if (uniqueProductIds.length > 0) {
+        setPricingCostLayersLoading(true);
+        try {
+          const entries = await Promise.all(
+            uniqueProductIds.map(async (productId) => {
+              const res = await api.admin.inventory.getCostLayers(productId, { order_id: orderId });
+              const layers = Array.isArray((res.data as any)?.layers) ? (res.data as any).layers : [];
+              return [productId, layers] as const;
+            })
+          );
+          setPricingCostLayersByProductId(Object.fromEntries(entries));
+        } catch (error: unknown) {
+          console.error('Failed to load cost layers for pricing editor:', error);
+        } finally {
+          setPricingCostLayersLoading(false);
+        }
+      }
     } catch (error: unknown) {
       console.error('Failed to open pricing editor:', error);
       const message = axios.isAxiosError(error)
@@ -1107,9 +1149,13 @@ export default function AdminOrdersWorkspace({
     const payloadItems = pricingEditor.items.map((item) => {
       const draft = pricingEditor.drafts[item.order_item_id];
       const unitPrice = toFinite(draft?.unit_price_override);
+      const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
+      const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
+      const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
       return {
         order_item_id: item.order_item_id,
         unit_price_override: unitPrice ?? 0,
+        preferred_unit_cost: preferredUnitCost,
         ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
       };
     });
@@ -1120,6 +1166,16 @@ export default function AdminOrdersWorkspace({
     }
     if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
       setPricingEditor((prev) => prev ? { ...prev, error: 'Harga deal harus > 0.' } : prev);
+      return;
+    }
+    if (pricingEditor.items.some((item) => {
+      const draft = pricingEditor.drafts[item.order_item_id];
+      const raw = String(draft?.preferred_unit_cost ?? '').trim();
+      if (!raw) return false;
+      const parsed = Number(raw);
+      return !Number.isFinite(parsed) || parsed <= 0;
+    })) {
+      setPricingEditor((prev) => prev ? { ...prev, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
       return;
     }
 
@@ -1138,6 +1194,8 @@ export default function AdminOrdersWorkspace({
       } catch { }
 
       setPricingEditor(null);
+      setPricingCostLayersByProductId({});
+      setPricingCostLayersLoading(false);
     } catch (error: unknown) {
       console.error('Failed to save pricing editor:', error);
       const message = axios.isAxiosError(error)
@@ -3272,6 +3330,8 @@ export default function AdminOrdersWorkspace({
 	              <div className="space-y-2">
 	                {pricingEditor.items.map((row) => {
 	                  const draft = pricingEditor.drafts[row.order_item_id];
+	                  const layers = pricingCostLayersByProductId[row.product_id] || [];
+	                  const isPromoLocked = Boolean(row.clearance_promo_id);
 	                  return (
 	                    <div key={row.order_item_id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
 	                      <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3298,7 +3358,7 @@ export default function AdminOrdersWorkspace({
 	                                    ...prev,
 	                                    drafts: {
 	                                      ...prev.drafts,
-	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', reason: '' }), unit_price_override: value }
+	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), unit_price_override: value }
 	                                    }
 	                                  };
 	                                });
@@ -3306,6 +3366,44 @@ export default function AdminOrdersWorkspace({
 	                              className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
 	                            />
 	                          </div>
+	                          <div className="flex items-center gap-2">
+	                            <label className="text-[10px] font-bold text-slate-500">Layer modal</label>
+	                            <select
+	                              value={draft?.preferred_unit_cost ?? ''}
+	                              disabled={pricingEditor.saving || pricingCostLayersLoading || isPromoLocked}
+	                              onChange={(e) => {
+	                                const value = e.target.value;
+	                                setPricingEditor((prev) => {
+	                                  if (!prev) return prev;
+	                                  return {
+	                                    ...prev,
+	                                    drafts: {
+	                                      ...prev.drafts,
+	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), preferred_unit_cost: value }
+	                                    }
+	                                  };
+	                                });
+	                              }}
+	                              className="w-60 max-w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+	                            >
+	                              <option value="">{pricingCostLayersLoading ? 'Memuat layer...' : 'FIFO (Auto)'}</option>
+	                              {layers.map((layer) => {
+	                                const unitCost = Number((layer as any)?.unit_cost || 0);
+	                                const unitCostFixed = Number(unitCost).toFixed(4);
+	                                const availableQty = Number((layer as any)?.qty_available_for_order ?? (layer as any)?.qty_available ?? 0);
+	                                return (
+	                                  <option key={unitCostFixed} value={unitCostFixed}>
+	                                    {formatCurrency(unitCost)} • tersedia {Math.max(0, Math.trunc(availableQty))}
+	                                  </option>
+	                                );
+	                              })}
+	                            </select>
+	                          </div>
+	                          {isPromoLocked ? (
+	                            <p className="text-[10px] text-slate-500 text-right max-w-[280px]">
+	                              Layer modal dikunci oleh promo cepat habis.
+	                            </p>
+	                          ) : null}
 	                          <input
 	                            type="text"
 	                            placeholder="Keterangan item (opsional)"
@@ -3318,7 +3416,7 @@ export default function AdminOrdersWorkspace({
 	                                  ...prev,
 	                                  drafts: {
 	                                    ...prev.drafts,
-	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', reason: '' }), reason: value }
+	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '' }), reason: value }
 	                                  }
 	                                };
 	                              });
@@ -3336,7 +3434,11 @@ export default function AdminOrdersWorkspace({
 	            <div className="border-t border-slate-200 bg-white px-5 py-4 flex flex-wrap items-center justify-end gap-2">
 	              <button
 	                type="button"
-	                onClick={() => setPricingEditor(null)}
+	                onClick={() => {
+	                  setPricingEditor(null);
+	                  setPricingCostLayersByProductId({});
+	                  setPricingCostLayersLoading(false);
+	                }}
 	                disabled={pricingEditor.saving}
 	                className="btn-3d rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-bold text-slate-700 disabled:opacity-50"
 	              >

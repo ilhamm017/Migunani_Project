@@ -6,18 +6,20 @@ interface InventoryBatchAttributes {
     product_id: string; // UUID
     unit_cost: number;
     qty_on_hand: number;
+    qty_reserved: number;
     source_type: string | null;
     source_id: string | null;
     note: string | null;
 }
 
-interface InventoryBatchCreationAttributes extends Optional<InventoryBatchAttributes, 'id' | 'source_type' | 'source_id' | 'note'> { }
+interface InventoryBatchCreationAttributes extends Optional<InventoryBatchAttributes, 'id' | 'qty_reserved' | 'source_type' | 'source_id' | 'note'> { }
 
 class InventoryBatch extends Model<InventoryBatchAttributes, InventoryBatchCreationAttributes> implements InventoryBatchAttributes {
     declare id: string;
     declare product_id: string;
     declare unit_cost: number;
     declare qty_on_hand: number;
+    declare qty_reserved: number;
     declare source_type: string | null;
     declare source_id: string | null;
     declare note: string | null;
@@ -46,6 +48,11 @@ InventoryBatch.init(
             allowNull: false,
             defaultValue: 0,
         },
+        qty_reserved: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 0,
+        },
         source_type: {
             type: DataTypes.STRING(32),
             allowNull: true,
@@ -65,9 +72,9 @@ InventoryBatch.init(
         indexes: [
             { fields: ['product_id'] },
             { fields: ['product_id', 'unit_cost'] },
+            { fields: ['product_id', 'qty_reserved'] },
         ]
     }
 );
 
 export default InventoryBatch;
-

@@ -178,7 +178,9 @@ export class InventoryCostService {
 
         for (const batch of batches as any[]) {
             if (remaining <= 0) break;
-            const available = toQtyInt(batch.qty_on_hand);
+            const onHand = toQtyInt(batch.qty_on_hand);
+            const reserved = toQtyInt(batch.qty_reserved);
+            const available = Math.max(0, onHand - reserved);
             if (available <= 0) continue;
 
             const take = Math.min(available, remaining);
@@ -188,7 +190,7 @@ export class InventoryCostService {
             const cost = round4(take * unitCost);
 
             await batch.update({
-                qty_on_hand: available - take
+                qty_on_hand: Math.max(0, onHand - take)
             }, { transaction: t });
 
             await InventoryBatchConsumption.create({

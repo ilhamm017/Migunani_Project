@@ -8,6 +8,7 @@ import { buildShortageSummary, isAllocationEditableStatus, isReallocatableStatus
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
+import { InventoryReservationService } from '../../services/InventoryReservationService';
 
 const BACKORDER_FILL_GRACE_MS = 24 * 60 * 60 * 1000;
 
@@ -526,6 +527,8 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
                 }, { transaction: t });
             }
         }
+
+        await InventoryReservationService.syncReservationsForOrder({ order_id: String(id), transaction: t });
 
         const previousStatus = String(previousStatusForNotification || '');
         const nextStatus = String(order.status || '');

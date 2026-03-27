@@ -1,6 +1,7 @@
 import { Op, Transaction } from 'sequelize';
 import { CustomerOtpSession, ALLOWED_TIERS } from './types';
 import { OrderAllocation, Product } from '../../models';
+import { InventoryReservationService } from '../../services/InventoryReservationService';
 
 export const customerOtpMap = new Map<string, CustomerOtpSession>();
 
@@ -81,4 +82,6 @@ export const releaseOrderAllocationStock = async (orderId: string, t: Transactio
             allocated_quantity: Math.max(0, Number(product.allocated_quantity || 0) - Number(alloc.allocated_qty || 0)),
         }, { transaction: t });
     }
+
+    await InventoryReservationService.releaseReservationsForOrder({ order_id: orderId, transaction: t });
 };

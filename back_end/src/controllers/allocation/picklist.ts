@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { Op } from 'sequelize';
-import { Order, OrderAllocation, Product, User } from '../../models';
+import { Op, QueryTypes } from 'sequelize';
+import { Order, OrderAllocation, Product, User, sequelize } from '../../models';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 
@@ -165,6 +165,45 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
     }
 
     // view === 'customer'
+    const reservedLayersByOrderProductKey = new Map<string, Array<{ unit_cost: number; qty_reserved: number }>>();
+    const orderIdList = Array.from(orderIds).filter(Boolean);
+    const productIdList = Array.from(productIds).filter(Boolean);
+    if (orderIdList.length > 0 && productIdList.length > 0) {
+        const reservedRows = await sequelize.query(
+            `SELECT
+                r.order_id AS order_id,
+                r.product_id AS product_id,
+                b.unit_cost AS unit_cost,
+                COALESCE(SUM(r.qty_reserved), 0) AS qty_reserved
+             FROM inventory_batch_reservations r
+             INNER JOIN inventory_batches b ON b.id = r.batch_id
+             WHERE r.order_id IN (:orderIds)
+               AND r.product_id IN (:productIds)
+             GROUP BY r.order_id, r.product_id, b.unit_cost`,
+            {
+                type: QueryTypes.SELECT,
+                replacements: { orderIds: orderIdList, productIds: productIdList }
+            }
+        ) as any[];
+
+        (Array.isArray(reservedRows) ? reservedRows : []).forEach((row: any) => {
+            const orderId = String(row?.order_id || '').trim();
+            const productId = String(row?.product_id || '').trim();
+            if (!orderId || !productId) return;
+            const key = `${orderId}::${productId}`;
+            const list = reservedLayersByOrderProductKey.get(key) || [];
+            list.push({
+                unit_cost: Number(row?.unit_cost || 0),
+                qty_reserved: Math.max(0, Math.trunc(Number(row?.qty_reserved || 0))),
+            });
+            reservedLayersByOrderProductKey.set(key, list);
+        });
+
+        reservedLayersByOrderProductKey.forEach((list, key) => {
+            reservedLayersByOrderProductKey.set(key, [...list].sort((a, b) => a.unit_cost - b.unit_cost));
+        });
+    }
+
     const byOrder = new Map<string, any>();
     for (const row of filtered) {
         const order = row?.Order || {};
@@ -174,6 +213,8 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
         const customerName = String(order?.Customer?.name || order?.customer_name || 'Customer');
         const existing = byOrder.get(orderId);
         const product = row?.Product || {};
+        const reservedKey = `${orderId}::${String(row?.product_id || product?.id || '').trim()}`;
+        const reservedLayers = reservedLayersByOrderProductKey.get(reservedKey) || [];
         const item = {
             allocation_id: row?.id,
             allocation_status: row?.status,
@@ -183,6 +224,7 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
             image_url: product?.image_url || null,
             bin_location: product?.bin_location || null,
             allocated_qty: Number(row?.allocated_qty || 0),
+            ...(reservedLayers.length > 0 ? { reserved_layers: reservedLayers } : {}),
         };
 
         if (!existing) {
@@ -237,4 +279,3 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
         rows,
     });
 });
-
