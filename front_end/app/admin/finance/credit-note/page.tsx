@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -18,7 +18,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
     return fallback;
 };
 
-export default function CreditNotePage() {
+function CreditNotePageContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
     const searchParams = useSearchParams();
     const [invoiceId, setInvoiceId] = useState('');
@@ -115,5 +115,13 @@ export default function CreditNotePage() {
                 </button>
             </div>
         </div>
+    );
+}
+
+export default function CreditNotePage() {
+    return (
+        <Suspense fallback={<div className="p-6 text-sm text-slate-500">Memuat credit note...</div>}>
+            <CreditNotePageContent />
+        </Suspense>
     );
 }
