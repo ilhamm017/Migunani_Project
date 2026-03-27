@@ -2314,6 +2314,12 @@ export default function AdminOrdersWorkspace({
               : 'border-amber-200'
           }`
         : 'mt-3 space-y-2';
+    const canShowPricingEditorButton =
+      variant === 'panel' &&
+      canEditPricing &&
+      !model.invoiceId &&
+      !model.invoiceNumber &&
+      ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(String(model.rawOrderStatus || '').trim().toLowerCase());
 
     return (
       <div className={wrapperClassName}>
@@ -2327,9 +2333,20 @@ export default function AdminOrdersWorkspace({
                 {model.invoiceId || model.invoiceNumber ? ` • Invoice ${model.invoiceRefLabel}` : ' • Belum invoice'}
               </p>
             </div>
-            <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
-              {model.items.length} item backorder
-            </span>
+            <div className="flex flex-col items-end gap-2">
+              <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
+                {model.items.length} item backorder
+              </span>
+              {canShowPricingEditorButton && (
+                <button
+                  type="button"
+                  onClick={() => void openPricingEditor(model.orderId)}
+                  className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
+                >
+                  Harga Nego
+                </button>
+              )}
+            </div>
           </div>
         )}
 
