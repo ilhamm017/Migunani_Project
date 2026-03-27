@@ -1365,17 +1365,19 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
         }
 
         const currentStatus = String(order.status || '').trim().toLowerCase();
-        const PRE_INVOICE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
-        if (!PRE_INVOICE_STATUSES.has(currentStatus)) {
+        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'shipped', 'delivered', 'completed']);
+        if (IMMUTABLE_STATUSES.has(currentStatus)) {
             await t.rollback();
-            throw new CustomError(`Harga nego hanya bisa diubah sebelum invoice, status saat ini '${currentStatus}'.`, 409);
+            throw new CustomError(`Harga nego tidak bisa diubah pada status '${currentStatus}'.`, 409);
+        }
+        if ((order as any).goods_out_posted_at) {
+            await t.rollback();
+            throw new CustomError('Harga nego tidak bisa diubah karena goods-out sudah diposting.', 409);
         }
 
-        const existingInvoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
-        if (existingInvoice) {
-            await t.rollback();
-            throw new CustomError('Harga nego tidak bisa diubah karena invoice sudah terbit.', 409);
-        }
+        // Invoice can already exist (partial invoicing/backorder). We still allow updating the order items so the next
+        // invoice uses the new pricing. Previously-issued invoice lines remain unchanged because they snapshot unit_price.
+        // For post-invoice adjustments to an existing invoice, use Credit Note instead.
 
         const orderItemIds = Array.from(new Set(requestedItems.map((row) => row.order_item_id))).filter(Boolean);
         const orderItems = await OrderItem.findAll({

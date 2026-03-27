@@ -137,7 +137,13 @@ type InvoiceStatusSnapshot = {
 type AllocationConfirmState = {
   orderId: string;
   step: 1 | 2;
-  action: 'allocation' | 'backorder_allocation' | 'cancel_order' | 'cancel_backorder' | 'issue_invoice';
+  action:
+    | 'allocation'
+    | 'backorder_allocation'
+    | 'cancel_order'
+    | 'cancel_backorder'
+    | 'issue_invoice'
+    | 'issue_invoice_items';
 };
 
 type WarehouseAssignConfirmCard = {
@@ -1172,14 +1178,9 @@ export default function AdminOrdersWorkspace({
 
 	    const orderId = pricingEditor.orderId;
 	    const statusLower = String(pricingEditor.orderStatus || '').trim().toLowerCase();
-	    const hasInvoiceRef = Boolean(String(pricingEditor.invoiceId || '').trim() || String(pricingEditor.invoiceNumber || '').trim());
-	    const priceEditable =
-	      !hasInvoiceRef &&
-	      ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(statusLower);
-	    const layerEditable =
-	      !pricingEditor.goodsOutPostedAt &&
-	      !['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(statusLower);
-	    if (!priceEditable && !layerEditable) {
+	    const statusLocked = ['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(statusLower);
+	    const editable = !pricingEditor.goodsOutPostedAt && !statusLocked;
+	    if (!editable) {
 	      setPricingEditor((prev) => prev ? { ...prev, error: `Tidak bisa mengubah harga/layer pada status '${statusLower || '-'}'.` } : prev);
 	      return;
 	    }
@@ -1187,106 +1188,96 @@ export default function AdminOrdersWorkspace({
 	      const n = Number(value);
 	      return Number.isFinite(n) ? n : null;
 	    };
+	    const round2 = (value: unknown) => Math.round(Number(value || 0) * 100) / 100;
+	    const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
 
 	    setPricingEditor((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
 	    try {
 	      const reason = pricingEditor.orderReason.trim();
-	      if (priceEditable) {
-	        let dealModeError = '';
-	        const payloadItems = pricingEditor.items.map((item) => {
-	          const draft = pricingEditor.drafts[item.order_item_id];
-	          const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
-	          let unitPrice: number | null = null;
-	          if (dealMode === 'percent') {
-	            const pctRaw = String(draft?.discount_pct ?? '').trim();
-	            const pct = toFinite(pctRaw);
-	            if (pct === null) {
-	              if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
-	            } else if (pct < 0 || pct > 100) {
-	              if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
-	            } else {
-	              const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
-	              unitPrice = Math.round(baseline * (1 - pct / 100));
-	            }
+	      let dealModeError = '';
+	      const payloadItems = pricingEditor.items.map((item) => {
+	        const draft = pricingEditor.drafts[item.order_item_id];
+	        const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
+	        let unitPrice: number | null = null;
+	        if (dealMode === 'percent') {
+	          const pctRaw = String(draft?.discount_pct ?? '').trim();
+	          const pct = toFinite(pctRaw);
+	          if (pct === null) {
+	            if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
+	          } else if (pct < 0 || pct > 100) {
+	            if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
 	          } else {
-	            unitPrice = toFinite(draft?.unit_price_override);
+	            const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
+	            unitPrice = Math.round(baseline * (1 - pct / 100));
 	          }
-	          const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
-	          const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
-	          const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
-	          return {
-	            order_item_id: item.order_item_id,
-	            unit_price_override: unitPrice ?? 0,
-	            preferred_unit_cost: preferredUnitCost,
-	            ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
-	          };
-	        });
+	        } else {
+	          unitPrice = toFinite(draft?.unit_price_override);
+	        }
+	        const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
+	        const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
+	        const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
+	        return {
+	          order_item_id: item.order_item_id,
+	          unit_price_override: unitPrice ?? 0,
+	          preferred_unit_cost: preferredUnitCost,
+	          ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
+	        };
+	      });
 
-	        if (dealModeError) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: dealModeError } : prev);
-	          return;
-	        }
-	        if (payloadItems.some((row) => !row.order_item_id)) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Order item tidak valid.' } : prev);
-	          return;
-	        }
-	        if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Harga deal harus > 0.' } : prev);
-	          return;
-	        }
-	        if (pricingEditor.items.some((item) => {
-	          const draft = pricingEditor.drafts[item.order_item_id];
-	          const raw = String(draft?.preferred_unit_cost ?? '').trim();
-	          if (!raw) return false;
-	          const parsed = Number(raw);
-	          return !Number.isFinite(parsed) || parsed <= 0;
-	        })) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
-	          return;
-	        }
+	      if (dealModeError) {
+	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: dealModeError } : prev);
+	        return;
+	      }
+	      if (payloadItems.some((row) => !row.order_item_id)) {
+	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Order item tidak valid.' } : prev);
+	        return;
+	      }
+	      if (payloadItems.some((row) => !Number.isFinite(row.unit_price_override) || row.unit_price_override <= 0)) {
+	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Harga deal harus > 0.' } : prev);
+	        return;
+	      }
+	      if (pricingEditor.items.some((item) => {
+	        const draft = pricingEditor.drafts[item.order_item_id];
+	        const raw = String(draft?.preferred_unit_cost ?? '').trim();
+	        if (!raw) return false;
+	        const parsed = Number(raw);
+	        return !Number.isFinite(parsed) || parsed <= 0;
+	      })) {
+	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
+	        return;
+	      }
 
+	      const hasAnyPriceChange = payloadItems.some((row) => {
+	        const beforeUnit = pricingEditor.items.find((i) => i.order_item_id === row.order_item_id)?.current_unit_price ?? 0;
+	        return round2(beforeUnit) !== round2(row.unit_price_override);
+	      });
+
+	      const layerItems = payloadItems.map((row) => ({
+	        order_item_id: row.order_item_id,
+	        preferred_unit_cost: row.preferred_unit_cost ?? null,
+	        ...(row.reason ? { reason: row.reason } : {})
+	      }));
+
+	      const hasAnyLayerChange = layerItems.some((row) => {
+	        const existing = pricingEditor.items.find((i) => i.order_item_id === row.order_item_id)?.preferred_unit_cost ?? null;
+	        const existingNormalized = existing !== null ? round4(existing) : null;
+	        const nextNormalized = row.preferred_unit_cost !== null && row.preferred_unit_cost !== undefined
+	          ? round4(row.preferred_unit_cost)
+	          : null;
+	        return existingNormalized !== nextNormalized;
+	      });
+
+	      if (!hasAnyPriceChange && !hasAnyLayerChange && !reason) {
+	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Tidak ada perubahan.' } : prev);
+	        return;
+	      }
+
+	      if (hasAnyPriceChange) {
 	        await api.admin.orderManagement.updatePricing(orderId, {
 	          items: payloadItems,
 	          ...(reason ? { reason } : {})
 	        });
-	      } else if (layerEditable) {
-	        if (pricingEditor.items.some((item) => {
-	          const draft = pricingEditor.drafts[item.order_item_id];
-	          const raw = String(draft?.preferred_unit_cost ?? '').trim();
-	          if (!raw) return false;
-	          const parsed = Number(raw);
-	          return !Number.isFinite(parsed) || parsed <= 0;
-	        })) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Layer modal harus FIFO atau angka > 0.' } : prev);
-	          return;
-	        }
-
-	        const layerItems = pricingEditor.items.map((item) => {
-	          const draft = pricingEditor.drafts[item.order_item_id];
-	          const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
-	          const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
-	          const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
-	          return {
-	            order_item_id: item.order_item_id,
-	            preferred_unit_cost: preferredUnitCost,
-	            ...(String(draft?.reason || '').trim() ? { reason: String(draft.reason).trim() } : {})
-	          };
-	        });
-
-	        const hasAnyLayerChange = layerItems.some((row) => {
-	          const existing = pricingEditor.items.find((i) => i.order_item_id === row.order_item_id)?.preferred_unit_cost ?? null;
-	          const existingNormalized = existing !== null ? Number(Number(existing).toFixed(4)) : null;
-	          const nextNormalized = row.preferred_unit_cost !== null && row.preferred_unit_cost !== undefined
-	            ? Number(Number(row.preferred_unit_cost).toFixed(4))
-	            : null;
-	          return existingNormalized !== nextNormalized;
-	        });
-
-	        if (!hasAnyLayerChange && !reason) {
-	          setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Tidak ada perubahan layer modal.' } : prev);
-	          return;
-	        }
-
+	      } else {
 	        await api.admin.orderManagement.updateCostLayerPreference(orderId, {
 	          items: layerItems,
 	          ...(reason ? { reason } : {})
@@ -1304,9 +1295,7 @@ export default function AdminOrdersWorkspace({
       setPricingCostLayersLoading(false);
 	    } catch (error: unknown) {
 	      console.error('Failed to save pricing editor:', error);
-	      const fallbackMessage = priceEditable
-	        ? 'Gagal menyimpan harga nego.'
-	        : 'Gagal menyimpan layer modal.';
+	      const fallbackMessage = 'Gagal menyimpan harga nego.';
 	      const message = axios.isAxiosError(error)
 	        ? String((error.response?.data as any)?.message || error.message || fallbackMessage)
 	        : fallbackMessage;
@@ -2091,6 +2080,104 @@ export default function AdminOrdersWorkspace({
       }
       return;
     }
+    if (allocationConfirm.action === 'issue_invoice_items') {
+      try {
+        setBusyInvoice(true);
+        const orderId = allocationConfirm.orderId;
+        let detail = orderDetails[orderId];
+        if (!detail) {
+          detail = (await api.orders.getOrderById(orderId)).data as any;
+          if (detail && typeof detail === 'object') {
+            setOrderDetails((prev) => ({ ...prev, [orderId]: detail as any }));
+          }
+        }
+
+        const allocations = Array.isArray((detail as any)?.Allocations) ? (detail as any).Allocations : [];
+        const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+        const itemSummaries = Array.isArray((detail as any)?.item_summaries) ? (detail as any).item_summaries : [];
+
+        const allocatedByProduct = new Map<string, number>();
+        allocations.forEach((alloc: any) => {
+          const productId = String(alloc?.product_id || '').trim();
+          if (!productId) return;
+          allocatedByProduct.set(productId, Number(allocatedByProduct.get(productId) || 0) + Number(alloc?.allocated_qty || 0));
+        });
+
+        const itemsByProduct = new Map<string, any[]>();
+        orderItems.forEach((item: any) => {
+          const productId = String(item?.product_id || '').trim();
+          if (!productId) return;
+          const bucket = itemsByProduct.get(productId) || [];
+          bucket.push(item);
+          itemsByProduct.set(productId, bucket);
+        });
+
+        const itemsToInvoice: Array<{ order_item_id: string | number; qty: number }> = [];
+        itemsByProduct.forEach((itemsForProduct, productId) => {
+          let remainingAlloc = Number(allocatedByProduct.get(productId) || 0);
+          const sortedItems = [...itemsForProduct].sort((a, b) => {
+            const aId = Number(a?.id);
+            const bId = Number(b?.id);
+            if (Number.isFinite(aId) && Number.isFinite(bId)) return aId - bId;
+            return String(a?.id || '').localeCompare(String(b?.id || ''));
+          });
+
+          for (const item of sortedItems) {
+            if (remainingAlloc <= 0) break;
+            const orderedQty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+            if (orderedQty <= 0) continue;
+
+            const allocQty = Math.min(remainingAlloc, orderedQty);
+            remainingAlloc -= allocQty;
+
+            const orderItemId = String(item?.id || '').trim();
+            const summaryRow = itemSummaries.find((row: any) => String(row?.order_item_id || '') === orderItemId);
+            const invoicedQty = Math.max(0, Math.trunc(Number(summaryRow?.invoiced_qty_total || 0)));
+            const maxInvoice = Math.max(0, allocQty - invoicedQty);
+            if (maxInvoice <= 0) continue;
+            itemsToInvoice.push({ order_item_id: orderItemId, qty: maxInvoice });
+          }
+        });
+
+        if (itemsToInvoice.length === 0) {
+          notifyAlert('Tidak ada qty siap invoice untuk order ini.');
+          setAllocationConfirm(null);
+          return;
+        }
+
+        const response = await api.admin.finance.issueInvoiceByItems(itemsToInvoice);
+        await loadOrders();
+        const invoiceNumber = String((response.data as any)?.invoice_number || '').trim();
+        notifyOpen({
+          variant: 'success',
+          title: 'Invoice diterbitkan',
+          message: invoiceNumber
+            ? `Invoice tambahan berhasil dibuat (${invoiceNumber}).`
+            : 'Invoice tambahan berhasil dibuat.',
+          primaryLabel: 'Buka Proses Gudang',
+          onPrimary: () => {
+            setOrderSectionFilter('gudang');
+            notifyClose();
+          },
+          secondaryLabel: 'Buka Checker',
+          onSecondary: () => {
+            setOrderSectionFilter('checker');
+            notifyClose();
+          },
+          autoCloseMs: 8000,
+        });
+        setAllocationConfirm(null);
+      } catch (error: unknown) {
+        console.error('Issue invoice items failed:', error);
+        const message = axios.isAxiosError(error)
+          ? String((error.response?.data as any)?.message || error.message || 'Gagal menerbitkan invoice.')
+          : 'Gagal menerbitkan invoice.';
+        notifyAlert(message);
+      } finally {
+        setBusyInvoice(false);
+      }
+      return;
+    }
     if (allocationConfirm.action === 'backorder_allocation') {
       const orderId = allocationConfirm.orderId;
       const groupedItems = groupedItemsByOrderId[orderId] || [];
@@ -2409,9 +2496,13 @@ export default function AdminOrdersWorkspace({
 	      : !pricingStatusOk
 	        ? `Harga nego/layer modal tidak bisa dibuka pada status '${pricingStatusLower || '-'}'.`
 	        : pricingHasInvoiceRef
-	          ? 'Invoice sudah terbit: harga deal terkunci, tapi layer modal masih bisa diubah.'
+	          ? 'Invoice sudah terbit: perubahan berlaku untuk invoice tambahan (invoice lama tidak berubah).'
 	          : '';
 	    const showPricingEditorButton = variant === 'panel' && Boolean(canEditPricing);
+	    const availability = availabilityByOrderId[model.orderId] || {};
+	    const invoiceableQty = Object.values(availability).reduce((sum, row) => sum + Number((row as any)?.maxInvoice || 0), 0);
+	    const invoiceableAmount = Number(invoiceableAmountByOrderId[model.orderId] || 0);
+	    const canIssueAdditionalInvoice = variant === 'panel' && canIssueInvoice && invoiceableQty > 0;
 
     return (
       <div className={wrapperClassName}>
@@ -2478,6 +2569,17 @@ export default function AdminOrdersWorkspace({
                 >
                   {model.allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                 </button>
+                {canIssueAdditionalInvoice && (
+                  <button
+                    type="button"
+                    onClick={() => handleIssueInvoiceItemsForOrder(model.orderId)}
+                    disabled={model.allocationBusy}
+                    className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white disabled:opacity-50"
+                    title={`Qty siap invoice ${invoiceableQty} • ${formatCurrency(invoiceableAmount)}`}
+                  >
+                    Issue Invoice Tambahan
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleCancelBackorder(model.orderId)}
@@ -2681,6 +2783,12 @@ export default function AdminOrdersWorkspace({
     setAllocationConfirm({ orderId: '__batch_invoice__', step: 1, action: 'issue_invoice' });
   };
 
+  const handleIssueInvoiceItemsForOrder = (orderIdRaw: string) => {
+    const orderId = String(orderIdRaw || '').trim();
+    if (!orderId) return;
+    setAllocationConfirm({ orderId, step: 1, action: 'issue_invoice_items' });
+  };
+
   const handleBatchAssignWarehouseDriver = async (
     cards: Array<{
       groupKey: string;
@@ -2859,6 +2967,51 @@ export default function AdminOrdersWorkspace({
         },
         changedItems: [] as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number }>,
         ordersToInvoice,
+      };
+    }
+    if (allocationConfirm.action === 'issue_invoice_items') {
+      const orderId = allocationConfirm.orderId;
+      const detail = orderDetails[orderId];
+      const availability = availabilityByOrderId[orderId] || {};
+      const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
+      const itemsToInvoice = orderItems
+        .map((item: any) => {
+          const orderItemId = String(item?.id || '').trim();
+          const qty = Math.max(0, Math.trunc(Number(availability[orderItemId]?.maxInvoice || 0)));
+          if (!orderItemId || qty <= 0) return null;
+          const unitPrice = Number(item?.price_at_purchase || 0);
+          return {
+            orderItemId,
+            productId: String(item?.product_id || ''),
+            name: String(item?.Product?.name || 'Produk'),
+            sku: String(item?.Product?.sku || '-'),
+            qty,
+            unitPrice,
+            lineTotal: unitPrice * qty,
+          };
+        })
+        .filter(Boolean) as Array<{ orderItemId: string; productId: string; name: string; sku: string; qty: number; unitPrice: number; lineTotal: number }>;
+
+      const qtyTotal = itemsToInvoice.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      const amount = itemsToInvoice.reduce((sum, row) => sum + Number(row.lineTotal || 0), 0);
+
+      return {
+        orderId,
+        customerName: String(detail?.customer_name || detail?.Customer?.name || selectedGroup?.customer_name || 'Customer'),
+        totals: {
+          invoiceQty: qtyTotal,
+          amount,
+        },
+        itemsToInvoice,
+        changedItems: [] as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number }>,
+        ordersToInvoice: [] as Array<{
+          orderId: string;
+          customerName: string;
+          orderedQty: number;
+          allocQty: number;
+          amount: number;
+          items: Array<{ productId: string; name: string; sku: string; orderedQty: number; allocatedQty: number }>;
+        }>,
       };
     }
     const orderId = allocationConfirm.orderId;
@@ -3044,15 +3197,17 @@ export default function AdminOrdersWorkspace({
 
 	  const pricingEditorStatusLower = String(pricingEditor?.orderStatus || '').trim().toLowerCase();
 	  const pricingEditorHasInvoiceRef = Boolean(String(pricingEditor?.invoiceId || '').trim() || String(pricingEditor?.invoiceNumber || '').trim());
-	  const pricingEditorPriceEditable = Boolean(pricingEditor) && !pricingEditorHasInvoiceRef && ['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled'].includes(pricingEditorStatusLower);
-	  const pricingEditorLayerEditable = Boolean(pricingEditor) && !pricingEditor?.goodsOutPostedAt && !['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(pricingEditorStatusLower);
-	  const pricingEditorSaveDisabled = Boolean(pricingEditor?.saving) || (!pricingEditorPriceEditable && !pricingEditorLayerEditable);
-	  const pricingEditorModalTitle = pricingEditorPriceEditable
-	    ? 'Edit harga deal sebelum invoice'
+	  const pricingEditorStatusLocked = ['canceled', 'expired', 'completed', 'delivered', 'shipped'].includes(pricingEditorStatusLower);
+	  const pricingEditorEditable = Boolean(pricingEditor) && !pricingEditor?.goodsOutPostedAt && !pricingEditorStatusLocked;
+	  const pricingEditorPriceEditable = pricingEditorEditable;
+	  const pricingEditorLayerEditable = pricingEditorEditable;
+	  const pricingEditorSaveDisabled = Boolean(pricingEditor?.saving) || !pricingEditorEditable;
+	  const pricingEditorModalTitle = !pricingEditorEditable
+	    ? 'Invoice terkunci'
 	    : pricingEditorHasInvoiceRef
-	      ? 'Invoice sudah terbit: harga deal terkunci'
-	      : 'Atur layer modal';
-	  const pricingEditorSaveLabel = pricingEditorPriceEditable ? 'Simpan Harga' : 'Simpan Layer Modal';
+	      ? 'Atur invoice tambahan (backorder)'
+	      : 'Edit harga deal sebelum invoice';
+	  const pricingEditorSaveLabel = 'Simpan Perubahan';
 	  const canManageCreditNote = ['super_admin', 'admin_finance'].includes(normalizedRole);
 	  const creditNoteHref = pricingEditor?.invoiceId
 	    ? `/admin/finance/credit-note?invoice_id=${encodeURIComponent(pricingEditor.invoiceId)}`
@@ -3071,6 +3226,8 @@ export default function AdminOrdersWorkspace({
                     ? 'Verifikasi Alokasi Backorder'
                   : allocationConfirm.action === 'cancel_backorder'
                     ? 'Verifikasi Cancel Backorder'
+                  : allocationConfirm.action === 'issue_invoice_items'
+                    ? 'Verifikasi Invoice Tambahan'
                   : allocationConfirm.action === 'issue_invoice'
                     ? 'Verifikasi Issue Invoice'
                     : 'Verifikasi Alokasi'}
@@ -3088,6 +3245,10 @@ export default function AdminOrdersWorkspace({
                     ? allocationConfirm.step === 1
                       ? 'Periksa backorder sebelum dibatalkan'
                       : 'Konfirmasi batalkan backorder'
+                  : allocationConfirm.action === 'issue_invoice_items'
+                    ? allocationConfirm.step === 1
+                      ? 'Periksa item yang akan dibuat invoice tambahan'
+                      : 'Konfirmasi terbitkan invoice tambahan'
                   : allocationConfirm.action === 'issue_invoice'
                     ? allocationConfirm.step === 1
                       ? 'Periksa order yang akan dibuat invoice'
@@ -3099,6 +3260,8 @@ export default function AdminOrdersWorkspace({
               <p className="mt-1 text-xs text-slate-500">
                 {allocationConfirm.action === 'issue_invoice'
                   ? `${allocationConfirmMeta.ordersToInvoice.length} order siap invoice`
+                  : allocationConfirm.action === 'issue_invoice_items'
+                    ? `Order #${allocationConfirmMeta.orderId} • ${Number((allocationConfirmMeta.totals as any)?.invoiceQty || 0)} qty siap invoice`
                   : `Order #${allocationConfirmMeta.orderId}`}
               </p>
             </div>
@@ -3147,6 +3310,35 @@ export default function AdminOrdersWorkspace({
                       {allocationConfirmMeta.ordersToInvoice.length > 8 && (
                         <p className="text-[10px] text-slate-500">
                           +{allocationConfirmMeta.ordersToInvoice.length - 8} order lain akan ikut diterbitkan invoice
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : allocationConfirm.action === 'issue_invoice_items' ? (
+                  <div className="space-y-3">
+                    <p>
+                      Qty siap invoice <span className="font-black">{Number((allocationConfirmMeta.totals as any)?.invoiceQty || 0)}</span> •
+                      Estimasi invoice <span className="font-black">{formatCurrency(Number((allocationConfirmMeta.totals as any)?.amount || 0))}</span>
+                    </p>
+                    <p className="text-[10px] text-slate-500">{String((allocationConfirmMeta as any)?.customerName || '')}</p>
+                    <div className="space-y-2">
+                      {((allocationConfirmMeta as any)?.itemsToInvoice || []).slice(0, 8).map((row: any) => (
+                        <div key={String(row?.orderItemId || '')} className="rounded-xl bg-white px-3 py-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-slate-800">{String(row?.name || 'Produk')}</p>
+                              <p className="text-[10px] text-slate-500">SKU {String(row?.sku || '-')}</p>
+                            </div>
+                            <div className="text-right text-[10px] text-slate-600">
+                              <p>Qty <span className="font-black text-slate-900">{Number(row?.qty || 0)}</span></p>
+                              <p>Subtotal <span className="font-black">{formatCurrency(Number(row?.lineTotal || 0))}</span></p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {(((allocationConfirmMeta as any)?.itemsToInvoice || []) as any[]).length > 8 && (
+                        <p className="text-[10px] text-slate-500">
+                          +{(((allocationConfirmMeta as any)?.itemsToInvoice || []) as any[]).length - 8} item lain akan ikut diterbitkan invoice
                         </p>
                       )}
                     </div>
@@ -3261,6 +3453,10 @@ export default function AdminOrdersWorkspace({
                     ? allocationConfirm.step === 1
                       ? 'Pastikan sisa qty ini memang tidak akan ditunggu lagi oleh customer. Qty yang sudah tersuplai tetap dipertahankan.'
                       : 'Ini adalah konfirmasi akhir. Batalkan backorder sekarang?'
+                  : allocationConfirm.action === 'issue_invoice_items'
+                    ? allocationConfirm.step === 1
+                      ? 'Invoice tambahan akan dibuat dari qty alokasi yang belum pernah ter-invoice.'
+                      : 'Ini adalah konfirmasi akhir. Terbitkan invoice tambahan sekarang?'
                   : allocationConfirm.action === 'issue_invoice'
                     ? allocationConfirm.step === 1
                       ? 'Periksa kembali daftar order yang akan digabung ke invoice. Invoice akan dibuat dari qty alokasi yang saat ini sudah tersimpan.'
@@ -3303,6 +3499,8 @@ export default function AdminOrdersWorkspace({
                         ? 'Ya, Simpan Backorder'
                       : allocationConfirm.action === 'cancel_backorder'
                         ? 'Ya, Batalkan Backorder'
+                      : allocationConfirm.action === 'issue_invoice_items'
+                        ? 'Ya, Terbitkan Invoice Tambahan'
                       : allocationConfirm.action === 'issue_invoice'
                         ? 'Ya, Terbitkan Invoice'
                         : 'Ya, Simpan Alokasi'}
@@ -3494,7 +3692,9 @@ export default function AdminOrdersWorkspace({
 		                />
 		                <p className="mt-1 text-[11px] text-slate-500">
 		                  {pricingEditorPriceEditable
-		                    ? 'Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
+		                    ? pricingEditorHasInvoiceRef
+		                      ? 'Perubahan ini dipakai untuk invoice tambahan (backorder). Invoice lama tidak berubah. Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
+		                      : 'Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
 		                    : pricingEditorHasInvoiceRef
 		                      ? (pricingEditorLayerEditable
 		                        ? 'Invoice sudah terbit: harga deal terkunci. Kamu masih bisa pilih layer modal untuk alokasi/picking sebelum barang keluar gudang. Untuk diskon setelah invoice, gunakan credit note.'
