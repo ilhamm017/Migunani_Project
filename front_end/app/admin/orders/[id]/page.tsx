@@ -129,6 +129,7 @@ export default function AdminInvoiceDetailPage() {
   const params = useParams();
   const router = useRouter();
   const routeRefId = String(params?.id || '').trim();
+  const normalizedRole = String(user?.role || '').trim();
 
   const [invoice, setInvoice] = useState<LooseRecord | null>(null);
   const [orders, setOrders] = useState<LooseRecord[]>([]);
@@ -147,6 +148,10 @@ export default function AdminInvoiceDetailPage() {
   const canManageWarehouseFlow = useMemo(
     () => ['admin_gudang', 'super_admin'].includes(user?.role || ''),
     [user?.role]
+  );
+  const isWarehouseStaff = useMemo(
+    () => ['admin_gudang', 'checker_gudang'].includes(normalizedRole),
+    [normalizedRole]
   );
 
   const loadCouriers = useCallback(async () => {
@@ -356,7 +361,7 @@ export default function AdminInvoiceDetailPage() {
 
   const activeDispatchOrderIds = useMemo(() => {
     return orderRows
-      .filter((row) => ['ready_to_ship', 'shipped', 'delivered'].includes(row.status) && row.id)
+      .filter((row) => ['allocated', 'processing', 'checked', 'ready_to_ship', 'shipped', 'delivered'].includes(row.status) && row.id)
       .map((row) => row.id);
   }, [orderRows]);
 
@@ -792,122 +797,124 @@ export default function AdminInvoiceDetailPage() {
           </div>
         )}
 
-        <div className="space-y-2">
-          <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>
-          {orderRows.length === 0 ? (
-            <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
-              Tidak ada order yang terhubung ke invoice ini.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {orderRows.map((row) => (
-                <div key={row.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="flex-1">
-                    <p className="text-sm font-black text-slate-900">#{row.id}</p>
-                    <p className="text-[11px] text-slate-500">
+        {!isWarehouseStaff && (
+          <div className="space-y-2">
+            <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>
+            {orderRows.length === 0 ? (
+              <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
+                Tidak ada order yang terhubung ke invoice ini.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {orderRows.map((row) => (
+                  <div key={row.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-black text-slate-900">#{row.id}</p>
+                      <p className="text-[11px] text-slate-500">
+                        {(() => {
+                          const createdAt = row.createdAt as unknown;
+                          return (typeof createdAt === 'string' || createdAt instanceof Date)
+                            ? formatDateTime(createdAt)
+                            : '-';
+                        })()} • Source {row.source}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                        {row.status === 'canceled' ? (
+                          <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-700">Dibatalkan</span>
+                        ) : (
+                          <>
+                            <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
+                            {row.backorderQty > 0 ? (
+                              <>
+                                <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Tersuplai {row.suppliedQty}</span>
+                                <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {row.backorderQty}</span>
+                                <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
+                                <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
+                              </>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
                       {(() => {
-                        const createdAt = row.createdAt as unknown;
-                        return (typeof createdAt === 'string' || createdAt instanceof Date)
-                          ? formatDateTime(createdAt)
-                          : '-';
-                      })()} • Source {row.source}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold">
-                      {row.status === 'canceled' ? (
-                        <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-700">Dibatalkan</span>
-                      ) : (
-                        <>
-                          <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">Diminta {row.orderedQty}</span>
-                          {row.backorderQty > 0 ? (
-                            <>
-                              <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Tersuplai {row.suppliedQty}</span>
-                              <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {row.backorderQty}</span>
-                              <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Qty dialokasikan {row.allocatedQty}</span>
-                              <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">SKU dialokasikan {row.allocatedSkuCount}</span>
-                            </>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
-                    {(() => {
-                      const targetOrder = orders.find((order) => String(asRecord(order).id || '') === row.id);
-                      if (row.status === 'canceled') return null;
-                      const orderItems = Array.isArray(asRecord(targetOrder).OrderItems)
-                        ? (asRecord(targetOrder).OrderItems as LooseRecord[])
-                        : [];
-                      if (orderItems.length === 0) return null;
-                      return (
-                        <div className="mt-3 space-y-2">
-                          {orderItems.map((item: LooseRecord) => {
-                          const itemRow = asRecord(item);
-                          const itemId = String(itemRow.id || '');
-                          const product = asRecord(itemRow.Product);
-                          const productName = String(product.name || 'Produk');
-                          const sku = String(product.sku || '-');
-                          const orderedQtyOriginal = Number(itemRow.ordered_qty_original || itemRow.qty || 0);
-                          const suppliedQty = getOrderItemSuppliedQty(
-                            targetOrder,
-                            invoice,
-                            itemId
-                          );
-                          const targetOrderRow = asRecord(targetOrder);
-                          const summaryRow = Array.isArray(targetOrderRow.item_summaries)
-                            ? (targetOrderRow.item_summaries as LooseRecord[]).find((summary: LooseRecord) => String(asRecord(summary).order_item_id || '') === itemId)
-                            : null;
-                          const backorderQty = summaryRow
-                            ? Number(asRecord(summaryRow).backorder_open_qty || 0)
-                            : Math.max(0, orderedQtyOriginal - suppliedQty);
-                          return (
-                            <div key={itemId} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-xs font-bold text-slate-900">{productName}</p>
-                                  <p className="text-[10px] text-slate-500">SKU {sku}</p>
-                                </div>
-                                <div className="text-right text-[10px] font-bold">
-                                  <p className="text-slate-700">Qty {orderedQtyOriginal}</p>
-                                  {backorderQty > 0 ? (
-                                    <>
-                                      <p className="text-emerald-700">Dialokasikan {suppliedQty}</p>
-                                      <p className="text-amber-700">Backorder {backorderQty}</p>
-                                    </>
-                                  ) : null}
+                        const targetOrder = orders.find((order) => String(asRecord(order).id || '') === row.id);
+                        if (row.status === 'canceled') return null;
+                        const orderItems = Array.isArray(asRecord(targetOrder).OrderItems)
+                          ? (asRecord(targetOrder).OrderItems as LooseRecord[])
+                          : [];
+                        if (orderItems.length === 0) return null;
+                        return (
+                          <div className="mt-3 space-y-2">
+                            {orderItems.map((item: LooseRecord) => {
+                            const itemRow = asRecord(item);
+                            const itemId = String(itemRow.id || '');
+                            const product = asRecord(itemRow.Product);
+                            const productName = String(product.name || 'Produk');
+                            const sku = String(product.sku || '-');
+                            const orderedQtyOriginal = Number(itemRow.ordered_qty_original || itemRow.qty || 0);
+                            const suppliedQty = getOrderItemSuppliedQty(
+                              targetOrder,
+                              invoice,
+                              itemId
+                            );
+                            const targetOrderRow = asRecord(targetOrder);
+                            const summaryRow = Array.isArray(targetOrderRow.item_summaries)
+                              ? (targetOrderRow.item_summaries as LooseRecord[]).find((summary: LooseRecord) => String(asRecord(summary).order_item_id || '') === itemId)
+                              : null;
+                            const backorderQty = summaryRow
+                              ? Number(asRecord(summaryRow).backorder_open_qty || 0)
+                              : Math.max(0, orderedQtyOriginal - suppliedQty);
+                            return (
+                              <div key={itemId} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-900">{productName}</p>
+                                    <p className="text-[10px] text-slate-500">SKU {sku}</p>
+                                  </div>
+                                  <div className="text-right text-[10px] font-bold">
+                                    <p className="text-slate-700">Qty {orderedQtyOriginal}</p>
+                                    {backorderQty > 0 ? (
+                                      <>
+                                        <p className="text-emerald-700">Dialokasikan {suppliedQty}</p>
+                                        <p className="text-amber-700">Backorder {backorderQty}</p>
+                                      </>
+                                    ) : null}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          );
-                        })}
-                        </div>
-                      );
-                    })()}
+                            );
+                          })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="text-left sm:text-right">
+                      <p className={`inline-flex px-2 py-1 rounded-full text-[10px] font-bold ${statusBadgeClass(row.status)}`}>
+                        {statusLabel(row.status)}
+                      </p>
+                      <p className="text-sm font-black text-slate-900 mt-1">{formatCurrency(row.totalAmount)}</p>
+                      <p className="text-[11px] text-slate-500">Driver: {row.courierName}</p>
+                      {row.backorderQty > 0 && customerWorkspaceHref && (
+                        <Link
+                          href={`${customerWorkspaceHref}&section=backorder&orderId=${encodeURIComponent(row.id)}`}
+                          className="mt-2 inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
+                        >
+                          Edit Backorder
+                        </Link>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-left sm:text-right">
-                    <p className={`inline-flex px-2 py-1 rounded-full text-[10px] font-bold ${statusBadgeClass(row.status)}`}>
-                      {statusLabel(row.status)}
-                    </p>
-                    <p className="text-sm font-black text-slate-900 mt-1">{formatCurrency(row.totalAmount)}</p>
-                    <p className="text-[11px] text-slate-500">Driver: {row.courierName}</p>
-                    {row.backorderQty > 0 && customerWorkspaceHref && (
-                      <Link
-                        href={`${customerWorkspaceHref}&section=backorder&orderId=${encodeURIComponent(row.id)}`}
-                        className="mt-2 inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
-                      >
-                        Edit Backorder
-                      </Link>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="space-y-2">
           <p className="text-sm font-black text-slate-900">
             {orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? 'Rincian Barang Dikirim' : 'Rincian Barang Siap Disiapkan Gudang'}
           </p>
           <p className="text-xs text-slate-500">
-            Daftar ini menghitung barang dari order berstatus <span className="font-bold">ready_to_ship, shipped, atau delivered</span>.
+            Daftar ini menghitung barang dari order berstatus <span className="font-bold">allocated, processing, checked, ready_to_ship, shipped, atau delivered</span>.
           </p>
           {pickingItems.length === 0 ? (
             <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
