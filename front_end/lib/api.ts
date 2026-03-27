@@ -459,7 +459,7 @@ export const api = {
 	            }) => apiClient.patch(`/orders/admin/${id}/status`, data),
 	            cancelItems: (id: string, data: {
 	                reason: string;
-	                items: Array<{ order_item_id: string; cancel_qty: number }>;
+	                items: Array<{ order_item_id: string; cancel_qty?: number }>;
 	            }) => apiClient.post(`/orders/admin/${id}/cancel-items`, data),
 		            updatePricing: (id: string, data: {
 		                items: Array<{ order_item_id: string; unit_price_override: number; preferred_unit_cost?: number | null; reason?: string }>;

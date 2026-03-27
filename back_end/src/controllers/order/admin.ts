@@ -707,18 +707,37 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
         const actorId = String(req.user?.id || '').trim() || null;
         const actorRole = String(req.user?.role || '').trim() || null;
 
-        const requestedCancelByOrderItemId = new Map<string, number>();
+        type CancelOrderItemSpec = { mode: 'all' } | { mode: 'qty'; qty: number };
+        const requestedCancelSpecByOrderItemId = new Map<string, CancelOrderItemSpec>();
         for (const row of itemsRaw) {
             const itemId = String(row?.order_item_id || '').trim();
-            const qty = Math.trunc(Number(row?.cancel_qty || 0));
             if (!itemId) continue;
+
+            const hasCancelQty = row && Object.prototype.hasOwnProperty.call(row, 'cancel_qty');
+            if (!hasCancelQty) {
+                requestedCancelSpecByOrderItemId.set(itemId, { mode: 'all' });
+                continue;
+            }
+
+            const rawCancelQty = (row as any)?.cancel_qty;
+            if (rawCancelQty === null || rawCancelQty === undefined || rawCancelQty === '') {
+                requestedCancelSpecByOrderItemId.set(itemId, { mode: 'all' });
+                continue;
+            }
+
+            const qty = Math.trunc(Number(rawCancelQty));
             if (!Number.isFinite(qty) || qty <= 0) continue;
-            requestedCancelByOrderItemId.set(itemId, (requestedCancelByOrderItemId.get(itemId) || 0) + qty);
+
+            const existing = requestedCancelSpecByOrderItemId.get(itemId);
+            if (existing?.mode === 'all') continue;
+            const prevQty = existing?.mode === 'qty' ? Number(existing.qty || 0) : 0;
+            requestedCancelSpecByOrderItemId.set(itemId, { mode: 'qty', qty: prevQty + qty });
         }
-        const requestedItemIds = Array.from(requestedCancelByOrderItemId.keys());
+
+        const requestedItemIds = Array.from(requestedCancelSpecByOrderItemId.keys());
         if (requestedItemIds.length === 0) {
             await t.rollback();
-            throw new CustomError('Tidak ada qty cancel yang valid.', 400);
+            throw new CustomError('Tidak ada item cancel yang valid.', 400);
         }
 
         const orderItems = await OrderItem.findAll({
@@ -765,13 +784,25 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
             afterQtyByOrderItemId[id] = qtyBefore;
         }
 
-        // Validate and apply cancels (in-memory + DB)
+        const requestedCancelQtyByOrderItemId = new Map<string, number>();
+
+        // Validate requested cancels & resolve final cancel qty (in-memory)
         for (const itemId of requestedItemIds) {
             const row = orderItemById.get(itemId);
             const qtyBefore = Math.max(0, Math.trunc(Number(row?.qty || 0)));
             const invoicedQty = Math.max(0, Math.trunc(Number(invoicedQtyByOrderItemId[itemId] || 0)));
             const cancelableQty = Math.max(0, qtyBefore - invoicedQty);
-            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+
+            const spec = requestedCancelSpecByOrderItemId.get(itemId);
+            const requestedCancelRaw = spec?.mode === 'all'
+                ? cancelableQty
+                : Math.max(0, Math.trunc(Number((spec as any)?.qty || 0)));
+            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelRaw || 0)));
+
+            if (spec?.mode === 'all' && requestedCancel <= 0) {
+                await t.rollback();
+                throw new CustomError(`Item ${itemId} tidak memiliki qty yang bisa dicancel (sudah ter-invoice).`, 409);
+            }
             if (requestedCancel <= 0) continue;
             if (requestedCancel > cancelableQty) {
                 await t.rollback();
@@ -780,12 +811,20 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
                     409
                 );
             }
+            requestedCancelQtyByOrderItemId.set(itemId, requestedCancel);
         }
 
-        for (const itemId of requestedItemIds) {
+        const effectiveItemIds = Array.from(requestedCancelQtyByOrderItemId.keys());
+        if (effectiveItemIds.length === 0) {
+            await t.rollback();
+            throw new CustomError('Tidak ada item yang bisa dicancel.', 400);
+        }
+
+        // Apply cancels (DB)
+        for (const itemId of effectiveItemIds) {
             const row = orderItemById.get(itemId);
             const qtyBefore = Math.max(0, Math.trunc(Number(row?.qty || 0)));
-            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+            const requestedCancel = Math.max(0, Math.trunc(Number(requestedCancelQtyByOrderItemId.get(itemId) || 0)));
             if (requestedCancel <= 0) continue;
 
             const qtyAfter = Math.max(0, qtyBefore - requestedCancel);
@@ -913,7 +952,7 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
         }
 
         // Sync backorder rows for affected items
-        const affectedItemIds = requestedItemIds;
+        const affectedItemIds = effectiveItemIds;
         const backorders = await Backorder.findAll({
             where: { order_item_id: { [Op.in]: affectedItemIds } },
             transaction: t,
@@ -954,7 +993,7 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
                 continue;
             }
 
-            const canceledQtyForItem = Math.max(0, Math.trunc(Number(requestedCancelByOrderItemId.get(itemId) || 0)));
+            const canceledQtyForItem = Math.max(0, Math.trunc(Number(requestedCancelQtyByOrderItemId.get(itemId) || 0)));
             const nextStatus = canceledQtyForItem > 0 ? 'canceled' : 'fulfilled';
             await backorder.update({
                 qty_pending: 0,

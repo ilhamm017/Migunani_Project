@@ -633,7 +633,7 @@ export default function AdminOrdersWorkspace({
     orderId: string;
     order: AdminOrderListRow;
     reason: string;
-    drafts: Record<string, number>;
+    drafts: Record<string, boolean>;
     saving: boolean;
     error: string;
   } | null>(null);
@@ -2121,13 +2121,10 @@ export default function AdminOrdersWorkspace({
       return;
     }
     const items = Object.entries(cancelItemsModal.drafts || {})
-      .map(([order_item_id, cancel_qty]) => ({
-        order_item_id,
-        cancel_qty: Math.max(0, Math.trunc(Number(cancel_qty || 0))),
-      }))
-      .filter((row) => row.order_item_id && row.cancel_qty > 0);
+      .filter(([order_item_id, selected]) => Boolean(order_item_id) && Boolean(selected))
+      .map(([order_item_id]) => ({ order_item_id }));
     if (items.length === 0) {
-      setCancelItemsModal((prev) => prev ? { ...prev, error: 'Pilih qty cancel minimal 1 item.' } : prev);
+      setCancelItemsModal((prev) => prev ? { ...prev, error: 'Pilih minimal 1 SKU untuk dicancel.' } : prev);
       return;
     }
 
@@ -3159,6 +3156,7 @@ export default function AdminOrdersWorkspace({
 		          qty: number;
 		          invoiced: number;
 		          maxCancelable: number;
+		          selected: boolean;
 		          cancelQty: number;
 		          price: number;
 		        };
@@ -3170,8 +3168,8 @@ export default function AdminOrdersWorkspace({
 		          const qty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
 		          const invoiced = Math.max(0, Math.trunc(Number(invoicedByItemId.get(itemId) || 0)));
 		          const maxCancelable = Math.max(0, qty - invoiced);
-		          const draft = Math.max(0, Math.trunc(Number(cancelItemsModal.drafts?.[itemId] || 0)));
-		          const cancelQty = Math.min(maxCancelable, draft);
+		          const selected = Boolean(cancelItemsModal.drafts?.[itemId]);
+		          const cancelQty = selected ? maxCancelable : 0;
 		          return {
 		            itemId,
 		            name: String(item?.Product?.name || 'Produk'),
@@ -3179,10 +3177,12 @@ export default function AdminOrdersWorkspace({
 		            qty,
 		            invoiced,
 		            maxCancelable,
+		            selected,
 		            cancelQty,
 		            price: Number(item?.price_at_purchase || 0),
 		          };
 		        }).filter((row: CancelableRow) => row.itemId);
+		        const totalSelectedSku = cancelableRows.reduce((sum, row) => sum + (row.selected ? 1 : 0), 0);
 		        const totalCancelQty = cancelableRows.reduce((sum, row) => sum + Number(row.cancelQty || 0), 0);
 		        const estimatedSubtotalReduction = cancelableRows.reduce(
 		          (sum, row) => sum + Number(row.cancelQty || 0) * Number(row.price || 0),
@@ -3197,7 +3197,8 @@ export default function AdminOrdersWorkspace({
 		            <div className="flex max-h-[calc(100vh-8rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
 		              <div className="border-b border-slate-200 px-5 pb-4 pt-5">
 		                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-600">Cancel Item</p>
-		                <h3 className="mt-2 text-lg font-black text-slate-900">Batalkan sebagian item (per SKU)</h3>
+		                <h3 className="mt-2 text-lg font-black text-slate-900">Batalkan item (per SKU)</h3>
+		                <p className="mt-1 text-xs text-slate-500">Cancel akan membatalkan seluruh qty yang belum ter-invoice untuk SKU yang dipilih.</p>
 		                <p className="mt-1 text-xs text-slate-500">Order #{orderId}</p>
 		              </div>
 
@@ -3228,7 +3229,8 @@ export default function AdminOrdersWorkspace({
 		                ) : (
 		                  <div className="space-y-2">
 		                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
-		                      Total cancel <span className="font-black text-rose-700">{totalCancelQty}</span> qty •
+		                      Total cancel <span className="font-black text-rose-700">{totalSelectedSku}</span> SKU •
+		                      <span className="font-black text-rose-700"> {totalCancelQty}</span> qty •
 		                      Estimasi pengurangan subtotal <span className="font-black">{formatCurrency(estimatedSubtotalReduction)}</span>
 		                    </div>
 		                    <div className="space-y-2">
@@ -3245,25 +3247,26 @@ export default function AdminOrdersWorkspace({
 		                              </p>
 		                            </div>
 		                            <div className="min-w-[180px] text-right space-y-1">
-		                              <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Qty Cancel</p>
-		                              <input
-		                                type="number"
-		                                min={0}
-		                                max={row.maxCancelable}
-		                                value={row.cancelQty}
-		                                disabled={row.maxCancelable <= 0 || cancelItemsModal.saving}
-		                                onChange={(e) => {
-		                                  const parsed = Number(e.target.value);
-		                                  const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
-		                                  const nextQty = Math.max(0, Math.min(row.maxCancelable, normalized));
-		                                  setCancelItemsModal((prev) => prev ? {
-		                                    ...prev,
-		                                    drafts: { ...(prev.drafts || {}), [row.itemId]: nextQty },
-		                                    error: '',
-		                                  } : prev);
-		                                }}
-		                                className="w-32 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-right font-black text-rose-800 disabled:opacity-60"
-		                              />
+		                              <label className="flex items-center justify-end gap-2 text-[10px] font-black uppercase tracking-widest text-rose-700">
+		                                <input
+		                                  type="checkbox"
+		                                  checked={row.selected}
+		                                  disabled={row.maxCancelable <= 0 || cancelItemsModal.saving}
+		                                  onChange={(e) => {
+		                                    const nextSelected = Boolean(e.target.checked);
+		                                    setCancelItemsModal((prev) => prev ? {
+		                                      ...prev,
+		                                      drafts: { ...(prev.drafts || {}), [row.itemId]: nextSelected },
+		                                      error: '',
+		                                    } : prev);
+		                                  }}
+		                                  className="h-4 w-4 rounded border border-rose-300 accent-rose-600 disabled:opacity-60"
+		                                />
+		                                Batalkan SKU
+		                              </label>
+		                              <p className="text-[11px] text-slate-500">
+		                                {row.selected ? `Akan cancel ${row.maxCancelable} qty` : 'Tidak dicancel'}
+		                              </p>
 		                            </div>
 		                          </div>
 		                        </div>
