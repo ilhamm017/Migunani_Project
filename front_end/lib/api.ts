@@ -220,6 +220,7 @@ export const api = {
             q?: string;
             allocation_status?: 'pending' | 'picked' | 'shipped' | 'all' | string;
             order_status?: string; // comma-separated
+            order_ids?: string; // comma-separated
             limit?: number;
         }) => apiClient.get('/allocation/picklist', { params }),
         getByProduct: (productId: string) => apiClient.get(`/allocation/product/${productId}`),

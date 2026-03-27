@@ -141,6 +141,8 @@ export default function AdminInvoiceDetailPage() {
 
   const [couriers, setCouriers] = useState<LooseRecord[]>([]);
   const [selectedCourierId, setSelectedCourierId] = useState('');
+  const [reservedLayersByOrderProductKey, setReservedLayersByOrderProductKey] = useState<Record<string, Array<{ unit_cost: number; qty_reserved: number }>>>({});
+  const [reservedLayersLoading, setReservedLayersLoading] = useState(false);
 
   const canManageWarehouseFlow = useMemo(
     () => ['admin_gudang', 'super_admin'].includes(user?.role || ''),
@@ -363,6 +365,56 @@ export default function AdminInvoiceDetailPage() {
       .filter((row) => row.status === 'ready_to_ship' && row.id)
       .map((row) => row.id);
   }, [orderRows]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (activeDispatchOrderIds.length === 0) {
+      setReservedLayersByOrderProductKey({});
+      return;
+    }
+    let cancelled = false;
+    setReservedLayersLoading(true);
+    void (async () => {
+      try {
+        const res = await api.allocation.getPicklist({
+          view: 'customer',
+          allocation_status: 'all',
+          order_ids: activeDispatchOrderIds.join(','),
+          limit: 20000,
+        });
+        const rows = Array.isArray((res.data as any)?.rows) ? (res.data as any).rows : [];
+        const next: Record<string, Array<{ unit_cost: number; qty_reserved: number }>> = {};
+        rows.forEach((orderRow: any) => {
+          const orderId = String(orderRow?.order_id || '').trim();
+          const items = Array.isArray(orderRow?.items) ? orderRow.items : [];
+          if (!orderId) return;
+          items.forEach((item: any) => {
+            const productId = String(item?.product_id || '').trim();
+            const layersRaw = Array.isArray(item?.reserved_layers) ? item.reserved_layers : [];
+            if (!productId || layersRaw.length === 0) return;
+            const layers = layersRaw
+              .map((layer: any) => ({
+                unit_cost: Number(layer?.unit_cost || 0),
+                qty_reserved: Math.max(0, Math.trunc(Number(layer?.qty_reserved || 0))),
+              }))
+              .filter((layer: any) => Number.isFinite(layer.unit_cost) && layer.unit_cost > 0 && layer.qty_reserved > 0)
+              .sort((a: any, b: any) => a.unit_cost - b.unit_cost);
+            if (layers.length === 0) return;
+            next[`${orderId}::${productId}`] = layers;
+          });
+        });
+        if (!cancelled) setReservedLayersByOrderProductKey(next);
+      } catch (e) {
+        console.error('Failed to load reserved layers for invoice picking list:', e);
+        if (!cancelled) setReservedLayersByOrderProductKey({});
+      } finally {
+        if (!cancelled) setReservedLayersLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDispatchOrderIds, allowed]);
 
   const pickingItems = useMemo(() => {
     const activeOrderSet = new Set(activeDispatchOrderIds);
@@ -882,6 +934,45 @@ export default function AdminInvoiceDetailPage() {
                       </span>
                     ))}
                   </div>
+                  {(() => {
+                    if (reservedLayersLoading) {
+                      return (
+                        <p className="text-[10px] text-slate-500">
+                          Memuat layer batch (HPP)...
+                        </p>
+                      );
+                    }
+                    const layersMap = new Map<number, number>();
+                    item.orderRefs.forEach((ref) => {
+                      const key = `${ref.orderId}::${item.productId}`;
+                      const layers = reservedLayersByOrderProductKey[key] || [];
+                      layers.forEach((layer) => {
+                        const unitCost = Number(layer.unit_cost || 0);
+                        const qty = Math.max(0, Math.trunc(Number(layer.qty_reserved || 0)));
+                        if (!Number.isFinite(unitCost) || unitCost <= 0 || qty <= 0) return;
+                        layersMap.set(unitCost, Number(layersMap.get(unitCost) || 0) + qty);
+                      });
+                    });
+                    const layers = Array.from(layersMap.entries())
+                      .map(([unit_cost, qty_reserved]) => ({ unit_cost, qty_reserved }))
+                      .filter((row) => row.qty_reserved > 0)
+                      .sort((a, b) => a.unit_cost - b.unit_cost);
+                    if (layers.length === 0) {
+                      return (
+                        <p className="text-[10px] text-slate-500">
+                          Layer batch (HPP): FIFO (auto)
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-700">
+                        <p className="font-black uppercase tracking-widest text-slate-500">Layer batch (HPP)</p>
+                        <p className="mt-1 text-[11px] font-bold text-slate-700">
+                          {layers.map((layer) => `${formatCurrency(layer.unit_cost)} x ${layer.qty_reserved}`).join(' • ')}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>

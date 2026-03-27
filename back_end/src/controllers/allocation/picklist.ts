@@ -20,6 +20,7 @@ const safeLower = (v: unknown): string => String(v || '').trim().toLowerCase();
 export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
     const view = (safeLower(req.query?.view) as PicklistView) || 'product';
     const q = String(req.query?.q || '').trim();
+    const orderIdsFilter = parseCsv(req.query?.order_ids);
 
     const allocationStatusesRaw = safeLower(req.query?.allocation_status || 'pending');
     const allocationStatuses =
@@ -30,6 +31,7 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
     const orderStatuses = (() => {
         const raw = parseCsv(req.query?.order_status);
         if (raw.length > 0) return raw.map((v) => safeLower(v));
+        if (orderIdsFilter.length > 0) return [];
         return ['allocated', 'partially_fulfilled'];
     })();
 
@@ -52,6 +54,7 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
                 model: Order,
                 attributes: ['id', 'status', 'customer_id', 'customer_name', 'createdAt'],
                 where: {
+                    ...(orderIdsFilter.length > 0 ? { id: { [Op.in]: orderIdsFilter } } : {}),
                     ...(orderStatuses.length > 0 ? { status: { [Op.in]: orderStatuses } } : {}),
                 },
                 required: true,
