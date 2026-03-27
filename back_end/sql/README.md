@@ -131,6 +131,14 @@ Jalankan SQL ini untuk menambah kolom audit override harga pada `pos_sale_items`
 mysql -u root -p migunani_motor_db < back_end/sql/20260326_add_pos_sale_items_override_audit.sql
 ```
 
+## Add POS refund fields (Kasir Offline)
+
+Jalankan SQL ini untuk menambah field refund pada `pos_sales` (pengganti tombol void di POS):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260328_add_pos_sales_refund_fields.sql
+```
+
 ## One-shot: run all safe SQL migrations (recommended)
 
 Jika ingin deploy ulang tanpa menjalankan file SQL satu per satu, gunakan runner ini. Runner akan:

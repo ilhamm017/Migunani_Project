@@ -558,7 +558,7 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
             ]
         });
     }
-    if (status && ['paid', 'voided'].includes(status)) andClauses.push({ status });
+    if (status && ['paid', 'voided', 'refunded'].includes(status)) andClauses.push({ status });
     if (cashierUserId) andClauses.push({ cashier_user_id: cashierUserId });
 
     const where = andClauses.length > 0 ? { [Op.and]: andClauses } : {};
@@ -614,7 +614,7 @@ export const getPosSaleById = asyncWrapper(async (req: Request, res: Response) =
     res.json(payload);
 });
 
-export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
+export const refundPosSale = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
     try {
         const userId = String(req.user?.id || '').trim();
@@ -644,7 +644,7 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
         }
         if (String((sale as any).status) !== 'paid') {
             await t.rollback();
-            throw new CustomError('Transaksi POS sudah di-void atau tidak valid untuk void.', 409);
+            throw new CustomError('Transaksi POS sudah direfund atau tidak valid untuk refund.', 409);
         }
 
         const items = await PosSaleItem.findAll({
@@ -687,18 +687,18 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
                 product_id: productId,
                 type: 'in',
                 qty: Math.abs(qty),
-                reference_type: 'pos_sale_void',
+                reference_type: 'pos_sale_refund',
                 reference_id: String(sale.id),
-                note: `VOID POS sale ${receiptNumber || String(sale.id).slice(-8)}`
+                note: `REFUND POS sale ${receiptNumber || String(sale.id).slice(-8)}`
             }, { transaction: t });
 
             await InventoryCostService.recordInbound({
                 product_id: productId,
                 qty,
                 unit_cost: Number(item.unit_cost || 0),
-                reference_type: 'pos_sale_void',
+                reference_type: 'pos_sale_refund',
                 reference_id: String(sale.id),
-                note: `VOID POS sale ${receiptNumber || String(sale.id).slice(-8)}`,
+                note: `REFUND POS sale ${receiptNumber || String(sale.id).slice(-8)}`,
                 transaction: t
             });
 
@@ -706,10 +706,10 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
         }
 
         await sale.update({
-            status: 'voided',
-            voided_at: new Date(),
-            voided_by: userId,
-            void_reason: reason
+            status: 'refunded',
+            refunded_at: new Date(),
+            refunded_by: userId,
+            refund_reason: reason
         }, { transaction: t });
 
         // Journal reversals (tracked on pos_sales)
@@ -731,7 +731,7 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
             if (!cashAcc) journalErrors.push('Akun kas (1101) tidak ditemukan');
             if (!revenueAcc) journalErrors.push('Akun penjualan (4100) tidak ditemukan');
             if (taxAmount > 0 && !vatAcc) journalErrors.push('Akun PPN keluaran (2201) tidak ditemukan');
-            if (underpay && !arAcc) journalErrors.push('Akun piutang usaha (1103) tidak ditemukan untuk void transaksi kurang bayar');
+            if (underpay && !arAcc) journalErrors.push('Akun piutang usaha (1103) tidak ditemukan untuk refund transaksi kurang bayar');
 
             if (journalErrors.length === 0 && cashAcc && revenueAcc && (dpp > 0 || taxAmount > 0)) {
                 const journalLines: any[] = [];
@@ -745,11 +745,11 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
 
                 if (journalLines.length >= 2) {
                     await JournalService.createEntry({
-                        description: `VOID POS Sale Settlement ${receiptNumber || String(sale.id).slice(-8)}`,
-                        reference_type: 'pos_sale_void',
+                        description: `REFUND POS Sale Settlement ${receiptNumber || String(sale.id).slice(-8)}`,
+                        reference_type: 'pos_sale_refund',
                         reference_id: String(sale.id),
                         created_by: userId,
-                        idempotency_key: `pos_sale_void_settlement_${sale.id}`,
+                        idempotency_key: `pos_sale_refund_settlement_${sale.id}`,
                         lines: journalLines
                     }, t);
                 }
@@ -758,11 +758,11 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
             const safeCogs = Math.max(0, Number(totalCogs || 0));
             if (hppAcc && inventoryAcc && safeCogs > 0) {
                 await JournalService.createEntry({
-                    description: `VOID POS Sale HPP ${receiptNumber || String(sale.id).slice(-8)}`,
-                    reference_type: 'pos_sale_void',
+                    description: `REFUND POS Sale HPP ${receiptNumber || String(sale.id).slice(-8)}`,
+                    reference_type: 'pos_sale_refund',
                     reference_id: String(sale.id),
                     created_by: userId,
-                    idempotency_key: `pos_sale_void_cogs_${sale.id}`,
+                    idempotency_key: `pos_sale_refund_cogs_${sale.id}`,
                     lines: [
                         { account_id: inventoryAcc.id, debit: safeCogs, credit: 0 },
                         { account_id: hppAcc.id, debit: 0, credit: safeCogs }
@@ -783,7 +783,7 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
             const existing = String((sale as any).journal_error || '').trim();
             const merged = [
                 existing ? existing : null,
-                `VOID: ${journalErrors.slice(0, 8).join('\n')}`
+                `REFUND: ${journalErrors.slice(0, 8).join('\n')}`
             ].filter(Boolean).join('\n');
             await sale.update({
                 journal_status: 'failed',
@@ -793,10 +793,13 @@ export const voidPosSale = asyncWrapper(async (req: Request, res: Response) => {
         }
 
         await t.commit();
-        res.json({ message: 'Transaksi POS berhasil di-void.', id: sale.id });
+        res.json({ message: 'Transaksi POS berhasil direfund.', id: sale.id });
     } catch (error) {
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
-        throw new CustomError('Gagal void transaksi POS', 500);
+        throw new CustomError('Gagal refund transaksi POS', 500);
     }
 });
+
+// Backward-compatible alias (old endpoint name)
+export const voidPosSale = refundPosSale;

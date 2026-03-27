@@ -79,7 +79,7 @@ export type PosSaleRow = {
   cashier_user_id?: string;
   customer_name?: string | null;
   note?: string | null;
-  status?: 'paid' | 'voided' | string;
+  status?: 'paid' | 'voided' | 'refunded' | string;
   subtotal?: number;
   discount_amount?: number;
   discount_percent?: number;
@@ -92,6 +92,9 @@ export type PosSaleRow = {
   voided_at?: string | null;
   voided_by?: string | null;
   void_reason?: string | null;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
+  refund_reason?: string | null;
   Cashier?: UserLite | null;
   Items?: PosSaleItemRow[];
   createdAt?: string;

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Printer, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowLeft, Printer, RotateCcw, ShieldAlert } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
@@ -18,7 +18,7 @@ export default function PosSaleDetailPage() {
   const [sale, setSale] = useState<PosSaleRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [voiding, setVoiding] = useState(false);
+  const [refunding, setRefunding] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -43,26 +43,29 @@ export default function PosSaleDetailPage() {
   }, [allowed, load]);
 
   const receipt = useMemo(() => String(sale?.receipt_number || '').trim() || '-', [sale]);
-  const status = useMemo(() => String(sale?.status || '').trim().toLowerCase(), [sale]);
+  const status = useMemo(() => {
+    const raw = String(sale?.status || '').trim().toLowerCase();
+    return raw === 'voided' ? 'refunded' : raw;
+  }, [sale]);
 
-  const handleVoid = async () => {
+  const handleRefund = async () => {
     if (!sale?.id) return;
-    const reason = window.prompt('Alasan void (opsional):') || '';
-    const ok = window.confirm(`Void transaksi ${receipt}? Ini akan mengembalikan stok.`);
+    const reason = window.prompt('Alasan refund (opsional):') || '';
+    const ok = window.confirm(`Refund transaksi ${receipt}? Ini akan mengembalikan stok.`);
     if (!ok) return;
 
     try {
-      setVoiding(true);
+      setRefunding(true);
       setError('');
-      await api.admin.pos.voidSale(String(sale.id), { reason: reason.trim() || undefined });
+      await api.admin.pos.refundSale(String(sale.id), { reason: reason.trim() || undefined });
       await load();
     } catch (e: unknown) {
       const message = typeof e === 'object' && e && 'response' in e
         ? String((e as any).response?.data?.message || '')
         : '';
-      setError(message || 'Gagal void transaksi.');
+      setError(message || 'Gagal refund transaksi.');
     } finally {
-      setVoiding(false);
+      setRefunding(false);
     }
   };
 
@@ -94,13 +97,13 @@ export default function PosSaleDetailPage() {
           </Link>
           <button
             type="button"
-            onClick={handleVoid}
-            disabled={voiding || status !== 'paid'}
+            onClick={handleRefund}
+            disabled={refunding || status !== 'paid'}
             className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-black uppercase tracking-wide text-rose-700 disabled:opacity-60"
-            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa di-void' : ''}
+            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa direfund' : ''}
           >
-            <Trash2 size={14} />
-            {voiding ? 'Voiding...' : 'Void'}
+            <RotateCcw size={14} />
+            {refunding ? 'Refunding...' : 'Refund'}
           </button>
         </div>
       </div>

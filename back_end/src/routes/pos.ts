@@ -10,9 +10,9 @@ router.use(authenticateToken);
 router.post('/sales', authorizeRoles('super_admin', 'kasir'), PosSalesController.createPosSale);
 router.get('/sales', authorizeRoles('super_admin', 'kasir'), PosSalesController.listPosSales);
 router.get('/sales/:id', authorizeRoles('super_admin', 'kasir'), PosSalesController.getPosSaleById);
+router.post('/sales/:id/refund', authorizeRoles('super_admin', 'kasir'), PosSalesController.refundPosSale);
 router.post('/sales/:id/void', authorizeRoles('super_admin', 'kasir'), PosSalesController.voidPosSale);
 
 router.get('/reports/daily-summary', authorizeRoles('super_admin', 'kasir'), PosReportsController.getDailySummary);
 
 export default router;
-

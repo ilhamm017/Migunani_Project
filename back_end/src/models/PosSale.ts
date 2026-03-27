@@ -1,7 +1,7 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
 
-export type PosSaleStatus = 'paid' | 'voided';
+export type PosSaleStatus = 'paid' | 'voided' | 'refunded';
 
 interface PosSaleAttributes {
     id: string; // UUID
@@ -24,6 +24,9 @@ interface PosSaleAttributes {
     voided_at?: Date | null;
     voided_by?: string | null;
     void_reason?: string | null;
+    refunded_at?: Date | null;
+    refunded_by?: string | null;
+    refund_reason?: string | null;
     journal_status?: 'posted' | 'failed' | null;
     journal_posted_at?: Date | null;
     journal_error?: string | null;
@@ -31,7 +34,7 @@ interface PosSaleAttributes {
     updatedAt?: Date;
 }
 
-interface PosSaleCreationAttributes extends Optional<PosSaleAttributes, 'id' | 'receipt_no' | 'receipt_number' | 'customer_name' | 'note' | 'status' | 'discount_amount' | 'discount_percent' | 'tax_percent' | 'tax_amount' | 'change_amount' | 'voided_at' | 'voided_by' | 'void_reason' | 'journal_status' | 'journal_posted_at' | 'journal_error'> { }
+interface PosSaleCreationAttributes extends Optional<PosSaleAttributes, 'id' | 'receipt_no' | 'receipt_number' | 'customer_name' | 'note' | 'status' | 'discount_amount' | 'discount_percent' | 'tax_percent' | 'tax_amount' | 'change_amount' | 'voided_at' | 'voided_by' | 'void_reason' | 'refunded_at' | 'refunded_by' | 'refund_reason' | 'journal_status' | 'journal_posted_at' | 'journal_error'> { }
 
 class PosSale extends Model<PosSaleAttributes, PosSaleCreationAttributes> implements PosSaleAttributes {
     declare id: string;
@@ -54,6 +57,9 @@ class PosSale extends Model<PosSaleAttributes, PosSaleCreationAttributes> implem
     declare voided_at: Date | null;
     declare voided_by: string | null;
     declare void_reason: string | null;
+    declare refunded_at: Date | null;
+    declare refunded_by: string | null;
+    declare refund_reason: string | null;
     declare journal_status: 'posted' | 'failed' | null;
     declare journal_posted_at: Date | null;
     declare journal_error: string | null;
@@ -96,7 +102,7 @@ PosSale.init(
             allowNull: true,
         },
         status: {
-            type: DataTypes.ENUM('paid', 'voided'),
+            type: DataTypes.ENUM('paid', 'voided', 'refunded'),
             allowNull: false,
             defaultValue: 'paid',
         },
@@ -153,6 +159,18 @@ PosSale.init(
             allowNull: true,
         },
         void_reason: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        refunded_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+        },
+        refunded_by: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        refund_reason: {
             type: DataTypes.TEXT,
             allowNull: true,
         },

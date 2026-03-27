@@ -22,7 +22,7 @@ export default function AdminPosHistoryPage() {
   const [q, setQ] = useState('');
   const [startDate, setStartDate] = useState<string>(today);
   const [endDate, setEndDate] = useState<string>(today);
-  const [status, setStatus] = useState<'all' | 'paid' | 'voided'>('all');
+  const [status, setStatus] = useState<'all' | 'paid' | 'refunded'>('all');
 
   const [page, setPage] = useState(1);
   const limit = 20;
@@ -142,7 +142,7 @@ export default function AdminPosHistoryPage() {
           >
             <option value="all">Semua</option>
             <option value="paid">Paid</option>
-            <option value="voided">Voided</option>
+            <option value="refunded">Refunded</option>
           </select>
           <div className="ml-auto text-xs text-slate-500">
             Total: <span className="font-black text-slate-700">{count}</span>
@@ -159,7 +159,8 @@ export default function AdminPosHistoryPage() {
               const id = safeStr(s?.id);
               const receipt = safeStr(s?.receipt_number) || '-';
               const paidAt = safeStr(s?.paid_at || s?.paidAt || s?.createdAt);
-              const rowStatus = safeStr(s?.status);
+              const rowStatusRaw = safeStr(s?.status).toLowerCase();
+              const rowStatus = rowStatusRaw === 'voided' ? 'refunded' : rowStatusRaw;
               const total = n(s?.total);
               const customer = safeStr(s?.customer_name);
               const note = safeStr(s?.note);
@@ -217,4 +218,3 @@ export default function AdminPosHistoryPage() {
     </div>
   );
 }
-

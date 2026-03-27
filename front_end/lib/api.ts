@@ -286,9 +286,11 @@ export const api = {
                 startDate?: string;
                 endDate?: string;
                 cashier_user_id?: string;
-                status?: 'paid' | 'voided' | string;
+                status?: 'paid' | 'voided' | 'refunded' | string;
             }) => apiClient.get('/admin/pos/sales', { params }),
             getSaleById: (id: string) => apiClient.get(`/admin/pos/sales/${id}`),
+            refundSale: (id: string, data: { reason?: string }) =>
+                apiClient.post(`/admin/pos/sales/${id}/refund`, data),
             voidSale: (id: string, data: { reason?: string }) =>
                 apiClient.post(`/admin/pos/sales/${id}/void`, data),
             getDailySummary: (params?: { date?: string }) =>
