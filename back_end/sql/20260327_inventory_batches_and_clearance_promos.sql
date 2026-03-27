@@ -4,7 +4,7 @@
 -- 1) Cost layers (batches/lots)
 CREATE TABLE IF NOT EXISTS `inventory_batches` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
-  `product_id` CHAR(36) NOT NULL,
+  `product_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `unit_cost` DECIMAL(15,4) NOT NULL,
   `qty_on_hand` INT NOT NULL DEFAULT 0,
   `source_type` VARCHAR(32) NULL,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS `inventory_batches` (
 CREATE TABLE IF NOT EXISTS `inventory_batch_consumptions` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `batch_id` BIGINT NOT NULL,
-  `product_id` CHAR(36) NOT NULL,
+  `product_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `qty` INT NOT NULL,
   `unit_cost` DECIMAL(15,4) NOT NULL,
   `total_cost` DECIMAL(15,4) NOT NULL,
@@ -42,9 +42,9 @@ CREATE TABLE IF NOT EXISTS `inventory_batch_consumptions` (
 
 -- 3) Clearance promo ("cepat habis") that targets a specific cost layer
 CREATE TABLE IF NOT EXISTS `clearance_promos` (
-  `id` CHAR(36) NOT NULL,
+  `id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `name` VARCHAR(120) NOT NULL,
-  `product_id` CHAR(36) NOT NULL,
+  `product_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `target_unit_cost` DECIMAL(15,4) NOT NULL,
   `pricing_mode` ENUM('fixed_price','percent_off') NOT NULL,
   `promo_unit_price` DECIMAL(15,2) NULL,
@@ -89,4 +89,3 @@ WHERE pcs.`on_hand_qty` > 0
     WHERE b.`product_id` = pcs.`product_id`
       AND b.`source_type` = 'legacy_bootstrap'
   );
-
