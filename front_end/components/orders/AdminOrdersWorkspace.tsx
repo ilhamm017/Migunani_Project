@@ -1091,25 +1091,44 @@ export default function AdminOrdersWorkspace({
 	      const goodsOutPostedAtRaw = (detail as any)?.goods_out_posted_at;
 	      const goodsOutPostedAt = goodsOutPostedAtRaw ? String(goodsOutPostedAtRaw) : null;
 
-	      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
-	      if (orderItems.length === 0) {
-	        notifyAlert('Order belum memiliki item.');
-	        return;
-	      }
+		      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+		      if (orderItems.length === 0) {
+		        notifyAlert('Order belum memiliki item.');
+		        return;
+		      }
+
+      const overrideReasonByItemId = new Map<string, string>();
 
       const items: PricingEditorItem[] = orderItems.map((row: any) => {
-        const snapshot = toObjectOrEmpty(row?.pricing_snapshot);
-        const baseline = toFinite(snapshot?.computed_unit_price ?? snapshot?.computedUnitPrice) ?? toFinite(row?.price_at_purchase) ?? 0;
-        const current = toFinite(row?.price_at_purchase) ?? 0;
-        const cost = toFinite(row?.cost_at_purchase);
-        const preferredUnitCostRaw = toFinite(row?.preferred_unit_cost);
-        const product = row?.Product || {};
-        return {
-          order_item_id: String(row?.id || ''),
-          product_id: String(row?.product_id || ''),
-          clearance_promo_id: String(row?.clearance_promo_id || '').trim() || null,
-          preferred_unit_cost: preferredUnitCostRaw !== null && preferredUnitCostRaw > 0 ? Number(preferredUnitCostRaw.toFixed(4)) : null,
-          product_name: String(product?.name || 'Produk'),
+        const orderItemId = String(row?.id || '');
+	        const snapshot = toObjectOrEmpty(row?.pricing_snapshot);
+	        const baseline = toFinite(snapshot?.computed_unit_price ?? snapshot?.computedUnitPrice) ?? toFinite(row?.price_at_purchase) ?? 0;
+	        const current = toFinite(row?.price_at_purchase) ?? 0;
+	        const cost = toFinite(row?.cost_at_purchase);
+	        const preferredUnitCostRaw = toFinite(row?.preferred_unit_cost);
+	        const product = row?.Product || {};
+
+	        let existingItemReason = '';
+	        const override = toObjectOrEmpty(snapshot?.override);
+	        if (typeof (override as any)?.reason === 'string') {
+	          existingItemReason = String((override as any).reason).trim();
+	        }
+	        if (!existingItemReason) {
+	          const history = Array.isArray((snapshot as any)?.override_history) ? (snapshot as any).override_history : [];
+	          const last = history.length > 0 ? history[history.length - 1] : null;
+	          if (typeof (last as any)?.reason === 'string') {
+	            existingItemReason = String((last as any).reason).trim();
+	          }
+	        }
+	        if (orderItemId) {
+	          overrideReasonByItemId.set(orderItemId, existingItemReason);
+	        }
+	        return {
+	          order_item_id: orderItemId,
+	          product_id: String(row?.product_id || ''),
+	          clearance_promo_id: String(row?.clearance_promo_id || '').trim() || null,
+	          preferred_unit_cost: preferredUnitCostRaw !== null && preferredUnitCostRaw > 0 ? Number(preferredUnitCostRaw.toFixed(4)) : null,
+	          product_name: String(product?.name || 'Produk'),
           sku: String(product?.sku || '-'),
           qty: Math.max(0, Number(row?.qty || 0)),
           baseline_unit_price: Math.max(0, baseline),
@@ -1118,34 +1137,38 @@ export default function AdminOrdersWorkspace({
         };
       }).filter((row: PricingEditorItem) => Boolean(row.order_item_id));
 
-      const drafts: Record<string, PricingEditorDraft> = {};
-      items.forEach((row) => {
-        const baseline = Math.max(0, Number(row.baseline_unit_price || 0));
-        const current = Math.max(0, Number(row.current_unit_price || 0));
-        const derivedPct = baseline > 0 && current > 0 && current <= baseline
-          ? Math.max(0, Math.min(100, (1 - current / baseline) * 100))
-          : 0;
-        drafts[row.order_item_id] = {
-          unit_price_override: String(row.current_unit_price || 0),
-          preferred_unit_cost: row.preferred_unit_cost !== null ? Number(row.preferred_unit_cost).toFixed(4) : '',
-          reason: '',
-          deal_mode: 'price',
-          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
-        };
-      });
-
-	      setPricingEditor({
-	        orderId,
-	        invoiceId,
-	        invoiceNumber,
-	        orderStatus,
-	        goodsOutPostedAt,
-	        orderReason: String((detail as any)?.pricing_override_note || '').trim(),
-	        items,
-	        drafts,
-	        saving: false,
-	        error: ''
+	      const drafts: Record<string, PricingEditorDraft> = {};
+	      items.forEach((row) => {
+	        const baseline = Math.max(0, Number(row.baseline_unit_price || 0));
+	        const current = Math.max(0, Number(row.current_unit_price || 0));
+	        const derivedPct = baseline > 0 && current > 0 && current <= baseline
+	          ? Math.max(0, Math.min(100, (1 - current / baseline) * 100))
+	          : 0;
+	        const existingReason = String(overrideReasonByItemId.get(row.order_item_id) || '').trim();
+	        drafts[row.order_item_id] = {
+	          unit_price_override: String(row.current_unit_price || 0),
+	          preferred_unit_cost: row.preferred_unit_cost !== null ? Number(row.preferred_unit_cost).toFixed(4) : '',
+	          reason: existingReason,
+	          deal_mode: 'price',
+	          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
+	        };
 	      });
+
+	      const detailReason = String((detail as any)?.pricing_override_note || '').trim();
+	      const fallbackReason = Array.from(overrideReasonByItemId.values()).find((value) => String(value || '').trim()) || '';
+
+		      setPricingEditor({
+		        orderId,
+		        invoiceId,
+		        invoiceNumber,
+		        orderStatus,
+		        goodsOutPostedAt,
+		        orderReason: detailReason || String(fallbackReason || '').trim(),
+		        items,
+		        drafts,
+		        saving: false,
+		        error: ''
+		      });
 
       const uniqueProductIds = Array.from(new Set(items.map((row) => String(row.product_id || '').trim()).filter(Boolean)));
       setPricingCostLayersByProductId({});

@@ -1700,6 +1700,10 @@ export const updateOrderCostLayerPreference = asyncWrapper(async (req: Request, 
             reservationSummary = await InventoryReservationService.syncReservationsForOrder({ order_id: orderId, transaction: t });
         }
 
+        if (orderReason) {
+            await order.update({ pricing_override_note: orderReason }, { transaction: t });
+        }
+
         if (changes.length > 0 || orderReason) {
             await recordOrderEvent({
                 transaction: t,
