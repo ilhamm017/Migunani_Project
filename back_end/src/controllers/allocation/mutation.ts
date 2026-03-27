@@ -814,3 +814,282 @@ export const cancelBackorder = asyncWrapper(async (req: Request, res: Response) 
         throw error;
     }
 });
+
+export const cancelBackorderItems = asyncWrapper(async (req: Request, res: Response) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params as { id: string };
+        const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason : '';
+        const reason = reasonRaw.trim();
+        const productIdsRaw = Array.isArray(req.body?.product_ids) ? req.body.product_ids : [];
+        const productIds = productIdsRaw
+            .map((value: unknown) => String(value || '').trim())
+            .filter(Boolean);
+
+        if (!reason) {
+            await t.rollback();
+            throw new CustomError('Alasan cancel wajib diisi.', 400);
+        }
+        if (productIds.length === 0) {
+            await t.rollback();
+            throw new CustomError('product_ids wajib diisi.', 400);
+        }
+
+        const order = await Order.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+        if (!order) {
+            await t.rollback();
+            throw new CustomError('Order tidak ditemukan.', 404);
+        }
+        const previousOrderStatus = String(order.status || '');
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
+
+        if ((TERMINAL_ORDER_STATUSES as readonly string[]).includes(String(order.status || '').trim().toLowerCase())) {
+            await t.rollback();
+            throw new CustomError(`Order dengan status '${order.status}' tidak bisa cancel backorder.`, 400);
+        }
+
+        const targetProductIds = new Set<string>(productIds);
+
+        const orderItems = await OrderItem.findAll({
+            where: { order_id: id },
+            include: [{ model: Product, attributes: ['id', 'name'], required: false }],
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+            order: [['id', 'ASC']]
+        });
+        const allocations = await OrderAllocation.findAll({
+            where: { order_id: id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
+        const { shortageItems } = buildShortageSummary(
+            orderItems.map((item: any) => item.get({ plain: true })),
+            allocations.map((allocation: any) => allocation.get({ plain: true }))
+        );
+
+        if (shortageItems.length === 0) {
+            await t.rollback();
+            throw new CustomError('Order ini tidak memiliki kekurangan alokasi (bukan backorder/pre-order).', 400);
+        }
+
+        const effectiveShortageTargets = (shortageItems as any[]).filter((row: any) => targetProductIds.has(String(row?.product_id || '')));
+        if (effectiveShortageTargets.length === 0) {
+            await t.rollback();
+            throw new CustomError('SKU yang dipilih tidak memiliki backorder aktif.', 409);
+        }
+
+        const allocatedByProduct = new Map<string, number>();
+        for (const allocation of allocations) {
+            const productId = String((allocation as any).product_id || '');
+            if (!productId) continue;
+            const prev = Number(allocatedByProduct.get(productId) || 0);
+            allocatedByProduct.set(productId, prev + Number((allocation as any).allocated_qty || 0));
+        }
+
+        const remainingAllocatedByProduct = new Map<string, number>(allocatedByProduct);
+        const itemBreakdown = orderItems.map((oi: any) => {
+            const productId = String(oi.product_id || '');
+            const orderedQty = Number(oi.qty || 0);
+            const remainingAllocated = Number(remainingAllocatedByProduct.get(productId) || 0);
+            const allocatedQty = Math.min(orderedQty, Math.max(0, remainingAllocated));
+            const shortageQty = Math.max(0, orderedQty - allocatedQty);
+            remainingAllocatedByProduct.set(productId, Math.max(0, remainingAllocated - allocatedQty));
+            return {
+                oi,
+                product_id: productId,
+                ordered_qty: orderedQty,
+                allocated_qty: allocatedQty,
+                shortage_qty: shortageQty
+            };
+        });
+
+        let originalSubtotal = 0;
+        let remainingSubtotal = 0;
+        let didCancelAny = false;
+
+        for (const row of itemBreakdown) {
+            const price = Number(row.oi.price_at_purchase || 0);
+            originalSubtotal += price * Number(row.ordered_qty || 0);
+
+            const shouldCancel = targetProductIds.has(String(row.product_id || '')) && row.shortage_qty > 0;
+            remainingSubtotal += price * Number(shouldCancel ? row.allocated_qty : row.ordered_qty);
+
+            if (!shouldCancel) {
+                const backorder = await Backorder.findOne({
+                    where: { order_item_id: row.oi.id },
+                    transaction: t
+                });
+                if (backorder && row.shortage_qty <= 0 && backorder.status === 'waiting_stock') {
+                    await backorder.update({
+                        qty_pending: 0,
+                        status: 'fulfilled'
+                    }, { transaction: t });
+                }
+                continue;
+            }
+
+            didCancelAny = true;
+            await row.oi.update({
+                qty: row.allocated_qty,
+                qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0) + Number(row.shortage_qty || 0),
+            }, { transaction: t });
+
+            await recordOrderEvent({
+                transaction: t,
+                order_id: String(id),
+                order_item_id: String(row?.oi?.id || ''),
+                event_type: 'backorder_canceled',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                reason,
+                payload: {
+                    before: {
+                        shortage_qty: Number(row.shortage_qty || 0),
+                        qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0),
+                    },
+                    after: {
+                        shortage_qty: 0,
+                        qty_canceled_backorder: Number(row.oi.qty_canceled_backorder || 0) + Number(row.shortage_qty || 0),
+                    },
+                    delta: {
+                        canceled_qty: Number(row.shortage_qty || 0)
+                    }
+                }
+            });
+
+            const backorder = await Backorder.findOne({
+                where: { order_item_id: row.oi.id },
+                transaction: t
+            });
+            if (backorder) {
+                await backorder.update({
+                    qty_pending: 0,
+                    status: 'canceled',
+                    notes: `Reason: ${reason}`
+                }, { transaction: t });
+            }
+        }
+
+        if (!didCancelAny) {
+            await t.rollback();
+            throw new CustomError('Tidak ada qty backorder yang bisa dibatalkan untuk SKU ini.', 409);
+        }
+
+        const shippingFee = Number(order.shipping_fee || 0);
+        const currentDiscount = Number(order.discount_amount || 0);
+        const discountRatio = originalSubtotal > 0 ? Math.min(1, Math.max(0, remainingSubtotal / originalSubtotal)) : 0;
+        const nextDiscount = Math.round(currentDiscount * discountRatio * 100) / 100;
+        const nextTotal = Math.max(0, Math.round((remainingSubtotal + shippingFee - nextDiscount) * 100) / 100);
+
+        const [orderWithInvoice] = await attachInvoicesToOrders([order], { transaction: t });
+        const attachedInvoice = orderWithInvoice?.Invoice || null;
+        const attachedPaymentMethod = String(attachedInvoice?.payment_method || order.payment_method || '').trim().toLowerCase();
+        const attachedPaymentStatus = String(attachedInvoice?.payment_status || '').trim().toLowerCase();
+        const paymentSettled =
+            attachedPaymentStatus === 'paid'
+            || (attachedPaymentMethod === 'cod' && attachedPaymentStatus === 'cod_pending');
+
+        const openBackorderCount = await Backorder.count({
+            where: {
+                order_item_id: { [Op.in]: orderItems.map((row: any) => row.id) },
+                qty_pending: { [Op.gt]: 0 },
+                status: 'waiting_stock'
+            },
+            transaction: t
+        });
+
+        let nextStatus = remainingSubtotal <= 0
+            ? 'canceled'
+            : (order.status === 'hold' ? 'waiting_invoice' : order.status);
+
+        if (remainingSubtotal > 0 && openBackorderCount === 0) {
+            const currentStatus = String(order.status || '').trim().toLowerCase();
+            if (currentStatus === 'partially_fulfilled') {
+                nextStatus = paymentSettled ? 'completed' : 'delivered';
+            }
+        }
+
+        await order.update({
+            total_amount: nextTotal,
+            discount_amount: nextDiscount,
+            status: nextStatus,
+            stock_released: remainingSubtotal <= 0 ? true : order.stock_released
+        }, { transaction: t });
+        if (previousOrderStatus !== nextStatus) {
+            await recordOrderEvent({
+                transaction: t,
+                order_id: String(id),
+                event_type: 'order_status_changed',
+                actor_user_id: actorId,
+                actor_role: actorRole,
+                payload: {
+                    before: { status: previousOrderStatus },
+                    after: { status: nextStatus },
+                    delta: { status_changed: true }
+                }
+            });
+        }
+
+        const openIssues = await OrderIssue.findAll({
+            where: { order_id: id, status: 'open' },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        for (const issue of openIssues) {
+            await issue.update({
+                status: 'resolved',
+                resolved_at: new Date(),
+                resolved_by: req.user?.id || null,
+            }, { transaction: t });
+        }
+
+        const now = new Date();
+        await OrderIssue.create({
+            order_id: id,
+            issue_type: 'shortage',
+            status: 'resolved',
+            note: `[CANCEL_BACKORDER_ITEMS] ${reason}`,
+            due_at: now,
+            resolved_at: now,
+            created_by: req.user?.id || null,
+            resolved_by: req.user?.id || null,
+        }, { transaction: t });
+
+        const finalStatus = String(nextStatus || order.status || '');
+        if (previousOrderStatus !== finalStatus) {
+            await emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus || null,
+                to_status: finalStatus,
+                source: String(order.source || ''),
+                payment_method: null,
+                courier_id: String(order.courier_id || ''),
+                triggered_by_role: String(req.user?.role || ''),
+                target_roles: ['kasir', 'admin_gudang', 'admin_finance', 'customer'],
+            }, {
+                transaction: t,
+                requestContext: 'allocation_cancel_backorder_items_status_changed'
+            });
+        } else {
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'allocation_cancel_backorder_items_refresh_badges'
+            });
+        }
+
+        await t.commit();
+
+        return res.json({
+            message: 'Backorder SKU berhasil dibatalkan.',
+            order_id: id,
+            canceled_reason: reason,
+            canceled_product_ids: Array.from(targetProductIds),
+            shortage_items: effectiveShortageTargets,
+        });
+    } catch (error) {
+        try { await t.rollback(); } catch { }
+        throw error;
+    }
+});

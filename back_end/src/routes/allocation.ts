@@ -11,6 +11,7 @@ router.get('/pending', OrderAllocationController.getPendingAllocations);
 router.get('/picklist', OrderAllocationController.getPicklist);
 router.get('/product/:productId', OrderAllocationController.getProductAllocations);
 router.post('/:id/cancel-backorder', OrderAllocationController.cancelBackorder);
+router.post('/:id/cancel-backorder-items', OrderAllocationController.cancelBackorderItems);
 router.get('/:id', OrderAllocationController.getOrderDetails);
 router.post('/:id', OrderAllocationController.allocateOrder);
 

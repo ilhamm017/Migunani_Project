@@ -142,8 +142,10 @@ type AllocationConfirmState = {
     | 'backorder_allocation'
     | 'cancel_order'
     | 'cancel_backorder'
+    | 'cancel_backorder_item'
     | 'issue_invoice'
     | 'issue_invoice_items';
+  productId?: string;
 };
 
 type WarehouseAssignConfirmCard = {
@@ -1971,7 +1973,10 @@ export default function AdminOrdersWorkspace({
   const handleConfirmAllocationStep = async () => {
     if (!allocationConfirm) return;
     if (allocationConfirm.step === 1) {
-      if (allocationConfirm.action === 'cancel_backorder' && !backorderCancelReason.trim()) {
+      if (
+        (allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item')
+        && !backorderCancelReason.trim()
+      ) {
         return;
       }
       setAllocationConfirm((prev) => (prev ? { ...prev, step: 2 } : prev));
@@ -2040,6 +2045,61 @@ export default function AdminOrdersWorkspace({
         const message = axios.isAxiosError(error)
           ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan backorder.')
           : 'Gagal membatalkan backorder.';
+        notifyAlert(message);
+      } finally {
+        setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
+      }
+      return;
+    }
+    if (allocationConfirm.action === 'cancel_backorder_item') {
+      try {
+        const meta = allocationConfirmMeta;
+        const productId = String(allocationConfirm.productId || '').trim();
+        if (!productId) {
+          notifyAlert('SKU backorder tidak valid.');
+          setAllocationConfirm(null);
+          return;
+        }
+
+        setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: true }));
+        await api.allocation.cancelBackorderItems(allocationConfirm.orderId, backorderCancelReason.trim(), [productId]);
+        if (meta) {
+          const snapshot: BackorderSnapshot = {
+            snapshotId: `cancel-sku-${allocationConfirm.orderId}-${productId}-${Date.now()}`,
+            createdAt: new Date().toISOString(),
+            reason: backorderCancelReason.trim(),
+            projectedStatus: String(meta.projectedStatus || ''),
+            summary: {
+              orderedTotal: Number(meta.totals.orderedQty || 0),
+              suppliedTotal: Number(meta.totals.allocQty || 0),
+              shortageTotal: 0,
+              allocatableTotal: 0,
+              reducedValue: Number((meta.totals as any)?.reducedValue || 0),
+            },
+            items: meta.changedItems.map((item) => ({
+              product_id: String(item.productId || ''),
+              name: String(item.name || 'Produk'),
+              sku: String(item.sku || '-'),
+              orderedQty: Number(item.orderedQty || 0),
+              allocatedQty: Math.max(0, Number(item.orderedQty || 0) - Number(item.beforeQty || 0)),
+              shortageQty: 0,
+              allocatableQty: 0,
+              canceledValue: Number((item as any)?.canceledValue || 0),
+            })),
+          };
+          setBackorderHistoryByOrderId((prev) => ({
+            ...prev,
+            [allocationConfirm.orderId]: [snapshot, ...(prev[allocationConfirm.orderId] || [])]
+          }));
+        }
+        await loadOrders();
+        setBackorderCancelReason('');
+        setAllocationConfirm(null);
+      } catch (error: unknown) {
+        console.error('Batal SKU backorder gagal:', error);
+        const message = axios.isAxiosError(error)
+          ? String((error.response?.data as any)?.message || error.message || 'Gagal membatalkan backorder SKU.')
+          : 'Gagal membatalkan backorder SKU.';
         notifyAlert(message);
       } finally {
         setAllocationSaving((prev) => ({ ...prev, [allocationConfirm.orderId]: false }));
@@ -2280,6 +2340,14 @@ export default function AdminOrdersWorkspace({
   const handleCancelBackorder = async (orderId: string) => {
     setBackorderCancelReason('');
     setAllocationConfirm({ orderId, step: 1, action: 'cancel_backorder' });
+  };
+
+  const handleCancelBackorderItem = async (orderIdRaw: string, productIdRaw: string) => {
+    const orderId = String(orderIdRaw || '').trim();
+    const productId = String(productIdRaw || '').trim();
+    if (!orderId || !productId) return;
+    setBackorderCancelReason('');
+    setAllocationConfirm({ orderId, step: 1, action: 'cancel_backorder_item', productId });
   };
 
   const handleCancelOrder = async (orderId: string) => {
@@ -2699,6 +2767,15 @@ export default function AdminOrdersWorkspace({
                             <Plus size={14} />
                           </button>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleCancelBackorderItem(model.orderId, item.product_id)}
+                          disabled={!model.canCancelBackorderEarly || model.allocationBusy || item.shortageQty <= 0}
+                          className="btn-3d mt-2 w-full rounded-lg bg-rose-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                          title="Batalkan sisa backorder untuk SKU ini (hanya qty yang belum tersuplai)."
+                        >
+                          Cancel SKU
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -3082,47 +3159,70 @@ export default function AdminOrdersWorkspace({
         }>,
       };
     }
-    if (allocationConfirm.action === 'cancel_backorder') {
+    if (allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item') {
       const detail = orderDetails[orderId];
       const orderItems = Array.isArray(detail?.OrderItems) ? detail.OrderItems : [];
-      const allocations = Array.isArray(detail?.Allocations) ? detail.Allocations : [];
-      const allocatedByProductId = allocations.reduce<Record<string, number>>((acc, allocation: any) => {
-        const productId = String(allocation?.product_id || '');
-        if (!productId) return acc;
-        acc[productId] = Number(acc[productId] || 0) + Number(allocation?.allocated_qty || 0);
-        return acc;
-      }, {});
-      const changedItems = groupedItems
-        .map((item) => {
-          const productId = String(item.product_id || '');
-          if (!productId) return null;
-          const orderedQtyItem = orderItems
-            .filter((row: any) => String(row?.product_id || '') === productId)
-            .reduce((sum: number, row: any) => sum + Number(row?.qty || 0), 0);
-          const allocatedQtyItem = Number(allocatedByProductId[productId] || 0);
-          const backorderQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
-          if (backorderQty <= 0) return null;
-          return {
-            productId,
-            name: String(item?.Product?.name || 'Produk'),
-            sku: String(item?.Product?.sku || '-'),
-            orderedQty: orderedQtyItem,
-            beforeQty: backorderQty,
-            afterQty: 0,
-            canceledValue: backorderQty * Number((orderItems.find((row: any) => String(row?.product_id || '') === productId)?.price_at_purchase) || 0),
-          };
-        })
-        .filter(Boolean) as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number; canceledValue: number }>;
-      const reducedValue = orderItems.reduce((sum: number, row: any) => {
-        const orderedQtyItem = Number(row?.qty || 0);
-        const allocatedQtyItem = Number(allocatedByProductId[String(row?.product_id || '')] || 0);
-        const canceledQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
-        return sum + (canceledQty * Number(row?.price_at_purchase || 0));
-      }, 0);
+      const availability = availabilityByOrderId[orderId] || {};
+      const targetProductId = allocationConfirm.action === 'cancel_backorder_item'
+        ? String(allocationConfirm.productId || '').trim()
+        : '';
+
+      const byProduct = new Map<string, {
+        productId: string;
+        name: string;
+        sku: string;
+        orderedQty: number;
+        backorderQty: number;
+        canceledValue: number;
+      }>();
+
+      orderItems.forEach((item: any) => {
+        const productId = String(item?.product_id || '').trim();
+        if (!productId) return;
+        const itemId = String(item?.id || '').trim();
+        if (!itemId) return;
+        const orderedQtyItem = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+        if (orderedQtyItem <= 0) return;
+        const allocQtyItem = Math.max(0, Math.trunc(Number((availability as any)?.[itemId]?.allocQty || 0)));
+        const backorderQty = Math.max(0, orderedQtyItem - allocQtyItem);
+        if (backorderQty <= 0) return;
+
+        const bucket = byProduct.get(productId) || {
+          productId,
+          name: String(item?.Product?.name || 'Produk'),
+          sku: String(item?.Product?.sku || '-'),
+          orderedQty: 0,
+          backorderQty: 0,
+          canceledValue: 0,
+        };
+
+        const unitPrice = Number(item?.price_at_purchase || 0);
+        bucket.orderedQty += orderedQtyItem;
+        bucket.backorderQty += backorderQty;
+        bucket.canceledValue += backorderQty * unitPrice;
+        byProduct.set(productId, bucket);
+      });
+
+      let changedItems = Array.from(byProduct.values()).map((bucket) => ({
+        productId: bucket.productId,
+        name: bucket.name,
+        sku: bucket.sku,
+        orderedQty: bucket.orderedQty,
+        beforeQty: bucket.backorderQty,
+        afterQty: 0,
+        canceledValue: bucket.canceledValue,
+      })) as Array<{ productId: string; name: string; sku: string; orderedQty: number; beforeQty: number; afterQty: number; canceledValue: number }>;
+
+      if (allocationConfirm.action === 'cancel_backorder_item') {
+        changedItems = changedItems.filter((row) => row.productId === targetProductId);
+      }
+
+      const reducedValue = changedItems.reduce((sum, row) => sum + Number(row.canceledValue || 0), 0);
       const currentTotalAmount = Number(detail?.total_amount || 0);
       const projectedValue = Math.max(0, currentTotalAmount - reducedValue);
       const rawStatus = String(detail?.status || '');
       const projectedStatus = projectedValue <= 0 ? 'canceled' : (rawStatus === 'hold' ? 'waiting_invoice' : rawStatus);
+
       return {
         orderId,
         totals: {
@@ -3226,6 +3326,8 @@ export default function AdminOrdersWorkspace({
                     ? 'Verifikasi Alokasi Backorder'
                   : allocationConfirm.action === 'cancel_backorder'
                     ? 'Verifikasi Cancel Backorder'
+                  : allocationConfirm.action === 'cancel_backorder_item'
+                    ? 'Verifikasi Cancel SKU Backorder'
                   : allocationConfirm.action === 'issue_invoice_items'
                     ? 'Verifikasi Invoice Tambahan'
                   : allocationConfirm.action === 'issue_invoice'
@@ -3245,6 +3347,10 @@ export default function AdminOrdersWorkspace({
                     ? allocationConfirm.step === 1
                       ? 'Periksa backorder sebelum dibatalkan'
                       : 'Konfirmasi batalkan backorder'
+                  : allocationConfirm.action === 'cancel_backorder_item'
+                    ? allocationConfirm.step === 1
+                      ? 'Periksa SKU backorder sebelum dibatalkan'
+                      : 'Konfirmasi batalkan SKU backorder'
                   : allocationConfirm.action === 'issue_invoice_items'
                     ? allocationConfirm.step === 1
                       ? 'Periksa item yang akan dibuat invoice tambahan'
@@ -3364,7 +3470,7 @@ export default function AdminOrdersWorkspace({
 	                      </p>
 	                    </div>
 	                  </div>
-	                ) : allocationConfirm.action === 'cancel_backorder' ? (
+	                ) : (allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item') ? (
 	                  <div className="space-y-3">
 	                    <p>
 	                      Qty backorder yang dibatalkan <span className="font-black">{Number((allocationConfirmMeta.totals as any)?.canceledQty || 0)}</span> •
@@ -3440,7 +3546,7 @@ export default function AdminOrdersWorkspace({
                 )}
               </div>
 
-              <div className={`mt-4 rounded-2xl px-4 py-3 text-[11px] ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'}`}>
+              <div className={`mt-4 rounded-2xl px-4 py-3 text-[11px] ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item' ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'}`}>
                 {allocationConfirm.action === 'cancel_order'
                   ? allocationConfirm.step === 1
                     ? 'Pastikan order ini memang harus dibatalkan. Setelah dibatalkan, customer akan melihat status order sebagai dibatalkan.'
@@ -3453,6 +3559,10 @@ export default function AdminOrdersWorkspace({
                     ? allocationConfirm.step === 1
                       ? 'Pastikan sisa qty ini memang tidak akan ditunggu lagi oleh customer. Qty yang sudah tersuplai tetap dipertahankan.'
                       : 'Ini adalah konfirmasi akhir. Batalkan backorder sekarang?'
+                  : allocationConfirm.action === 'cancel_backorder_item'
+                    ? allocationConfirm.step === 1
+                      ? 'Pastikan SKU ini memang tidak akan ditunggu lagi oleh customer. Hanya qty backorder SKU ini yang dibatalkan.'
+                      : 'Ini adalah konfirmasi akhir. Batalkan backorder SKU ini sekarang?'
                   : allocationConfirm.action === 'issue_invoice_items'
                     ? allocationConfirm.step === 1
                       ? 'Invoice tambahan akan dibuat dari qty alokasi yang belum pernah ter-invoice.'
@@ -3479,8 +3589,13 @@ export default function AdminOrdersWorkspace({
 	                {allocationConfirm.step === 2 && (
 	                  <button
 	                    type="button"
-	                    onClick={() => setAllocationConfirm({ orderId: allocationConfirm.orderId, step: 1, action: allocationConfirm.action })}
-	                    className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-bold ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'border border-rose-200 bg-rose-50 text-rose-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}
+	                    onClick={() => setAllocationConfirm({
+	                      orderId: allocationConfirm.orderId,
+	                      step: 1,
+	                      action: allocationConfirm.action,
+	                      ...(allocationConfirm.productId ? { productId: allocationConfirm.productId } : {}),
+	                    })}
+	                    className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-bold ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item' ? 'border border-rose-200 bg-rose-50 text-rose-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}
 	                  >
 	                    Kembali
 	                  </button>
@@ -3488,8 +3603,8 @@ export default function AdminOrdersWorkspace({
 	                <button
 	                  type="button"
 	                  onClick={() => void handleConfirmAllocationStep()}
-	                  disabled={allocationConfirm.action === 'cancel_backorder' && allocationConfirm.step === 1 && !backorderCancelReason.trim()}
-	                  className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' ? 'bg-rose-600' : 'bg-emerald-600'}`}
+	                  disabled={(allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item') && allocationConfirm.step === 1 && !backorderCancelReason.trim()}
+	                  className={`btn-3d rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50 ${allocationConfirm.action === 'cancel_order' || allocationConfirm.action === 'cancel_backorder' || allocationConfirm.action === 'cancel_backorder_item' ? 'bg-rose-600' : 'bg-emerald-600'}`}
 	                >
                   {allocationConfirm.step === 1
                     ? 'Lanjut Verifikasi'
@@ -3499,6 +3614,8 @@ export default function AdminOrdersWorkspace({
                         ? 'Ya, Simpan Backorder'
                       : allocationConfirm.action === 'cancel_backorder'
                         ? 'Ya, Batalkan Backorder'
+                      : allocationConfirm.action === 'cancel_backorder_item'
+                        ? 'Ya, Batalkan SKU'
                       : allocationConfirm.action === 'issue_invoice_items'
                         ? 'Ya, Terbitkan Invoice Tambahan'
                       : allocationConfirm.action === 'issue_invoice'
@@ -3746,6 +3863,26 @@ export default function AdminOrdersWorkspace({
 	                  const computedDealPrice = dealMode === 'percent' && Number.isFinite(discountPct)
 	                    ? Math.round(baselineUnitPrice * (1 - discountPct / 100))
 	                    : null;
+	                  const draftUnitPriceRaw = String(draft?.unit_price_override ?? '').trim();
+	                  const draftUnitPriceParsed = Number(draftUnitPriceRaw);
+	                  const selectedUnitPrice = computedDealPrice !== null && Number.isFinite(computedDealPrice) && computedDealPrice > 0
+	                    ? computedDealPrice
+	                    : Number.isFinite(draftUnitPriceParsed) && draftUnitPriceParsed > 0
+	                      ? draftUnitPriceParsed
+	                      : Math.max(0, Number(row.current_unit_price || 0));
+	                  const itemQty = Math.max(0, Math.trunc(Number(row.qty || 0)));
+	                  const baselineDelta = selectedUnitPrice - baselineUnitPrice;
+	                  const baselineDeltaAbs = Math.abs(baselineDelta);
+	                  const baselineDeltaPct = baselineUnitPrice > 0
+	                    ? Math.round((baselineDeltaAbs / baselineUnitPrice) * 10000) / 100
+	                    : 0;
+	                  const baselineDeltaTotalAbs = baselineDeltaAbs * itemQty;
+	                  const costAtPurchase = row.cost_at_purchase !== null ? Number(row.cost_at_purchase || 0) : null;
+	                  const profitPerUnit = costAtPurchase !== null ? selectedUnitPrice - costAtPurchase : null;
+	                  const profitTotal = profitPerUnit !== null ? profitPerUnit * itemQty : null;
+	                  const profitPct = profitPerUnit !== null && selectedUnitPrice > 0
+	                    ? Math.round(((profitPerUnit / selectedUnitPrice) * 100) * 100) / 100
+	                    : null;
 	                  const layers = pricingCostLayersByProductId[row.product_id] || [];
 	                  const isPromoLocked = Boolean(row.clearance_promo_id);
 	                  return (
@@ -3757,6 +3894,36 @@ export default function AdminOrdersWorkspace({
 	                          <p className="mt-1 text-[10px] text-slate-500">
 	                            Baseline {formatCurrency(row.baseline_unit_price)} • Saat ini {formatCurrency(row.current_unit_price)}
 	                            {row.cost_at_purchase !== null ? ` • Modal ${formatCurrency(row.cost_at_purchase)}` : ''}
+	                          </p>
+	                          <p className="mt-1 text-[10px] text-slate-600">
+	                            Dipilih <span className="font-black text-slate-900">{formatCurrency(selectedUnitPrice)}</span>
+	                            {baselineDeltaAbs > 0.0001 ? (
+	                              <span className="text-slate-600">
+	                                {' • '}
+	                                {baselineDelta < 0 ? 'Diskon baseline ' : 'Selisih baseline '}
+	                                <span className="font-black text-amber-700">
+	                                  {formatCurrency(baselineDeltaAbs)}/pcs
+	                                </span>
+	                                {baselineDeltaPct > 0 ? ` (${baselineDeltaPct}%)` : ''}
+	                                {itemQty > 1 ? ` • total ${formatCurrency(baselineDeltaTotalAbs)}` : ''}
+	                              </span>
+	                            ) : (
+	                              <span className="text-slate-500">{' • '}Selisih baseline 0</span>
+	                            )}
+	                          </p>
+	                          <p className={`mt-1 text-[10px] ${profitPerUnit !== null && profitPerUnit < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+	                            {profitPerUnit === null ? (
+	                              <span className="text-slate-400">Estimasi profit: -</span>
+	                            ) : (
+	                              <>
+	                                {profitPerUnit < 0 ? 'Estimasi rugi ' : 'Estimasi profit '}
+	                                <span className="font-black">
+	                                  {formatCurrency(Math.abs(profitPerUnit))}/pcs
+	                                </span>
+	                                {profitPct !== null ? ` (${profitPct}%)` : ''}
+	                                {profitTotal !== null ? ` • total ${formatCurrency(Math.abs(profitTotal))}` : ''}
+	                              </>
+	                            )}
 	                          </p>
 	                        </div>
 	                        <div className="flex flex-col items-end gap-2">

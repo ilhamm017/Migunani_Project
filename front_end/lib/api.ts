@@ -229,6 +229,11 @@ export const api = {
             apiClient.post(`/allocation/${id}`, { items }),
         cancelBackorder: (id: string, reason: string) =>
             apiClient.post(`/allocation/${id}/cancel-backorder`, { reason }),
+        cancelBackorderItems: (id: string, reason: string, productIds: string[]) =>
+            apiClient.post(`/allocation/${id}/cancel-backorder-items`, {
+                reason,
+                product_ids: productIds,
+            }),
     },
 
     // Retur (Customer & Admin)
