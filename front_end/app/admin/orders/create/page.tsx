@@ -3,7 +3,7 @@
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal } from 'lucide-react';
+import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal, Minus, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/utils';
 import Image from 'next/image';
@@ -46,6 +46,7 @@ type CustomerOption = {
 
 type ProductOption = {
     id: string;
+    sku?: string;
     name?: string;
     image_url?: string;
     stock_quantity?: number | string;
@@ -425,6 +426,13 @@ function ManualOrderContent() {
         }));
     };
 
+    const setQty = (productId: string, rawValue: string) => {
+        const parsed = Number(rawValue);
+        const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
+        const nextQty = Math.max(1, normalized);
+        setCart((prev) => prev.map((item) => (item.product_id === productId ? { ...item, qty: nextQty } : item)));
+    };
+
 	    const calculateSubtotal = () => {
 	        return cart.reduce((sum, item) => sum + (getDealUnitPrice(item) * item.qty), 0);
 	    };
@@ -670,11 +678,11 @@ function ManualOrderContent() {
                 </div>
             )}
 
-		            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-		                {/* Left Column: Selection (digabung jadi 1 card) */}
-		                <div className="order-2 lg:order-2 lg:col-span-1">
-		                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-		                        <div className="space-y-6">
+			            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+			                {/* Left Column: Selection (digabung jadi 1 card) */}
+			                <div className="order-1 lg:order-1 lg:col-span-1">
+			                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+			                        <div className="space-y-6">
 		                            {/* Customer Selection */}
 		                            {!isChatDrivenOrder ? (
 		                                <div className="space-y-4">
@@ -789,14 +797,15 @@ function ManualOrderContent() {
 		                                                    <div className="flex items-center gap-3">
 		                                                        {p.image_url && (
 		                                                            <Image src={p.image_url} alt={p.name || 'Produk'} width={40} height={40} className="rounded-lg object-cover" />
-		                                                        )}
-		                                                        <div>
-		                                                            <p className="font-bold text-slate-900">{p.name}</p>
-		                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
-		                                                        </div>
-		                                                    </div>
-		                                                    <p className="font-bold text-blue-600">
-		                                                        {formatCurrency(getProductPrice(p))}
+			                                                        )}
+			                                                        <div>
+			                                                            <p className="font-bold text-slate-900">{p.name}</p>
+			                                                            <p className="text-xs text-slate-500">SKU: {p.sku || '-'}</p>
+			                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
+			                                                        </div>
+			                                                    </div>
+			                                                    <p className="font-bold text-blue-600">
+			                                                        {formatCurrency(getProductPrice(p))}
 		                                                    </p>
 		                                                </div>
 		                                            ))}
@@ -865,7 +874,7 @@ function ManualOrderContent() {
 	                            >
 	                                {shippingMethods.length === 0 ? (
 	                                    <option value="">{loadingShippingMethods ? 'Memuat metode...' : 'Belum ada metode aktif'}</option>
-	                                ) : (
+	                        ) : (
 	                                    shippingMethods.map((item) => (
 	                                        <option key={item.code} value={item.code}>
 	                                            {item.name} ({formatCurrency(Number(item.fee || 0))})
@@ -874,122 +883,202 @@ function ManualOrderContent() {
 	                                )}
 	                            </select>
 	                        </div>
-
-	                        <div className="space-y-1 text-sm">
-	                            <div className="flex justify-between items-center">
-	                                <span className="font-semibold text-slate-600">Subtotal Produk</span>
-	                                <span className="font-bold text-slate-900">{formatCurrency(calculateSubtotal())}</span>
-	                            </div>
-	                            <div className="flex justify-between items-center">
-	                                <span className="font-semibold text-slate-600">Biaya Pengiriman</span>
-	                                <span className="font-bold text-slate-900">{formatCurrency(shippingFee)}</span>
-	                            </div>
-	                        </div>
-	                        <div className="flex justify-between items-center text-lg">
-	                            <span className="font-bold text-slate-600">Total</span>
-	                            <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
-	                        </div>
-			                        <button
-                                        type="button"
-			                            onClick={handleSubmit}
-			                            disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
-			                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-			                        >
-		                            {submitting ? 'Memproses...' : (
-		                                <>
-		                                    <Check size={18} /> Buat Pesanan
-		                                </>
-		                            )}
-		                        </button>
 		                            </div>
 		                        </div>
 		                    </div>
 		                </div>
 	
 		                {/* Right Column (Lebih luas): Cart Summary */}
-		                <div className="order-1 lg:order-1 lg:col-span-2 space-y-6">
+		                <div className="order-2 lg:order-2 lg:col-span-2 space-y-6">
 	                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
                         <h2 className="font-bold text-slate-900 mb-4">Ringkasan Pesanan</h2>
 
-	                        <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+	                        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
                             {cart.length === 0 ? (
                                 <div className="text-center py-10 text-slate-400">
                                     <ShoppingCart size={48} className="mx-auto mb-2 opacity-20" />
                                     <p>Belum ada produk dipilih</p>
                                 </div>
 	                            ) : (
-	                                cart.map(item => (
-	                                    <div key={item.product_id} className="flex gap-3 relative group">
-	                                        <div className="flex-1">
-	                                            <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.product.name}</p>
-	                                            <div className="mt-1 space-y-1">
-		                                                <p className="text-sm text-slate-500">
-		                                                    Harga normal {formatCurrency(getProductPrice(item.product))} x {item.qty}
-		                                                </p>
-		                                                {canOverridePricing ? (
-		                                                    <div className="flex flex-wrap items-center gap-2">
-		                                                        <label className="text-xs font-bold text-slate-500">Harga deal</label>
-		                                                        <input
-		                                                            type="number"
-		                                                            min={0}
-		                                                            value={Number(item.unit_price_override ?? getProductPrice(item.product)) || 0}
-	                                                            onChange={(e) => {
-	                                                                const raw = e.target.value;
-	                                                                const next = raw === '' ? null : Number(raw);
-	                                                                setCart((prev) => prev.map((row) => row.product_id === item.product_id
-	                                                                    ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
-	                                                                    : row));
-	                                                            }}
-		                                                            className="w-36 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-right"
-		                                                        />
-		                                                        <input
-		                                                            type="text"
-		                                                            placeholder="Keterangan (opsional)"
-	                                                            value={String(item.unit_price_override_reason || '')}
-	                                                            onChange={(e) => {
-	                                                                const next = e.target.value;
-	                                                                setCart((prev) => prev.map((row) => row.product_id === item.product_id
-	                                                                    ? { ...row, unit_price_override_reason: next }
-	                                                                    : row));
-	                                                            }}
-		                                                            className="flex-1 min-w-[180px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm"
-		                                                        />
-		                                                    </div>
-		                                                ) : null}
-		                                                {canOverridePricing ? (
-		                                                    <p className="text-xs text-slate-500">
-		                                                        Dipakai: <span className="font-bold">{formatCurrency(getDealUnitPrice(item))}</span> per item
-		                                                    </p>
-		                                                ) : null}
-	                                            </div>
-	                                        </div>
-	                                        <div className="flex items-center gap-2">
-	                                            <button onClick={() => updateQty(item.product_id, -1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">-</button>
-	                                            <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
-	                                            <button onClick={() => updateQty(item.product_id, 1)} className="w-6 h-6 rounded bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">+</button>
-	                                        </div>
-                                        {canManageAliases ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setAliasModalProduct({ id: item.product_id, name: item.product?.name });
-                                                    setAliasModalOpen(true);
-                                                }}
-                                                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+	                                cart.map((item) => {
+                                        const name = String(item.product?.name || '').trim() || 'Produk';
+                                        const sku = String(item.product?.sku || '').trim();
+                                        const stockParsed = Number(item.product?.stock_quantity);
+                                        const stockQty = Number.isFinite(stockParsed) ? stockParsed : null;
+                                        const isOutOfStock = stockQty !== null && stockQty <= 0;
+                                        const shortage = stockQty === null ? 0 : Math.max(0, Number(item.qty || 0) - stockQty);
+                                        const hasShortage = shortage > 0;
+                                        const dealUnit = getDealUnitPrice(item);
+                                        const normalUnit = getProductPrice(item.product);
+                                        const lineTotal = dealUnit * Number(item.qty || 0);
+
+                                        return (
+                                            <div
+                                                key={item.product_id}
+                                                className={`rounded-xl p-3 ${hasShortage
+                                                    ? isOutOfStock
+                                                        ? 'border border-rose-200 bg-rose-50/70'
+                                                        : 'border border-amber-200 bg-amber-50/70'
+                                                    : 'border border-slate-100 bg-white'
+                                                    }`}
                                             >
-                                                Alias
-                                            </button>
-                                        ) : null}
-	                                        <button
-	                                            onClick={() => removeFromCart(item.product_id)}
-	                                            className="text-rose-500 hover:text-rose-700 p-1"
-	                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
-                                ))
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <p className="text-xs font-bold text-slate-900">{name}</p>
+                                                            {stockQty !== null ? (
+                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${isOutOfStock
+                                                                    ? 'bg-rose-600 text-white'
+                                                                    : hasShortage
+                                                                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                                                        : 'bg-slate-100 text-slate-700'
+                                                                    }`}>
+                                                                    {isOutOfStock ? 'Stok Habis' : hasShortage ? 'Stok Kurang' : `Stok ${stockQty}`}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                        <p className="text-[10px] text-slate-500">SKU: {sku || item.product_id}</p>
+                                                        <p className="text-[10px] text-slate-500">
+                                                            Total <span className="font-black text-slate-800">{formatCurrency(lineTotal)}</span>
+                                                            {' • '}
+                                                            Qty {Number(item.qty || 0)}
+                                                            {' • '}
+                                                            Unit {formatCurrency(dealUnit)}
+                                                            {canOverridePricing ? ` • Normal ${formatCurrency(normalUnit)}` : ''}
+                                                        </p>
+
+                                                        {stockQty !== null && hasShortage ? (
+                                                            <div className={`mt-2 rounded-lg bg-white/80 px-3 py-2 ${isOutOfStock ? 'border border-rose-200' : 'border border-amber-200'}`}>
+                                                                <p className={`text-[11px] font-black ${isOutOfStock ? 'text-rose-700' : 'text-amber-700'}`}>
+                                                                    Stok {stockQty} • Pesan {Number(item.qty || 0)} • Kurang {shortage}
+                                                                </p>
+                                                            </div>
+                                                        ) : null}
+
+                                                        {canOverridePricing ? (
+                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Harga deal</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        min={0}
+                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
+                                                                        onChange={(e) => {
+                                                                            const raw = e.target.value;
+                                                                            const next = raw === '' ? null : Number(raw);
+                                                                            setCart((prev) => prev.map((row) => row.product_id === item.product_id
+                                                                                ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
+                                                                                : row));
+                                                                        }}
+                                                                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right"
+                                                                    />
+                                                                    <input
+                                                                        type="text"
+                                                                        placeholder="Keterangan nego (opsional)"
+                                                                        value={String(item.unit_price_override_reason || '')}
+                                                                        onChange={(e) => {
+                                                                            const next = e.target.value;
+                                                                            setCart((prev) => prev.map((row) => row.product_id === item.product_id
+                                                                                ? { ...row, unit_price_override_reason: next }
+                                                                                : row));
+                                                                        }}
+                                                                        className="flex-1 min-w-[160px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                                                                    />
+                                                                </div>
+                                                                <p className="text-[10px] text-slate-500">
+                                                                    Dipakai <span className="font-black text-slate-800">{formatCurrency(dealUnit)}</span> per item
+                                                                </p>
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+
+                                                    <div className="text-right">
+                                                        <p className="text-[10px] text-slate-400">Qty</p>
+                                                        <div className="flex items-center justify-end gap-1">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateQty(item.product_id, -1)}
+                                                                disabled={Number(item.qty || 0) <= 1}
+                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+                                                                aria-label="Kurangi qty"
+                                                            >
+                                                                <Minus size={14} />
+                                                            </button>
+                                                            <input
+                                                                type="number"
+                                                                min={1}
+                                                                value={Number(item.qty || 0)}
+                                                                onChange={(e) => setQty(item.product_id, e.target.value)}
+                                                                className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateQty(item.product_id, 1)}
+                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+                                                                aria-label="Tambah qty"
+                                                            >
+                                                                <Plus size={14} />
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="mt-2 flex items-center justify-end gap-2">
+                                                            {canManageAliases ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setAliasModalProduct({ id: item.product_id, sku: item.product?.sku, name: item.product?.name });
+                                                                        setAliasModalOpen(true);
+                                                                    }}
+                                                                    className="btn-3d rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
+                                                                >
+                                                                    Alias
+                                                                </button>
+                                                            ) : null}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeFromCart(item.product_id)}
+                                                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                                                                aria-label="Hapus dari cart"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
 	                            )}
 			                        </div>
+
+                                <div className="border-t border-slate-200 pt-4 space-y-3">
+                                    <div className="space-y-1 text-sm">
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-semibold text-slate-600">Subtotal Produk</span>
+                                            <span className="font-black text-slate-900">{formatCurrency(calculateSubtotal())}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-semibold text-slate-600">Biaya Pengiriman</span>
+                                            <span className="font-black text-slate-900">{formatCurrency(shippingFee)}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-between items-center text-lg">
+                                        <span className="font-bold text-slate-600">Total</span>
+                                        <span className="font-black text-slate-900">{formatCurrency(grandTotal)}</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleSubmit}
+                                        disabled={submitting || cart.length === 0 || (shippingMethods.length > 0 && !shippingMethodCode)}
+                                        className="btn-3d w-full rounded-2xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-wider text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                                    >
+                                        {submitting ? 'Memproses...' : (
+                                            <>
+                                                <Check size={18} /> Buat Pesanan
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
 		                    </div>
 		                </div>
 		            </div>
