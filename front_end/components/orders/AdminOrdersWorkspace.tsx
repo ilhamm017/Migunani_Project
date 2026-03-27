@@ -3937,7 +3937,7 @@ export default function AdminOrdersWorkspace({
                 )}
               </div>
 
-              {forcedCustomerId && orderSectionFilter !== 'backorder' && (
+              {forcedCustomerId && orderSectionFilter === 'backorder' && (
                 <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -3999,6 +3999,7 @@ export default function AdminOrdersWorkspace({
 
               {renderSectionOptions.map((section) => {
                 if (orderSectionFilter !== 'all' && orderSectionFilter !== section) return null;
+                if (forcedCustomerId && orderSectionFilter === 'backorder' && section === 'backorder') return null;
                 const label = getSectionLabel(section);
                 const list = filteredGroupedOrders[section] as AdminOrderListRow[];
                 if (list.length === 0) return null;
