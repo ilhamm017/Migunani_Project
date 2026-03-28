@@ -120,7 +120,7 @@ export const attachInvoicesToOrders = async (
         where: { order_item_id: { [Op.in]: orderItemIds } },
         include: [{
             model: Invoice,
-            attributes: ['id', 'invoice_number', 'payment_status', 'payment_method', 'total', 'amount_paid', 'payment_proof_url', 'shipment_status', 'createdAt', 'updatedAt', 'expiry_date']
+            attributes: ['id', 'invoice_number', 'payment_status', 'payment_method', 'total', 'amount_paid', 'payment_proof_url', 'shipment_status', 'courier_id', 'createdAt', 'updatedAt', 'expiry_date']
         }],
         transaction: options?.transaction
     });
