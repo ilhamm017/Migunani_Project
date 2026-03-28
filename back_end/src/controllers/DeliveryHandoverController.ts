@@ -9,6 +9,7 @@ import { recordOrderEvent, recordOrderStatusChanged } from '../utils/orderEvent'
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
 import { AccountingPostingService } from '../services/AccountingPostingService';
 import { normalizeNullableUuid } from '../utils/uuid';
+import { InventoryReservationService } from '../services/InventoryReservationService';
 
 type RawHandoverItemInput = {
     product_id?: unknown;
@@ -293,6 +294,20 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
                 }
             }
         } else {
+            // Preventive: ensure reservations exist before handover/goods-out posting.
+            // This avoids handover failures due to missing batch reservations.
+            for (const order of orders) {
+                try {
+                    await InventoryReservationService.syncReservationsForOrder({ order_id: String(order.id), transaction: t });
+                } catch (error: any) {
+                    if (error instanceof CustomError) throw error;
+                    const message = String(error?.message || error || '').trim();
+                    throw new CustomError(
+                        message ? `Gagal sync reservasi sebelum handover: ${message}` : 'Gagal sync reservasi sebelum handover.',
+                        409
+                    );
+                }
+            }
             await invoice.update({
                 shipment_status: 'checked',
             }, { transaction: t });

@@ -60,37 +60,52 @@ export class AccountingPostingService {
                 }
                 if (qtyOut <= 0) continue;
 
-                const clearancePromoId = String(item?.clearance_promo_id || '').trim();
-                let valuation: { qty: number; unit_cost: number; total_cost: number };
+	                const clearancePromoId = String(item?.clearance_promo_id || '').trim();
+	                let valuation: { qty: number; unit_cost: number; total_cost: number } | null = null;
 
                 try {
-                    valuation = await InventoryReservationService.consumeReservedForOrderItem({
-                        order_item_id: String(item.id),
-                        qty: qtyOut,
-                        reference_type: 'order_goods_out',
-                        reference_id: String(order.id),
-                        note: 'Goods out valuation (reserved)',
-                        transaction: t
-                    });
-                } catch (error: any) {
-                    const message = String(error?.message || error || '');
-                    const noReservations = message.includes('No inventory batch reservations');
-                    const insufficientReserved = message.includes('Insufficient reserved')
-                        || message.includes('insufficient reserved')
-                        || message.includes('Qty reservasi batch inventory tidak cukup');
+	                    valuation = await InventoryReservationService.consumeReservedForOrderItem({
+	                        order_item_id: String(item.id),
+	                        qty: qtyOut,
+	                        reference_type: 'order_goods_out',
+	                        reference_id: String(order.id),
+	                        note: 'Goods out valuation (reserved)',
+	                        transaction: t
+	                    });
+	                } catch (error: any) {
+                    let message = String(error?.message || error || '');
+                    let messageLower = message.toLowerCase();
+                    const reservationMissing = () =>
+                        message.includes('No inventory batch reservations')
+                        || messageLower.includes('tidak ada reservasi batch inventory')
+                        || messageLower.includes('no inventory batch reservation');
+                    const reservationInsufficient = () =>
+                        messageLower.includes('insufficient reserved')
+                        || messageLower.includes('qty reservasi batch inventory tidak cukup');
 
-                    if ((noReservations || insufficientReserved) && !didSyncReservations) {
+                    let handled = false;
+                    if ((reservationMissing() || reservationInsufficient()) && !didSyncReservations) {
                         await InventoryReservationService.syncReservationsForOrder({ order_id: String(order.id), transaction: t });
                         didSyncReservations = true;
-                        valuation = await InventoryReservationService.consumeReservedForOrderItem({
-                            order_item_id: String(item.id),
-                            qty: qtyOut,
-                            reference_type: 'order_goods_out',
-                            reference_id: String(order.id),
-                            note: 'Goods out valuation (reserved after sync)',
-                            transaction: t
-                        });
-                    } else if (noReservations) {
+                        try {
+	                            valuation = await InventoryReservationService.consumeReservedForOrderItem({
+	                                order_item_id: String(item.id),
+	                                qty: qtyOut,
+	                                reference_type: 'order_goods_out',
+	                                reference_id: String(order.id),
+	                                note: 'Goods out valuation (reserved after sync)',
+	                                transaction: t
+	                            });
+	                            handled = true;
+                        } catch (retryError: any) {
+                            // If still missing reservations, fallback to legacy valuation below.
+                            error = retryError;
+                            message = String(retryError?.message || retryError || '');
+                            messageLower = message.toLowerCase();
+                        }
+                    }
+
+                    if (!handled && reservationMissing()) {
                         // Legacy fallback (no allocation/reservation) - still respects other orders' reservations via consumeFromBatches().
                         if (clearancePromoId) {
                             const promo = await ClearancePromo.findByPk(clearancePromoId, { transaction: t, lock: t.LOCK.SHARE });
@@ -98,8 +113,8 @@ export class AccountingPostingService {
                                 ? Number((promo as any).target_unit_cost || 0)
                                 : null;
 
-                            valuation = targetUnitCost !== null
-                                ? await InventoryCostService.consumeOutboundPreferUnitCost({
+	                            valuation = targetUnitCost !== null
+	                                ? await InventoryCostService.consumeOutboundPreferUnitCost({
                                     product_id: String(item.product_id),
                                     qty: qtyOut,
                                     preferred_unit_cost: targetUnitCost,
@@ -119,31 +134,37 @@ export class AccountingPostingService {
                                     transaction: t
                                 });
                         } else {
-                            valuation = await InventoryCostService.consumeOutbound({
-                                product_id: String(item.product_id),
-                                qty: qtyOut,
-                                reference_type: 'order_goods_out',
-                                reference_id: String(order.id),
-                                order_item_id: String(item.id),
-                                note: 'Goods out valuation (legacy)',
-                                transaction: t
-                            });
-                        }
-                    } else {
+	                            valuation = await InventoryCostService.consumeOutbound({
+	                                product_id: String(item.product_id),
+	                                qty: qtyOut,
+	                                reference_type: 'order_goods_out',
+	                                reference_id: String(order.id),
+	                                order_item_id: String(item.id),
+	                                note: 'Goods out valuation (legacy)',
+	                                transaction: t
+	                            });
+	                        }
+	                        handled = true;
+	                    }
+
+                    if (!handled) {
                         // Normalize inventory posting failures into a user-facing error instead of 500.
                         if (error instanceof CustomError) throw error;
-                        throw new CustomError(
-                            message || 'Gagal memproses goods out (inventory/jurnal).',
-                            409
-                        );
-                    }
-                }
+	                        throw new CustomError(
+	                            message || 'Gagal memproses goods out (inventory/jurnal).',
+	                            409
+	                        );
+	                    }
+	                }
 
-                cogs += n(valuation.total_cost);
+	                if (!valuation) {
+	                    throw new CustomError('Gagal menentukan valuation goods out untuk item order.', 409);
+	                }
+	                cogs += n(valuation.total_cost);
 
-                await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
-                await InvoiceItem.update({
-                    unit_cost: n(valuation.unit_cost)
+	                await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
+	                await InvoiceItem.update({
+	                    unit_cost: n(valuation.unit_cost)
                 }, {
                     where: { order_item_id: String(item.id) },
                     transaction: t
