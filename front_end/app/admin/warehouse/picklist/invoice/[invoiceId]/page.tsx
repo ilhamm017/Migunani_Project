@@ -13,6 +13,7 @@ type PicklistRow = {
   name: string;
   bin_location: string | null;
   total_qty: number;
+  batch_layers?: Array<{ unit_cost: number; qty_reserved: number }>;
 };
 
 type PicklistPayload = {
@@ -190,6 +191,7 @@ export default function InvoicePicklistPage() {
                     <th className="px-4 py-3">Bin</th>
                     <th className="px-4 py-3">SKU</th>
                     <th className="px-4 py-3">Produk</th>
+                    <th className="px-4 py-3">Batch (HPP)</th>
                     <th className="px-4 py-3 text-right">Qty</th>
                   </tr>
                 </thead>
@@ -208,6 +210,18 @@ export default function InvoicePicklistPage() {
                         <p className="text-sm font-black text-slate-900">{toText(row.name) || 'Produk'}</p>
                         <p className="text-[11px] text-slate-500">{row.product_id}</p>
                       </td>
+                      <td className="px-4 py-3">
+                        {Array.isArray(row.batch_layers) && row.batch_layers.length > 0 ? (
+                          <p className="text-[11px] font-bold text-slate-700">
+                            {row.batch_layers
+                              .filter((l) => Number(l?.qty_reserved || 0) > 0)
+                              .map((l) => `${toInt(l.unit_cost).toLocaleString('id-ID')} x ${toInt(l.qty_reserved)}`)
+                              .join(' • ')}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-slate-500">FIFO (auto)</p>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <span className="text-base font-black text-slate-900">{toInt(row.total_qty)}</span>
                       </td>
@@ -222,4 +236,3 @@ export default function InvoicePicklistPage() {
     </div>
   );
 }
-

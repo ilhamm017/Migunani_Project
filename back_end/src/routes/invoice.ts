@@ -9,9 +9,10 @@ const uploadPaymentProofMiddleware = createSingleUploadMiddleware(proofUpload, {
     fieldName: 'proof',
     sizeExceededMessage: 'Ukuran bukti pembayaran terlalu besar (maksimal 5MB).',
     fallbackMessage: 'Upload bukti pembayaran gagal diproses.'
-});
+	});
 
 	router.get('/my', authenticateToken, InvoiceController.getMyInvoices);
+	router.get('/admin/warehouse/queue', authenticateToken, InvoiceController.getWarehouseInvoiceQueue);
 	router.get('/:id', authenticateToken, InvoiceController.getInvoiceDetail);
 	router.get('/:id/picklist', authenticateToken, InvoiceController.getInvoicePicklist);
 	router.get('/:id/picklist.xlsx', authenticateToken, InvoiceController.exportInvoicePicklistExcel);

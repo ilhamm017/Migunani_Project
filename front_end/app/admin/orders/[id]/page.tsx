@@ -260,9 +260,6 @@ export default function AdminInvoiceDetailPage() {
   }, [routeRefId]);
 
   const invoiceRow = asRecord(invoice);
-  const picklistHref = resolvedInvoiceId
-    ? `/admin/warehouse/picklist/invoice/${encodeURIComponent(resolvedInvoiceId)}`
-    : '';
 
   useEffect(() => {
     if (!allowed) return;
@@ -953,14 +950,6 @@ export default function AdminInvoiceDetailPage() {
                 Daftar ini menghitung barang dari order berstatus <span className="font-bold">allocated, processing, checked, ready_to_ship, shipped, atau delivered</span>.
               </p>
             </div>
-            {(isWarehouseStaff || isSuperAdmin) && picklistHref && (
-              <Link
-                href={picklistHref}
-                className="shrink-0 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
-              >
-                Buka Picklist Gudang
-              </Link>
-            )}
           </div>
           {pickingItems.length === 0 ? (
             <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, sequelize } from '../models';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderIdsByInvoiceIds } from '../utils/invoiceLookup';
@@ -295,6 +295,7 @@ type InvoicePicklistRow = {
     name: string;
     bin_location: string | null;
     total_qty: number;
+    batch_layers?: Array<{ unit_cost: number; qty_reserved: number }>;
 };
 
 const requireInvoicePicklistRoles = (roleRaw: unknown) => {
@@ -334,6 +335,7 @@ const buildInvoicePicklist = async (invoiceId: string, opts?: { transaction?: an
     }) as any[];
 
     const byProduct = new Map<string, InvoicePicklistRow>();
+    const orderIdSet = new Set<string>();
     let totalQty = 0;
 
     for (const item of Array.isArray(items) ? items : []) {
@@ -342,6 +344,8 @@ const buildInvoicePicklist = async (invoiceId: string, opts?: { transaction?: an
 
         const orderItem = item?.OrderItem || null;
         const productRef = orderItem?.Product || null;
+        const orderId = String(orderItem?.order_id || '').trim();
+        if (orderId) orderIdSet.add(orderId);
         const productId = String(orderItem?.product_id || productRef?.id || '').trim();
         if (!productId) continue;
 
@@ -372,6 +376,48 @@ const buildInvoicePicklist = async (invoiceId: string, opts?: { transaction?: an
         return String(a.sku || '').localeCompare(String(b.sku || ''));
     });
 
+    // Attach reserved batch layers (HPP) so warehouse doesn't pick wrong batch.
+    const orderIds = Array.from(orderIdSet).filter(Boolean);
+    const productIds = Array.from(byProduct.keys()).filter(Boolean);
+    if (orderIds.length > 0 && productIds.length > 0) {
+        const reservedRows = await sequelize.query(
+            `SELECT
+                r.product_id AS product_id,
+                b.unit_cost AS unit_cost,
+                COALESCE(SUM(r.qty_reserved), 0) AS qty_reserved
+             FROM inventory_batch_reservations r
+             INNER JOIN inventory_batches b ON b.id = r.batch_id
+             WHERE r.order_id IN (:orderIds)
+               AND r.product_id IN (:productIds)
+             GROUP BY r.product_id, b.unit_cost`,
+            {
+                type: QueryTypes.SELECT,
+                replacements: { orderIds, productIds },
+                transaction: opts?.transaction,
+            }
+        ) as any[];
+
+        const layersByProductId = new Map<string, Array<{ unit_cost: number; qty_reserved: number }>>();
+        (Array.isArray(reservedRows) ? reservedRows : []).forEach((row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return;
+            const unitCost = Number(row?.unit_cost || 0);
+            const qtyReserved = Math.max(0, Math.trunc(Number(row?.qty_reserved || 0)));
+            if (!Number.isFinite(unitCost) || unitCost <= 0 || qtyReserved <= 0) return;
+            const list = layersByProductId.get(productId) || [];
+            list.push({ unit_cost: unitCost, qty_reserved: qtyReserved });
+            layersByProductId.set(productId, list);
+        });
+        layersByProductId.forEach((list, productId) => {
+            layersByProductId.set(productId, [...list].sort((a, b) => a.unit_cost - b.unit_cost));
+        });
+
+        rows.forEach((row) => {
+            const layers = layersByProductId.get(row.product_id) || [];
+            if (layers.length > 0) row.batch_layers = layers;
+        });
+    }
+
     return {
         invoice: invoice.get({ plain: true }) as any,
         totals: {
@@ -381,6 +427,86 @@ const buildInvoicePicklist = async (invoiceId: string, opts?: { transaction?: an
         rows,
     };
 };
+
+export const getWarehouseInvoiceQueue = asyncWrapper(async (req: Request, res: Response) => {
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const statusRaw = String(req.query?.status || 'ready_to_ship,checked').trim().toLowerCase();
+    const statusList = statusRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
+    const q = String(req.query?.q || '').trim();
+
+    const limitRaw = Number(req.query?.limit ?? 200);
+    const limit = Number.isFinite(limitRaw) ? Math.min(500, Math.max(1, Math.trunc(limitRaw))) : 200;
+
+    const invoices = await Invoice.findAll({
+        where: {
+            ...(statusList.length > 0 ? { shipment_status: { [Op.in]: statusList } } : {}),
+            ...(q ? { invoice_number: { [Op.like]: `%${q}%` } } : {}),
+        },
+        attributes: ['id', 'invoice_number', 'shipment_status', 'courier_id', 'payment_method', 'payment_status', 'createdAt', 'updatedAt'],
+        order: [['createdAt', 'ASC']],
+        limit,
+    }) as any[];
+
+    const invoiceIds = invoices.map((inv) => String(inv?.id || '')).filter(Boolean);
+    const totalsByInvoiceId = new Map<string, { total_qty: number; product_set: Set<string>; order_set: Set<string> }>();
+    invoiceIds.forEach((id) => totalsByInvoiceId.set(id, { total_qty: 0, product_set: new Set(), order_set: new Set() }));
+
+    if (invoiceIds.length > 0) {
+        const itemRows = await InvoiceItem.findAll({
+            where: { invoice_id: { [Op.in]: invoiceIds } },
+            attributes: ['invoice_id', 'qty', 'order_item_id'],
+            include: [
+                {
+                    model: OrderItem,
+                    attributes: ['order_id', 'product_id'],
+                    required: true,
+                },
+            ],
+        }) as any[];
+
+        for (const row of itemRows) {
+            const invoiceId = String(row?.invoice_id || '').trim();
+            if (!invoiceId) continue;
+            const entry = totalsByInvoiceId.get(invoiceId);
+            if (!entry) continue;
+
+            const qty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const orderId = String(row?.OrderItem?.order_id || '').trim();
+            const productId = String(row?.OrderItem?.product_id || '').trim();
+            entry.total_qty += qty;
+            if (orderId) entry.order_set.add(orderId);
+            if (productId) entry.product_set.add(productId);
+        }
+    }
+
+    res.json({
+        status: statusList.length > 0 ? statusList : undefined,
+        q,
+        rows: invoices.map((inv) => {
+            const plain = inv.get({ plain: true }) as any;
+            const id = String(plain?.id || '');
+            const totals = totalsByInvoiceId.get(id);
+            return {
+                id,
+                invoice_number: String(plain?.invoice_number || ''),
+                shipment_status: String(plain?.shipment_status || ''),
+                courier_id: plain?.courier_id ? String(plain.courier_id) : null,
+                payment_method: String(plain?.payment_method || ''),
+                payment_status: String(plain?.payment_status || ''),
+                createdAt: plain?.createdAt || null,
+                updatedAt: plain?.updatedAt || null,
+                total_qty: Number(totals?.total_qty || 0),
+                product_count: Number(totals?.product_set?.size || 0),
+                order_count: Number(totals?.order_set?.size || 0),
+            };
+        }),
+    });
+});
 
 export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) => {
     const user = req.user!;
@@ -811,19 +937,27 @@ export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res:
     sheet.getRow(6).values = ['Total Produk', Number(result.totals?.product_count || 0)];
 
     const headerRowIndex = 8;
-    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Qty'];
+    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty'];
     sheet.getRow(headerRowIndex).font = { bold: true };
 
     (Array.isArray(result.rows) ? result.rows : []).forEach((row, idx) => {
         const excelRowIndex = headerRowIndex + 1 + idx;
+        const layers = Array.isArray((row as any).batch_layers) ? ((row as any).batch_layers as any[]) : [];
+        const layerText = layers.length > 0
+            ? layers
+                .filter((l) => Number(l?.qty_reserved || 0) > 0)
+                .map((l) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
+                .join(' | ')
+            : 'FIFO (auto)';
         sheet.getRow(excelRowIndex).values = [
             idx + 1,
             row.bin_location || '',
             row.sku || row.product_id || '',
             row.name || '',
+            layerText,
             Number(row.total_qty || 0),
         ];
-        sheet.getRow(excelRowIndex).getCell(5).numFmt = '#,##0';
+        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
     });
 
     sheet.columns = [
@@ -831,6 +965,7 @@ export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res:
         { key: 'bin', width: 18 },
         { key: 'sku', width: 18 },
         { key: 'product', width: 44 },
+        { key: 'batch', width: 28 },
         { key: 'qty', width: 10 },
     ];
 

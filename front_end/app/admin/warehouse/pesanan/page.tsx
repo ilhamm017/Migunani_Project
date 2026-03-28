@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState, useCallback, DragEvent } from 'react';
 import { api } from '@/lib/api';
 import { Package, Clock, User, Hash, GripVertical, RefreshCw } from 'lucide-react';
@@ -326,6 +327,13 @@ export default function WarehouseKanbanPage() {
                         <p className="warehouse-subtitle">Gunakan drag & drop kartu pesanan antar kolom untuk transisi status pengerjaan.</p>
                     </div>
                     <div className="flex items-center gap-3">
+                        <Link
+                            href="/admin/warehouse/picklist/invoices"
+                            className="hidden sm:inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                            title="Queue picklist invoice gudang"
+                        >
+                            Picklist Invoice
+                        </Link>
                         <div className="flex flex-col items-end mr-3">
                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Terakhir Sinkron</span>
                             <span className="text-xs font-bold text-slate-600">
