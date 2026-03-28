@@ -283,14 +283,15 @@ export default function TrackerGudangCheckPage() {
         notifyAlert('Disarankan isi catatan agar jelas mismatch/masalahnya.');
       }
       await load();
-    } catch (error: any) {
-      console.error('Submit checking failed:', error);
-      const message = String(error?.response?.data?.message || error?.message || 'Gagal menyimpan checking.');
-      notifyAlert(message);
-    } finally {
-      setBusy(false);
-    }
-  };
+	    } catch (error: any) {
+	      console.error('Submit checking failed:', error);
+	      const message = String(error?.response?.data?.message || error?.message || 'Gagal menyimpan checking.');
+	      const requestId = String(error?.response?.data?.request_id || '').trim();
+	      notifyAlert(requestId ? `${message} (request_id: ${requestId})` : message);
+	    } finally {
+	      setBusy(false);
+	    }
+	  };
 
   const handleHandover = async () => {
     const handoverId = Number(latestHandover?.id || 0);
@@ -303,14 +304,15 @@ export default function TrackerGudangCheckPage() {
       await api.deliveryHandovers.handover(handoverId);
       notifyOpen({ variant: 'success', title: 'Handover', message: 'Berhasil: status invoice menjadi shipped.' });
       router.push('/admin/orders');
-    } catch (error: any) {
-      console.error('Handover failed:', error);
-      const message = String(error?.response?.data?.message || error?.message || 'Gagal handover ke driver.');
-      notifyAlert(message);
-    } finally {
-      setBusy(false);
-    }
-  };
+	    } catch (error: any) {
+	      console.error('Handover failed:', error);
+	      const message = String(error?.response?.data?.message || error?.message || 'Gagal handover ke driver.');
+	      const requestId = String(error?.response?.data?.request_id || '').trim();
+	      notifyAlert(requestId ? `${message} (request_id: ${requestId})` : message);
+	    } finally {
+	      setBusy(false);
+	    }
+	  };
 
   if (!allowed) return null;
 

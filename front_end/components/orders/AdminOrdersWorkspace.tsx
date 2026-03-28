@@ -3081,15 +3081,19 @@ export default function AdminOrdersWorkspace({
       }
       setDeliveryHandoverModal(null);
       await loadOrders();
-    } catch (error: unknown) {
-      const message = axios.isAxiosError(error)
-        ? String((error.response?.data as any)?.message || error.message || 'Gagal memproses checker/handover.')
-        : 'Gagal memproses checker/handover.';
-      notifyAlert(message);
-    } finally {
-      setDeliveryHandoverBusy(false);
-    }
-  };
+	    } catch (error: unknown) {
+	      if (axios.isAxiosError(error)) {
+	        const data = error.response?.data as any;
+	        const message = String(data?.message || error.message || 'Gagal memproses checker/handover.');
+	        const requestId = String(data?.request_id || '').trim();
+	        notifyAlert(requestId ? `${message} (request_id: ${requestId})` : message);
+	      } else {
+	        notifyAlert('Gagal memproses checker/handover.');
+	      }
+	    } finally {
+	      setDeliveryHandoverBusy(false);
+	    }
+	  };
 
   const allocationConfirmMeta = useMemo(() => {
     if (!allocationConfirm) return null;

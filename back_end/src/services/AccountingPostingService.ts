@@ -4,6 +4,7 @@ import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
 import { InventoryReservationService } from './InventoryReservationService';
 import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
+import { CustomError } from '../utils/CustomError';
 
 const n = (v: unknown) => Number(v || 0);
 
@@ -12,11 +13,11 @@ const getAccount = async (code: string, t: Transaction) => Account.findOne({ whe
 export class AccountingPostingService {
     static async postGoodsOutForOrder(orderId: string, actorId: string, t: Transaction, mode: 'non_cod' | 'cod') {
         const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
-        if (!order) throw new Error('Order not found for goods out posting');
+        if (!order) throw new CustomError('Order tidak ditemukan untuk proses goods out.', 404);
         if (order.goods_out_posted_at) return { revenue: 0, cogs: 0 };
 
         const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
-        if (!invoice) throw new Error('Invoice not found for goods out posting');
+        if (!invoice) throw new CustomError('Invoice tidak ditemukan untuk proses goods out.', 409);
 
         const orderItems = await OrderItem.findAll({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
         const allocations = await OrderAllocation.findAll({ where: { order_id: orderId }, transaction: t });
@@ -74,8 +75,11 @@ export class AccountingPostingService {
                 } catch (error: any) {
                     const message = String(error?.message || error || '');
                     const noReservations = message.includes('No inventory batch reservations');
+                    const insufficientReserved = message.includes('Insufficient reserved')
+                        || message.includes('insufficient reserved')
+                        || message.includes('Qty reservasi batch inventory tidak cukup');
 
-                    if (noReservations && !didSyncReservations) {
+                    if ((noReservations || insufficientReserved) && !didSyncReservations) {
                         await InventoryReservationService.syncReservationsForOrder({ order_id: String(order.id), transaction: t });
                         didSyncReservations = true;
                         valuation = await InventoryReservationService.consumeReservedForOrderItem({
@@ -126,7 +130,12 @@ export class AccountingPostingService {
                             });
                         }
                     } else {
-                        throw error;
+                        // Normalize inventory posting failures into a user-facing error instead of 500.
+                        if (error instanceof CustomError) throw error;
+                        throw new CustomError(
+                            message || 'Gagal memproses goods out (inventory/jurnal).',
+                            409
+                        );
                     }
                 }
 

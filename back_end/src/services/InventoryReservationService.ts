@@ -9,6 +9,7 @@ import {
     OrderItem,
 } from '../models';
 import { InventoryCostService } from './InventoryCostService';
+import { CustomError } from '../utils/CustomError';
 
 const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
 const toQtyInt = (value: unknown) => Math.max(0, Math.trunc(Number(value || 0)));
@@ -51,7 +52,7 @@ export class InventoryReservationService {
     static async syncReservationsForOrder(params: { order_id: string; transaction: Transaction }) {
         const t = params.transaction;
         const orderId = safeId(params.order_id);
-        if (!orderId) throw new Error('order_id is required for reservation sync');
+        if (!orderId) throw new CustomError('order_id wajib diisi untuk sync reservasi', 400);
 
         const orderItems = await OrderItem.findAll({
             where: { order_id: orderId },
@@ -296,18 +297,18 @@ export class InventoryReservationService {
         transaction: Transaction;
         note?: string;
     }) {
-        const t = params.transaction;
-        const orderItemId = safeId(params.order_item_id);
-        const qtyOut = toQtyInt(params.qty);
-        if (!orderItemId) throw new Error('order_item_id is required to consume reserved stock');
-        if (qtyOut <= 0) return { qty: 0, unit_cost: 0, total_cost: 0 };
+	        const t = params.transaction;
+	        const orderItemId = safeId(params.order_item_id);
+	        const qtyOut = toQtyInt(params.qty);
+	        if (!orderItemId) throw new CustomError('order_item_id wajib diisi untuk konsumsi reservasi stok', 400);
+	        if (qtyOut <= 0) return { qty: 0, unit_cost: 0, total_cost: 0 };
 
-        const orderItem = await OrderItem.findByPk(orderItemId, {
-            attributes: ['id', 'product_id'],
-            transaction: t,
-            lock: t.LOCK.UPDATE
-        });
-        if (!orderItem) throw new Error('OrderItem not found for reserved consumption');
+	        const orderItem = await OrderItem.findByPk(orderItemId, {
+	            attributes: ['id', 'product_id'],
+	            transaction: t,
+	            lock: t.LOCK.UPDATE
+	        });
+	        if (!orderItem) throw new CustomError('Order item tidak ditemukan untuk konsumsi reservasi', 404);
 
         const productId = safeId((orderItem as any).product_id);
         await InventoryCostService.ensureBootstrapBatchFromState(productId, t);
@@ -318,9 +319,9 @@ export class InventoryReservationService {
             lock: t.LOCK.UPDATE,
         });
 
-        if (reservations.length === 0) {
-            throw new Error(`No inventory batch reservations found for order_item_id ${orderItemId}.`);
-        }
+	        if (reservations.length === 0) {
+	            throw new CustomError('Tidak ada reservasi batch inventory untuk item order ini. Coba sync reservasi / alokasi ulang.', 409);
+	        }
 
         // Sort by batch FIFO (createdAt, id)
         const batchIds = Array.from(new Set(reservations.map((r: any) => safeId(r?.batch_id)).filter(Boolean)));
@@ -393,9 +394,9 @@ export class InventoryReservationService {
             remaining -= take;
         }
 
-        if (remaining > 0) {
-            throw new Error(`Insufficient reserved quantity for order_item_id ${orderItemId} (need ${qtyOut}, remaining ${remaining}).`);
-        }
+	        if (remaining > 0) {
+	            throw new CustomError('Qty reservasi batch inventory tidak cukup untuk diproses (insufficient reserved). Coba sync reservasi / alokasi ulang.', 409);
+	        }
 
         const weightedUnitCost = qtyOut > 0 ? (totalCost / qtyOut) : 0;
         await InventoryCostLedger.create({
@@ -414,4 +415,3 @@ export class InventoryReservationService {
         return { qty: qtyOut, unit_cost: weightedUnitCost, total_cost: round4(totalCost) };
     }
 }
-

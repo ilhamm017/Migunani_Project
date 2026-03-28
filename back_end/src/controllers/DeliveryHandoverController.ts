@@ -414,7 +414,16 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
 
         for (const order of orders) {
             const method = String(invoice.payment_method || '').toLowerCase() === 'cod' ? 'cod' : 'non_cod';
-            await AccountingPostingService.postGoodsOutForOrder(String(order.id), String(req.user?.id || ''), t, method as any);
+            try {
+                await AccountingPostingService.postGoodsOutForOrder(String(order.id), String(req.user?.id || ''), t, method as any);
+            } catch (error: any) {
+                if (error instanceof CustomError) throw error;
+                const message = String(error?.message || error || '').trim();
+                throw new CustomError(
+                    message ? `Gagal posting goods out: ${message}` : 'Gagal posting goods out (inventory/jurnal).',
+                    409
+                );
+            }
         }
 
         await invoice.update({

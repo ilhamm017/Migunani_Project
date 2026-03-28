@@ -624,14 +624,29 @@ export default function AdminInvoiceDetailPage() {
         setError('');
         await api.invoices.assignDriver(invoiceIdToAssign, { courier_id: selectedCourierId });
         await loadInvoiceDetail();
+        const postAssignPrimary =
+          normalizedRole === 'admin_gudang'
+            ? {
+                label: 'Buka Picklist',
+                onClick: () => {
+                  router.push(`/admin/warehouse/picklist/invoice/${encodeURIComponent(invoiceIdToAssign)}`);
+                },
+              }
+            : {
+                label: 'Buka Checker',
+                onClick: () => {
+                  router.push(`/admin/tracker-gudang/${encodeURIComponent(invoiceIdToAssign)}`);
+                },
+              };
         notifyOpen({
           variant: 'success',
           title: 'Driver ditugaskan',
-          message: 'Driver berhasil ditugaskan untuk invoice ini. Lanjutkan ke proses checker untuk verifikasi barang.',
-          primaryLabel: 'Buka Checker',
-          onPrimary: () => {
-            router.push(`/admin/tracker-gudang/${encodeURIComponent(invoiceIdToAssign)}`);
-          },
+          message:
+            normalizedRole === 'admin_gudang'
+              ? 'Driver berhasil ditugaskan. Invoice otomatis masuk tahap Checker; silakan lanjutkan picking/siapkan barang.'
+              : 'Driver berhasil ditugaskan untuk invoice ini. Lanjutkan ke proses checker untuk verifikasi barang.',
+          primaryLabel: postAssignPrimary.label,
+          onPrimary: postAssignPrimary.onClick,
           secondaryLabel: 'Tutup',
           autoCloseMs: 8000,
         });
