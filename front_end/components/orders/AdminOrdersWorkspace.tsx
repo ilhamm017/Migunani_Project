@@ -5512,6 +5512,7 @@ export default function AdminOrdersWorkspace({
 	                                </Link>
 		                              )}
 		                              {canEditPricing
+                                    && !isReportOnlySection
 		                                && [
 		                                  'pending',
 		                                  'waiting_invoice',
