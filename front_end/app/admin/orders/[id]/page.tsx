@@ -614,19 +614,27 @@ export default function AdminInvoiceDetailPage() {
     }
 
     const runAssign = async () => {
+      const invoiceIdToAssign = String(resolvedInvoiceId || invoiceRow.id || '').trim();
+      if (!invoiceIdToAssign) {
+        setError('Invoice ID tidak ditemukan untuk assign driver.');
+        return;
+      }
       try {
         setUpdating(true);
         setError('');
-        const results = await Promise.allSettled(
-          targetIds.map((id) => api.admin.orderManagement.updateStatus(id, { status: 'shipped', courier_id: selectedCourierId }))
-        );
-        const failedIds = results
-          .map((result, idx) => (result.status === 'rejected' ? String(targetIds[idx]) : ''))
-          .filter(Boolean);
-        if (failedIds.length > 0) {
-          setError(`Sebagian order gagal assign driver (${failedIds.length}/${targetIds.length}): ${failedIds.join(', ')}`);
-        }
+        await api.invoices.assignDriver(invoiceIdToAssign, { courier_id: selectedCourierId });
         await loadInvoiceDetail();
+        notifyOpen({
+          variant: 'success',
+          title: 'Driver ditugaskan',
+          message: 'Driver berhasil ditugaskan untuk invoice ini. Lanjutkan ke proses checker untuk verifikasi barang.',
+          primaryLabel: 'Buka Checker',
+          onPrimary: () => {
+            router.push(`/admin/tracker-gudang/${encodeURIComponent(invoiceIdToAssign)}`);
+          },
+          secondaryLabel: 'Tutup',
+          autoCloseMs: 8000,
+        });
       } catch (e: unknown) {
         setError(
           typeof e === 'object' && e !== null
@@ -641,8 +649,8 @@ export default function AdminInvoiceDetailPage() {
     notifyOpen({
       variant: 'warning',
       title: 'Tunjuk Driver (Invoice)',
-      message: `Kirim ${targetIds.length} order ready_to_ship dengan 1 driver untuk invoice ${invoiceNumber}?`,
-      primaryLabel: `Ya, Kirim (${targetIds.length})`,
+      message: `Tunjuk 1 driver untuk ${targetIds.length} order ready_to_ship di invoice ${invoiceNumber}? Setelah ditugaskan, invoice akan masuk tahap Checker.`,
+      primaryLabel: `Ya, Tunjuk Driver (${targetIds.length})`,
       secondaryLabel: 'Batal',
       onPrimary: () => {
         void runAssign();
@@ -1058,7 +1066,7 @@ export default function AdminInvoiceDetailPage() {
                   disabled={updating || !selectedCourierId}
                   className="w-full px-4 py-2.5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-amber-700 transition-colors shadow-sm shadow-amber-200"
                 >
-                  {updating ? 'Memproses...' : `Kirim ${readyToShipOrderIds.length} Order (1 Invoice)`}
+                  {updating ? 'Memproses...' : `Tunjuk Driver (${readyToShipOrderIds.length} Order)`}
                 </button>
               </>
             ) : orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? (

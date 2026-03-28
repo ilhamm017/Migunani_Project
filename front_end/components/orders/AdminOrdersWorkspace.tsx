@@ -2983,26 +2983,45 @@ export default function AdminOrdersWorkspace({
       return;
     }
 
-    try {
-      setWarehouseBatchAssigning(true);
+	    try {
+	      setWarehouseBatchAssigning(true);
 
-      const tasks = warehouseAssignConfirm.cards.map(async (card) => {
-        if (card.invoiceId) {
-          // Process at Invoice level
-          return api.invoices.assignDriver(card.invoiceId, {
-            courier_id: warehouseAssignConfirm.courierId
-          });
-        } else {
-          // Process individual orders for non-invoiced groups
-          const subTasks = card.readyToShipOrderIds.map(id =>
-            api.admin.orderManagement.updateStatus(id, {
-              status: 'shipped',
-              courier_id: warehouseAssignConfirm.courierId,
-            })
-          );
-          return Promise.all(subTasks);
-        }
-      });
+	      const tasks = warehouseAssignConfirm.cards.map(async (card) => {
+	        if (card.invoiceId) {
+	          // Process at Invoice level
+	          return api.invoices.assignDriver(card.invoiceId, {
+	            courier_id: warehouseAssignConfirm.courierId,
+	          });
+	        }
+
+	        // Some groupings may not carry invoiceId on the card.
+	        // Try to resolve invoice IDs from orders/details and assign at invoice level
+	        // to avoid accidentally moving to shipped (handover).
+	        const invoiceIds = new Set<string>();
+	        const missing: string[] = [];
+	        card.readyToShipOrderIds.forEach((orderId) => {
+	          const orderRow =
+	            (Array.isArray(ordersRef.current) ? ordersRef.current : []).find((row) => String(row?.id || '') === orderId) ||
+	            (Array.isArray(orders) ? orders : []).find((row) => String(row?.id || '') === orderId);
+	          const detail = orderDetails[orderId];
+	          const invoiceId = orderRow
+	            ? resolveInvoiceRefForOrder(orderRow, detail).invoiceId
+	            : normalizeInvoiceRef((detail as any)?.invoice_id);
+	          if (invoiceId) invoiceIds.add(invoiceId);
+	          else missing.push(orderId);
+	        });
+
+	        if (missing.length > 0 || invoiceIds.size === 0) {
+	          throw new Error(
+	            `Invoice tidak ditemukan untuk sebagian order (${missing.length}/${card.readyToShipOrderIds.length}). Refresh data atau issue invoice terlebih dahulu.`
+	          );
+	        }
+
+	        const subTasks = Array.from(invoiceIds).map((invoiceId) =>
+	          api.invoices.assignDriver(invoiceId, { courier_id: warehouseAssignConfirm.courierId })
+	        );
+	        return Promise.all(subTasks);
+	      });
 
       const results = await Promise.allSettled(tasks);
       const failedCount = results.filter((result) => result.status === 'rejected').length;
@@ -3014,15 +3033,17 @@ export default function AdminOrdersWorkspace({
       if (failedCount > 0) {
         notifyAlert(`Sebagian grup gagal ditugaskan ke driver (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
       }
-    } catch (error: unknown) {
-      const message = axios.isAxiosError(error)
-        ? String((error.response?.data as any)?.message || error.message || 'Gagal assign driver batch.')
-        : 'Gagal assign driver batch.';
-      notifyAlert(message);
-    } finally {
-      setWarehouseBatchAssigning(false);
-    }
-  };
+	    } catch (error: unknown) {
+	      const message = axios.isAxiosError(error)
+	        ? String((error.response?.data as any)?.message || error.message || 'Gagal assign driver batch.')
+	        : error instanceof Error && error.message
+	          ? error.message
+	          : 'Gagal assign driver batch.';
+	      notifyAlert(message);
+	    } finally {
+	      setWarehouseBatchAssigning(false);
+	    }
+	  };
 
   const openDeliveryHandoverModal = (invoiceId: string, invoiceTitle: string) => {
     setDeliveryHandoverModal({
