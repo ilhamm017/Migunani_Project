@@ -310,12 +310,13 @@ const normalizeUuid = (raw: unknown): string => {
 
 const resolveWorkspaceCourierId = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
-  const courierId = String(
-    (invoice as any)?.courier_id ||
-    (order as any)?.courier_id ||
-    (detail as any)?.courier_id ||
-    ''
-  ).trim();
+  // Courier assignment is invoice-level. `order.courier_id` may be stale from older flows and can
+  // incorrectly push new invoices into the Checker stage.
+  if (invoice) {
+    const invoiceCourierId = String((invoice as any)?.courier_id || '').trim();
+    return normalizeUuid(invoiceCourierId);
+  }
+  const courierId = String((order as any)?.courier_id || (detail as any)?.courier_id || '').trim();
   return normalizeUuid(courierId);
 };
 const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
@@ -4864,7 +4865,6 @@ export default function AdminOrdersWorkspace({
                         (invoiceDetail as any)?.courier_id ||
                         (primaryOrderDetail as any)?.Invoice?.courier_id ||
                         (primaryOrder as any)?.Invoice?.courier_id ||
-                        (primaryOrder as any)?.courier_id ||
                         ''
                       ).trim());
                       const statusLabel = statusSet.size <= 1 ? (Array.from(statusSet)[0] || '-') : `${statusSet.size} status`;
