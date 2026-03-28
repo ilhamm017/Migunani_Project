@@ -35,11 +35,23 @@ type CustomerGroup = {
 	    gudang: number;
 	    checker: number;
 	    pengiriman: number;
+      partially_fulfilled: number;
 	    selesai: number;
+      canceled: number;
 	  };
 	};
 
-type OrderSection = 'baru' | 'allocated' | 'backorder' | 'pembayaran' | 'gudang' | 'checker' | 'pengiriman' | 'selesai';
+type OrderSection =
+  | 'baru'
+  | 'allocated'
+  | 'backorder'
+  | 'pembayaran'
+  | 'gudang'
+  | 'checker'
+  | 'pengiriman'
+  | 'partially_fulfilled'
+  | 'selesai'
+  | 'canceled';
 type OrderSectionFilter = 'all' | OrderSection;
 
 type BackorderSnapshotItem = {
@@ -182,7 +194,8 @@ type DeliveryHandoverModalState = {
   file: File | null;
 };
 
-const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
+const COMPLETED_STATUSES = new Set(['completed']);
+const CANCELED_STATUSES = new Set(['canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
 const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'checked', 'waiting_payment', 'processing', 'hold']);
 const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
@@ -199,10 +212,52 @@ const WORKSPACE_ORDER_STATUS_PREFERRED_OVER_INVOICE_SHIPMENT = new Set([
   'partially_fulfilled',
 ]);
 const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;
-const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
-const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
-const ORDER_SECTION_OPTIONS_ALL: OrderSection[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
-const ORDER_SECTION_OPTIONS_WAREHOUSE: OrderSection[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
+const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = [
+  'baru',
+  'allocated',
+  'backorder',
+  'pembayaran',
+  'gudang',
+  'checker',
+  'pengiriman',
+  'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
+const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = [
+  'baru',
+  'allocated',
+  'pembayaran',
+  'gudang',
+  'checker',
+  'pengiriman',
+  'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
+const ORDER_SECTION_OPTIONS_ALL: OrderSection[] = [
+  'baru',
+  'allocated',
+  'backorder',
+  'pembayaran',
+  'gudang',
+  'checker',
+  'pengiriman',
+  'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
+const ORDER_SECTION_OPTIONS_WAREHOUSE: OrderSection[] = [
+  'baru',
+  'allocated',
+  'pembayaran',
+  'gudang',
+  'checker',
+  'pengiriman',
+  'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
 const CANCELABLE_ORDER_STATUSES = new Set([
   'pending',
   'waiting_invoice',
@@ -223,6 +278,8 @@ const getSectionFilterLabel = (filter: OrderSectionFilter) => {
   if (filter === 'gudang') return 'Proses Gudang';
   if (filter === 'checker') return 'Checker';
   if (filter === 'pengiriman') return 'Pengiriman';
+  if (filter === 'partially_fulfilled') return 'Parsial';
+  if (filter === 'canceled') return 'Dibatalkan';
   return 'Selesai';
 };
 const getSectionLabel = (section: OrderSection) => {
@@ -233,6 +290,8 @@ const getSectionLabel = (section: OrderSection) => {
   if (section === 'gudang') return 'Proses Gudang';
   if (section === 'checker') return 'Checker';
   if (section === 'pengiriman') return 'Pengiriman';
+  if (section === 'partially_fulfilled') return 'Parsial';
+  if (section === 'canceled') return 'Dibatalkan';
   return 'Selesai';
 };
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
@@ -815,6 +874,7 @@ export default function AdminOrdersWorkspace({
     const normalizedStatus = resolveWorkspaceShipmentStatus(order, detail);
     const courierId = resolveWorkspaceCourierId(order, detail);
     const isCompleted = COMPLETED_STATUSES.has(rawStatus);
+    const isCanceled = CANCELED_STATUSES.has(rawStatus) || String(normalizedStatus || '').trim().toLowerCase() === 'canceled';
     const isPayment = PAYMENT_STATUSES.has(rawStatus);
     const isWarehouse = WAREHOUSE_STATUSES.has(normalizedStatus);
     const isShipping = normalizedStatus === 'shipped';
@@ -826,16 +886,18 @@ export default function AdminOrdersWorkspace({
     const isAllocatedReady = normalizedStatus === 'waiting_invoice';
     const sections: OrderSection[] = [];
 
+    if (isCanceled) return ['canceled'];
     if (isCompleted) return ['selesai'];
     if (isDelivered) {
       if (isBackorder) return [isPaidByRule ? 'selesai' : 'pembayaran', 'backorder'];
       return [isPaidByRule ? 'selesai' : 'pembayaran'];
     }
     if (isPartiallyFulfilled && !isBackorder) {
-      return [isPaidByRule ? 'selesai' : 'pengiriman'];
+      return Array.from(new Set(['partially_fulfilled', isPaidByRule ? 'selesai' : 'pengiriman']));
     }
 
     if (isBackorder) sections.push('backorder');
+    if (isPartiallyFulfilled) sections.push('partially_fulfilled');
     if (isBackorder && isPaidByRule && isPartiallyFulfilled) sections.push('selesai');
     if (isPayment) sections.push('pembayaran');
     if (isShipping) sections.push('pengiriman');
@@ -872,7 +934,18 @@ export default function AdminOrdersWorkspace({
         customer_id: customerId,
         customer_name: name,
         orders: [],
-        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, checker: 0, pengiriman: 0, selesai: 0 },
+        counts: {
+          baru: 0,
+          allocated: 0,
+          backorder: 0,
+          pembayaran: 0,
+          gudang: 0,
+          checker: 0,
+          pengiriman: 0,
+          partially_fulfilled: 0,
+          selesai: 0,
+          canceled: 0,
+        },
       };
 
       const detail = orderDetails[String(order.id)];
@@ -886,8 +959,28 @@ export default function AdminOrdersWorkspace({
     });
 
     return Array.from(map.values()).sort((a, b) => {
-      const aCount = a.counts.baru + a.counts.allocated + a.counts.backorder + a.counts.pembayaran + a.counts.gudang + a.counts.checker + a.counts.pengiriman + a.counts.selesai;
-      const bCount = b.counts.baru + b.counts.allocated + b.counts.backorder + b.counts.pembayaran + b.counts.gudang + b.counts.checker + b.counts.pengiriman + b.counts.selesai;
+      const aCount =
+        a.counts.baru
+        + a.counts.allocated
+        + a.counts.backorder
+        + a.counts.pembayaran
+        + a.counts.gudang
+        + a.counts.checker
+        + a.counts.pengiriman
+        + a.counts.partially_fulfilled
+        + a.counts.selesai
+        + a.counts.canceled;
+      const bCount =
+        b.counts.baru
+        + b.counts.allocated
+        + b.counts.backorder
+        + b.counts.pembayaran
+        + b.counts.gudang
+        + b.counts.checker
+        + b.counts.pengiriman
+        + b.counts.partially_fulfilled
+        + b.counts.selesai
+        + b.counts.canceled;
       return bCount - aCount;
     });
   }, [orders, orderDetails, classifyOrderSections]);
@@ -924,7 +1017,9 @@ export default function AdminOrdersWorkspace({
         acc.counts.gudang += group.counts.gudang;
         acc.counts.checker += group.counts.checker;
         acc.counts.pengiriman += group.counts.pengiriman;
+        acc.counts.partially_fulfilled += group.counts.partially_fulfilled;
         acc.counts.selesai += group.counts.selesai;
+        acc.counts.canceled += group.counts.canceled;
         return acc;
       },
       {
@@ -932,15 +1027,50 @@ export default function AdminOrdersWorkspace({
         customer_id: null,
         customer_name: 'Semua Customer',
         orders: [],
-        counts: { baru: 0, allocated: 0, backorder: 0, pembayaran: 0, gudang: 0, checker: 0, pengiriman: 0, selesai: 0 },
+        counts: {
+          baru: 0,
+          allocated: 0,
+          backorder: 0,
+          pembayaran: 0,
+          gudang: 0,
+          checker: 0,
+          pengiriman: 0,
+          partially_fulfilled: 0,
+          selesai: 0,
+          canceled: 0,
+        },
       }
     );
   }, [filteredCustomerGroups, forcedCustomerId, forcedCustomerKey]);
 
   const groupedOrders = useMemo(() => {
     const group = selectedGroup;
-    if (!group) return { baru: [], allocated: [], backorder: [], pembayaran: [], gudang: [], checker: [], pengiriman: [], selesai: [] };
-    const result = { baru: [] as AdminOrderListRow[], allocated: [] as AdminOrderListRow[], backorder: [] as AdminOrderListRow[], pembayaran: [] as AdminOrderListRow[], gudang: [] as AdminOrderListRow[], checker: [] as AdminOrderListRow[], pengiriman: [] as AdminOrderListRow[], selesai: [] as AdminOrderListRow[] };
+    if (!group) {
+      return {
+        baru: [],
+        allocated: [],
+        backorder: [],
+        pembayaran: [],
+        gudang: [],
+        checker: [],
+        pengiriman: [],
+        partially_fulfilled: [],
+        selesai: [],
+        canceled: [],
+      };
+    }
+    const result = {
+      baru: [] as AdminOrderListRow[],
+      allocated: [] as AdminOrderListRow[],
+      backorder: [] as AdminOrderListRow[],
+      pembayaran: [] as AdminOrderListRow[],
+      gudang: [] as AdminOrderListRow[],
+      checker: [] as AdminOrderListRow[],
+      pengiriman: [] as AdminOrderListRow[],
+      partially_fulfilled: [] as AdminOrderListRow[],
+      selesai: [] as AdminOrderListRow[],
+      canceled: [] as AdminOrderListRow[],
+    };
     const getRecencyTs = (order: AdminOrderListRow) => {
       const updatedTs = Date.parse(String(order?.updatedAt || ''));
       if (Number.isFinite(updatedTs)) return updatedTs;
@@ -994,7 +1124,9 @@ export default function AdminOrdersWorkspace({
       gudang: groupedOrders.gudang.filter(matchOrder),
       checker: groupedOrders.checker.filter(matchOrder),
       pengiriman: groupedOrders.pengiriman.filter(matchOrder),
+      partially_fulfilled: groupedOrders.partially_fulfilled.filter(matchOrder),
       selesai: groupedOrders.selesai.filter(matchOrder),
+      canceled: groupedOrders.canceled.filter(matchOrder),
     };
   }, [groupedOrders, orderDetails, orderQuery]);
 
@@ -1433,10 +1565,10 @@ export default function AdminOrdersWorkspace({
   const visibleOrdersForInvoiceBoard = useMemo<AdminOrderListRow[]>(() => {
     if (orderSectionFilter === 'all') {
       return sectionOptions
-        .filter((section) => section !== 'selesai')
+        .filter((section) => section !== 'selesai' && section !== 'canceled' && section !== 'partially_fulfilled')
         .flatMap((section) => filteredGroupedOrders[section]);
     }
-    if (orderSectionFilter === 'selesai') return [];
+    if (orderSectionFilter === 'selesai' || orderSectionFilter === 'canceled' || orderSectionFilter === 'partially_fulfilled') return [];
     if (isWarehouseRole && orderSectionFilter === 'backorder') return [];
     return filteredGroupedOrders[orderSectionFilter] || [];
   }, [filteredGroupedOrders, isWarehouseRole, orderSectionFilter, sectionOptions]);
