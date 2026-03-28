@@ -8,6 +8,7 @@ import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
+import { notifyOpen } from '@/lib/notify';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
 type LooseRecord = Record<string, unknown>;
@@ -611,33 +612,43 @@ export default function AdminInvoiceDetailPage() {
       setError('Tidak ada order ready_to_ship pada invoice ini.');
       return;
     }
-    const proceed = confirm(
-      `Assign driver untuk ${targetIds.length} order di invoice ${invoiceNumber}? Semua order ready_to_ship akan dikirim dengan driver yang sama.`
-    );
-    if (!proceed) return;
 
-    try {
-      setUpdating(true);
-      setError('');
-      const results = await Promise.allSettled(
-        targetIds.map((id) => api.admin.orderManagement.updateStatus(id, { status: 'shipped', courier_id: selectedCourierId }))
-      );
-      const failedIds = results
-        .map((result, idx) => (result.status === 'rejected' ? String(targetIds[idx]) : ''))
-        .filter(Boolean);
-      if (failedIds.length > 0) {
-        setError(`Sebagian order gagal assign driver (${failedIds.length}/${targetIds.length}): ${failedIds.join(', ')}`);
+    const runAssign = async () => {
+      try {
+        setUpdating(true);
+        setError('');
+        const results = await Promise.allSettled(
+          targetIds.map((id) => api.admin.orderManagement.updateStatus(id, { status: 'shipped', courier_id: selectedCourierId }))
+        );
+        const failedIds = results
+          .map((result, idx) => (result.status === 'rejected' ? String(targetIds[idx]) : ''))
+          .filter(Boolean);
+        if (failedIds.length > 0) {
+          setError(`Sebagian order gagal assign driver (${failedIds.length}/${targetIds.length}): ${failedIds.join(', ')}`);
+        }
+        await loadInvoiceDetail();
+      } catch (e: unknown) {
+        setError(
+          typeof e === 'object' && e !== null
+            ? String((e as { response?: { data?: { message?: unknown } } }).response?.data?.message || 'Gagal assign driver invoice')
+            : 'Gagal assign driver invoice'
+        );
+      } finally {
+        setUpdating(false);
       }
-      await loadInvoiceDetail();
-    } catch (e: unknown) {
-      setError(
-        typeof e === 'object' && e !== null
-          ? String((e as { response?: { data?: { message?: unknown } } }).response?.data?.message || 'Gagal assign driver invoice')
-          : 'Gagal assign driver invoice'
-      );
-    } finally {
-      setUpdating(false);
-    }
+    };
+
+    notifyOpen({
+      variant: 'warning',
+      title: 'Tunjuk Driver (Invoice)',
+      message: `Kirim ${targetIds.length} order ready_to_ship dengan 1 driver untuk invoice ${invoiceNumber}?`,
+      primaryLabel: `Ya, Kirim (${targetIds.length})`,
+      secondaryLabel: 'Batal',
+      onPrimary: () => {
+        void runAssign();
+      },
+      autoCloseMs: 12000,
+    });
   };
 
   if (!allowed) return null;
