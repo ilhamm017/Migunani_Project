@@ -99,24 +99,32 @@ export default function AdminSetoranDriverPage() {
   const selectedDriver = useMemo(() => rows.find((r) => r.driver.id === selectedDriverId) || null, [rows, selectedDriverId]);
 
   useEffect(() => {
-    if (!selectedDriver) return;
+    if (!selectedDriverId) return;
     setSelectedInvoiceIds({});
     setSelectedHandoverIds({});
     setHandoverNotes({});
+    setAmountReceivedInput('');
+    setFeedback(null);
+  }, [selectedDriverId]);
+
+  useEffect(() => {
+    if (!selectedDriver) return;
     setHandoverQty((prev) => {
       const next = { ...prev };
       selectedDriver.retur_handovers_pending.forEach((h) => {
         const hk = String(h.handover_id);
-        if (next[hk]) return;
-        const items: Record<string, string> = {};
-        h.items.forEach((it) => { items[String(it.retur_id)] = String(Math.max(0, Math.trunc(Number(it.qty || 0)))); });
+        const existing = next[hk];
+        const items: Record<string, string> = existing ? { ...existing } : {};
+        h.items.forEach((it) => {
+          const key = String(it.retur_id);
+          if (items[key] !== undefined) return;
+          items[key] = String(Math.max(0, Math.trunc(Number(it.qty || 0))));
+        });
         next[hk] = items;
       });
       return next;
     });
-    setAmountReceivedInput('');
-    setFeedback(null);
-  }, [selectedDriverId, selectedDriver]);
+  }, [selectedDriver]);
 
   const selectedInvoiceIdList = useMemo(() => {
     return Object.entries(selectedInvoiceIds).filter(([, v]) => v).map(([k]) => k);

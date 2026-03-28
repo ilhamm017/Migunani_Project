@@ -139,6 +139,18 @@ Jalankan SQL ini untuk menambah field refund pada `pos_sales` (pengganti tombol 
 mysql -u root -p migunani_motor_db < back_end/sql/20260328_add_pos_sales_refund_fields.sql
 ```
 
+## Bootstrap FIFO inventory batches dari stok legacy (fix "Insufficient inventory batches")
+
+Jika kamu sudah punya stok di `products.stock_quantity` / `products.allocated_quantity`, tapi modul FIFO baru (tabel `product_cost_states` + `inventory_batches`) masih kosong, posting goods out bisa gagal dengan pesan:
+
+`Insufficient inventory batches ... Run SQL migration bootstrap if needed.`
+
+Jalankan SQL ini untuk melakukan bootstrap **konservatif** (hanya untuk produk yang belum punya batch sama sekali):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260328_bootstrap_inventory_batches_from_products.sql
+```
+
 ## One-shot: run all safe SQL migrations (recommended)
 
 Jika ingin deploy ulang tanpa menjalankan file SQL satu per satu, gunakan runner ini. Runner akan:

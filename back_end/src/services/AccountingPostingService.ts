@@ -22,6 +22,23 @@ export class AccountingPostingService {
         const orderItems = await OrderItem.findAll({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });
         const allocations = await OrderAllocation.findAll({ where: { order_id: orderId }, transaction: t });
 
+        // Prefer posting based on invoice_items (what actually gets shipped/checked) to avoid consuming stock
+        // for order items that are not part of the current invoice shipment.
+        const invoiceItems = await InvoiceItem.findAll({
+            where: { invoice_id: String(invoice.id) },
+            attributes: ['order_item_id', 'qty'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        }) as any[];
+        const invoiceQtyByOrderItemId = new Map<string, number>();
+        for (const row of invoiceItems) {
+            const orderItemId = String(row?.order_item_id || '').trim();
+            if (!orderItemId) continue;
+            const prev = Number(invoiceQtyByOrderItemId.get(orderItemId) || 0);
+            invoiceQtyByOrderItemId.set(orderItemId, prev + n(row?.qty));
+        }
+        const hasInvoiceItemScope = invoiceQtyByOrderItemId.size > 0;
+
         const allocatedByProduct = new Map<string, number>();
         allocations.forEach((allocation: any) => {
             const productId = String(allocation?.product_id || '').trim();
@@ -53,7 +70,8 @@ export class AccountingPostingService {
             let remainingAlloc = hasAllocation ? Math.max(0, n(allocatedByProduct.get(productId))) : 0;
 
             for (const item of sorted as any[]) {
-                let qtyOut = Math.max(0, n(item?.qty));
+                const invoiceQty = hasInvoiceItemScope ? Math.max(0, n(invoiceQtyByOrderItemId.get(String(item.id)) || 0)) : null;
+                let qtyOut = Math.max(0, invoiceQty === null ? n(item?.qty) : invoiceQty);
                 if (hasAllocation) {
                     qtyOut = Math.min(qtyOut, remainingAlloc);
                     remainingAlloc = Math.max(0, remainingAlloc - qtyOut);
@@ -163,19 +181,24 @@ export class AccountingPostingService {
 	                cogs += n(valuation.total_cost);
 
 	                await item.update({ cost_at_purchase: n(valuation.unit_cost) }, { transaction: t });
-	                await InvoiceItem.update({
-	                    unit_cost: n(valuation.unit_cost)
-                }, {
-                    where: { order_item_id: String(item.id) },
-                    transaction: t
-                });
+	                await InvoiceItem.update(
+	                    { unit_cost: n(valuation.unit_cost) },
+	                    {
+	                        where: { invoice_id: String(invoice.id), order_item_id: String(item.id) },
+	                        transaction: t
+	                    }
+	                );
             }
         }
 
-        const orderSubtotal = orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0);
-        const orderDiscount = n(order.discount_amount);
-        const orderShipping = n(order.shipping_fee);
-        const revenueDpp = Math.max(0, orderSubtotal - orderDiscount + orderShipping);
+        const revenueDpp = hasInvoiceItemScope
+            ? Math.max(0, n((invoice as any).subtotal) - n((invoice as any).discount_amount) + n((invoice as any).shipping_fee_total))
+            : (() => {
+                const orderSubtotal = orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0);
+                const orderDiscount = n(order.discount_amount);
+                const orderShipping = n(order.shipping_fee);
+                return Math.max(0, orderSubtotal - orderDiscount + orderShipping);
+            })();
         const outputVat = n(invoice.tax_mode_snapshot === 'pkp' ? invoice.tax_amount : 0) * (n(invoice.total) > 0 ? (revenueDpp / n(invoice.total)) : 0);
 
         if (mode === 'non_cod') {
