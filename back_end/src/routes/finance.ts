@@ -60,6 +60,9 @@ router.get('/reports/stock-reduction/export', authorizeRoles('super_admin', 'kas
 router.get('/reports/tax-summary', authorizeRoles('super_admin', 'admin_finance'), ReportController.getTaxSummary);
 router.get('/reports/vat-monthly', authorizeRoles('super_admin', 'admin_finance'), ReportController.getVatMonthlyReport);
 router.get('/reports/products-sold', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.getProductsSoldReport);
+router.get('/reports/products-sold/export', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.exportProductsSoldReportExcel);
+router.get('/reports/top-customers', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.getTopCustomersReport);
+router.get('/reports/top-customers/export', authorizeRoles('super_admin', 'admin_finance', 'kasir'), ReportController.exportTopCustomersReportExcel);
 
 // Legacy/Operational AR
 router.get('/ar', authorizeRoles('super_admin', 'admin_finance'), FinanceController.getAccountsReceivable);

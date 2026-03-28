@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
 import { ReportService } from '../services/ReportService';
 import { CustomerBalanceService } from '../services/CustomerBalanceService';
-import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, User, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
@@ -556,6 +556,217 @@ export const exportStockReductionReportExcel = asyncWrapper(async (req: Request,
     }
 });
 
+type ProductsSoldMergedRow = {
+    product_id: string;
+    sku: string | null;
+    product_name: string | null;
+    unit: string | null;
+    qty_sold: number;
+    revenue: number;
+    cogs: number;
+    qty_invoice: number;
+    qty_pos: number;
+    revenue_invoice: number;
+    revenue_pos: number;
+    cogs_invoice: number;
+    cogs_pos: number;
+    tx_invoice: number;
+    tx_pos: number;
+    order_count: number;
+};
+
+const computeProductsSoldMergedRows = async (params: { start: Date; end: Date; limitNum: number }): Promise<ProductsSoldMergedRow[]> => {
+    const { start, end, limitNum } = params;
+
+    const sourceLimit = Math.min(2000, Math.max(limitNum * 5, limitNum));
+    const toNumberSafe = (value: unknown) => {
+        const parsed = Number(value || 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    type SourceRow = {
+        product_id?: string;
+        sku?: string | null;
+        product_name?: string | null;
+        unit?: string | null;
+        qty_sold?: unknown;
+        revenue?: unknown;
+        cogs?: unknown;
+        tx_count?: unknown;
+    };
+
+    const [invoiceRows, posRows] = await Promise.all([
+        InvoiceItem.findAll({
+            attributes: [
+                [sequelize.col('OrderItem.product_id'), 'product_id'],
+                [sequelize.col('OrderItem.Product.sku'), 'sku'],
+                [sequelize.col('OrderItem.Product.name'), 'product_name'],
+                [sequelize.col('OrderItem.Product.unit'), 'unit'],
+                [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
+                [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
+                [sequelize.fn('SUM', sequelize.literal(`InvoiceItem.qty * COALESCE((
+                    SELECT ico.unit_cost_override
+                    FROM invoice_cost_overrides ico
+                    WHERE ico.invoice_id = InvoiceItem.invoice_id
+                      AND ico.product_id = OrderItem.product_id
+                    LIMIT 1
+                ), InvoiceItem.unit_cost)`)), 'cogs'],
+                [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('InvoiceItem.invoice_id'))), 'tx_count'],
+            ],
+            include: [
+                {
+                    model: Invoice,
+                    attributes: [],
+                    where: {
+                        payment_status: 'paid',
+                        verified_at: { [Op.between]: [start, end] }
+                    }
+                },
+                {
+                    model: OrderItem,
+                    attributes: [],
+                    include: [
+                        { model: Product, attributes: [] }
+                    ]
+                }
+            ],
+            group: [
+                sequelize.col('OrderItem.product_id'),
+                sequelize.col('OrderItem.Product.id'),
+                sequelize.col('OrderItem.Product.sku'),
+                sequelize.col('OrderItem.Product.name'),
+                sequelize.col('OrderItem.Product.unit'),
+            ],
+            order: [[sequelize.literal('qty_sold'), 'DESC']],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as SourceRow[],
+        PosSaleItem.findAll({
+            attributes: [
+                [sequelize.col('PosSaleItem.product_id'), 'product_id'],
+                [sequelize.col('Product.sku'), 'sku'],
+                [sequelize.col('Product.name'), 'product_name'],
+                [sequelize.col('Product.unit'), 'unit'],
+                [sequelize.fn('SUM', sequelize.col('PosSaleItem.qty')), 'qty_sold'],
+                [sequelize.fn('SUM', sequelize.col('PosSaleItem.line_total')), 'revenue'],
+                [sequelize.fn('SUM', sequelize.col('PosSaleItem.cogs_total')), 'cogs'],
+                [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('PosSaleItem.pos_sale_id'))), 'tx_count'],
+            ],
+            include: [
+                {
+                    model: PosSale,
+                    as: 'Sale',
+                    attributes: [],
+                    where: {
+                        status: 'paid',
+                        paid_at: { [Op.between]: [start, end] }
+                    }
+                },
+                {
+                    model: Product,
+                    as: 'Product',
+                    attributes: [],
+                }
+            ],
+            group: [
+                sequelize.col('PosSaleItem.product_id'),
+                sequelize.col('Product.id'),
+                sequelize.col('Product.sku'),
+                sequelize.col('Product.name'),
+                sequelize.col('Product.unit'),
+            ],
+            order: [[sequelize.literal('qty_sold'), 'DESC']],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as SourceRow[],
+    ]);
+
+    type Bucket = {
+        product_id: string;
+        sku: string | null;
+        product_name: string | null;
+        unit: string | null;
+        qty_invoice: number;
+        qty_pos: number;
+        revenue_invoice: number;
+        revenue_pos: number;
+        cogs_invoice: number;
+        cogs_pos: number;
+        tx_invoice: number;
+        tx_pos: number;
+    };
+
+    const byProduct = new Map<string, Bucket>();
+    const ensureBucket = (row: SourceRow) => {
+        const productId = String(row.product_id || '').trim();
+        if (!productId) return null;
+        const existing = byProduct.get(productId);
+        if (existing) return existing;
+        const next: Bucket = {
+            product_id: productId,
+            sku: row.sku ?? null,
+            product_name: row.product_name ?? null,
+            unit: row.unit ?? null,
+            qty_invoice: 0,
+            qty_pos: 0,
+            revenue_invoice: 0,
+            revenue_pos: 0,
+            cogs_invoice: 0,
+            cogs_pos: 0,
+            tx_invoice: 0,
+            tx_pos: 0,
+        };
+        byProduct.set(productId, next);
+        return next;
+    };
+
+    for (const row of invoiceRows) {
+        const bucket = ensureBucket(row);
+        if (!bucket) continue;
+        bucket.sku = bucket.sku ?? row.sku ?? null;
+        bucket.product_name = bucket.product_name ?? row.product_name ?? null;
+        bucket.unit = bucket.unit ?? row.unit ?? null;
+        bucket.qty_invoice += Math.max(0, toNumberSafe(row.qty_sold));
+        bucket.revenue_invoice += Math.max(0, toNumberSafe(row.revenue));
+        bucket.cogs_invoice += Math.max(0, toNumberSafe(row.cogs));
+        bucket.tx_invoice += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+    }
+
+    for (const row of posRows) {
+        const bucket = ensureBucket(row);
+        if (!bucket) continue;
+        bucket.sku = bucket.sku ?? row.sku ?? null;
+        bucket.product_name = bucket.product_name ?? row.product_name ?? null;
+        bucket.unit = bucket.unit ?? row.unit ?? null;
+        bucket.qty_pos += Math.max(0, toNumberSafe(row.qty_sold));
+        bucket.revenue_pos += Math.max(0, toNumberSafe(row.revenue));
+        bucket.cogs_pos += Math.max(0, toNumberSafe(row.cogs));
+        bucket.tx_pos += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+    }
+
+    return Array.from(byProduct.values())
+        .map((bucket): ProductsSoldMergedRow => ({
+            product_id: bucket.product_id,
+            sku: bucket.sku,
+            product_name: bucket.product_name,
+            unit: bucket.unit,
+            qty_sold: bucket.qty_invoice + bucket.qty_pos,
+            revenue: bucket.revenue_invoice + bucket.revenue_pos,
+            cogs: bucket.cogs_invoice + bucket.cogs_pos,
+            qty_invoice: bucket.qty_invoice,
+            qty_pos: bucket.qty_pos,
+            revenue_invoice: bucket.revenue_invoice,
+            revenue_pos: bucket.revenue_pos,
+            cogs_invoice: bucket.cogs_invoice,
+            cogs_pos: bucket.cogs_pos,
+            tx_invoice: bucket.tx_invoice,
+            tx_pos: bucket.tx_pos,
+            order_count: bucket.tx_invoice + bucket.tx_pos,
+        }))
+        .sort((a, b) => toNumberSafe(b.qty_sold) - toNumberSafe(a.qty_sold))
+        .slice(0, limitNum);
+};
+
 export const getProductsSoldReport = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const { startDate, endDate, limit } = req.query;
@@ -570,203 +781,514 @@ export const getProductsSoldReport = asyncWrapper(async (req: Request, res: Resp
         }
 
         const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
-
-        const sourceLimit = Math.min(2000, Math.max(limitNum * 5, limitNum));
-        const toNumberSafe = (value: unknown) => {
-            const parsed = Number(value || 0);
-            return Number.isFinite(parsed) ? parsed : 0;
-        };
-
-        type SourceRow = {
-            product_id?: string;
-            sku?: string | null;
-            product_name?: string | null;
-            unit?: string | null;
-            qty_sold?: unknown;
-            revenue?: unknown;
-            cogs?: unknown;
-            tx_count?: unknown;
-        };
-
-        const [invoiceRows, posRows] = await Promise.all([
-            InvoiceItem.findAll({
-                attributes: [
-                    [sequelize.col('OrderItem.product_id'), 'product_id'],
-                    [sequelize.col('OrderItem.Product.sku'), 'sku'],
-                    [sequelize.col('OrderItem.Product.name'), 'product_name'],
-                    [sequelize.col('OrderItem.Product.unit'), 'unit'],
-                    [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_sold'],
-                    [sequelize.fn('SUM', sequelize.col('InvoiceItem.line_total')), 'revenue'],
-                    [sequelize.fn('SUM', sequelize.literal(`InvoiceItem.qty * COALESCE((
-                        SELECT ico.unit_cost_override
-                        FROM invoice_cost_overrides ico
-                        WHERE ico.invoice_id = InvoiceItem.invoice_id
-                          AND ico.product_id = OrderItem.product_id
-                        LIMIT 1
-                    ), InvoiceItem.unit_cost)`)), 'cogs'],
-                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('InvoiceItem.invoice_id'))), 'tx_count'],
-                ],
-                include: [
-                    {
-                        model: Invoice,
-                        attributes: [],
-                        where: {
-                            payment_status: 'paid',
-                            verified_at: { [Op.between]: [start, end] }
-                        }
-                    },
-                    {
-                        model: OrderItem,
-                        attributes: [],
-                        include: [
-                            { model: Product, attributes: [] }
-                        ]
-                    }
-                ],
-                group: [
-                    sequelize.col('OrderItem.product_id'),
-                    sequelize.col('OrderItem.Product.id'),
-                    sequelize.col('OrderItem.Product.sku'),
-                    sequelize.col('OrderItem.Product.name'),
-                    sequelize.col('OrderItem.Product.unit'),
-                ],
-                order: [[sequelize.literal('qty_sold'), 'DESC']],
-                limit: sourceLimit,
-                raw: true,
-            }) as unknown as SourceRow[],
-            PosSaleItem.findAll({
-                attributes: [
-                    [sequelize.col('PosSaleItem.product_id'), 'product_id'],
-                    [sequelize.col('Product.sku'), 'sku'],
-                    [sequelize.col('Product.name'), 'product_name'],
-                    [sequelize.col('Product.unit'), 'unit'],
-                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.qty')), 'qty_sold'],
-                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.line_total')), 'revenue'],
-                    [sequelize.fn('SUM', sequelize.col('PosSaleItem.cogs_total')), 'cogs'],
-                    [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('PosSaleItem.pos_sale_id'))), 'tx_count'],
-                ],
-                include: [
-                    {
-                        model: PosSale,
-                        as: 'Sale',
-                        attributes: [],
-                        where: {
-                            status: 'paid',
-                            paid_at: { [Op.between]: [start, end] }
-                        }
-                    },
-                    {
-                        model: Product,
-                        as: 'Product',
-                        attributes: [],
-                    }
-                ],
-                group: [
-                    sequelize.col('PosSaleItem.product_id'),
-                    sequelize.col('Product.id'),
-                    sequelize.col('Product.sku'),
-                    sequelize.col('Product.name'),
-                    sequelize.col('Product.unit'),
-                ],
-                order: [[sequelize.literal('qty_sold'), 'DESC']],
-                limit: sourceLimit,
-                raw: true,
-            }) as unknown as SourceRow[],
-        ]);
-
-        type Bucket = {
-            product_id: string;
-            sku: string | null;
-            product_name: string | null;
-            unit: string | null;
-            qty_invoice: number;
-            qty_pos: number;
-            revenue_invoice: number;
-            revenue_pos: number;
-            cogs_invoice: number;
-            cogs_pos: number;
-            tx_invoice: number;
-            tx_pos: number;
-        };
-
-        const byProduct = new Map<string, Bucket>();
-        const ensureBucket = (row: SourceRow) => {
-            const productId = String(row.product_id || '').trim();
-            if (!productId) return null;
-            const existing = byProduct.get(productId);
-            if (existing) return existing;
-            const next: Bucket = {
-                product_id: productId,
-                sku: row.sku ?? null,
-                product_name: row.product_name ?? null,
-                unit: row.unit ?? null,
-                qty_invoice: 0,
-                qty_pos: 0,
-                revenue_invoice: 0,
-                revenue_pos: 0,
-                cogs_invoice: 0,
-                cogs_pos: 0,
-                tx_invoice: 0,
-                tx_pos: 0,
-            };
-            byProduct.set(productId, next);
-            return next;
-        };
-
-        for (const row of invoiceRows) {
-            const bucket = ensureBucket(row);
-            if (!bucket) continue;
-            bucket.sku = bucket.sku ?? row.sku ?? null;
-            bucket.product_name = bucket.product_name ?? row.product_name ?? null;
-            bucket.unit = bucket.unit ?? row.unit ?? null;
-            bucket.qty_invoice += Math.max(0, toNumberSafe(row.qty_sold));
-            bucket.revenue_invoice += Math.max(0, toNumberSafe(row.revenue));
-            bucket.cogs_invoice += Math.max(0, toNumberSafe(row.cogs));
-            bucket.tx_invoice += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
-        }
-
-        for (const row of posRows) {
-            const bucket = ensureBucket(row);
-            if (!bucket) continue;
-            bucket.sku = bucket.sku ?? row.sku ?? null;
-            bucket.product_name = bucket.product_name ?? row.product_name ?? null;
-            bucket.unit = bucket.unit ?? row.unit ?? null;
-            bucket.qty_pos += Math.max(0, toNumberSafe(row.qty_sold));
-            bucket.revenue_pos += Math.max(0, toNumberSafe(row.revenue));
-            bucket.cogs_pos += Math.max(0, toNumberSafe(row.cogs));
-            bucket.tx_pos += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
-        }
-
-        const mergedRows = Array.from(byProduct.values())
-            .map((bucket) => ({
-                product_id: bucket.product_id,
-                sku: bucket.sku,
-                product_name: bucket.product_name,
-                unit: bucket.unit,
-                qty_sold: bucket.qty_invoice + bucket.qty_pos,
-                revenue: bucket.revenue_invoice + bucket.revenue_pos,
-                cogs: bucket.cogs_invoice + bucket.cogs_pos,
-                qty_invoice: bucket.qty_invoice,
-                qty_pos: bucket.qty_pos,
-                revenue_invoice: bucket.revenue_invoice,
-                revenue_pos: bucket.revenue_pos,
-                cogs_invoice: bucket.cogs_invoice,
-                cogs_pos: bucket.cogs_pos,
-                tx_invoice: bucket.tx_invoice,
-                tx_pos: bucket.tx_pos,
-                order_count: bucket.tx_invoice + bucket.tx_pos,
-            }))
-            .sort((a, b) => toNumberSafe(b.qty_sold) - toNumberSafe(a.qty_sold))
-            .slice(0, limitNum);
+        const rows = await computeProductsSoldMergedRows({ start, end, limitNum });
 
         res.json({
             period: { startDate: String(startDate), endDate: String(endDate) },
-            rows: mergedRows,
+            rows,
         });
     } catch (error) {
         if (error instanceof CustomError) {
             throw error;
         }
         throw new CustomError('Error generating products sold report', 500);
+    }
+});
+
+export const exportProductsSoldReportExcel = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate, limit } = req.query;
+        if (!startDate || !endDate) {
+            throw new CustomError('StartDate dan EndDate wajib diisi', 400);
+        }
+
+        const start = new Date(String(startDate));
+        const end = new Date(String(endDate));
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new CustomError('StartDate/EndDate tidak valid', 400);
+        }
+
+        const limitNum = Math.min(500, Math.max(1, Number(limit) || 50));
+        const rows = await computeProductsSoldMergedRows({ start, end, limitNum });
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Migunani Admin';
+        workbook.created = new Date();
+        const sheet = workbook.addWorksheet('Produk_Terjual');
+
+        const periodStart = String(startDate);
+        const periodEnd = String(endDate);
+        const exportTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+        sheet.getCell('A1').value = 'Laporan Produk Terjual (Invoice paid + POS paid)';
+        sheet.getCell('A2').value = `Waktu Export: ${exportTime}`;
+        sheet.getCell('A3').value = `Periode: ${periodStart} s/d ${periodEnd}`;
+        sheet.getCell('A4').value = `Limit: ${limitNum}`;
+
+        const headerRowIndex = 6;
+        const headers = [
+            'SKU',
+            'Nama Produk',
+            'Qty Terjual',
+            'Satuan',
+            'Revenue',
+            'COGS',
+            'Gross Profit',
+            'Transaksi',
+            'Qty Invoice',
+            'Qty POS',
+        ];
+        sheet.getRow(headerRowIndex).values = headers;
+        sheet.getRow(headerRowIndex).font = { bold: true };
+
+        rows.forEach((row, idx) => {
+            const excelRowIndex = headerRowIndex + 1 + idx;
+            const revenue = Number(row.revenue || 0);
+            const cogs = Number(row.cogs || 0);
+            sheet.getRow(excelRowIndex).values = [
+                row.sku || '-',
+                row.product_name || '-',
+                Number(row.qty_sold || 0),
+                row.unit || '-',
+                revenue,
+                cogs,
+                revenue - cogs,
+                Number(row.order_count || 0),
+                Number(row.qty_invoice || 0),
+                Number(row.qty_pos || 0),
+            ];
+        });
+
+        sheet.columns = [
+            { key: 'sku', width: 18 },
+            { key: 'name', width: 38 },
+            { key: 'qty', width: 14 },
+            { key: 'unit', width: 12 },
+            { key: 'revenue', width: 16 },
+            { key: 'cogs', width: 16 },
+            { key: 'gp', width: 16 },
+            { key: 'tx', width: 12 },
+            { key: 'qtyInvoice', width: 14 },
+            { key: 'qtyPos', width: 14 },
+        ];
+
+        const timestamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+        const fileName = `laporan-produk-terjual-${fileSuffix}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error exporting products sold report', 500);
+    }
+});
+
+type TopCustomersMergedRow = {
+    customer_id: string;
+    customer_name: string | null;
+    whatsapp_number: string | null;
+    revenue: number;
+    revenue_invoice: number;
+    revenue_pos: number;
+    qty_total: number;
+    qty_invoice: number;
+    qty_pos: number;
+    tx_invoice: number;
+    tx_pos: number;
+    order_count: number;
+    first_bought_at: Date | null;
+    last_bought_at: Date | null;
+};
+
+const computeTopCustomersMergedRows = async (params: { start: Date; end: Date; limitNum: number }): Promise<TopCustomersMergedRow[]> => {
+    const { start, end, limitNum } = params;
+
+    const sourceLimit = Math.min(5000, Math.max(limitNum * 10, limitNum));
+    const toNumberSafe = (value: unknown) => {
+        const parsed = Number(value || 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const toDateSafe = (value: unknown): Date | null => {
+        if (!value) return null;
+        const d = value instanceof Date ? value : new Date(String(value));
+        return Number.isFinite(d.getTime()) ? d : null;
+    };
+
+    type AggRow = {
+        customer_id?: string | null;
+        revenue?: unknown;
+        tx_count?: unknown;
+        first_at?: unknown;
+        last_at?: unknown;
+    };
+
+    type QtyRow = {
+        customer_id?: string | null;
+        qty_total?: unknown;
+    };
+
+    const [invoiceAgg, invoiceQty, posAgg, posQty] = await Promise.all([
+        Invoice.findAll({
+            attributes: [
+                'customer_id',
+                [sequelize.fn('SUM', sequelize.col('Invoice.total')), 'revenue'],
+                [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('Invoice.id'))), 'tx_count'],
+                [sequelize.fn('MIN', sequelize.col('Invoice.verified_at')), 'first_at'],
+                [sequelize.fn('MAX', sequelize.col('Invoice.verified_at')), 'last_at'],
+            ],
+            where: {
+                payment_status: 'paid',
+                verified_at: { [Op.between]: [start, end] },
+                customer_id: { [Op.ne]: null },
+            },
+            group: [sequelize.col('Invoice.customer_id')],
+            order: [[sequelize.literal('tx_count'), 'DESC']],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as AggRow[],
+        InvoiceItem.findAll({
+            attributes: [
+                [sequelize.col('Invoice.customer_id'), 'customer_id'],
+                [sequelize.fn('SUM', sequelize.col('InvoiceItem.qty')), 'qty_total'],
+            ],
+            include: [
+                {
+                    model: Invoice,
+                    attributes: [],
+                    where: {
+                        payment_status: 'paid',
+                        verified_at: { [Op.between]: [start, end] },
+                        customer_id: { [Op.ne]: null },
+                    }
+                }
+            ],
+            group: [sequelize.col('Invoice.customer_id')],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as QtyRow[],
+        PosSale.findAll({
+            attributes: [
+                'customer_id',
+                [sequelize.fn('SUM', sequelize.col('PosSale.total')), 'revenue'],
+                [sequelize.fn('COUNT', sequelize.fn('DISTINCT', sequelize.col('PosSale.id'))), 'tx_count'],
+                [sequelize.fn('MIN', sequelize.col('PosSale.paid_at')), 'first_at'],
+                [sequelize.fn('MAX', sequelize.col('PosSale.paid_at')), 'last_at'],
+            ],
+            where: {
+                status: 'paid',
+                paid_at: { [Op.between]: [start, end] },
+                customer_id: { [Op.ne]: null },
+            },
+            group: [sequelize.col('PosSale.customer_id')],
+            order: [[sequelize.literal('tx_count'), 'DESC']],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as AggRow[],
+        PosSaleItem.findAll({
+            attributes: [
+                [sequelize.col('Sale.customer_id'), 'customer_id'],
+                [sequelize.fn('SUM', sequelize.col('PosSaleItem.qty')), 'qty_total'],
+            ],
+            include: [
+                {
+                    model: PosSale,
+                    as: 'Sale',
+                    attributes: [],
+                    where: {
+                        status: 'paid',
+                        paid_at: { [Op.between]: [start, end] },
+                        customer_id: { [Op.ne]: null },
+                    }
+                }
+            ],
+            group: [sequelize.col('Sale.customer_id')],
+            limit: sourceLimit,
+            raw: true,
+        }) as unknown as QtyRow[],
+    ]);
+
+    type Bucket = {
+        customer_id: string;
+        revenue_invoice: number;
+        revenue_pos: number;
+        qty_invoice: number;
+        qty_pos: number;
+        tx_invoice: number;
+        tx_pos: number;
+        first_invoice_at: Date | null;
+        last_invoice_at: Date | null;
+        first_pos_at: Date | null;
+        last_pos_at: Date | null;
+    };
+
+    const byCustomer = new Map<string, Bucket>();
+    const ensureBucket = (customerId: string) => {
+        const id = String(customerId || '').trim();
+        if (!id) return null;
+        const existing = byCustomer.get(id);
+        if (existing) return existing;
+        const next: Bucket = {
+            customer_id: id,
+            revenue_invoice: 0,
+            revenue_pos: 0,
+            qty_invoice: 0,
+            qty_pos: 0,
+            tx_invoice: 0,
+            tx_pos: 0,
+            first_invoice_at: null,
+            last_invoice_at: null,
+            first_pos_at: null,
+            last_pos_at: null,
+        };
+        byCustomer.set(id, next);
+        return next;
+    };
+
+    const minDate = (a: Date | null, b: Date | null) => {
+        if (!a) return b;
+        if (!b) return a;
+        return a.getTime() <= b.getTime() ? a : b;
+    };
+    const maxDate = (a: Date | null, b: Date | null) => {
+        if (!a) return b;
+        if (!b) return a;
+        return a.getTime() >= b.getTime() ? a : b;
+    };
+
+    for (const row of invoiceAgg) {
+        const customerId = String(row.customer_id || '').trim();
+        if (!customerId) continue;
+        const bucket = ensureBucket(customerId);
+        if (!bucket) continue;
+        bucket.revenue_invoice += Math.max(0, toNumberSafe(row.revenue));
+        bucket.tx_invoice += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+        bucket.first_invoice_at = minDate(bucket.first_invoice_at, toDateSafe(row.first_at));
+        bucket.last_invoice_at = maxDate(bucket.last_invoice_at, toDateSafe(row.last_at));
+    }
+
+    for (const row of invoiceQty) {
+        const customerId = String(row.customer_id || '').trim();
+        if (!customerId) continue;
+        const bucket = ensureBucket(customerId);
+        if (!bucket) continue;
+        bucket.qty_invoice += Math.max(0, toNumberSafe(row.qty_total));
+    }
+
+    for (const row of posAgg) {
+        const customerId = String(row.customer_id || '').trim();
+        if (!customerId) continue;
+        const bucket = ensureBucket(customerId);
+        if (!bucket) continue;
+        bucket.revenue_pos += Math.max(0, toNumberSafe(row.revenue));
+        bucket.tx_pos += Math.max(0, Math.trunc(toNumberSafe(row.tx_count)));
+        bucket.first_pos_at = minDate(bucket.first_pos_at, toDateSafe(row.first_at));
+        bucket.last_pos_at = maxDate(bucket.last_pos_at, toDateSafe(row.last_at));
+    }
+
+    for (const row of posQty) {
+        const customerId = String(row.customer_id || '').trim();
+        if (!customerId) continue;
+        const bucket = ensureBucket(customerId);
+        if (!bucket) continue;
+        bucket.qty_pos += Math.max(0, toNumberSafe(row.qty_total));
+    }
+
+    const merged = Array.from(byCustomer.values()).map((bucket) => {
+        const first_bought_at = minDate(bucket.first_invoice_at, bucket.first_pos_at);
+        const last_bought_at = maxDate(bucket.last_invoice_at, bucket.last_pos_at);
+        const revenue = bucket.revenue_invoice + bucket.revenue_pos;
+        const qty_total = bucket.qty_invoice + bucket.qty_pos;
+        const order_count = bucket.tx_invoice + bucket.tx_pos;
+        return {
+            customer_id: bucket.customer_id,
+            revenue,
+            revenue_invoice: bucket.revenue_invoice,
+            revenue_pos: bucket.revenue_pos,
+            qty_total,
+            qty_invoice: bucket.qty_invoice,
+            qty_pos: bucket.qty_pos,
+            tx_invoice: bucket.tx_invoice,
+            tx_pos: bucket.tx_pos,
+            order_count,
+            first_bought_at,
+            last_bought_at,
+        };
+    });
+
+    merged.sort((a, b) => {
+        if (b.order_count !== a.order_count) return b.order_count - a.order_count;
+        if (b.revenue !== a.revenue) return b.revenue - a.revenue;
+        const aLast = a.last_bought_at ? a.last_bought_at.getTime() : 0;
+        const bLast = b.last_bought_at ? b.last_bought_at.getTime() : 0;
+        return bLast - aLast;
+    });
+
+    const top = merged.slice(0, limitNum);
+    const topIds = top.map((r) => r.customer_id);
+
+    const users = await User.findAll({
+        where: { id: { [Op.in]: topIds } },
+        attributes: ['id', 'name', 'whatsapp_number'],
+        raw: true,
+    }) as unknown as Array<{ id: string; name: string; whatsapp_number: string | null }>;
+
+    const byUserId = new Map(users.map((u) => [String(u.id), u]));
+
+    return top.map((r) => {
+        const u = byUserId.get(r.customer_id);
+        return {
+            customer_id: r.customer_id,
+            customer_name: u?.name ?? null,
+            whatsapp_number: u?.whatsapp_number ?? null,
+            revenue: r.revenue,
+            revenue_invoice: r.revenue_invoice,
+            revenue_pos: r.revenue_pos,
+            qty_total: r.qty_total,
+            qty_invoice: r.qty_invoice,
+            qty_pos: r.qty_pos,
+            tx_invoice: r.tx_invoice,
+            tx_pos: r.tx_pos,
+            order_count: r.order_count,
+            first_bought_at: r.first_bought_at,
+            last_bought_at: r.last_bought_at,
+        };
+    });
+};
+
+export const getTopCustomersReport = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate, limit } = req.query;
+        if (!startDate || !endDate) {
+            throw new CustomError('StartDate dan EndDate wajib diisi', 400);
+        }
+
+        const start = new Date(String(startDate));
+        const end = new Date(String(endDate));
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new CustomError('StartDate/EndDate tidak valid', 400);
+        }
+
+        const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+        const rows = await computeTopCustomersMergedRows({ start, end, limitNum });
+
+        res.json({
+            period: { startDate: String(startDate), endDate: String(endDate) },
+            rows,
+        });
+    } catch (error) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error generating top customers report', 500);
+    }
+});
+
+export const exportTopCustomersReportExcel = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate, limit } = req.query;
+        if (!startDate || !endDate) {
+            throw new CustomError('StartDate dan EndDate wajib diisi', 400);
+        }
+
+        const start = new Date(String(startDate));
+        const end = new Date(String(endDate));
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            throw new CustomError('StartDate/EndDate tidak valid', 400);
+        }
+
+        const limitNum = Math.min(500, Math.max(1, Number(limit) || 50));
+        const rows = await computeTopCustomersMergedRows({ start, end, limitNum });
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Migunani Admin';
+        workbook.created = new Date();
+        const sheet = workbook.addWorksheet('Customer_Loyal');
+
+        const periodStart = String(startDate);
+        const periodEnd = String(endDate);
+        const exportTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+        sheet.getCell('A1').value = 'Laporan Customer Loyal (Invoice paid + POS paid)';
+        sheet.getCell('A2').value = `Waktu Export: ${exportTime}`;
+        sheet.getCell('A3').value = `Periode: ${periodStart} s/d ${periodEnd}`;
+        sheet.getCell('A4').value = `Limit: ${limitNum}`;
+
+        const headerRowIndex = 6;
+        const headers = [
+            'Customer',
+            'WhatsApp',
+            'Transaksi',
+            'Qty Total',
+            'Omzet',
+            'Last Beli',
+            'First Beli',
+            'Tx Invoice',
+            'Tx POS',
+            'Omzet Invoice',
+            'Omzet POS',
+            'Qty Invoice',
+            'Qty POS',
+        ];
+        sheet.getRow(headerRowIndex).values = headers;
+        sheet.getRow(headerRowIndex).font = { bold: true };
+
+        rows.forEach((row, idx) => {
+            const excelRowIndex = headerRowIndex + 1 + idx;
+            sheet.getRow(excelRowIndex).values = [
+                row.customer_name || row.customer_id,
+                row.whatsapp_number || '-',
+                Number(row.order_count || 0),
+                Number(row.qty_total || 0),
+                Number(row.revenue || 0),
+                row.last_bought_at ? formatLocalYmdHm(new Date(row.last_bought_at)) : '-',
+                row.first_bought_at ? formatLocalYmdHm(new Date(row.first_bought_at)) : '-',
+                Number(row.tx_invoice || 0),
+                Number(row.tx_pos || 0),
+                Number(row.revenue_invoice || 0),
+                Number(row.revenue_pos || 0),
+                Number(row.qty_invoice || 0),
+                Number(row.qty_pos || 0),
+            ];
+        });
+
+        sheet.columns = [
+            { key: 'customer', width: 28 },
+            { key: 'wa', width: 18 },
+            { key: 'tx', width: 12 },
+            { key: 'qty', width: 12 },
+            { key: 'omzet', width: 16 },
+            { key: 'last', width: 18 },
+            { key: 'first', width: 18 },
+            { key: 'txInv', width: 12 },
+            { key: 'txPos', width: 12 },
+            { key: 'omzetInv', width: 16 },
+            { key: 'omzetPos', width: 16 },
+            { key: 'qtyInv', width: 12 },
+            { key: 'qtyPos', width: 12 },
+        ];
+
+        const timestamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+        const fileName = `laporan-customer-loyal-${fileSuffix}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        if (error instanceof CustomError) {
+            throw error;
+        }
+        throw new CustomError('Error exporting top customers report', 500);
     }
 });

@@ -25,6 +25,7 @@ import {
     SlidersHorizontal,
     TrendingUp,
     Layers,
+    Users,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 
@@ -141,10 +142,18 @@ export default function FinanceReportsPage() {
         },
         {
             title: 'Produk Terjual',
-            desc: 'Top produk terjual (invoice paid) per periode',
+            desc: 'Top produk terjual (invoice + POS paid) per periode',
             icon: <Package size={24} className="text-purple-600" />,
             href: '/admin/finance/laporan/produk-terjual',
             color: 'bg-purple-50',
+            roles: ['super_admin', 'admin_finance', 'kasir']
+        },
+        {
+            title: 'Customer Loyal',
+            desc: 'Ranking customer paling sering beli + omzet',
+            icon: <Users size={24} className="text-emerald-600" />,
+            href: '/admin/finance/laporan/customer-loyal',
+            color: 'bg-emerald-50',
             roles: ['super_admin', 'admin_finance', 'kasir']
         },
         {

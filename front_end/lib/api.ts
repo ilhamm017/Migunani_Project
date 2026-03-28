@@ -750,6 +750,12 @@ export const api = {
             }) => apiClient.post('/admin/finance/supplier-invoice/pay', data),
             getProductsSoldReport: (params: { startDate: string; endDate: string; limit?: number }) =>
                 apiClient.get('/admin/finance/reports/products-sold', { params }),
+            exportProductsSoldReport: (params: { startDate: string; endDate: string; limit?: number }) =>
+                apiClient.get('/admin/finance/reports/products-sold/export', { params, responseType: 'blob' }),
+            getTopCustomersReport: (params: { startDate: string; endDate: string; limit?: number }) =>
+                apiClient.get('/admin/finance/reports/top-customers', { params }),
+            exportTopCustomersReport: (params: { startDate: string; endDate: string; limit?: number }) =>
+                apiClient.get('/admin/finance/reports/top-customers/export', { params, responseType: 'blob' }),
         },
         // Profile
         profile: {
