@@ -174,6 +174,10 @@ export const api = {
         getById: (invoiceId: string) => apiClient.get<InvoiceDetailResponse>(`/invoices/${invoiceId}`),
         getWarehouseQueue: (params?: { status?: string; q?: string; limit?: number | string }) =>
             apiClient.get(`/invoices/admin/warehouse/queue`, { params }),
+        getWarehousePicklist: (params?: { status?: string; q?: string; limit?: number | string }) =>
+            apiClient.get(`/invoices/admin/warehouse/picklist`, { params }),
+        downloadWarehousePicklistXlsx: (params?: { status?: string; q?: string; limit?: number | string }) =>
+            apiClient.get(`/invoices/admin/warehouse/picklist.xlsx`, { params, responseType: 'blob' }),
         getPicklist: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}/picklist`),
         downloadPicklistXlsx: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}/picklist.xlsx`, { responseType: 'blob' }),
         getMy: (params?: {

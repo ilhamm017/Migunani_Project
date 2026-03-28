@@ -13,6 +13,8 @@ const uploadPaymentProofMiddleware = createSingleUploadMiddleware(proofUpload, {
 
 	router.get('/my', authenticateToken, InvoiceController.getMyInvoices);
 	router.get('/admin/warehouse/queue', authenticateToken, InvoiceController.getWarehouseInvoiceQueue);
+	router.get('/admin/warehouse/picklist', authenticateToken, InvoiceController.getWarehouseProductPicklist);
+	router.get('/admin/warehouse/picklist.xlsx', authenticateToken, InvoiceController.exportWarehouseProductPicklistExcel);
 	router.get('/:id', authenticateToken, InvoiceController.getInvoiceDetail);
 	router.get('/:id/picklist', authenticateToken, InvoiceController.getInvoicePicklist);
 	router.get('/:id/picklist.xlsx', authenticateToken, InvoiceController.exportInvoicePicklistExcel);

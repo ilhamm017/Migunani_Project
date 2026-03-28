@@ -508,6 +508,145 @@ export const getWarehouseInvoiceQueue = asyncWrapper(async (req: Request, res: R
     });
 });
 
+const buildWarehouseProductPicklist = async (opts: { statuses?: string[]; q?: string; limit?: number }) => {
+    const whereStatus = (Array.isArray(opts.statuses) && opts.statuses.length > 0 ? opts.statuses : ['ready_to_ship', 'checked'])
+        .map((s) => String(s || '').trim().toLowerCase())
+        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
+    const q = String(opts.q || '').trim();
+    const limitRaw = Number(opts.limit ?? 2000);
+    const limit = Number.isFinite(limitRaw) ? Math.min(20000, Math.max(1, Math.trunc(limitRaw))) : 2000;
+
+    const productRows = await sequelize.query(
+        `SELECT
+            oi.product_id AS product_id,
+            p.sku AS sku,
+            p.name AS name,
+            p.bin_location AS bin_location,
+            COUNT(DISTINCT ii.invoice_id) AS invoice_count,
+            COUNT(DISTINCT oi.order_id) AS order_count,
+            COALESCE(SUM(ii.qty), 0) AS total_qty
+         FROM invoice_items ii
+         INNER JOIN invoices inv ON inv.id = ii.invoice_id
+         INNER JOIN order_items oi ON oi.id = ii.order_item_id
+         LEFT JOIN products p ON p.id = oi.product_id
+         WHERE inv.shipment_status IN (:statuses)
+         GROUP BY oi.product_id, p.sku, p.name, p.bin_location
+         ORDER BY p.bin_location ASC, p.sku ASC
+         LIMIT :limit`,
+        {
+            type: QueryTypes.SELECT,
+            replacements: { statuses: whereStatus, limit },
+        }
+    ) as any[];
+
+    const filteredRows = q
+        ? (Array.isArray(productRows) ? productRows : []).filter((row: any) => {
+            const haystack = [
+                row?.sku,
+                row?.name,
+                row?.bin_location,
+                row?.product_id,
+            ].map((v) => String(v || '').toLowerCase()).join(' | ');
+            return haystack.includes(q.toLowerCase());
+        })
+        : (Array.isArray(productRows) ? productRows : []);
+
+    const productIds = filteredRows.map((r: any) => String(r?.product_id || '').trim()).filter(Boolean);
+
+    const orderRows = await sequelize.query(
+        `SELECT DISTINCT oi.order_id AS order_id
+         FROM invoice_items ii
+         INNER JOIN invoices inv ON inv.id = ii.invoice_id
+         INNER JOIN order_items oi ON oi.id = ii.order_item_id
+         WHERE inv.shipment_status IN (:statuses)`,
+        {
+            type: QueryTypes.SELECT,
+            replacements: { statuses: whereStatus },
+        }
+    ) as any[];
+    const orderIds = (Array.isArray(orderRows) ? orderRows : [])
+        .map((r: any) => String(r?.order_id || '').trim())
+        .filter(Boolean);
+
+    const layersByProductId = new Map<string, Array<{ unit_cost: number; qty_reserved: number }>>();
+    if (orderIds.length > 0 && productIds.length > 0) {
+        const reservedRows = await sequelize.query(
+            `SELECT
+                r.product_id AS product_id,
+                b.unit_cost AS unit_cost,
+                COALESCE(SUM(r.qty_reserved), 0) AS qty_reserved
+             FROM inventory_batch_reservations r
+             INNER JOIN inventory_batches b ON b.id = r.batch_id
+             WHERE r.order_id IN (:orderIds)
+               AND r.product_id IN (:productIds)
+             GROUP BY r.product_id, b.unit_cost`,
+            {
+                type: QueryTypes.SELECT,
+                replacements: { orderIds, productIds },
+            }
+        ) as any[];
+
+        (Array.isArray(reservedRows) ? reservedRows : []).forEach((row: any) => {
+            const productId = String(row?.product_id || '').trim();
+            if (!productId) return;
+            const unitCost = Number(row?.unit_cost || 0);
+            const qtyReserved = Math.max(0, Math.trunc(Number(row?.qty_reserved || 0)));
+            if (!Number.isFinite(unitCost) || unitCost <= 0 || qtyReserved <= 0) return;
+            const list = layersByProductId.get(productId) || [];
+            list.push({ unit_cost: unitCost, qty_reserved: qtyReserved });
+            layersByProductId.set(productId, list);
+        });
+        layersByProductId.forEach((list, productId) => {
+            layersByProductId.set(productId, [...list].sort((a, b) => a.unit_cost - b.unit_cost));
+        });
+    }
+
+    const rows = filteredRows.map((row: any) => {
+        const productId = String(row?.product_id || '').trim();
+        const totalQty = Math.max(0, Math.trunc(Number(row?.total_qty || 0)));
+        return {
+            product_id: productId,
+            sku: String(row?.sku || productId || '').trim(),
+            name: String(row?.name || 'Produk'),
+            bin_location: row?.bin_location ? String(row.bin_location) : null,
+            invoice_count: Math.max(0, Math.trunc(Number(row?.invoice_count || 0))),
+            order_count: Math.max(0, Math.trunc(Number(row?.order_count || 0))),
+            total_qty: totalQty,
+            batch_layers: layersByProductId.get(productId) || [],
+        };
+    });
+
+    const totals = rows.reduce(
+        (acc, row) => {
+            acc.total_qty += Number(row.total_qty || 0);
+            acc.product_count += 1;
+            acc.invoice_count += Number(row.invoice_count || 0);
+            acc.order_count += Number(row.order_count || 0);
+            return acc;
+        },
+        { total_qty: 0, product_count: 0, invoice_count: 0, order_count: 0 }
+    );
+
+    return { status: whereStatus, q, totals, rows };
+};
+
+export const getWarehouseProductPicklist = asyncWrapper(async (req: Request, res: Response) => {
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const statusRaw = String(req.query?.status || 'ready_to_ship,checked').trim().toLowerCase();
+    const statusList = statusRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
+    const result = await buildWarehouseProductPicklist({
+        statuses: statusList.length > 0 ? statusList : undefined,
+        q: String(req.query?.q || ''),
+        limit: Number(req.query?.limit ?? 2000),
+    });
+    res.json(result);
+});
+
 export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) => {
     const user = req.user!;
     const userRole = String(user?.role || '');
@@ -974,6 +1113,88 @@ export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res:
     const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
     const safeInvoiceNumber = String(result.invoice?.invoice_number || 'INV').replace(/[^a-z0-9_-]/gi, '_');
     const fileName = `picklist-${safeInvoiceNumber}-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+});
+
+export const exportWarehouseProductPicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const statusRaw = String(req.query?.status || 'ready_to_ship,checked').trim().toLowerCase();
+    const statusList = statusRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
+    const q = String(req.query?.q || '').trim();
+    const limitRaw = Number(req.query?.limit ?? 20000);
+    const limit = Number.isFinite(limitRaw) ? Math.min(20000, Math.max(1, Math.trunc(limitRaw))) : 20000;
+
+    const payload = await buildWarehouseProductPicklist({
+        statuses: statusList.length > 0 ? statusList : undefined,
+        q,
+        limit,
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani System';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Picklist Gudang');
+
+    sheet.getRow(1).values = ['Picklist Gudang (Global)'];
+    sheet.getRow(1).font = { bold: true, size: 14 };
+    sheet.getRow(3).values = ['Status', String((payload.status || []).join(', ') || '-')];
+    sheet.getRow(4).values = ['Filter', q || '-'];
+    sheet.getRow(5).values = ['Total Qty', Number(payload.totals?.total_qty || 0)];
+    sheet.getRow(6).values = ['Total Produk', Number(payload.totals?.product_count || 0)];
+
+    const headerRowIndex = 8;
+    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty', 'Invoice', 'Order'];
+    sheet.getRow(headerRowIndex).font = { bold: true };
+
+    (payload.rows as any[]).forEach((row: any, idx: number) => {
+        const excelRowIndex = headerRowIndex + 1 + idx;
+        const layers = Array.isArray(row?.batch_layers) ? row.batch_layers : [];
+        const layerText = layers.length > 0
+            ? layers
+                .filter((l: any) => Number(l?.qty_reserved || 0) > 0)
+                .map((l: any) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
+                .join(' | ')
+            : 'FIFO (auto)';
+        sheet.getRow(excelRowIndex).values = [
+            idx + 1,
+            row.bin_location || '',
+            row.sku || row.product_id || '',
+            row.name || '',
+            layerText,
+            Number(row.total_qty || 0),
+            Number(row.invoice_count || 0),
+            Number(row.order_count || 0),
+        ];
+        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
+        sheet.getRow(excelRowIndex).getCell(7).numFmt = '#,##0';
+        sheet.getRow(excelRowIndex).getCell(8).numFmt = '#,##0';
+    });
+
+    sheet.columns = [
+        { key: 'no', width: 6 },
+        { key: 'bin', width: 18 },
+        { key: 'sku', width: 18 },
+        { key: 'product', width: 44 },
+        { key: 'batch', width: 28 },
+        { key: 'qty', width: 10 },
+        { key: 'inv', width: 10 },
+        { key: 'ord', width: 10 },
+    ];
+
+    const timestamp = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const fileName = `picklist-gudang-${fileSuffix}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
