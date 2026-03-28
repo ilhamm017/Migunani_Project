@@ -647,6 +647,86 @@ export const getWarehouseProductPicklist = asyncWrapper(async (req: Request, res
     res.json(result);
 });
 
+export const getInvoicePicklist = asyncWrapper(async (req: Request, res: Response) => {
+    const invoiceId = String(req.params.id || '').trim();
+    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const result = await buildInvoicePicklist(invoiceId);
+    res.json({
+        invoice_id: String(result.invoice?.id || invoiceId),
+        invoice_number: String(result.invoice?.invoice_number || ''),
+        createdAt: result.invoice?.createdAt || null,
+        shipment_status: String(result.invoice?.shipment_status || ''),
+        totals: result.totals,
+        rows: result.rows,
+    });
+});
+
+export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
+    const invoiceId = String(req.params.id || '').trim();
+    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const result = await buildInvoicePicklist(invoiceId);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani System';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Picklist');
+
+    sheet.getRow(1).values = ['Picklist Gudang (Invoice)'];
+    sheet.getRow(1).font = { bold: true, size: 14 };
+    sheet.getRow(3).values = ['Invoice', String(result.invoice?.invoice_number || '-')];
+    sheet.getRow(4).values = ['Invoice ID', String(result.invoice?.id || invoiceId)];
+    sheet.getRow(5).values = ['Total Qty', Number(result.totals?.total_qty || 0)];
+    sheet.getRow(6).values = ['Total Produk', Number(result.totals?.product_count || 0)];
+
+    const headerRowIndex = 8;
+    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty'];
+    sheet.getRow(headerRowIndex).font = { bold: true };
+
+    (Array.isArray(result.rows) ? result.rows : []).forEach((row, idx) => {
+        const excelRowIndex = headerRowIndex + 1 + idx;
+        const layers = Array.isArray((row as any).batch_layers) ? ((row as any).batch_layers as any[]) : [];
+        const layerText = layers.length > 0
+            ? layers
+                .filter((l) => Number(l?.qty_reserved || 0) > 0)
+                .map((l) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
+                .join(' | ')
+            : 'FIFO (auto)';
+        sheet.getRow(excelRowIndex).values = [
+            idx + 1,
+            row.bin_location || '',
+            row.sku || row.product_id || '',
+            row.name || '',
+            layerText,
+            Number(row.total_qty || 0),
+        ];
+        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
+    });
+
+    sheet.columns = [
+        { key: 'no', width: 6 },
+        { key: 'bin', width: 18 },
+        { key: 'sku', width: 18 },
+        { key: 'product', width: 44 },
+        { key: 'batch', width: 28 },
+        { key: 'qty', width: 10 },
+    ];
+
+    const timestamp = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const safeInvoiceNumber = String(result.invoice?.invoice_number || 'INV').replace(/[^a-z0-9_-]/gi, '_');
+    const fileName = `picklist-${safeInvoiceNumber}-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+});
 export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) => {
     const user = req.user!;
     const userRole = String(user?.role || '');
@@ -1037,89 +1117,8 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
 
         const invoice = await Invoice.findByPk(invoiceId, {
             transaction: t,
-            lock: t.LOCK.UPDATE
-});
-
-export const getInvoicePicklist = asyncWrapper(async (req: Request, res: Response) => {
-    const invoiceId = String(req.params.id || '').trim();
-    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
-    requireInvoicePicklistRoles(req.user?.role);
-
-    const result = await buildInvoicePicklist(invoiceId);
-    res.json({
-        invoice_id: String(result.invoice?.id || invoiceId),
-        invoice_number: String(result.invoice?.invoice_number || ''),
-        createdAt: result.invoice?.createdAt || null,
-        shipment_status: String(result.invoice?.shipment_status || ''),
-        totals: result.totals,
-        rows: result.rows,
-    });
-});
-
-export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
-    const invoiceId = String(req.params.id || '').trim();
-    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
-    requireInvoicePicklistRoles(req.user?.role);
-
-    const result = await buildInvoicePicklist(invoiceId);
-
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Migunani System';
-    workbook.created = new Date();
-    const sheet = workbook.addWorksheet('Picklist');
-
-    sheet.getRow(1).values = ['Picklist Gudang (Invoice)'];
-    sheet.getRow(1).font = { bold: true, size: 14 };
-    sheet.getRow(3).values = ['Invoice', String(result.invoice?.invoice_number || '-')];
-    sheet.getRow(4).values = ['Invoice ID', String(result.invoice?.id || invoiceId)];
-    sheet.getRow(5).values = ['Total Qty', Number(result.totals?.total_qty || 0)];
-    sheet.getRow(6).values = ['Total Produk', Number(result.totals?.product_count || 0)];
-
-    const headerRowIndex = 8;
-    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty'];
-    sheet.getRow(headerRowIndex).font = { bold: true };
-
-    (Array.isArray(result.rows) ? result.rows : []).forEach((row, idx) => {
-        const excelRowIndex = headerRowIndex + 1 + idx;
-        const layers = Array.isArray((row as any).batch_layers) ? ((row as any).batch_layers as any[]) : [];
-        const layerText = layers.length > 0
-            ? layers
-                .filter((l) => Number(l?.qty_reserved || 0) > 0)
-                .map((l) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
-                .join(' | ')
-            : 'FIFO (auto)';
-        sheet.getRow(excelRowIndex).values = [
-            idx + 1,
-            row.bin_location || '',
-            row.sku || row.product_id || '',
-            row.name || '',
-            layerText,
-            Number(row.total_qty || 0),
-        ];
-        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
-    });
-
-    sheet.columns = [
-        { key: 'no', width: 6 },
-        { key: 'bin', width: 18 },
-        { key: 'sku', width: 18 },
-        { key: 'product', width: 44 },
-        { key: 'batch', width: 28 },
-        { key: 'qty', width: 10 },
-    ];
-
-    const timestamp = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
-    const safeInvoiceNumber = String(result.invoice?.invoice_number || 'INV').replace(/[^a-z0-9_-]/gi, '_');
-    const fileName = `picklist-${safeInvoiceNumber}-${fileSuffix}.xlsx`;
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
-});
+            lock: t.LOCK.UPDATE,
+        });
 
 export const exportWarehouseProductPicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
     requireInvoicePicklistRoles(req.user?.role);
