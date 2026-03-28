@@ -874,7 +874,7 @@ export default function AdminOrdersWorkspace({
     const normalizedStatus = resolveWorkspaceShipmentStatus(order, detail);
     const courierId = resolveWorkspaceCourierId(order, detail);
     const isCompleted = COMPLETED_STATUSES.has(rawStatus);
-    const isCanceled = CANCELED_STATUSES.has(rawStatus) || String(normalizedStatus || '').trim().toLowerCase() === 'canceled';
+    const isCanceledStatus = CANCELED_STATUSES.has(rawStatus) || String(normalizedStatus || '').trim().toLowerCase() === 'canceled';
     const isPayment = PAYMENT_STATUSES.has(rawStatus);
     const isWarehouse = WAREHOUSE_STATUSES.has(normalizedStatus);
     const isShipping = normalizedStatus === 'shipped';
@@ -886,19 +886,46 @@ export default function AdminOrdersWorkspace({
     const isAllocatedReady = normalizedStatus === 'waiting_invoice';
     const sections: OrderSection[] = [];
 
-    if (isCanceled) return ['canceled'];
-    if (isCompleted) return ['selesai'];
+    // Canceled section: only orders canceled early (no invoice & no allocation history attached).
+    const hasInvoiceRef = Boolean(
+      normalizeInvoiceRef(
+        (order as any)?.invoice_id ||
+        (order as any)?.Invoice?.id ||
+        (detail as any)?.invoice_id ||
+        (detail as any)?.Invoice?.id ||
+        ''
+      )
+    ) || (Array.isArray((order as any)?.Invoices) && (order as any).Invoices.length > 0);
+    const allocations = (Array.isArray((detail as any)?.Allocations) ? (detail as any).Allocations : null)
+      || (Array.isArray((order as any)?.Allocations) ? (order as any).Allocations : []);
+    const hasAnyAllocation = allocations.some((alloc: any) => Number(alloc?.allocated_qty || 0) > 0);
+    const isCanceledFromStart = isCanceledStatus && !hasInvoiceRef && !hasAnyAllocation;
+
+    // Partial section: orders already settled/done for the delivered part but still leaving backorder open.
+    const isPartialCompletion = isBackorder && isPaidByRule && (isDelivered || isPartiallyFulfilled || isCompleted);
+
+    if (isCanceledFromStart) return ['canceled'];
+
+    if (isCompleted) {
+      if (isPartialCompletion) return ['partially_fulfilled', 'backorder'];
+      return ['selesai'];
+    }
     if (isDelivered) {
-      if (isBackorder) return [isPaidByRule ? 'selesai' : 'pembayaran', 'backorder'];
+      if (isBackorder) return [isPaidByRule ? 'partially_fulfilled' : 'pembayaran', 'backorder'];
       return [isPaidByRule ? 'selesai' : 'pembayaran'];
     }
     if (isPartiallyFulfilled && !isBackorder) {
+      // Non-backorder partial stays visible as "Parsial" plus its active lane.
       return Array.from(new Set(['partially_fulfilled', isPaidByRule ? 'selesai' : 'pengiriman']));
+    }
+    if (isCanceledStatus) {
+      // If canceled after some progress, treat as finished lanes based on whether it still leaves backorder.
+      if (isPartialCompletion) return ['partially_fulfilled', 'backorder'];
+      return ['selesai'];
     }
 
     if (isBackorder) sections.push('backorder');
-    if (isPartiallyFulfilled) sections.push('partially_fulfilled');
-    if (isBackorder && isPaidByRule && isPartiallyFulfilled) sections.push('selesai');
+    if (isPartialCompletion) sections.push('partially_fulfilled');
     if (isPayment) sections.push('pembayaran');
     if (isShipping) sections.push('pengiriman');
     if (isAllocatedReady) sections.push('allocated');
