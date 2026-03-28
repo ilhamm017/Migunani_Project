@@ -60,20 +60,29 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         };
 
         const tokensPresent = tokens.length > 0;
-        const availableStockLiteral = sequelize.literal('GREATEST(`Product`.`stock_quantity` - `Product`.`allocated_quantity`, 0)');
         const orderForSearch = tokensPresent
             ? [
                 ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
-                [availableStockLiteral, 'DESC'],
                 ...order
             ]
             : order;
 
         const runQuery = async (mode: 'and' | 'or') => {
             const whereForQuery = tokensPresent ? buildSearchWhere(mode) : whereClause;
+            const productAttributes = [
+                'id',
+                'sku',
+                'name',
+                'price',
+                'unit',
+                'description',
+                'image_url',
+                'category_id',
+                ...(tokensPresent ? (['barcode'] as const) : []),
+            ];
             return Product.findAndCountAll({
                 where: whereForQuery,
-                attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'], // Explicit attributes (hide stock from public)
+                attributes: productAttributes, // Explicit attributes (hide stock from public)
                 include: [
                     { model: Category, attributes: ['id', 'name', 'icon'] },
                     { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
@@ -85,18 +94,96 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
             });
         };
 
-        let result = await runQuery('and');
+        const buildSimpleSearchWhere = (mode: 'and' | 'or') => {
+            const next: any = { ...whereClause };
+            const andVal = next[Op.and];
+            if (Array.isArray(andVal)) next[Op.and] = [...andVal];
+
+            const tokenClauses = tokens.map((token) => ({
+                [Op.or]: [
+                    { name: { [Op.like]: `%${token}%` } },
+                    { sku: { [Op.like]: `%${token}%` } },
+                    { barcode: { [Op.like]: `%${token}%` } },
+                ]
+            }));
+
+            const existing = next[Op.and];
+            const andParts: any[] = [];
+            if (Array.isArray(existing)) andParts.push(...existing);
+            else if (existing) andParts.push(existing);
+
+            if (mode === 'and') {
+                andParts.push(...tokenClauses);
+            } else {
+                andParts.push({ [Op.or]: tokenClauses });
+            }
+            next[Op.and] = andParts;
+            return next;
+        };
+
+        const runSimpleQuery = async (mode: 'and' | 'or') => {
+            const whereForQuery = tokensPresent ? buildSimpleSearchWhere(mode) : whereClause;
+            const productAttributes = [
+                'id',
+                'sku',
+                'name',
+                'price',
+                'unit',
+                'description',
+                'image_url',
+                'category_id',
+            ];
+            return Product.findAndCountAll({
+                where: whereForQuery,
+                attributes: productAttributes,
+                include: [
+                    { model: Category, attributes: ['id', 'name', 'icon'] },
+                    { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
+                ],
+                limit: Number(limit),
+                offset: Number(offset),
+                order: tokensPresent
+                    ? order
+                    : order,
+                distinct: true
+            });
+        };
+
+        let result;
+        try {
+            result = await runQuery('and');
+        } catch (error: any) {
+            if (!tokensPresent) throw error;
+            console.error('[Catalog] Advanced search failed; fallback to basic token search.', error);
+            result = await runSimpleQuery('and');
+        }
+
         if (tokens.length > 1 && getCountNumber((result as any)?.count) === 0) {
-            result = await runQuery('or');
+            try {
+                result = await runQuery('or');
+            } catch (error: any) {
+                console.error('[Catalog] Advanced OR search failed; fallback to basic token search.', error);
+                result = await runSimpleQuery('or');
+            }
         }
 
         const { count, rows } = result;
+
+        const safeRows = tokensPresent
+            ? (rows as any[]).map((row) => {
+                const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
+                if (plain && typeof plain === 'object' && 'barcode' in plain) {
+                    delete (plain as any).barcode;
+                }
+                return plain;
+            })
+            : rows;
 
         res.json({
             total: count,
             totalPages: Math.ceil(count / Number(limit)),
             currentPage: Number(page),
-            products: rows
+            products: safeRows
         });
     } catch (error) {
         if (error instanceof CustomError) {

@@ -60,6 +60,7 @@ function CatalogContent() {
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
+    const [loadError, setLoadError] = useState('');
     const [searchQuery, setSearchQuery] = useState(searchParams?.get('search') || '');
     const [appliedSearch, setAppliedSearch] = useState(searchParams?.get('search') || '');
     const [showFilters, setShowFilters] = useState(false);
@@ -96,6 +97,7 @@ function CatalogContent() {
             } else {
                 setLoading(true);
             }
+            if (!append) setLoadError('');
 
             const response = await api.catalog.getProducts({
                 search: appliedSearch || undefined,
@@ -122,6 +124,16 @@ function CatalogContent() {
             });
         } catch (error) {
             console.error('Failed to load products:', error);
+            const message = typeof error === 'object' && error && 'response' in error
+                ? String((error as { response?: { data?: { message?: string } } }).response?.data?.message || '')
+                : '';
+            if (!append) {
+                setProducts([]);
+                setCurrentPage(1);
+                setTotalPages(1);
+                setHasMore(false);
+            }
+            setLoadError(message || 'Gagal memuat katalog. Coba lagi sebentar.');
         } finally {
             if (append) {
                 setLoadingMore(false);
@@ -388,6 +400,12 @@ function CatalogContent() {
                     {products.length} Produk • Hal {currentPage}/{totalPages}
                 </span>
             </div>
+
+            {!loading && loadError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">
+                    {loadError}
+                </div>
+            )}
 
             {/* Products Grid */}
             {loading ? (
