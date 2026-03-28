@@ -5449,13 +5449,16 @@ export default function AdminOrdersWorkspace({
 	                        allocationDraft,
 	                        topupDraftByProductId: backorderTopupDrafts[String(order.id)] || {},
 	                        allocationBusy,
-	                        canAllocate,
+	                        canAllocate: canAllocate && !(['selesai', 'partially_fulfilled', 'canceled'] as OrderSection[]).includes(section),
 	                        backorderHistory: backorderHistoryByOrderId[String(order.id)] || [],
 	                      });
+                      const isReportOnlySection =
+                        section === 'selesai' || section === 'partially_fulfilled' || section === 'canceled';
+                      const canAllocateInteractive = canAllocate && !isReportOnlySection;
                       const backorderCard =
                         orderSectionFilter === 'backorder' &&
-                        canAllocate &&
-                        section !== 'selesai' &&
+                        canAllocateInteractive &&
+                        !isReportOnlySection &&
                         detail &&
                         backorderEditorModel
                           ? renderBackorderEditor(backorderEditorModel, 'embedded')
@@ -5463,7 +5466,10 @@ export default function AdminOrdersWorkspace({
                       const invoiceTotalFromSummary = Number((order as any)?.Invoice?.collectible_total ?? (order as any)?.Invoice?.total ?? 0);
                       const invoiceTotalFromDetail = Number((invoiceDetail as any)?.collectible_total ?? (invoiceDetail as any)?.total ?? 0);
                       const effectiveInvoiceTotal = invoiceTotalFromDetail > 0 ? invoiceTotalFromDetail : invoiceTotalFromSummary;
-                      const shouldPreferInvoiceTotal = section === 'selesai' && Number.isFinite(effectiveInvoiceTotal) && effectiveInvoiceTotal > 0;
+                      const shouldPreferInvoiceTotal =
+                        (section === 'selesai' || section === 'partially_fulfilled')
+                        && Number.isFinite(effectiveInvoiceTotal)
+                        && effectiveInvoiceTotal > 0;
                       const amountToShow = shouldPreferInvoiceTotal
                         ? effectiveInvoiceTotal
                         : showInvoiceableAmount
@@ -5603,7 +5609,7 @@ export default function AdminOrdersWorkspace({
                                     {warehouseActionLabel}
                                   </Link>
                                 )}
-	                                {isOrderCancelable && (
+	                                {isOrderCancelable && !isReportOnlySection && (
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => void handleCancelOrder(String(order.id))}
@@ -5613,7 +5619,7 @@ export default function AdminOrdersWorkspace({
 	                                    Cancel Order
 	                                  </button>
 	                                )}
-	                                {canCancelItems && (
+	                                {canCancelItems && !isReportOnlySection && (
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => openCancelItemsModal(order)}
@@ -5652,7 +5658,7 @@ export default function AdminOrdersWorkspace({
                             </div>
                           )}
 
-                          {showInlineOrderDetailPanel && section !== 'selesai' && !detail && canViewAllocation && (
+                          {showInlineOrderDetailPanel && !isReportOnlySection && !detail && canViewAllocation && (
                             <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3 space-y-2">
                               <div className="flex flex-wrap items-start justify-between gap-2">
                                 <div className="space-y-1">
@@ -5678,6 +5684,7 @@ export default function AdminOrdersWorkspace({
                                     Muat Ulang
                                   </button>
                                   {canMoveToIndentAction &&
+                                    !isReportOnlySection &&
                                     ALLOCATION_EDITABLE_STATUSES.has(rawOrderStatus) &&
                                     !allocationBusy &&
                                     !isBackorder &&
@@ -5704,7 +5711,29 @@ export default function AdminOrdersWorkspace({
                             </div>
                           )}
 
-                          {showInlineOrderDetailPanel && section !== 'selesai' && detail && canViewAllocation && (
+                          {showInlineOrderDetailPanel && section === 'partially_fulfilled' && detail && (
+                            <div className="mt-3 border border-slate-100 rounded-2xl p-3 bg-slate-50/60 space-y-2">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Progress Backorder</p>
+                              <p className="text-[11px] text-slate-700">
+                                {(() => {
+                                  const summaries = Array.isArray((detail as any)?.item_summaries) ? (detail as any).item_summaries : [];
+                                  const openQty = summaries.reduce((sum: number, row: any) => sum + Number(row?.backorder_open_qty || 0), 0);
+                                  const canceledQty = summaries.reduce(
+                                    (sum: number, row: any) => sum + Number(row?.backorder_canceled_qty || 0) + Number(row?.manual_canceled_qty || 0),
+                                    0
+                                  );
+                                  const invoicedQty = summaries.reduce((sum: number, row: any) => sum + Number(row?.invoiced_qty_total || 0), 0);
+                                  const orderedQty = summaries.reduce((sum: number, row: any) => sum + Number(row?.ordered_qty_original || 0), 0);
+                                  return `Ordered ${orderedQty} • Invoiced ${invoicedQty} • Backorder open ${openQty} • Backorder canceled ${canceledQty}`;
+                                })()}
+                              </p>
+                              <p className="text-[10px] text-slate-500">
+                                Order sudah selesai untuk invoice yang terkirim, tetapi masih ada backorder yang tersisa.
+                              </p>
+                            </div>
+                          )}
+
+                          {showInlineOrderDetailPanel && !isReportOnlySection && detail && canViewAllocation && (
                             <div className="mt-3 border border-slate-100 rounded-2xl p-3 bg-slate-50/60 space-y-2">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
@@ -5714,7 +5743,7 @@ export default function AdminOrdersWorkspace({
                                     {!isAllocatedOnlyView && shortageSummary.shortageTotal > 0 ? ` • Kurang ${shortageSummary.shortageTotal}` : ''}
                                   </p>
                                 </div>
-                                {canAllocate ? (
+                                {canAllocateInteractive ? (
                                   <div className="flex flex-wrap items-center gap-2">
                                     <button
                                       type="button"
