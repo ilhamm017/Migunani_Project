@@ -647,6 +647,88 @@ export const getWarehouseProductPicklist = asyncWrapper(async (req: Request, res
     res.json(result);
 });
 
+export const exportWarehouseProductPicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const statusRaw = String(req.query?.status || 'ready_to_ship,checked').trim().toLowerCase();
+    const statusList = statusRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
+    const q = String(req.query?.q || '').trim();
+    const limitRaw = Number(req.query?.limit ?? 20000);
+    const limit = Number.isFinite(limitRaw) ? Math.min(20000, Math.max(1, Math.trunc(limitRaw))) : 20000;
+
+    const payload = await buildWarehouseProductPicklist({
+        statuses: statusList.length > 0 ? statusList : undefined,
+        q,
+        limit,
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani System';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Picklist Gudang');
+
+    sheet.getRow(1).values = ['Picklist Gudang (Global)'];
+    sheet.getRow(1).font = { bold: true, size: 14 };
+    sheet.getRow(3).values = ['Status', String((payload.status || []).join(', ') || '-')];
+    sheet.getRow(4).values = ['Filter', q || '-'];
+    sheet.getRow(5).values = ['Total Qty', Number(payload.totals?.total_qty || 0)];
+    sheet.getRow(6).values = ['Total Produk', Number(payload.totals?.product_count || 0)];
+
+    const headerRowIndex = 8;
+    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty', 'Invoice', 'Order'];
+    sheet.getRow(headerRowIndex).font = { bold: true };
+
+    (payload.rows as any[]).forEach((row: any, idx: number) => {
+        const excelRowIndex = headerRowIndex + 1 + idx;
+        const layers = Array.isArray(row?.batch_layers) ? row.batch_layers : [];
+        const layerText = layers.length > 0
+            ? layers
+                .filter((l: any) => Number(l?.qty_reserved || 0) > 0)
+                .map((l: any) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
+                .join(' | ')
+            : 'FIFO (auto)';
+        sheet.getRow(excelRowIndex).values = [
+            idx + 1,
+            row.bin_location || '',
+            row.sku || row.product_id || '',
+            row.name || '',
+            layerText,
+            Number(row.total_qty || 0),
+            Number(row.invoice_count || 0),
+            Number(row.order_count || 0),
+        ];
+        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
+        sheet.getRow(excelRowIndex).getCell(7).numFmt = '#,##0';
+        sheet.getRow(excelRowIndex).getCell(8).numFmt = '#,##0';
+    });
+
+    sheet.columns = [
+        { key: 'no', width: 6 },
+        { key: 'bin', width: 18 },
+        { key: 'sku', width: 18 },
+        { key: 'product', width: 44 },
+        { key: 'batch', width: 28 },
+        { key: 'qty', width: 10 },
+        { key: 'inv', width: 10 },
+        { key: 'ord', width: 10 },
+    ];
+
+    const timestamp = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const fileName = `picklist-gudang-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+});
+
 export const getInvoicePicklist = asyncWrapper(async (req: Request, res: Response) => {
     const invoiceId = String(req.params.id || '').trim();
     if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
@@ -1119,88 +1201,6 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
             transaction: t,
             lock: t.LOCK.UPDATE,
         });
-
-export const exportWarehouseProductPicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
-    requireInvoicePicklistRoles(req.user?.role);
-
-    const statusRaw = String(req.query?.status || 'ready_to_ship,checked').trim().toLowerCase();
-    const statusList = statusRaw
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .filter((s) => ['ready_to_ship', 'checked'].includes(s));
-    const q = String(req.query?.q || '').trim();
-    const limitRaw = Number(req.query?.limit ?? 20000);
-    const limit = Number.isFinite(limitRaw) ? Math.min(20000, Math.max(1, Math.trunc(limitRaw))) : 20000;
-
-    const payload = await buildWarehouseProductPicklist({
-        statuses: statusList.length > 0 ? statusList : undefined,
-        q,
-        limit,
-    });
-
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Migunani System';
-    workbook.created = new Date();
-    const sheet = workbook.addWorksheet('Picklist Gudang');
-
-    sheet.getRow(1).values = ['Picklist Gudang (Global)'];
-    sheet.getRow(1).font = { bold: true, size: 14 };
-    sheet.getRow(3).values = ['Status', String((payload.status || []).join(', ') || '-')];
-    sheet.getRow(4).values = ['Filter', q || '-'];
-    sheet.getRow(5).values = ['Total Qty', Number(payload.totals?.total_qty || 0)];
-    sheet.getRow(6).values = ['Total Produk', Number(payload.totals?.product_count || 0)];
-
-    const headerRowIndex = 8;
-    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Batch (HPP)', 'Qty', 'Invoice', 'Order'];
-    sheet.getRow(headerRowIndex).font = { bold: true };
-
-    (payload.rows as any[]).forEach((row: any, idx: number) => {
-        const excelRowIndex = headerRowIndex + 1 + idx;
-        const layers = Array.isArray(row?.batch_layers) ? row.batch_layers : [];
-        const layerText = layers.length > 0
-            ? layers
-                .filter((l: any) => Number(l?.qty_reserved || 0) > 0)
-                .map((l: any) => `${Number(l?.unit_cost || 0)} x ${Math.max(0, Math.trunc(Number(l?.qty_reserved || 0)))}`)
-                .join(' | ')
-            : 'FIFO (auto)';
-        sheet.getRow(excelRowIndex).values = [
-            idx + 1,
-            row.bin_location || '',
-            row.sku || row.product_id || '',
-            row.name || '',
-            layerText,
-            Number(row.total_qty || 0),
-            Number(row.invoice_count || 0),
-            Number(row.order_count || 0),
-        ];
-        sheet.getRow(excelRowIndex).getCell(6).numFmt = '#,##0';
-        sheet.getRow(excelRowIndex).getCell(7).numFmt = '#,##0';
-        sheet.getRow(excelRowIndex).getCell(8).numFmt = '#,##0';
-    });
-
-    sheet.columns = [
-        { key: 'no', width: 6 },
-        { key: 'bin', width: 18 },
-        { key: 'sku', width: 18 },
-        { key: 'product', width: 44 },
-        { key: 'batch', width: 28 },
-        { key: 'qty', width: 10 },
-        { key: 'inv', width: 10 },
-        { key: 'ord', width: 10 },
-    ];
-
-    const timestamp = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
-    const fileName = `picklist-gudang-${fileSuffix}.xlsx`;
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
-});
 
         if (!invoice) {
             throw new CustomError('Invoice tidak ditemukan', 404);
