@@ -172,6 +172,8 @@ export const api = {
 
     invoices: {
         getById: (invoiceId: string) => apiClient.get<InvoiceDetailResponse>(`/invoices/${invoiceId}`),
+        getPicklist: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}/picklist`),
+        downloadPicklistXlsx: (invoiceId: string) => apiClient.get(`/invoices/${invoiceId}/picklist.xlsx`, { responseType: 'blob' }),
         getMy: (params?: {
             page?: number;
             limit?: number;

@@ -130,6 +130,7 @@ export default function AdminInvoiceDetailPage() {
   const router = useRouter();
   const routeRefId = String(params?.id || '').trim();
   const normalizedRole = String(user?.role || '').trim();
+  const isSuperAdmin = normalizedRole === 'super_admin';
 
   const [invoice, setInvoice] = useState<LooseRecord | null>(null);
   const [orders, setOrders] = useState<LooseRecord[]>([]);
@@ -153,6 +154,19 @@ export default function AdminInvoiceDetailPage() {
     () => ['admin_gudang', 'checker_gudang'].includes(normalizedRole),
     [normalizedRole]
   );
+
+  const showOrderListDefault = useMemo(() => {
+    if (isWarehouseStaff) return false;
+    // Keep this page warehouse-focused for superadmin; details remain available via toggle.
+    if (isSuperAdmin) return false;
+    return true;
+  }, [isSuperAdmin, isWarehouseStaff]);
+
+  const [showOrderList, setShowOrderList] = useState(showOrderListDefault);
+
+  useEffect(() => {
+    setShowOrderList(showOrderListDefault);
+  }, [showOrderListDefault]);
 
   const loadCouriers = useCallback(async () => {
     try {
@@ -246,6 +260,9 @@ export default function AdminInvoiceDetailPage() {
   }, [routeRefId]);
 
   const invoiceRow = asRecord(invoice);
+  const picklistHref = resolvedInvoiceId
+    ? `/admin/warehouse/picklist/invoice/${encodeURIComponent(resolvedInvoiceId)}`
+    : '';
 
   useEffect(() => {
     if (!allowed) return;
@@ -799,10 +816,27 @@ export default function AdminInvoiceDetailPage() {
 
         {!isWarehouseStaff && (
           <div className="space-y-2">
-            <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-slate-900">List Pesanan dalam Invoice</p>
+              {orderRows.length > 0 && (
+                <button
+                  type="button"
+                  data-no-3d="true"
+                  onClick={() => setShowOrderList((prev) => !prev)}
+                  className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-50"
+                >
+                  {showOrderList ? 'Sembunyikan' : 'Tampilkan'}
+                </button>
+              )}
+            </div>
+
             {orderRows.length === 0 ? (
               <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
                 Tidak ada order yang terhubung ke invoice ini.
+              </div>
+            ) : !showOrderList ? (
+              <div className="bg-slate-50 rounded-2xl p-4 text-xs text-slate-600">
+                Disembunyikan agar fokus gudang tetap di picking list. Klik <span className="font-black">Tampilkan</span> untuk melihat detail per-order.
               </div>
             ) : (
               <div className="space-y-2">
@@ -910,12 +944,24 @@ export default function AdminInvoiceDetailPage() {
         )}
 
         <div className="space-y-2">
-          <p className="text-sm font-black text-slate-900">
-            {orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? 'Rincian Barang Dikirim' : 'Rincian Barang Siap Disiapkan Gudang'}
-          </p>
-          <p className="text-xs text-slate-500">
-            Daftar ini menghitung barang dari order berstatus <span className="font-bold">allocated, processing, checked, ready_to_ship, shipped, atau delivered</span>.
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-900">
+                {orderRows.some(r => ['shipped', 'delivered'].includes(r.status)) ? 'Rincian Barang Dikirim' : 'Rincian Barang Siap Disiapkan Gudang'}
+              </p>
+              <p className="text-xs text-slate-500">
+                Daftar ini menghitung barang dari order berstatus <span className="font-bold">allocated, processing, checked, ready_to_ship, shipped, atau delivered</span>.
+              </p>
+            </div>
+            {(isWarehouseStaff || isSuperAdmin) && picklistHref && (
+              <Link
+                href={picklistHref}
+                className="shrink-0 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+              >
+                Buka Picklist Gudang
+              </Link>
+            )}
+          </div>
           {pickingItems.length === 0 ? (
             <div className="bg-slate-50 rounded-2xl p-4 text-sm text-slate-500">
               Belum ada barang siap kirim untuk disiapkan.

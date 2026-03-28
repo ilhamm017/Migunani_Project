@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import ExcelJS from 'exceljs';
 import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, sequelize } from '../models';
 import { Op } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
@@ -286,6 +287,99 @@ const parseDateOrNull = (raw: unknown, opts?: { endOfDay?: boolean }): Date | nu
         return new Date(`${value}T23:59:59.999Z`);
     }
     return date;
+};
+
+type InvoicePicklistRow = {
+    product_id: string;
+    sku: string;
+    name: string;
+    bin_location: string | null;
+    total_qty: number;
+};
+
+const requireInvoicePicklistRoles = (roleRaw: unknown) => {
+    const role = String(roleRaw || '').trim();
+    if (!['super_admin', 'admin_gudang', 'checker_gudang'].includes(role)) {
+        throw new CustomError('Tidak memiliki akses untuk picklist gudang invoice.', 403);
+    }
+};
+
+const buildInvoicePicklist = async (invoiceId: string, opts?: { transaction?: any }) => {
+    const invoice = await Invoice.findByPk(invoiceId, {
+        attributes: ['id', 'invoice_number', 'shipment_status', 'createdAt'],
+        transaction: opts?.transaction,
+        lock: opts?.transaction ? opts.transaction.LOCK.UPDATE : undefined,
+    }) as any;
+    if (!invoice) throw new CustomError('Invoice tidak ditemukan', 404);
+
+    const items = await InvoiceItem.findAll({
+        where: { invoice_id: invoiceId },
+        attributes: ['id', 'qty', 'order_item_id'],
+        include: [
+            {
+                model: OrderItem,
+                attributes: ['id', 'order_id', 'product_id'],
+                required: true,
+                include: [
+                    {
+                        model: Product,
+                        attributes: ['id', 'name', 'sku', 'bin_location'],
+                        required: false,
+                    }
+                ],
+            },
+        ],
+        transaction: opts?.transaction,
+        lock: opts?.transaction ? opts.transaction.LOCK.UPDATE : undefined,
+    }) as any[];
+
+    const byProduct = new Map<string, InvoicePicklistRow>();
+    let totalQty = 0;
+
+    for (const item of Array.isArray(items) ? items : []) {
+        const qty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+        if (qty <= 0) continue;
+
+        const orderItem = item?.OrderItem || null;
+        const productRef = orderItem?.Product || null;
+        const productId = String(orderItem?.product_id || productRef?.id || '').trim();
+        if (!productId) continue;
+
+        const existing = byProduct.get(productId);
+        const sku = String(productRef?.sku || productId || '').trim();
+        const name = String(productRef?.name || 'Produk');
+        const binLocation = productRef?.bin_location ? String(productRef.bin_location) : null;
+
+        if (!existing) {
+            byProduct.set(productId, {
+                product_id: productId,
+                sku,
+                name,
+                bin_location: binLocation,
+                total_qty: qty,
+            });
+        } else {
+            existing.total_qty += qty;
+        }
+
+        totalQty += qty;
+    }
+
+    const rows = Array.from(byProduct.values()).sort((a, b) => {
+        const binA = String(a.bin_location || '');
+        const binB = String(b.bin_location || '');
+        if (binA !== binB) return binA.localeCompare(binB);
+        return String(a.sku || '').localeCompare(String(b.sku || ''));
+    });
+
+    return {
+        invoice: invoice.get({ plain: true }) as any,
+        totals: {
+            product_count: rows.length,
+            total_qty: totalQty,
+        },
+        rows,
+    };
 };
 
 export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) => {
@@ -679,7 +773,79 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
         const invoice = await Invoice.findByPk(invoiceId, {
             transaction: t,
             lock: t.LOCK.UPDATE
-        });
+});
+
+export const getInvoicePicklist = asyncWrapper(async (req: Request, res: Response) => {
+    const invoiceId = String(req.params.id || '').trim();
+    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const result = await buildInvoicePicklist(invoiceId);
+    res.json({
+        invoice_id: String(result.invoice?.id || invoiceId),
+        invoice_number: String(result.invoice?.invoice_number || ''),
+        createdAt: result.invoice?.createdAt || null,
+        shipment_status: String(result.invoice?.shipment_status || ''),
+        totals: result.totals,
+        rows: result.rows,
+    });
+});
+
+export const exportInvoicePicklistExcel = asyncWrapper(async (req: Request, res: Response) => {
+    const invoiceId = String(req.params.id || '').trim();
+    if (!invoiceId) throw new CustomError('ID Invoice wajib diisi', 400);
+    requireInvoicePicklistRoles(req.user?.role);
+
+    const result = await buildInvoicePicklist(invoiceId);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani System';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Picklist');
+
+    sheet.getRow(1).values = ['Picklist Gudang (Invoice)'];
+    sheet.getRow(1).font = { bold: true, size: 14 };
+    sheet.getRow(3).values = ['Invoice', String(result.invoice?.invoice_number || '-')];
+    sheet.getRow(4).values = ['Invoice ID', String(result.invoice?.id || invoiceId)];
+    sheet.getRow(5).values = ['Total Qty', Number(result.totals?.total_qty || 0)];
+    sheet.getRow(6).values = ['Total Produk', Number(result.totals?.product_count || 0)];
+
+    const headerRowIndex = 8;
+    sheet.getRow(headerRowIndex).values = ['No', 'Bin', 'SKU', 'Produk', 'Qty'];
+    sheet.getRow(headerRowIndex).font = { bold: true };
+
+    (Array.isArray(result.rows) ? result.rows : []).forEach((row, idx) => {
+        const excelRowIndex = headerRowIndex + 1 + idx;
+        sheet.getRow(excelRowIndex).values = [
+            idx + 1,
+            row.bin_location || '',
+            row.sku || row.product_id || '',
+            row.name || '',
+            Number(row.total_qty || 0),
+        ];
+        sheet.getRow(excelRowIndex).getCell(5).numFmt = '#,##0';
+    });
+
+    sheet.columns = [
+        { key: 'no', width: 6 },
+        { key: 'bin', width: 18 },
+        { key: 'sku', width: 18 },
+        { key: 'product', width: 44 },
+        { key: 'qty', width: 10 },
+    ];
+
+    const timestamp = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const safeInvoiceNumber = String(result.invoice?.invoice_number || 'INV').replace(/[^a-z0-9_-]/gi, '_');
+    const fileName = `picklist-${safeInvoiceNumber}-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+});
 
         if (!invoice) {
             throw new CustomError('Invoice tidak ditemukan', 404);
