@@ -8,6 +8,7 @@ interface ClearancePromoAttributes {
     name: string;
     product_id: string; // UUID
     target_unit_cost: number;
+    qty_limit?: number | null;
     pricing_mode: ClearancePromoPricingMode;
     promo_unit_price: number | null;
     discount_pct: number | null;
@@ -25,6 +26,7 @@ class ClearancePromo extends Model<ClearancePromoAttributes, ClearancePromoCreat
     declare name: string;
     declare product_id: string;
     declare target_unit_cost: number;
+    declare qty_limit: number | null;
     declare pricing_mode: ClearancePromoPricingMode;
     declare promo_unit_price: number | null;
     declare discount_pct: number | null;
@@ -56,6 +58,10 @@ ClearancePromo.init(
         target_unit_cost: {
             type: DataTypes.DECIMAL(15, 4),
             allowNull: false,
+        },
+        qty_limit: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
         },
         pricing_mode: {
             type: DataTypes.ENUM('fixed_price', 'percent_off'),
@@ -102,4 +108,3 @@ ClearancePromo.init(
 );
 
 export default ClearancePromo;
-

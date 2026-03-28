@@ -700,6 +700,27 @@ const ensureInvoiceAmountReceivedColumnReady = async () => {
     }
 };
 
+const ensureClearancePromoQtyLimitColumnReady = async () => {
+    const tableName = 'clearance_promos';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const columnName = 'qty_limit';
+    const ok = await columnExists(tableName, columnName);
+    if (ok) return;
+
+    console.warn(`[Startup] Missing column in ${tableName}: ${columnName}. Applying targeted ALTER TABLE...`);
+    try {
+        await sequelize.query(
+            `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` INT NULL AFTER \`target_unit_cost\``
+        );
+    } catch (error: any) {
+        const code = error?.parent?.code || error?.original?.code || error?.code;
+        if (code === 'ER_DUP_FIELDNAME') return;
+        throw error;
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -715,6 +736,7 @@ const syncDatabaseWithRetry = async () => {
         await ensureCodSettlementAuditColumnsReady();
         await ensureDeliveryHandoverItemEvidenceColumnsReady();
         await ensureInvoiceAmountReceivedColumnReady();
+        await ensureClearancePromoQtyLimitColumnReady();
         await ensureReportIndexesReady();
         return;
     }
@@ -731,6 +753,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
+            await ensureClearancePromoQtyLimitColumnReady();
             await ensureReportIndexesReady();
             return;
         } catch (error) {
@@ -750,6 +773,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureCodSettlementAuditColumnsReady();
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
+            await ensureClearancePromoQtyLimitColumnReady();
             await ensureReportIndexesReady();
             return;
         }

@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { ClearancePromo, InventoryBatch, Product, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
 const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
+const toInt = (value: unknown) => Math.max(0, Math.trunc(Number(value || 0)));
 
 const parseDate = (value: unknown): Date | null => {
     if (value instanceof Date) return value;
@@ -26,6 +27,68 @@ const computeRemainingQtyByCost = async (productId: string, unitCost: number, t?
         raw: true,
     }) as any;
     return Math.max(0, Math.trunc(Number(agg?.qty_sum || 0)));
+};
+
+const parseQtyLimit = (value: unknown): number | null => {
+    if (value === undefined) return null;
+    if (value === null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const v = Math.trunc(n);
+    if (v <= 0) return null;
+    return v;
+};
+
+const getClearancePromoUsageQtyByPromoIds = async (promoIds: string[], t?: any): Promise<Map<string, number>> => {
+    const ids = (Array.isArray(promoIds) ? promoIds : []).map((id) => String(id || '').trim()).filter(Boolean);
+    const usageById = new Map<string, number>();
+    if (ids.length === 0) return usageById;
+
+    const orderRows = await sequelize.query(
+        `SELECT 
+            oi.clearance_promo_id AS promo_id,
+            COALESCE(SUM(oi.qty), 0) AS qty_used
+         FROM order_items oi
+         INNER JOIN orders o ON o.id = oi.order_id
+         WHERE oi.clearance_promo_id IN (:promoIds)
+           AND o.status NOT IN ('canceled', 'expired')
+         GROUP BY oi.clearance_promo_id`,
+        {
+            type: QueryTypes.SELECT,
+            replacements: { promoIds: ids },
+            transaction: t,
+        }
+    ) as any[];
+
+    (Array.isArray(orderRows) ? orderRows : []).forEach((row: any) => {
+        const id = String(row?.promo_id || '').trim();
+        if (!id) return;
+        usageById.set(id, toInt(row?.qty_used));
+    });
+
+    const posRows = await sequelize.query(
+        `SELECT 
+            psi.clearance_promo_id AS promo_id,
+            COALESCE(SUM(psi.qty), 0) AS qty_used
+         FROM pos_sale_items psi
+         INNER JOIN pos_sales ps ON ps.id = psi.pos_sale_id
+         WHERE psi.clearance_promo_id IN (:promoIds)
+           AND ps.status = 'paid'
+         GROUP BY psi.clearance_promo_id`,
+        {
+            type: QueryTypes.SELECT,
+            replacements: { promoIds: ids },
+            transaction: t,
+        }
+    ) as any[];
+
+    (Array.isArray(posRows) ? posRows : []).forEach((row: any) => {
+        const id = String(row?.promo_id || '').trim();
+        if (!id) return;
+        usageById.set(id, (usageById.get(id) || 0) + toInt(row?.qty_used));
+    });
+
+    return usageById;
 };
 
 const computePromoPrice = (params: {
@@ -59,11 +122,13 @@ export const getActiveClearancePromos = asyncWrapper(async (req: Request, res: R
         include: [{
             model: Product,
             as: 'Product' as any,
-            attributes: ['id', 'sku', 'name', 'unit', 'price', 'image_url'],
+            attributes: ['id', 'sku', 'name', 'unit', 'price', 'image_url', 'stock_quantity'],
             required: false,
         }],
         order: [['starts_at', 'ASC'], ['createdAt', 'DESC']],
     });
+
+    const usageByPromoId = await getClearancePromoUsageQtyByPromoIds((promos as any[]).map((p) => String((p as any).id || '')).filter(Boolean));
 
     const rows = await Promise.all((promos as any[]).map(async (promo: any) => {
         const product = promo?.Product ? promo.Product : null;
@@ -74,12 +139,17 @@ export const getActiveClearancePromos = asyncWrapper(async (req: Request, res: R
             discount_pct: promo.discount_pct,
             normal_price: normalPrice
         });
-        const remainingQty = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const remainingQtyByStock = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : toInt(promo.qty_limit);
+        const qtyUsed = usageByPromoId.get(String(promo.id)) || 0;
+        const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
+        const remainingQty = Math.max(0, Math.min(remainingQtyByStock, remainingByLimit));
 
         return {
             ...promo.get({ plain: true }),
             Product: product ? product.get({ plain: true }) : null,
             remaining_qty: remainingQty,
+            qty_used: qtyUsed,
             computed_promo_unit_price: computedPromoUnitPrice,
             normal_unit_price: normalPrice,
         };
@@ -101,17 +171,24 @@ export const adminListClearancePromos = asyncWrapper(async (req: Request, res: R
         include: [{
             model: Product,
             as: 'Product' as any,
-            attributes: ['id', 'sku', 'name', 'unit', 'price', 'image_url'],
+            attributes: ['id', 'sku', 'name', 'unit', 'price', 'image_url', 'stock_quantity'],
             required: false,
         }],
         order: [['createdAt', 'DESC']],
     });
 
+    const usageByPromoId = await getClearancePromoUsageQtyByPromoIds((promos as any[]).map((p) => String((p as any).id || '')).filter(Boolean));
+
     const rows = await Promise.all((promos as any[]).map(async (promo: any) => {
-        const remainingQty = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const remainingQtyByStock = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : toInt(promo.qty_limit);
+        const qtyUsed = usageByPromoId.get(String(promo.id)) || 0;
+        const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
+        const remainingQty = Math.max(0, Math.min(remainingQtyByStock, remainingByLimit));
         return {
             ...promo.get({ plain: true }),
             remaining_qty: remainingQty,
+            qty_used: qtyUsed,
         };
     }));
 
@@ -125,6 +202,7 @@ export const adminCreateClearancePromo = asyncWrapper(async (req: Request, res: 
     const productId = typeof req.body?.product_id === 'string' ? req.body.product_id.trim() : '';
     const pricingMode = typeof req.body?.pricing_mode === 'string' ? req.body.pricing_mode.trim() : '';
     const targetUnitCost = Number(req.body?.target_unit_cost);
+    const qtyLimit = parseQtyLimit(req.body?.qty_limit);
     const startsAt = parseDate(req.body?.starts_at);
     const endsAt = parseDate(req.body?.ends_at);
     const isActive = req.body?.is_active === undefined ? true : Boolean(req.body.is_active);
@@ -132,6 +210,7 @@ export const adminCreateClearancePromo = asyncWrapper(async (req: Request, res: 
     if (!name) throw new CustomError('name wajib diisi', 400);
     if (!productId) throw new CustomError('product_id wajib diisi', 400);
     if (!Number.isFinite(targetUnitCost) || targetUnitCost < 0) throw new CustomError('target_unit_cost tidak valid', 400);
+    if (!qtyLimit) throw new CustomError('qty_limit wajib diisi (>= 1)', 400);
     if (!['fixed_price', 'percent_off'].includes(pricingMode)) throw new CustomError('pricing_mode tidak valid', 400);
     if (!startsAt || !endsAt) throw new CustomError('starts_at / ends_at wajib diisi', 400);
     if (startsAt.getTime() >= endsAt.getTime()) throw new CustomError('ends_at harus lebih besar dari starts_at', 400);
@@ -139,10 +218,16 @@ export const adminCreateClearancePromo = asyncWrapper(async (req: Request, res: 
     const product = await Product.findByPk(productId, { attributes: ['id'] });
     if (!product) throw new CustomError('Produk tidak ditemukan', 404);
 
+    const remainingQtyByStock = await computeRemainingQtyByCost(String(productId), Number(targetUnitCost || 0));
+    if (qtyLimit > remainingQtyByStock) {
+        throw new CustomError(`qty_limit melebihi stok batch tersedia (${remainingQtyByStock}).`, 400);
+    }
+
     const payload: any = {
         name,
         product_id: productId,
         target_unit_cost: round4(targetUnitCost),
+        qty_limit: qtyLimit,
         pricing_mode: pricingMode,
         starts_at: startsAt,
         ends_at: endsAt,
@@ -183,6 +268,11 @@ export const adminUpdateClearancePromo = asyncWrapper(async (req: Request, res: 
     const patch: any = {};
     if (typeof req.body?.name === 'string') patch.name = req.body.name.trim();
     if (typeof req.body?.product_id === 'string') patch.product_id = req.body.product_id.trim();
+    if (req.body?.qty_limit !== undefined) {
+        const v = parseQtyLimit(req.body.qty_limit);
+        if (!v) throw new CustomError('qty_limit tidak valid (>= 1)', 400);
+        patch.qty_limit = v;
+    }
     if (req.body?.target_unit_cost !== undefined) {
         const v = Number(req.body.target_unit_cost);
         if (!Number.isFinite(v) || v < 0) throw new CustomError('target_unit_cost tidak valid', 400);
@@ -225,6 +315,14 @@ export const adminUpdateClearancePromo = asyncWrapper(async (req: Request, res: 
     if (patch.product_id) {
         const product = await Product.findByPk(String(patch.product_id), { attributes: ['id'] });
         if (!product) throw new CustomError('Produk tidak ditemukan', 404);
+    }
+
+    if (patch.qty_limit !== undefined) {
+        const usageMap = await getClearancePromoUsageQtyByPromoIds([id]);
+        const qtyUsed = usageMap.get(id) || 0;
+        if (patch.qty_limit < qtyUsed) {
+            throw new CustomError(`qty_limit tidak boleh lebih kecil dari qty terpakai (${qtyUsed}).`, 400);
+        }
     }
 
     patch.updated_by = actorId;

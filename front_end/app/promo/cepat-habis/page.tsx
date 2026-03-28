@@ -16,6 +16,8 @@ type ClearancePromoRow = {
   starts_at: string;
   ends_at: string;
   remaining_qty: number;
+  qty_limit?: number | null;
+  qty_used?: number | null;
   computed_promo_unit_price: number;
   normal_unit_price: number;
   Product?: {
@@ -25,6 +27,7 @@ type ClearancePromoRow = {
     unit?: string;
     price?: number;
     image_url?: string | null;
+    stock_quantity?: number | string | null;
   } | null;
 };
 
@@ -117,6 +120,9 @@ export default function ClearancePromoPage() {
             const sku = String(promo?.Product?.sku || '').trim();
             const unit = String(promo?.Product?.unit || 'Pcs');
             const remaining = Math.max(0, Math.trunc(Number(promo.remaining_qty || 0)));
+            const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : Math.max(0, Math.trunc(Number(promo.qty_limit || 0)));
+            const qtyUsed = promo.qty_used === null || promo.qty_used === undefined ? 0 : Math.max(0, Math.trunc(Number(promo.qty_used || 0)));
+            const remainingAllocation = qtyLimit === null ? null : Math.max(0, qtyLimit - qtyUsed);
             const promoPrice = Number(promo.computed_promo_unit_price || 0);
             const normalPrice = Number(promo.normal_unit_price || promo?.Product?.price || 0);
             const qty = Math.max(0, Math.trunc(Number(qtyByPromoId[promo.id] || 0)));
@@ -128,7 +134,10 @@ export default function ClearancePromoPage() {
                     <h3 className="text-sm font-black text-slate-900">{productName}</h3>
                     <p className="text-xs text-slate-500">
                       {sku ? `${sku} • ` : ''}
-                      Sisa promo: {remaining.toLocaleString('id-ID')} {unit}
+                      {qtyLimit === null
+                        ? `Sisa promo: ${remaining.toLocaleString('id-ID')} ${unit}`
+                        : `Alokasi: ${qtyLimit.toLocaleString('id-ID')} • Terpakai: ${qtyUsed.toLocaleString('id-ID')} • Sisa alokasi: ${(remainingAllocation || 0).toLocaleString('id-ID')} • Sisa promo: ${remaining.toLocaleString('id-ID')} ${unit}`
+                      }
                     </p>
                   </div>
                   <div className="text-right">
@@ -143,9 +152,11 @@ export default function ClearancePromoPage() {
                     <input
                       type="number"
                       min={0}
+                      max={remaining}
+                      disabled={remaining <= 0}
                       value={qty}
                       onChange={(e) => {
-                        const next = Math.max(0, Math.trunc(Number(e.target.value || 0)));
+                        const next = Math.min(remaining, Math.max(0, Math.trunc(Number(e.target.value || 0))));
                         setQtyByPromoId((prev) => ({ ...prev, [promo.id]: next }));
                       }}
                       className="w-24 h-10 px-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-900"
@@ -179,4 +190,3 @@ export default function ClearancePromoPage() {
     </div>
   );
 }
-

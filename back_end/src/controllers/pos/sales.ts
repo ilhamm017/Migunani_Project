@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { Account, ClearancePromo, InventoryBatch, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
@@ -181,6 +181,36 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const lines: Line[] = [];
         let subtotal = 0;
         const promoById = new Map<string, any>();
+        const promoUsedQtyCache = new Map<string, number>();
+
+        const getPromoUsedQty = async (promoId: string): Promise<number> => {
+            const id = String(promoId || '').trim();
+            if (!id) return 0;
+            if (promoUsedQtyCache.has(id)) return promoUsedQtyCache.get(id) || 0;
+
+            const orderRows = await sequelize.query(
+                `SELECT COALESCE(SUM(oi.qty), 0) AS qty_used
+                 FROM order_items oi
+                 INNER JOIN orders o ON o.id = oi.order_id
+                 WHERE oi.clearance_promo_id = :promoId
+                   AND o.status NOT IN ('canceled', 'expired')`,
+                { type: QueryTypes.SELECT, replacements: { promoId: id }, transaction: t }
+            ) as any[];
+
+            const posRows = await sequelize.query(
+                `SELECT COALESCE(SUM(psi.qty), 0) AS qty_used
+                 FROM pos_sale_items psi
+                 INNER JOIN pos_sales ps ON ps.id = psi.pos_sale_id
+                 WHERE psi.clearance_promo_id = :promoId
+                   AND ps.status = 'paid'`,
+                { type: QueryTypes.SELECT, replacements: { promoId: id }, transaction: t }
+            ) as any[];
+
+            const used = Math.max(0, Math.trunc(Number((orderRows?.[0] as any)?.qty_used || 0))) +
+                Math.max(0, Math.trunc(Number((posRows?.[0] as any)?.qty_used || 0)));
+            promoUsedQtyCache.set(id, used);
+            return used;
+        };
 
         for (const it of items) {
             const product = productById.get(it.product_id);
@@ -275,7 +305,14 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
                 raw: true,
             }) as any;
             const remainingQty = Math.max(0, Math.trunc(Number(remainingAgg?.qty_sum || 0)));
-            const promoQty = Math.max(0, Math.min(it.qty, remainingQty));
+            const qtyLimit = (promo as any).qty_limit === null || (promo as any).qty_limit === undefined
+                ? null
+                : Math.max(0, Math.trunc(Number((promo as any).qty_limit || 0)));
+            const qtyUsed = qtyLimit === null ? 0 : await getPromoUsedQty(String((promo as any).id));
+            const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
+            const effectiveRemaining = Math.max(0, Math.min(remainingQty, remainingByLimit));
+
+            const promoQty = Math.max(0, Math.min(it.qty, effectiveRemaining));
             const normalQty = Math.max(0, it.qty - promoQty);
 
             if (promoQty > 0) {

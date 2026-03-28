@@ -430,6 +430,7 @@ export const api = {
                 name: string;
                 product_id: string;
                 target_unit_cost: number;
+                qty_limit: number;
                 pricing_mode: 'fixed_price' | 'percent_off';
                 promo_unit_price?: number;
                 discount_pct?: number;
@@ -441,6 +442,7 @@ export const api = {
                 name?: string;
                 product_id?: string;
                 target_unit_cost?: number;
+                qty_limit?: number;
                 pricing_mode?: 'fixed_price' | 'percent_off';
                 promo_unit_price?: number;
                 discount_pct?: number;

@@ -1,9 +1,9 @@
 'use client';
 
-import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal, Minus, Plus } from 'lucide-react';
+import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal, Minus, Plus, Layers, X } from 'lucide-react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/utils';
 import Image from 'next/image';
@@ -56,10 +56,37 @@ type ProductOption = {
     varian_harga?: unknown;
 };
 
+type ClearancePromoOption = {
+    id: string;
+    name: string;
+    product_id: string;
+    pricing_mode: 'fixed_price' | 'percent_off' | string;
+    promo_unit_price?: number | string | null;
+    discount_pct?: number | string | null;
+    target_unit_cost?: number | string | null;
+    qty_limit?: number | string | null;
+    qty_used?: number | string | null;
+    remaining_qty?: number | string | null;
+    computed_promo_unit_price?: number | string | null;
+    normal_unit_price?: number | string | null;
+    Product?: {
+        id: string;
+        sku?: string | null;
+        name?: string | null;
+        unit?: string | null;
+        price?: number | string | null;
+        image_url?: string | null;
+        stock_quantity?: number | string | null;
+    } | null;
+};
+
 type CartItem = {
+    line_id: string;
     product_id: string;
     product: ProductOption;
     qty: number;
+    clearance_promo_id?: string | null;
+    clearance_promo?: ClearancePromoOption | null;
     unit_price_override?: number | null;
     unit_price_override_reason?: string;
 };
@@ -100,6 +127,14 @@ function ManualOrderContent() {
     const [productSearch, setProductSearch] = useState('');
     const [products, setProducts] = useState<ProductOption[]>([]);
     const [, setSearchingProducts] = useState(false);
+
+    // Clearance Promo (Active) Picker
+    const [promoModalOpen, setPromoModalOpen] = useState(false);
+    const [promoLoading, setPromoLoading] = useState(false);
+    const [promoError, setPromoError] = useState('');
+    const [promoSearch, setPromoSearch] = useState('');
+    const [activePromos, setActivePromos] = useState<ClearancePromoOption[]>([]);
+    const [promoQtyById, setPromoQtyById] = useState<Record<string, number>>({});
 
     // Cart State
     const [cart, setCart] = useState<CartItem[]>([]);
@@ -279,10 +314,10 @@ function ManualOrderContent() {
         void refreshChatContext(chatSessionIdParam);
     }, [allowed, chatSessionIdParam, refreshChatContext]);
 
-    // Debounced Search for Products
-    useEffect(() => {
-        const delayDebounceFn = setTimeout(async () => {
-            if (productSearch.length > 2) {
+	    // Debounced Search for Products
+	    useEffect(() => {
+	        const delayDebounceFn = setTimeout(async () => {
+	            if (productSearch.length > 2) {
                 setSearchingProducts(true);
                 try {
                     const res = await api.admin.inventory.getProducts({ search: productSearch, limit: 10, status: 'active' });
@@ -297,13 +332,36 @@ function ManualOrderContent() {
             }
         }, 500);
 
-        return () => clearTimeout(delayDebounceFn);
-    }, [productSearch]);
+	        return () => clearTimeout(delayDebounceFn);
+	    }, [productSearch]);
 
-    const toFiniteNumber = (value: unknown): number | null => {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed)) return null;
-        return parsed;
+        const loadActivePromos = useCallback(async () => {
+            try {
+                setPromoLoading(true);
+                setPromoError('');
+                const res = await api.clearancePromos.getActive();
+                const promos: ClearancePromoOption[] = Array.isArray(res.data?.promos) ? res.data.promos : [];
+                setActivePromos(promos);
+            } catch (e: unknown) {
+                const message = typeof e === 'object' && e && 'response' in e
+                    ? String((e as any).response?.data?.message || '')
+                    : '';
+                setActivePromos([]);
+                setPromoError(message || 'Gagal memuat promo cepat habis.');
+            } finally {
+                setPromoLoading(false);
+            }
+        }, []);
+
+        useEffect(() => {
+            if (!allowed || !promoModalOpen) return;
+            void loadActivePromos();
+        }, [allowed, promoModalOpen, loadActivePromos]);
+
+	    const toFiniteNumber = (value: unknown): number | null => {
+	        const parsed = Number(value);
+	        if (!Number.isFinite(parsed)) return null;
+	        return parsed;
     };
 
     const getProductPrice = (product: ProductOption) => {
@@ -359,12 +417,22 @@ function ManualOrderContent() {
 	        return normalizedBasePrice;
 	    };
 
-		    const getDealUnitPrice = (item: CartItem) => {
-		        const overrideRaw = item?.unit_price_override;
-		        const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
-		        if (Number.isFinite(override) && override > 0) return Math.max(0, override);
-		        return Math.max(0, getProductPrice(item.product));
-		    };
+			    const getDealUnitPrice = (item: CartItem) => {
+                    if (item.clearance_promo_id) {
+                        const promo = item.clearance_promo;
+                        const pricingMode = String(promo?.pricing_mode || '');
+                        if (pricingMode === 'fixed_price') {
+                            const v = Number(promo?.promo_unit_price || 0);
+                            return Number.isFinite(v) ? Math.max(0, v) : 0;
+                        }
+                        const v = Number(promo?.computed_promo_unit_price || 0);
+                        return Number.isFinite(v) ? Math.max(0, v) : 0;
+                    }
+			        const overrideRaw = item?.unit_price_override;
+			        const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
+			        if (Number.isFinite(override) && override > 0) return Math.max(0, override);
+			        return Math.max(0, getProductPrice(item.product));
+			    };
 
             const validateBeforeSubmit = useCallback(() => {
                 if (!selectedCustomer) {
@@ -384,13 +452,14 @@ function ManualOrderContent() {
                     return false;
                 }
 
-                if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
-                    const invalid = cart.find((item) => {
-                        const deal = getDealUnitPrice(item);
-                        const costRaw = Number(item?.product?.base_price);
-                        if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
-                        return deal < costRaw;
-                    });
+	                if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
+	                    const invalid = cart.find((item) => {
+                            if (item.clearance_promo_id) return false;
+	                        const deal = getDealUnitPrice(item);
+	                        const costRaw = Number(item?.product?.base_price);
+	                        if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
+	                        return deal < costRaw;
+	                    });
                     if (invalid) {
                         showSubmitPopup('error', 'Tidak Diizinkan', 'Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
                         return false;
@@ -400,46 +469,103 @@ function ManualOrderContent() {
                 return true;
             }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
 		
-		    const addToCart = (product: ProductOption) => {
-		        setCart(prev => {
-		            const existing = prev.find(item => item.product_id === product.id);
-	            if (existing) {
-	                return prev.map(item => item.product_id === product.id ? { ...item, qty: item.qty + 1 } : item);
+			    const addToCart = (product: ProductOption) => {
+			        setCart(prev => {
+			            const lineId = `product:${product.id}`;
+			            const existing = prev.find(item => item.line_id === lineId);
+		            if (existing) {
+		                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
+		            }
+		            const baseline = getProductPrice(product);
+		            // New picked product should appear on top (most recently added first).
+		            return [{ line_id: lineId, product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '', clearance_promo_id: null, clearance_promo: null }, ...prev];
+		        });
+		        setProductSearch('');
+		        setProducts([]);
+		    };
+
+            const addPromoToCart = (promo: ClearancePromoOption, qtyToAdd = 1) => {
+                const promoId = String(promo?.id || '').trim();
+                const productId = String(promo?.product_id || promo?.Product?.id || '').trim();
+                if (!promoId || !productId) return;
+                const remaining = Math.max(0, Math.trunc(Number(promo?.remaining_qty || 0)));
+                const safeQty = Math.max(1, Math.min(remaining || 0, Math.trunc(Number(qtyToAdd || 1))));
+                if (remaining <= 0 || safeQty <= 0) return;
+
+                const lineId = `promo:${promoId}`;
+                const product: ProductOption = {
+                    id: productId,
+                    sku: String(promo?.Product?.sku || ''),
+                    name: String(promo?.Product?.name || promo?.name || ''),
+                    image_url: promo?.Product?.image_url ? String(promo.Product.image_url) : undefined,
+                    stock_quantity: promo?.Product?.stock_quantity ?? undefined,
+                    price: promo?.Product?.price ?? undefined,
+                };
+
+                setCart((prev) => {
+                    const existing = prev.find((row) => row.line_id === lineId);
+                    if (existing) {
+                        return prev.map((row) => row.line_id === lineId ? { ...row, qty: row.qty + safeQty } : row);
+                    }
+                    return [{
+                        line_id: lineId,
+                        product_id: productId,
+                        product,
+                        qty: safeQty,
+                        clearance_promo_id: promoId,
+                        clearance_promo: promo,
+                        unit_price_override: null,
+                        unit_price_override_reason: '',
+                    }, ...prev];
+                });
+            };
+
+	    const removeFromCart = (lineId: string) => {
+	        setCart(prev => prev.filter(item => item.line_id !== lineId));
+	    };
+
+	    const updateQty = (lineId: string, delta: number) => {
+	        setCart(prev => prev.map(item => {
+	            if (item.line_id === lineId) {
+	                const newQty = Math.max(1, item.qty + delta);
+	                return { ...item, qty: newQty };
 	            }
-	            const baseline = getProductPrice(product);
-	            // New picked product should appear on top (most recently added first).
-	            return [{ product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '' }, ...prev];
-	        });
-	        setProductSearch('');
-	        setProducts([]);
+	            return item;
+	        }));
 	    };
 
-    const removeFromCart = (productId: string) => {
-        setCart(prev => prev.filter(item => item.product_id !== productId));
-    };
-
-    const updateQty = (productId: string, delta: number) => {
-        setCart(prev => prev.map(item => {
-            if (item.product_id === productId) {
-                const newQty = Math.max(1, item.qty + delta);
-                return { ...item, qty: newQty };
-            }
-            return item;
-        }));
-    };
-
-    const setQty = (productId: string, rawValue: string) => {
-        const parsed = Number(rawValue);
-        const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
-        const nextQty = Math.max(1, normalized);
-        setCart((prev) => prev.map((item) => (item.product_id === productId ? { ...item, qty: nextQty } : item)));
-    };
-
-	    const calculateSubtotal = () => {
-	        return cart.reduce((sum, item) => sum + (getDealUnitPrice(item) * item.qty), 0);
+	    const setQty = (lineId: string, rawValue: string) => {
+	        const parsed = Number(rawValue);
+	        const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
+	        const nextQty = Math.max(1, normalized);
+	        setCart((prev) => prev.map((item) => (item.line_id === lineId ? { ...item, qty: nextQty } : item)));
 	    };
 
-    const selectedShippingMethod = shippingMethods.find((item) => item.code === shippingMethodCode) || null;
+		    const calculateSubtotal = () => {
+		        return cart.reduce((sum, item) => sum + (getDealUnitPrice(item) * item.qty), 0);
+		    };
+
+            const filteredPromos = useMemo(() => {
+                const q = promoSearch.trim().toLowerCase();
+                const base = Array.isArray(activePromos) ? activePromos : [];
+                const rows = q
+                    ? base.filter((promo) => {
+                        const name = String(promo?.Product?.name || promo?.name || '').toLowerCase();
+                        const sku = String(promo?.Product?.sku || '').toLowerCase();
+                        const promoName = String(promo?.name || '').toLowerCase();
+                        return name.includes(q) || sku.includes(q) || promoName.includes(q);
+                    })
+                    : base;
+
+                return rows.slice().sort((a, b) => {
+                    const aRemaining = Math.max(0, Math.trunc(Number((a as any)?.remaining_qty || 0)));
+                    const bRemaining = Math.max(0, Math.trunc(Number((b as any)?.remaining_qty || 0)));
+                    if (aRemaining !== bRemaining) return bRemaining - aRemaining;
+                    return String(a?.Product?.name || a?.name || '').localeCompare(String(b?.Product?.name || b?.name || ''));
+                });
+            }, [activePromos, promoSearch]);
+
+	    const selectedShippingMethod = shippingMethods.find((item) => item.code === shippingMethodCode) || null;
     const shippingFee = Number(selectedShippingMethod?.fee || 0);
     const grandTotal = calculateSubtotal() + shippingFee;
 
@@ -499,18 +625,20 @@ function ManualOrderContent() {
 			        try {
 		            const orderReason = orderOverrideReason.trim();
 		            const payload: Parameters<typeof api.orders.checkout>[0] = {
-	                ...(selectedCustomer?.id ? { customer_id: selectedCustomer.id } : {}), // Only works if admin
-	                items: cart.map(item => {
-	                    const baseline = Math.max(0, getProductPrice(item.product));
-	                    const deal = Math.max(0, getDealUnitPrice(item));
-	                    const itemReason = String(item.unit_price_override_reason || '').trim();
-	                    return {
-	                        product_id: item.product.id,
-	                        qty: item.qty,
-	                        ...(canOverridePricing && deal > 0 && deal < baseline ? { unit_price_override: deal } : {}),
-	                        ...(canOverridePricing && itemReason ? { unit_price_override_reason: itemReason } : {})
-	                    };
-	                }),
+		                ...(selectedCustomer?.id ? { customer_id: selectedCustomer.id } : {}), // Only works if admin
+		                items: cart.map(item => {
+		                    const baseline = Math.max(0, getProductPrice(item.product));
+		                    const deal = Math.max(0, getDealUnitPrice(item));
+		                    const itemReason = String(item.unit_price_override_reason || '').trim();
+                            const promoId = String(item.clearance_promo_id || '').trim();
+		                    return {
+		                        product_id: item.product.id,
+		                        qty: item.qty,
+                                ...(promoId ? { clearance_promo_id: promoId } : {}),
+		                        ...(!promoId && canOverridePricing && deal > 0 && deal < baseline ? { unit_price_override: deal } : {}),
+		                        ...(!promoId && canOverridePricing && itemReason ? { unit_price_override_reason: itemReason } : {})
+		                    };
+		                }),
 	                shipping_method_code: shippingMethodCode || undefined,
 	                from_cart: false,
 	                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {}),
@@ -559,14 +687,131 @@ function ManualOrderContent() {
 		        }
 		        };
 
-    if (!allowed) return null;
+	    if (!allowed) return null;
+	
+		    return (
+		        <div className="p-6 space-y-6">
+                    {promoModalOpen && (
+                        <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto">
+                            <div className="w-full max-w-4xl bg-white rounded-3xl border border-slate-200 shadow-xl p-4 space-y-3 mt-10">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Popup Promo</p>
+                                        <h2 className="text-base font-black text-slate-900 mt-0.5 flex items-center gap-2">
+                                            <Layers size={16} /> Pilih Promo Cepat Habis
+                                        </h2>
+                                        <p className="text-xs text-slate-500 mt-1">Pilih promo yang akan dibeli. Sistem akan split otomatis jika qty melebihi sisa promo.</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPromoModalOpen(false)}
+                                        className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700"
+                                    >
+                                        <X size={14} /> Tutup
+                                    </button>
+                                </div>
 
-	    return (
-	        <div className="p-6 space-y-6">
-            <div className="flex items-center gap-4">
-                <Link href="/admin/orders" className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
-                    <ArrowLeft size={20} />
-                </Link>
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <input
+                                        value={promoSearch}
+                                        onChange={(e) => setPromoSearch(e.target.value)}
+                                        placeholder="Cari promo (nama produk / SKU / nama promo)"
+                                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void loadActivePromos()}
+                                        disabled={promoLoading}
+                                        className="inline-flex items-center justify-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-slate-100 text-slate-700 disabled:opacity-60"
+                                    >
+                                        <Search size={14} /> {promoLoading ? 'Memuat...' : 'Refresh'}
+                                    </button>
+                                </div>
+
+                                {promoError ? (
+                                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-700">{promoError}</div>
+                                ) : promoLoading ? (
+                                    <div className="text-sm text-slate-500">Memuat promo...</div>
+                                ) : filteredPromos.length === 0 ? (
+                                    <div className="text-sm text-slate-500">Tidak ada promo aktif.</div>
+                                ) : (
+                                    <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                                        {filteredPromos.map((promo) => {
+                                            const promoId = String(promo.id || '').trim();
+                                            const productName = String(promo?.Product?.name || promo.name || 'Produk');
+                                            const sku = String(promo?.Product?.sku || '').trim();
+                                            const unit = String(promo?.Product?.unit || 'Pcs');
+                                            const remaining = Math.max(0, Math.trunc(Number(promo.remaining_qty || 0)));
+                                            const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : Math.max(0, Math.trunc(Number(promo.qty_limit || 0)));
+                                            const qtyUsed = promo.qty_used === null || promo.qty_used === undefined ? 0 : Math.max(0, Math.trunc(Number(promo.qty_used || 0)));
+                                            const remainingAllocation = qtyLimit === null ? null : Math.max(0, qtyLimit - qtyUsed);
+                                            const qty = Math.max(1, Math.min(remaining || 1, Math.trunc(Number(promoQtyById[promoId] || 1))));
+                                            const promoPrice = Number(promo.computed_promo_unit_price || promo.promo_unit_price || 0);
+                                            const normalPrice = Number(promo.normal_unit_price || promo?.Product?.price || 0);
+                                            const disabled = remaining <= 0;
+
+                                            return (
+                                                <div key={promoId} className={`rounded-2xl border p-3 ${disabled ? 'border-slate-200 bg-slate-50 opacity-70' : 'border-slate-200 bg-white'}`}>
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <p className="text-xs font-black text-slate-900 truncate">
+                                                                {productName} {sku ? <span className="text-slate-500 font-bold">({sku})</span> : null}
+                                                            </p>
+                                                            <p className="text-[11px] text-slate-500 mt-1">
+                                                                {qtyLimit === null
+                                                                    ? `Sisa promo: ${remaining.toLocaleString('id-ID')} ${unit}`
+                                                                    : `Alokasi: ${qtyLimit.toLocaleString('id-ID')} • Terpakai: ${qtyUsed.toLocaleString('id-ID')} • Sisa alokasi: ${(remainingAllocation || 0).toLocaleString('id-ID')} • Sisa promo: ${remaining.toLocaleString('id-ID')} ${unit}`
+                                                                }
+                                                            </p>
+                                                        </div>
+                                                        <div className="text-right shrink-0">
+                                                            {normalPrice > 0 ? (
+                                                                <p className="text-[11px] text-slate-500 line-through">{formatCurrency(normalPrice)}</p>
+                                                            ) : null}
+                                                            <p className="text-xs font-black text-emerald-700">{formatCurrency(Number.isFinite(promoPrice) ? promoPrice : 0)}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="mt-3 flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-[11px] text-slate-500">Qty</span>
+                                                            <input
+                                                                type="number"
+                                                                min={1}
+                                                                max={remaining}
+                                                                disabled={disabled}
+                                                                value={qty}
+                                                                onChange={(e) => {
+                                                                    const next = Math.min(remaining || 1, Math.max(1, Math.trunc(Number(e.target.value || 1))));
+                                                                    setPromoQtyById((prev) => ({ ...prev, [promoId]: next }));
+                                                                }}
+                                                                className="w-24 h-9 px-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-900"
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            disabled={disabled}
+                                                            onClick={() => {
+                                                                addPromoToCart(promo, qty);
+                                                                setPromoQtyById((prev) => ({ ...prev, [promoId]: 1 }));
+                                                            }}
+                                                            className="btn-3d inline-flex items-center gap-2 text-xs font-black uppercase tracking-wide px-4 py-2 rounded-xl bg-emerald-600 text-white disabled:opacity-60"
+                                                        >
+                                                            <Plus size={14} /> Tambah
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+	            <div className="flex items-center gap-4">
+	                <Link href="/admin/orders" className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
+	                    <ArrowLeft size={20} />
+	                </Link>
                 <div>
                     <h1 className="text-2xl font-black text-slate-900">Buat Pesanan Manual</h1>
                     <p className="text-slate-500 text-sm">Input pesanan untuk pelanggan offline atau via WhatsApp</p>
@@ -778,11 +1023,11 @@ function ManualOrderContent() {
 		                                <h2 className="font-bold text-slate-900 flex items-center gap-2">
 		                                    <ShoppingCart size={18} /> Tambah Produk
 		                                </h2>
-		                                <div className="relative">
-		                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-		                                    <input
-		                                        type="text"
-		                                        placeholder="Cari produk (nama/sku)..."
+			                                <div className="relative">
+			                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+			                                    <input
+			                                        type="text"
+			                                        placeholder="Cari produk (nama/sku)..."
 		                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
 		                                        value={productSearch}
 		                                        onChange={(e) => setProductSearch(e.target.value)}
@@ -813,19 +1058,27 @@ function ManualOrderContent() {
 		                                            ))}
 		                                        </div>
 		                                    )}
-		                                    {!selectedCustomer && (
-		                                        <p className="text-xs text-amber-600 mt-2 ml-2">
-		                                            {isChatDrivenOrder
-		                                                ? 'Menunggu data customer dari sesi chat agar harga tier bisa dipakai.'
-		                                                : 'Pilih pelanggan dulu untuk melihat harga sesuai tier.'}
-		                                        </p>
-		                                    )}
-		                                </div>
-		                                {selectedCustomer ? (
-		                                    <CustomerTopProductsCard
-		                                        customerId={selectedCustomer.id}
-		                                        onPick={addToCart}
-		                                    />
+			                                    {!selectedCustomer && (
+			                                        <p className="text-xs text-amber-600 mt-2 ml-2">
+			                                            {isChatDrivenOrder
+			                                                ? 'Menunggu data customer dari sesi chat agar harga tier bisa dipakai.'
+			                                                : 'Pilih pelanggan dulu untuk melihat harga sesuai tier.'}
+			                                        </p>
+			                                    )}
+			                                </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setPromoModalOpen(true)}
+                                                disabled={!selectedCustomer}
+                                                className="btn-3d inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-black uppercase tracking-wider text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                            >
+                                                <Layers size={16} /> Pilih Promo Cepat Habis
+                                            </button>
+			                                {selectedCustomer ? (
+			                                    <CustomerTopProductsCard
+			                                        customerId={selectedCustomer.id}
+			                                        onPick={addToCart}
+			                                    />
 		                                ) : null}
 		                            </div>
 
@@ -907,53 +1160,64 @@ function ManualOrderContent() {
                                     <ShoppingCart size={48} className="mx-auto mb-2 opacity-20" />
                                     <p>Belum ada produk dipilih</p>
                                 </div>
-	                            ) : (
-	                                cart.map((item) => {
-                                        const name = String(item.product?.name || '').trim() || 'Produk';
-                                        const sku = String(item.product?.sku || '').trim();
-                                        const stockParsed = Number(item.product?.stock_quantity);
+		                            ) : (
+		                                cart.map((item) => {
+	                                        const name = String(item.product?.name || '').trim() || 'Produk';
+	                                        const sku = String(item.product?.sku || '').trim();
+	                                        const stockParsed = Number(item.product?.stock_quantity);
                                         const stockQty = Number.isFinite(stockParsed) ? stockParsed : null;
                                         const isOutOfStock = stockQty !== null && stockQty <= 0;
                                         const shortage = stockQty === null ? 0 : Math.max(0, Number(item.qty || 0) - stockQty);
-                                        const hasShortage = shortage > 0;
-                                        const dealUnit = getDealUnitPrice(item);
-                                        const normalUnit = getProductPrice(item.product);
-                                        const lineTotal = dealUnit * Number(item.qty || 0);
-
-                                        return (
-                                            <div
-                                                key={item.product_id}
-                                                className={`rounded-xl p-3 ${hasShortage
-                                                    ? isOutOfStock
-                                                        ? 'border border-rose-200 bg-rose-50/70'
-                                                        : 'border border-amber-200 bg-amber-50/70'
+	                                        const hasShortage = shortage > 0;
+                                            const isPromoLine = Boolean(item.clearance_promo_id);
+	                                        const dealUnit = getDealUnitPrice(item);
+	                                        const normalUnit = getProductPrice(item.product);
+	                                        const lineTotal = dealUnit * Number(item.qty || 0);
+	
+	                                        return (
+	                                            <div
+	                                                key={item.line_id}
+	                                                className={`rounded-xl p-3 ${hasShortage
+	                                                    ? isOutOfStock
+	                                                        ? 'border border-rose-200 bg-rose-50/70'
+	                                                        : 'border border-amber-200 bg-amber-50/70'
                                                     : 'border border-slate-100 bg-white'
                                                     }`}
                                             >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div className="min-w-0">
-                                                        <div className="flex flex-wrap items-center gap-2">
-                                                            <p className="text-xs font-bold text-slate-900">{name}</p>
-                                                            {stockQty !== null ? (
-                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${isOutOfStock
-                                                                    ? 'bg-rose-600 text-white'
-                                                                    : hasShortage
+	                                                <div className="flex items-start justify-between gap-3">
+	                                                    <div className="min-w-0">
+	                                                        <div className="flex flex-wrap items-center gap-2">
+	                                                            <p className="text-xs font-bold text-slate-900">{name}</p>
+                                                                {isPromoLine ? (
+                                                                    <span className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                                        Promo Cepat Habis
+                                                                    </span>
+                                                                ) : null}
+	                                                            {stockQty !== null ? (
+	                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${isOutOfStock
+	                                                                    ? 'bg-rose-600 text-white'
+	                                                                    : hasShortage
                                                                         ? 'bg-amber-100 text-amber-800 border border-amber-200'
                                                                         : 'bg-slate-100 text-slate-700'
                                                                     }`}>
                                                                     {isOutOfStock ? 'Stok Habis' : hasShortage ? 'Stok Kurang' : `Stok ${stockQty}`}
                                                                 </span>
+	                                                            ) : null}
+	                                                        </div>
+	                                                        <p className="text-[10px] text-slate-500">SKU: {sku || item.product_id}</p>
+                                                            {isPromoLine ? (
+                                                                <p className="text-[10px] text-slate-500">
+                                                                    Promo: {String(item.clearance_promo?.name || item.clearance_promo_id || '').trim() || '-'}
+                                                                </p>
                                                             ) : null}
-                                                        </div>
-                                                        <p className="text-[10px] text-slate-500">SKU: {sku || item.product_id}</p>
-                                                        <p className="text-[10px] text-slate-500">
-                                                            Total <span className="font-black text-slate-800">{formatCurrency(lineTotal)}</span>
-                                                            {' • '}
-                                                            Qty {Number(item.qty || 0)}
-                                                            {' • '}
-                                                            Unit {formatCurrency(dealUnit)}
-                                                            {canOverridePricing ? ` • Normal ${formatCurrency(normalUnit)}` : ''}
-                                                        </p>
+	                                                        <p className="text-[10px] text-slate-500">
+	                                                            Total <span className="font-black text-slate-800">{formatCurrency(lineTotal)}</span>
+	                                                            {' • '}
+	                                                            Qty {Number(item.qty || 0)}
+	                                                            {' • '}
+	                                                            Unit {formatCurrency(dealUnit)}
+	                                                            {canOverridePricing && !isPromoLine ? ` • Normal ${formatCurrency(normalUnit)}` : ''}
+	                                                        </p>
 
                                                         {stockQty !== null && hasShortage ? (
                                                             <div className={`mt-2 rounded-lg bg-white/80 px-3 py-2 ${isOutOfStock ? 'border border-rose-200' : 'border border-amber-200'}`}>
@@ -963,37 +1227,37 @@ function ManualOrderContent() {
                                                             </div>
                                                         ) : null}
 
-                                                        {canOverridePricing ? (
-                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
-                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px_1fr] sm:items-center">
-                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
-                                                                        Harga deal
+	                                                        {canOverridePricing && !isPromoLine ? (
+	                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
+	                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px_1fr] sm:items-center">
+	                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
+	                                                                        Harga deal
                                                                     </label>
                                                                     <input
                                                                         type="number"
                                                                         min={0}
-                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
-                                                                        onChange={(e) => {
-                                                                            const raw = e.target.value;
-                                                                            const next = raw === '' ? null : Number(raw);
-                                                                            setCart((prev) => prev.map((row) => row.product_id === item.product_id
-                                                                                ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
-                                                                                : row));
-                                                                        }}
-                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
-                                                                    />
+	                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
+	                                                                        onChange={(e) => {
+	                                                                            const raw = e.target.value;
+	                                                                            const next = raw === '' ? null : Number(raw);
+	                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+	                                                                                ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
+	                                                                                : row));
+	                                                                        }}
+	                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+	                                                                    />
                                                                     <input
                                                                         type="text"
                                                                         placeholder="Keterangan nego (opsional)"
-                                                                        value={String(item.unit_price_override_reason || '')}
-                                                                        onChange={(e) => {
-                                                                            const next = e.target.value;
-                                                                            setCart((prev) => prev.map((row) => row.product_id === item.product_id
-                                                                                ? { ...row, unit_price_override_reason: next }
-                                                                                : row));
-                                                                        }}
-                                                                        className="min-w-0 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs sm:w-auto"
-                                                                    />
+	                                                                        value={String(item.unit_price_override_reason || '')}
+	                                                                        onChange={(e) => {
+	                                                                            const next = e.target.value;
+	                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+	                                                                                ? { ...row, unit_price_override_reason: next }
+	                                                                                : row));
+	                                                                        }}
+	                                                                        className="min-w-0 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs sm:w-auto"
+	                                                                    />
                                                                 </div>
                                                                 <p className="text-[10px] text-slate-500">
                                                                     Dipakai <span className="font-black text-slate-800">{formatCurrency(dealUnit)}</span> per item
@@ -1002,30 +1266,30 @@ function ManualOrderContent() {
                                                         ) : null}
                                                     </div>
 
-                                                    <div className="text-right">
-                                                        <p className="text-[10px] text-slate-400">Qty</p>
-                                                        <div className="flex items-center justify-end gap-1">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => updateQty(item.product_id, -1)}
-                                                                disabled={Number(item.qty || 0) <= 1}
-                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
-                                                                aria-label="Kurangi qty"
+	                                                    <div className="text-right">
+	                                                        <p className="text-[10px] text-slate-400">Qty</p>
+	                                                        <div className="flex items-center justify-end gap-1">
+	                                                            <button
+	                                                                type="button"
+	                                                                onClick={() => updateQty(item.line_id, -1)}
+	                                                                disabled={Number(item.qty || 0) <= 1}
+	                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+	                                                                aria-label="Kurangi qty"
                                                             >
                                                                 <Minus size={14} />
                                                             </button>
-                                                            <input
-                                                                type="number"
-                                                                min={1}
-                                                                value={Number(item.qty || 0)}
-                                                                onChange={(e) => setQty(item.product_id, e.target.value)}
-                                                                className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => updateQty(item.product_id, 1)}
-                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
-                                                                aria-label="Tambah qty"
+	                                                            <input
+	                                                                type="number"
+	                                                                min={1}
+	                                                                value={Number(item.qty || 0)}
+	                                                                onChange={(e) => setQty(item.line_id, e.target.value)}
+	                                                                className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
+	                                                            />
+	                                                            <button
+	                                                                type="button"
+	                                                                onClick={() => updateQty(item.line_id, 1)}
+	                                                                className="btn-3d inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50"
+	                                                                aria-label="Tambah qty"
                                                             >
                                                                 <Plus size={14} />
                                                             </button>
@@ -1044,12 +1308,12 @@ function ManualOrderContent() {
                                                                     Alias
                                                                 </button>
                                                             ) : null}
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => removeFromCart(item.product_id)}
-                                                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                                                                aria-label="Hapus dari cart"
-                                                            >
+	                                                            <button
+	                                                                type="button"
+	                                                                onClick={() => removeFromCart(item.line_id)}
+	                                                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+	                                                                aria-label="Hapus dari cart"
+	                                                            >
                                                                 <Trash2 size={14} />
                                                             </button>
                                                         </div>
