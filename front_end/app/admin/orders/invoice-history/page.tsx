@@ -24,6 +24,7 @@ type HistoryRow = {
 type LooseRecord = Record<string, unknown>;
 
 const COMPLETED_STATUSES = new Set(['completed', 'canceled', 'expired']);
+const DONE_SHIPMENT_STATUSES = new Set(['delivered', 'canceled']);
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const asRecord = (value: unknown): LooseRecord =>
@@ -96,7 +97,7 @@ function AdminCompletedInvoiceHistoryPageContent() {
     if (!allowed) return;
     try {
       if (!silent) setLoading(true);
-      const res = await api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all' });
+      const res = await api.admin.orderManagement.getAll({ page: 1, limit: 200, status: 'all', include_collectible_total: 'true' });
       const allOrders = Array.isArray(res.data?.orders) ? res.data.orders : [];
       const groups = new Map<string, HistoryRow & { paymentStatuses: Set<string>; shipmentStatuses: Set<string> }>();
 
@@ -105,16 +106,23 @@ function AdminCompletedInvoiceHistoryPageContent() {
         const invoiceRow = asRecord(orderRow.Invoice);
         const customerRow = asRecord(orderRow.Customer);
         const rawStatus = String(orderRow.status || '').trim();
-        if (!COMPLETED_STATUSES.has(rawStatus)) return;
+        const paymentStatus = String(invoiceRow.payment_status || '').trim().toLowerCase();
+        const shipmentStatusRaw = String(invoiceRow.shipment_status || '').trim().toLowerCase();
+        const amountPaid = Number(invoiceRow.amount_paid || 0);
+        const isOrderArchived = COMPLETED_STATUSES.has(rawStatus);
+        const isInvoicePaid = paymentStatus === 'paid'
+          || (paymentStatus === 'cod_pending' && Number.isFinite(amountPaid) && amountPaid > 0);
+        const isInvoiceDelivered = DONE_SHIPMENT_STATUSES.has(shipmentStatusRaw);
+        if (!isOrderArchived && !(isInvoicePaid && isInvoiceDelivered)) return;
         if (scopedCustomerId && String(orderRow.customer_id || '').trim() !== scopedCustomerId) return;
         const invoiceId = normalizeInvoiceRef(orderRow.invoice_id || invoiceRow.id);
         const invoiceNumber = normalizeInvoiceRef(orderRow.invoice_number || invoiceRow.invoice_number);
         if (!invoiceId && !invoiceNumber) return;
 
         const groupKey = invoiceId ? `id:${invoiceId}` : `num:${invoiceNumber.toLowerCase()}`;
-        const paymentStatus = String(invoiceRow.payment_status || '').trim().toLowerCase();
-        const shipmentStatus = normalizeOrderStatus(invoiceRow.shipment_status || rawStatus);
+        const shipmentStatus = normalizeOrderStatus(shipmentStatusRaw || rawStatus);
         const latestTs = Date.parse(String(orderRow.updatedAt || orderRow.createdAt || ''));
+        const invoiceTotal = Number((invoiceRow as any).collectible_total ?? (invoiceRow as any).total ?? 0);
         const row = groups.get(groupKey) || {
           groupKey,
           invoiceId,
@@ -130,7 +138,11 @@ function AdminCompletedInvoiceHistoryPageContent() {
         };
 
         row.orderIds.push(String(orderRow.id || ''));
-        row.totalAmount += Number(orderRow.total_amount || 0);
+        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0) {
+          row.totalAmount = Math.max(row.totalAmount, invoiceTotal);
+        } else {
+          row.totalAmount = Math.max(row.totalAmount, Number(orderRow.total_amount || 0));
+        }
         row.customerName = row.customerName || String(orderRow.customer_name || customerRow.name || 'Customer');
         if (paymentStatus) row.paymentStatuses.add(paymentStatus);
         if (shipmentStatus) row.shipmentStatuses.add(shipmentStatus);

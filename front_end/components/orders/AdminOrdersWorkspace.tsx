@@ -187,6 +187,17 @@ const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
 const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'checked', 'waiting_payment', 'processing', 'hold']);
 const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
 const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'ready_to_ship', 'partially_fulfilled', 'hold', 'delivered', 'completed']);
+const WORKSPACE_ORDER_STATUS_PREFERRED_OVER_INVOICE_SHIPMENT = new Set([
+  'pending',
+  'waiting_invoice',
+  'allocated',
+  'ready_to_ship',
+  'checked',
+  'processing',
+  'hold',
+  'waiting_payment',
+  'partially_fulfilled',
+]);
 const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;
 const ORDER_FILTER_OPTIONS_ALL: OrderSectionFilter[] = ['baru', 'allocated', 'backorder', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
 const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = ['baru', 'allocated', 'pembayaran', 'gudang', 'checker', 'pengiriman', 'selesai'];
@@ -271,15 +282,21 @@ const getBackorderAllocationLockReason = (params: {
 };
 
 const resolveWorkspaceShipmentStatus = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
+  const orderStatus = normalizeOrderStatus(order?.status);
   const invoiceShipmentStatus = String(
     detail?.Invoice?.shipment_status ||
     order?.Invoice?.shipment_status ||
     ''
   ).trim();
-  if (invoiceShipmentStatus) {
-    return normalizeOrderStatus(invoiceShipmentStatus);
-  }
-  return normalizeOrderStatus(order?.status);
+  if (!invoiceShipmentStatus) return orderStatus;
+
+  // Jangan override status order yang masih di tahap alokasi/gudang dengan status kirim invoice lama.
+  // Kasus: order backorder sudah punya invoice terkirim, lalu top-up alokasi sisa -> status order jadi `waiting_invoice`.
+  // Jika invoice shipment_status diprioritaskan, order akan salah masuk tab "Selesai/Backorder" dan hilang dari "Sudah Dialokasikan".
+  const orderKey = String(orderStatus || '').trim().toLowerCase();
+  if (WORKSPACE_ORDER_STATUS_PREFERRED_OVER_INVOICE_SHIPMENT.has(orderKey)) return orderStatus;
+
+  return normalizeOrderStatus(invoiceShipmentStatus);
 };
 
 const normalizeUuid = (raw: unknown): string => {
@@ -809,12 +826,16 @@ export default function AdminOrdersWorkspace({
     const sections: OrderSection[] = [];
 
     if (isCompleted) return ['selesai'];
-    if (isDelivered) return [isPaidByRule ? 'selesai' : 'pembayaran'];
+    if (isDelivered) {
+      if (isBackorder) return [isPaidByRule ? 'selesai' : 'pembayaran', 'backorder'];
+      return [isPaidByRule ? 'selesai' : 'pembayaran'];
+    }
     if (isPartiallyFulfilled && !isBackorder) {
       return [isPaidByRule ? 'selesai' : 'pengiriman'];
     }
 
     if (isBackorder) sections.push('backorder');
+    if (isBackorder && isPaidByRule && isPartiallyFulfilled) sections.push('selesai');
     if (isPayment) sections.push('pembayaran');
     if (isShipping) sections.push('pengiriman');
     if (isAllocatedReady) sections.push('allocated');
@@ -5272,14 +5293,23 @@ export default function AdminOrdersWorkspace({
 	                        canAllocate,
 	                        backorderHistory: backorderHistoryByOrderId[String(order.id)] || [],
 	                      });
-	                      const backorderCard =
-	                        orderSectionFilter === 'backorder' &&
-	                        canAllocate &&
-	                        section !== 'selesai' &&
-	                        detail &&
-	                        backorderEditorModel
-	                          ? renderBackorderEditor(backorderEditorModel, 'embedded')
-	                          : null;
+                      const backorderCard =
+                        orderSectionFilter === 'backorder' &&
+                        canAllocate &&
+                        section !== 'selesai' &&
+                        detail &&
+                        backorderEditorModel
+                          ? renderBackorderEditor(backorderEditorModel, 'embedded')
+                          : null;
+                      const invoiceTotalFromSummary = Number((order as any)?.Invoice?.collectible_total ?? (order as any)?.Invoice?.total ?? 0);
+                      const invoiceTotalFromDetail = Number((invoiceDetail as any)?.collectible_total ?? (invoiceDetail as any)?.total ?? 0);
+                      const effectiveInvoiceTotal = invoiceTotalFromDetail > 0 ? invoiceTotalFromDetail : invoiceTotalFromSummary;
+                      const shouldPreferInvoiceTotal = section === 'selesai' && Number.isFinite(effectiveInvoiceTotal) && effectiveInvoiceTotal > 0;
+                      const amountToShow = shouldPreferInvoiceTotal
+                        ? effectiveInvoiceTotal
+                        : showInvoiceableAmount
+                          ? invoiceableOrderAmount
+                          : Number(order.total_amount || 0);
                       return (
                         <div key={order.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                           <div className="flex items-start justify-between gap-2">
@@ -5300,7 +5330,7 @@ export default function AdminOrdersWorkspace({
                             <div className="text-right">
                               <p className="text-[11px] text-slate-500">{order.status}</p>
                               <p className="mt-1 text-sm font-black text-slate-900">
-                                {formatCurrency(showInvoiceableAmount ? invoiceableOrderAmount : Number(order.total_amount || 0))}
+                                {formatCurrency(amountToShow)}
                               </p>
                               {showInvoiceableAmount && (
                                 <p className="text-[10px] font-bold text-emerald-700">Nilai siap invoice</p>

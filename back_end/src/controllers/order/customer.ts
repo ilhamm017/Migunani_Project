@@ -65,7 +65,7 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
             0
         );
         const status = String(plain.status || '').toLowerCase();
-        const deliveredLikeStatus = ['shipped', 'delivered', 'completed'].includes(status);
+        const deliveredLikeStatus = ['shipped', 'delivered', 'completed', 'partially_fulfilled'].includes(status);
         const allocated_qty = (plain.Allocations || []).reduce(
             (sum: number, alloc: any) => sum + Number(alloc.allocated_qty || 0),
             0
