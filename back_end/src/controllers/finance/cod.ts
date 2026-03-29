@@ -21,6 +21,7 @@ import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
 import { CustomerBalanceService } from '../../services/CustomerBalanceService';
+import { parseMoneyInput } from '../../utils/money';
 
 // --- Driver COD Deposit ---
 
@@ -232,8 +233,9 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             throw new CustomError('Driver ID required', 400);
         }
 
-        const received = Number(amount_received);
-        if (isNaN(received) || received < 0) {
+        const receivedParsed = parseMoneyInput(amount_received);
+        const received = receivedParsed === null ? NaN : receivedParsed;
+        if (!Number.isFinite(received) || received < 0) {
             await t.rollback();
             throw new CustomError('Jumlah uang tidak valid', 400);
         }

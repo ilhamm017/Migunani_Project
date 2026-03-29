@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { AlertCircle, CheckCircle, Wallet, PackageCheck } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { formatMoneyId, parseMoneyInput } from '@/lib/money';
 
 type CodInvoiceRow = {
   invoice_id: string;
@@ -54,15 +55,10 @@ export default function AdminSetoranDriverPage() {
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const parseAmount = useCallback((value: string) => {
-    const digits = String(value || '').replace(/\D/g, '');
-    return digits ? Number(digits) : 0;
+  const sanitizeAmountInput = useCallback((value: string) => {
+    // Allow digits plus separators for localized input like "260.750,56".
+    return String(value || '').replace(/[^\d.,\-\s]/g, '');
   }, []);
-
-  const formatAmount = useCallback((value: string) => {
-    const parsed = parseAmount(value);
-    return parsed > 0 ? new Intl.NumberFormat('id-ID').format(parsed) : '';
-  }, [parseAmount]);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
@@ -149,14 +145,11 @@ export default function AdminSetoranDriverPage() {
     return selectedInvoiceIdList.reduce((sum, id) => sum + Number(byId.get(id)?.expected_total || 0), 0);
   }, [selectedDriver, selectedInvoiceIdList]);
 
-  const amountReceived = useMemo(() => parseAmount(amountReceivedInput), [amountReceivedInput, parseAmount]);
+  const amountReceived = useMemo(() => {
+    const parsed = parseMoneyInput(amountReceivedInput);
+    return parsed === null ? 0 : parsed;
+  }, [amountReceivedInput]);
   const diff = useMemo(() => Math.round((amountReceived - expectedSelectedTotal) * 100) / 100, [amountReceived, expectedSelectedTotal]);
-
-  useEffect(() => {
-    if (!hasSelectedCod && amountReceivedInput) {
-      setAmountReceivedInput('');
-    }
-  }, [amountReceivedInput, hasSelectedCod]);
 
   const canSelectInvoice = useCallback((inv: CodInvoiceRow) => {
     if (!inv.requires_retur_handover) return true;
@@ -174,6 +167,10 @@ export default function AdminSetoranDriverPage() {
 
     if (invoiceIds.length === 0 && handoverIds.length === 0) {
       setFeedback({ type: 'error', message: 'Pilih minimal 1 invoice COD atau 1 handover retur.' });
+      return;
+    }
+    if (invoiceIds.length === 0 && amountReceived > 0) {
+      setFeedback({ type: 'error', message: 'Nominal uang sudah diisi, tapi belum ada invoice COD yang dipilih. Centang invoice COD dulu atau kosongkan nominal.' });
       return;
     }
     if (invoiceIds.length > 0 && amountReceived <= 0) {
@@ -380,18 +377,20 @@ export default function AdminSetoranDriverPage() {
                     <input
                       value={amountReceivedInput}
                       onChange={(e) => {
-                        if (!hasSelectedCod) return;
-                        setAmountReceivedInput(formatAmount(e.target.value));
+                        setAmountReceivedInput(sanitizeAmountInput(e.target.value));
                       }}
-                      placeholder={hasSelectedCod ? '0' : 'Diblokir (setoran hanya barang)'}
-                      disabled={!hasSelectedCod}
-                      className={`mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900 ${!hasSelectedCod ? 'opacity-60' : ''}`}
-                      inputMode="numeric"
+                      onBlur={() => {
+                        const parsed = parseMoneyInput(amountReceivedInput);
+                        setAmountReceivedInput(parsed && parsed > 0 ? formatMoneyId(parsed, { maximumFractionDigits: 2 }) : '');
+                      }}
+                      placeholder="Contoh: 260.750,56"
+                      className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-900"
+                      inputMode="decimal"
                     />
                     {hasSelectedCod ? (
                       <p className="text-[11px] text-slate-500 mt-2">Selisih akan dicatat sebagai utang/piutang driver.</p>
                     ) : (
-                      <p className="text-[11px] text-slate-500 mt-2">Pilih invoice COD jika ada penerimaan uang. Jika setoran hanya barang retur, nominal uang tidak perlu diisi.</p>
+                      <p className="text-[11px] text-slate-500 mt-2">Jika ada penerimaan uang, centang invoice COD dulu. Jika setoran hanya barang retur, nominal uang bisa dikosongkan.</p>
                     )}
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">

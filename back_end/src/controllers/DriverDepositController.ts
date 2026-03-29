@@ -28,6 +28,7 @@ import { ReturService } from '../services/ReturService';
 import { bulkUpdateReturHandoversSafe, findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
 import { recordOrderStatusChanged } from '../utils/orderEvent';
 import { CustomerBalanceService } from '../services/CustomerBalanceService';
+import { parseMoneyInput } from '../utils/money';
 
 type DriverDepositCodInvoiceRow = {
     invoice_id: string;
@@ -628,12 +629,12 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
 
         if (cod && Array.isArray(cod?.invoice_ids) && cod.invoice_ids.length > 0) {
             const invoiceIds = Array.from(new Set((cod.invoice_ids as any[]).map((v) => String(v).trim()).filter(Boolean)));
-            const received = Number(cod?.amount_received);
-            if (!Number.isFinite(received) || received < 0) {
+            const receivedParsed = parseMoneyInput(cod?.amount_received);
+            if (receivedParsed === null || receivedParsed < 0) {
                 await t.rollback();
                 throw new CustomError('amount_received tidak valid', 400);
             }
-            amountReceived = Math.round(received * 100) / 100;
+            amountReceived = Math.round(receivedParsed * 100) / 100;
 
             // Block if any selected invoice still has pending retur handover
             const pending = await findAllReturHandoversSafe({

@@ -20,6 +20,7 @@ import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
 import { CustomerBalanceService } from '../../services/CustomerBalanceService';
+import { parseMoneyInput } from '../../utils/money';
 
 export const verifyPayment = asyncWrapper(async (req: Request, res: Response) => {
     const t = await sequelize.transaction();
@@ -94,8 +95,8 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             const receivedRaw = req.body?.amount_received;
             const receivedParsed = receivedRaw === undefined || receivedRaw === null || receivedRaw === ''
                 ? collectibleTotal
-                : Number(receivedRaw);
-            if (!Number.isFinite(receivedParsed) || receivedParsed < 0) {
+                : parseMoneyInput(receivedRaw);
+            if (receivedParsed === null || !Number.isFinite(receivedParsed) || receivedParsed < 0) {
                 await t.rollback();
                 throw new CustomError('amount_received tidak valid', 400);
             }

@@ -12,6 +12,7 @@ import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
+import { parseMoneyInput } from '../../utils/money';
 
 export const recordPayment = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -71,9 +72,9 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
             totalToPay = Math.round(totalToPay * 100) / 100;
             const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
                 ? totalToPay
-                : Number(rawAmount);
+                : parseMoneyInput(rawAmount);
 
-            if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+            if (parsedAmount === null || !Number.isFinite(parsedAmount) || parsedAmount < 0) {
                 await t.rollback();
                 throw new CustomError('Jumlah pembayaran tidak valid.', 400);
             }

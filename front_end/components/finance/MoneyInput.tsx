@@ -1,6 +1,7 @@
 
 import React from 'react';
 import { cn } from '@/lib/utils';
+import { formatMoneyId, parseMoneyInput } from '@/lib/money';
 
 // Simple implementation without extra dependency for now to be safe
 interface MoneyInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
@@ -20,12 +21,12 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     // Handle local formatting logic
     const formatDisplay = (val: string | number | readonly string[] | undefined) => {
         if (!val) return '';
-        return new Intl.NumberFormat('id-ID').format(Number(val));
+        const parsed = typeof val === 'string' ? parseMoneyInput(val) : Number(val);
+        return parsed !== null ? formatMoneyId(parsed, { maximumFractionDigits: 2 }) : '';
     };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const rawValue = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-        const numValue = Number(rawValue);
+        const numValue = parseMoneyInput(e.target.value) ?? 0;
 
         if (onValueChange) {
             onValueChange(numValue);
