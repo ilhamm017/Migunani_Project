@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { sequelize, Invoice, InvoiceItem, Order, OrderItem, DeliveryHandover, DeliveryHandoverItem, OrderIssue } from '../models';
+import { sequelize, Invoice, InvoiceItem, Order, OrderItem, DeliveryHandover, DeliveryHandoverItem, OrderIssue, Product } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
@@ -339,6 +339,15 @@ export const getLatestByInvoice = asyncWrapper(async (req: Request, res: Respons
         where: { invoice_id: invoiceId },
         order: [['checked_at', 'DESC'], ['id', 'DESC']],
         attributes: ['id', 'invoice_id', 'courier_id', 'checker_id', 'status', 'checked_at', 'handed_over_at', 'note', 'evidence_url'],
+        include: [
+            {
+                model: DeliveryHandoverItem,
+                as: 'Items',
+                required: false,
+                attributes: ['id', 'product_id', 'qty_expected', 'qty_checked', 'condition', 'note', 'evidence_url'],
+                include: [{ model: Product, as: 'Product', required: false, attributes: ['id', 'name', 'sku', 'unit'] }]
+            }
+        ]
     }) as any;
 
     if (!latest) return res.json({ handover: null });

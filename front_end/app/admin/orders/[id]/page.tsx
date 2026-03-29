@@ -599,6 +599,23 @@ export default function AdminInvoiceDetailPage() {
   const proofImageUrl = normalizeProofImageUrl(
     typeof invoiceRow.payment_proof_url === 'string' ? invoiceRow.payment_proof_url : null
   );
+  const deliveryProofImageUrl = normalizeProofImageUrl(
+    typeof invoiceRow.delivery_proof_url === 'string' ? invoiceRow.delivery_proof_url : null
+  );
+  const warehouseHandoverLatest = asRecord(invoiceRow.warehouse_handover_latest);
+  const checkerEvidenceUrl = normalizeProofImageUrl(
+    typeof warehouseHandoverLatest.evidence_url === 'string' ? (warehouseHandoverLatest.evidence_url as string) : null
+  );
+  const checkerItemEvidenceRows = Array.isArray(warehouseHandoverLatest.Items) ? (warehouseHandoverLatest.Items as unknown[]) : [];
+  const checkerItemEvidences = checkerItemEvidenceRows
+    .map((raw) => asRecord(raw))
+    .map((row) => ({
+      id: String(row.id || ''),
+      productId: String(asRecord(row.Product).id || row.product_id || '').trim(),
+      productName: String(asRecord(row.Product).name || '').trim(),
+      evidenceUrl: typeof row.evidence_url === 'string' ? normalizeProofImageUrl(row.evidence_url) : null,
+    }))
+    .filter((row) => Boolean(row.evidenceUrl));
 
   const handleAssignDriver = async () => {
     if (!selectedCourierId) {
@@ -810,6 +827,53 @@ export default function AdminInvoiceDetailPage() {
                   className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
                   onError={() => setProofLoadError(true)}
                 />
+              </div>
+            )}
+            {deliveryProofImageUrl && (
+              <div className="pt-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Bukti Pengiriman (Driver)</p>
+                <Image
+                  src={deliveryProofImageUrl}
+                  alt="Bukti pengiriman"
+                  width={960}
+                  height={540}
+                  className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
+                />
+              </div>
+            )}
+            {checkerEvidenceUrl && (
+              <div className="pt-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Bukti Checker Gudang</p>
+                <Image
+                  src={checkerEvidenceUrl}
+                  alt="Bukti checker gudang"
+                  width={960}
+                  height={540}
+                  className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
+                />
+              </div>
+            )}
+            {checkerItemEvidences.length > 0 && (
+              <div className="pt-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Bukti Item Checker ({checkerItemEvidences.length})</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {checkerItemEvidences.map((row) => (
+                    <div key={row.id || `${row.productId}:${row.evidenceUrl}`} className="rounded-xl border border-slate-200 bg-white p-2">
+                      <p className="text-[10px] font-bold text-slate-700 truncate">
+                        {row.productName || (row.productId ? `Produk ${row.productId}` : 'Produk')}
+                      </p>
+                      {row.evidenceUrl ? (
+                        <Image
+                          src={row.evidenceUrl}
+                          alt="Bukti item checker"
+                          width={640}
+                          height={360}
+                          className="mt-1 w-full max-h-32 object-contain rounded-lg bg-slate-50 border border-slate-100"
+                        />
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

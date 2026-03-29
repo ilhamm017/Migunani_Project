@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import { Upload, ArrowLeft, CheckCircle2, XCircle, Truck, Camera, RefreshCw, User, Phone } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
@@ -28,6 +29,20 @@ const toNonNegativeInt = (value: unknown) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.trunc(n));
+};
+
+const normalizeProofImageUrl = (raw?: string | null) => {
+  if (!raw) return null;
+  const val = String(raw).trim();
+  if (!val) return null;
+  if (val.startsWith('http://') || val.startsWith('https://')) return val;
+  if (val.startsWith('/uploads/')) return val;
+  if (val.startsWith('uploads/')) return `/${val}`;
+  const normalizedSlash = val.replace(/\\/g, '/');
+  if (normalizedSlash.startsWith('uploads/')) return `/${normalizedSlash}`;
+  const uploadsIndex = normalizedSlash.indexOf('/uploads/');
+  if (uploadsIndex >= 0) return normalizedSlash.slice(uploadsIndex);
+  return val;
 };
 
 const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
@@ -321,6 +336,16 @@ export default function TrackerGudangCheckPage() {
   const courierPhone = normalizeText((invoice as any)?.Courier?.whatsapp_number || (invoice as any)?.Courier?.phone || (invoice as any)?.Courier?.phone_number);
   const shipmentStatus = normalizeText((invoice as any)?.shipment_status).toLowerCase();
   const canHandover = shipmentStatus === 'checked' && String(latestHandover?.status || '').toLowerCase() === 'checked_passed' && Boolean(courierId);
+  const latestEvidenceUrl = normalizeProofImageUrl(typeof latestHandover?.evidence_url === 'string' ? latestHandover.evidence_url : null);
+  const latestItemEvidenceRows = Array.isArray(latestHandover?.Items) ? (latestHandover.Items as any[]) : [];
+  const latestItemEvidences = latestItemEvidenceRows
+    .map((row: any) => ({
+      id: String(row?.id || ''),
+      productName: String(row?.Product?.name || '').trim(),
+      productId: normalizeText(row?.product_id),
+      evidenceUrl: normalizeProofImageUrl(typeof row?.evidence_url === 'string' ? row.evidence_url : null),
+    }))
+    .filter((row) => Boolean(row.evidenceUrl));
 
   return (
     <div className="p-6 space-y-5 pb-24">
@@ -529,10 +554,47 @@ export default function TrackerGudangCheckPage() {
             </div>
 
             {latestHandover && (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
-                Handover terakhir: <span className="font-black">{String(latestHandover.status || '-')}</span>
-                {latestHandover.checked_at ? (
-                  <span className="ml-2 text-slate-500">({new Date(latestHandover.checked_at).toLocaleString('id-ID')})</span>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700 space-y-2">
+                <div>
+                  Handover terakhir: <span className="font-black">{String(latestHandover.status || '-')}</span>
+                  {latestHandover.checked_at ? (
+                    <span className="ml-2 text-slate-500">({new Date(latestHandover.checked_at).toLocaleString('id-ID')})</span>
+                  ) : null}
+                </div>
+                {latestEvidenceUrl ? (
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Bukti Checker (Header)</p>
+                    <Image
+                      src={latestEvidenceUrl}
+                      alt="Bukti checker (header)"
+                      width={960}
+                      height={540}
+                      className="w-full max-h-56 object-contain rounded-xl bg-white border border-slate-200"
+                    />
+                  </div>
+                ) : null}
+                {latestItemEvidences.length > 0 ? (
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Bukti Item ({latestItemEvidences.length})</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {latestItemEvidences.map((row) => (
+                        <div key={row.id || `${row.productId}:${row.evidenceUrl}`} className="rounded-xl border border-slate-200 bg-white p-2">
+                          <p className="text-[10px] font-bold text-slate-700 truncate">
+                            {row.productName || (row.productId ? `Produk ${row.productId}` : 'Produk')}
+                          </p>
+                          {row.evidenceUrl ? (
+                            <Image
+                              src={row.evidenceUrl}
+                              alt="Bukti checker (item)"
+                              width={640}
+                              height={360}
+                              className="mt-1 w-full max-h-32 object-contain rounded-lg bg-slate-50 border border-slate-100"
+                            />
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
               </div>
             )}

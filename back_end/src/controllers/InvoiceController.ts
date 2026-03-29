@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
-import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, DeliveryHandover, DeliveryHandoverItem, sequelize } from '../models';
 import { Op, QueryTypes } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
@@ -254,13 +254,34 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         : [];
     const deliveryReturnSummary = await computeInvoiceNetTotals(invoiceId);
 
+    const warehouse_handover_latest = isAdminRole
+        ? await (async () => {
+            const latest = await DeliveryHandover.findOne({
+                where: { invoice_id: invoiceId },
+                order: [['checked_at', 'DESC'], ['id', 'DESC']],
+                attributes: ['id', 'invoice_id', 'courier_id', 'checker_id', 'status', 'checked_at', 'handed_over_at', 'note', 'evidence_url'],
+                include: [
+                    {
+                        model: DeliveryHandoverItem,
+                        as: 'Items',
+                        attributes: ['id', 'product_id', 'qty_expected', 'qty_checked', 'condition', 'note', 'evidence_url'],
+                        required: false,
+                        include: [{ model: Product, as: 'Product', attributes: ['id', 'name', 'sku', 'unit'], required: false }]
+                    }
+                ]
+            }) as any;
+            return latest ? latest.get({ plain: true }) : null;
+        })()
+        : null;
+
     return res.json({
         ...plain,
         InvoiceItems: invoiceItems,
         order_ids: orderIds,
         customer: customer ? customer.get({ plain: true }) : null,
         delivery_returs: deliveryReturs.map((r: any) => r.get({ plain: true })),
-        delivery_return_summary: deliveryReturnSummary
+        delivery_return_summary: deliveryReturnSummary,
+        warehouse_handover_latest
     });
 });
 
