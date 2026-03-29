@@ -11,6 +11,7 @@ type CustomerOrderItem = {
   qty?: number | string;
   ordered_qty_original?: number | string;
   qty_canceled_backorder?: number | string;
+  qty_canceled_manual?: number | string;
   Product?: {
     id?: string;
     name?: string;
@@ -79,6 +80,7 @@ type AggregatedProduct = {
   orderedQty: number;
   suppliedQty: number;
   backorderQty: number;
+  canceledQty: number;
   orderCount: number;
   lastBoughtAt: string;
   invoices: Array<{
@@ -245,6 +247,8 @@ export default function CustomerPurchaseHistoryPanel({
   const productSummary = useMemo<AggregatedProduct[]>(() => {
     const bucket = new Map<string, AggregatedProduct>();
     orders.forEach((order) => {
+      const orderStatus = String(order?.status || '').trim().toLowerCase();
+      const isOrderCanceled = orderStatus === 'canceled' || orderStatus === 'cancelled';
       const orderItems = Array.isArray(order.OrderItems) ? order.OrderItems : [];
       orderItems.forEach((item) => {
         const key = String(item?.Product?.id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
@@ -269,6 +273,14 @@ export default function CustomerPurchaseHistoryPanel({
           Number(itemSummary?.invoiced_qty_total || 0),
           invoiceItems.reduce((sum, invoiceItem) => sum + Number(invoiceItem?.qty || 0), 0)
         );
+        const canceledManualQty = Math.max(0, Number(item?.qty_canceled_manual || 0));
+        const canceledBackorderQty = Math.max(
+          0,
+          Number(itemSummary?.backorder_canceled_qty ?? item?.qty_canceled_backorder ?? 0)
+        );
+        const currentQty = Math.max(0, Number(item?.qty || 0));
+        const canceledByOrderQty = isOrderCanceled ? Math.max(0, currentQty - suppliedQty) : 0;
+        const canceledQty = Math.max(0, canceledManualQty + canceledBackorderQty + canceledByOrderQty);
         const prev = bucket.get(key) || {
           key,
           name: String(item?.Product?.name || 'Produk'),
@@ -276,6 +288,7 @@ export default function CustomerPurchaseHistoryPanel({
           orderedQty: 0,
           suppliedQty: 0,
           backorderQty: 0,
+          canceledQty: 0,
           orderCount: 0,
           lastBoughtAt: '',
           invoices: [],
@@ -283,6 +296,7 @@ export default function CustomerPurchaseHistoryPanel({
         prev.orderedQty += orderedQty;
         prev.suppliedQty += suppliedQty;
         prev.backorderQty += backorderQty;
+        prev.canceledQty += canceledQty;
         prev.orderCount += 1;
         const currentTs = Date.parse(String(order.createdAt || ''));
         const prevTs = Date.parse(String(prev.lastBoughtAt || ''));
@@ -440,6 +454,10 @@ export default function CustomerPurchaseHistoryPanel({
     () => productSummary.reduce((sum, item) => sum + item.backorderQty, 0),
     [productSummary]
   );
+  const totalCanceledQty = useMemo(
+    () => productSummary.reduce((sum, item) => sum + item.canceledQty, 0),
+    [productSummary]
+  );
   const productPageCount = Math.max(1, Math.ceil(productSummary.length / PAGE_SIZE));
   const invoicePageCount = Math.max(1, Math.ceil(invoiceSummary.length / PAGE_SIZE));
   const paginatedProducts = useMemo(
@@ -519,7 +537,7 @@ export default function CustomerPurchaseHistoryPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Qty Tersuplai</p>
           <p className="mt-2 text-2xl font-black text-emerald-900">{totalSuppliedQty}</p>
@@ -527,6 +545,10 @@ export default function CustomerPurchaseHistoryPanel({
         <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-widest text-orange-700">Qty Backorder</p>
           <p className="mt-2 text-2xl font-black text-orange-900">{totalBackorderQty}</p>
+        </div>
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 shadow-sm">
+          <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Qty Cancel</p>
+          <p className="mt-2 text-2xl font-black text-rose-900">{totalCanceledQty}</p>
         </div>
         <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Invoice Sumber</p>
@@ -576,7 +598,7 @@ export default function CustomerPurchaseHistoryPanel({
                   <p className="text-lg font-black text-slate-900">{item.orderCount}</p>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
                   <p className="font-black text-slate-400 uppercase text-[10px] tracking-wide">Order</p>
                   <p className="mt-1 font-bold text-slate-800">{item.orderedQty}</p>
@@ -588,6 +610,10 @@ export default function CustomerPurchaseHistoryPanel({
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
                   <p className="font-black text-slate-400 uppercase text-[10px] tracking-wide">Backorder</p>
                   <p className="mt-1 font-bold text-orange-700">{item.backorderQty}</p>
+                </div>
+                <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
+                  <p className="font-black text-slate-400 uppercase text-[10px] tracking-wide">Cancel</p>
+                  <p className="mt-1 font-bold text-rose-700">{item.canceledQty}</p>
                 </div>
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
                   <p className="font-black text-slate-400 uppercase text-[10px] tracking-wide">Terakhir Order</p>

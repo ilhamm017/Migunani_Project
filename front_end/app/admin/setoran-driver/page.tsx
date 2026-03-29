@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
-import { AlertCircle, CheckCircle, Wallet, PackageCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle, Wallet, PackageCheck, Receipt } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { formatMoneyId, parseMoneyInput } from '@/lib/money';
 
@@ -230,6 +231,15 @@ export default function AdminSetoranDriverPage() {
         <div>
           <h1 className="text-2xl font-black text-slate-900">Setoran Driver</h1>
           <p className="text-xs text-slate-500 mt-1">Gabungkan terima uang COD dan terima barang retur (handover) dalam satu halaman.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/admin/riwayat-setoran-driver"
+            className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase text-slate-700 hover:bg-slate-50"
+          >
+            <Receipt size={16} />
+            Riwayat
+          </Link>
         </div>
       </div>
 
