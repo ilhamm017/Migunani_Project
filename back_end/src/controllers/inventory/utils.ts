@@ -121,6 +121,9 @@ export interface ImportPreviewRow {
     total_modal: number | null;
     is_valid: boolean;
     reasons: string[];
+    _import_meta?: {
+        blank_fields?: Record<string, boolean>;
+    };
 }
 
 export interface ImportPreviewSummary {
@@ -161,6 +164,7 @@ export interface ImportNormalizedRow {
     varianHarga: unknown | null;
     grosir: unknown | null;
     totalModal: number | null;
+    inputBlankFields?: Record<string, boolean>;
 }
 
 export const REQUIRED_PRODUCT_COLUMNS = ['description', 'image_url', 'keterangan', 'tipe_modal', 'varian_harga', 'grosir', 'total_modal'] as const;
@@ -540,8 +544,8 @@ export const parseImportRows = (worksheet: ExcelJS.Worksheet, headerMap: Record<
             sku,
             skuKey: sku.toUpperCase(),
             name,
-            categoryName: readCellText(row.getCell(headerMap['KATEGORI BARANG']).value) || 'Uncategorized',
-            unit: readCellText(row.getCell(headerMap['UNIT']).value) || 'Pcs',
+            categoryName: readCellText(row.getCell(headerMap['KATEGORI BARANG']).value),
+            unit: readCellText(row.getCell(headerMap['UNIT']).value),
             barcode: readCellText(row.getCell(headerMap['BARCODE']).value),
             keterangan: readCellText(row.getCell(headerMap['KETERANGAN']).value),
             tipeModal: readCellText(row.getCell(headerMap['TIPE MODAL']).value),
@@ -561,6 +565,8 @@ export const parseImportRows = (worksheet: ExcelJS.Worksheet, headerMap: Record<
 export interface ImportFileRowExtras {
     categoryId?: number | null;
     categoryIds?: number[] | null;
+    categoryIdInputRaw?: unknown;
+    categoryIdsInputRaw?: unknown;
     descriptionRaw?: unknown;
     imageUrlRaw?: unknown;
     allocatedQuantityRaw?: unknown;
@@ -593,20 +599,20 @@ export const parseProductsExportRows = (
             .every((value) => value === '');
         if (isCompletelyEmpty) return;
 
-	        const sku = skuRaw.trim();
-	        const name = nameRaw.trim();
-	        const rawCategoryIds = getCellValueByHeader(row, 'category_ids');
-	        const parsedCategoryIds = parseCategoryIdsInput(rawCategoryIds);
-	        const rawCategoryId = getCellValueByHeader(row, 'category_id');
-	        // Backward compatibility: allow multi-ID input in "category_id" column (e.g. "4,5,8").
-	        const parsedFromCategoryId = parsedCategoryIds.length > 0 ? [] : parseCategoryIdsInput(rawCategoryId);
-	        const effectiveCategoryIds = parsedCategoryIds.length > 0 ? parsedCategoryIds : parsedFromCategoryId;
+        const sku = skuRaw.trim();
+        const name = nameRaw.trim();
+        const rawCategoryIds = getCellValueByHeader(row, 'category_ids');
+        const parsedCategoryIds = parseCategoryIdsInput(rawCategoryIds);
+        const rawCategoryId = getCellValueByHeader(row, 'category_id');
+        // Backward compatibility: allow multi-ID input in "category_id" column (e.g. "4,5,8").
+        const parsedFromCategoryId = parsedCategoryIds.length > 0 ? [] : parseCategoryIdsInput(rawCategoryId);
+        const effectiveCategoryIds = parsedCategoryIds.length > 0 ? parsedCategoryIds : parsedFromCategoryId;
 
-	        const categoryIdFromList = effectiveCategoryIds.length > 0 ? effectiveCategoryIds[0] : null;
-	        const categoryIdParsed = categoryIdFromList === null
-	            ? parseFlexibleNumber(rawCategoryId)
-	            : categoryIdFromList;
-	        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
+        const categoryIdFromList = effectiveCategoryIds.length > 0 ? effectiveCategoryIds[0] : null;
+        const categoryIdParsed = categoryIdFromList === null
+            ? parseFlexibleNumber(rawCategoryId)
+            : categoryIdFromList;
+        const categoryId = categoryIdParsed === null ? null : Math.max(0, Math.trunc(categoryIdParsed));
 
         rows.push({
             rowNumber,
@@ -614,7 +620,7 @@ export const parseProductsExportRows = (
             skuKey: sku.toUpperCase(),
             name,
             categoryName: 'Uncategorized',
-            unit: readCellText(getCellValueByHeader(row, 'unit')) || 'Pcs',
+            unit: readCellText(getCellValueByHeader(row, 'unit')),
             barcode: readCellText(getCellValueByHeader(row, 'barcode')),
             keterangan: readCellText(getCellValueByHeader(row, 'keterangan')),
             tipeModal: readCellText(getCellValueByHeader(row, 'tipe_modal')),
@@ -623,14 +629,16 @@ export const parseProductsExportRows = (
             priceRaw: priceValue,
             stockRaw: stockValue,
             totalModalRaw: getCellValueByHeader(row, 'total_modal'),
-	            varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
-	            grosirRaw: getCellValueByHeader(row, 'grosir'),
-	            categoryId,
-	            categoryIds: effectiveCategoryIds.length > 0 ? effectiveCategoryIds : undefined,
-	            descriptionRaw: getCellValueByHeader(row, 'description'),
-	            imageUrlRaw: getCellValueByHeader(row, 'image_url'),
-	            allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
-	            minStockRaw: getCellValueByHeader(row, 'min_stock'),
+            varianHargaRaw: getCellValueByHeader(row, 'varian_harga'),
+            grosirRaw: getCellValueByHeader(row, 'grosir'),
+            categoryId,
+            categoryIds: effectiveCategoryIds.length > 0 ? effectiveCategoryIds : undefined,
+            categoryIdInputRaw: rawCategoryId,
+            categoryIdsInputRaw: rawCategoryIds,
+            descriptionRaw: getCellValueByHeader(row, 'description'),
+            imageUrlRaw: getCellValueByHeader(row, 'image_url'),
+            allocatedQuantityRaw: getCellValueByHeader(row, 'allocated_quantity'),
+            minStockRaw: getCellValueByHeader(row, 'min_stock'),
             binLocationRaw: getCellValueByHeader(row, 'bin_location'),
             vehicleCompatibilityRaw: getCellValueByHeader(row, 'vehicle_compatibility')
         });
@@ -795,6 +803,37 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
         ? parseFlexibleNumber(extras.minStockRaw)
         : null;
 
+    const blankFields: Record<string, boolean> = {
+        sku: rawSku === '',
+        name: rawName === '',
+        category_name: row.categoryName.trim() === '',
+        unit: row.unit.trim() === '',
+        barcode: row.barcode.trim() === '',
+        status: row.statusRaw.trim() === '',
+        base_price: isBlankValue(row.basePriceRaw),
+        price: isBlankValue(row.priceRaw),
+        stock_quantity: isBlankValue(row.stockRaw),
+        total_modal: isBlankValue(row.totalModalRaw),
+        varian_harga_text: isBlankValue(row.varianHargaRaw),
+        grosir_text: isBlankValue(row.grosirRaw),
+        keterangan: row.keterangan.trim() === '',
+        tipe_modal: row.tipeModal.trim() === '',
+    };
+    if (extras.categoryIdInputRaw !== undefined || extras.categoryIdsInputRaw !== undefined) {
+        blankFields.category_id = isBlankValue(extras.categoryIdInputRaw);
+        blankFields.category_ids = isBlankValue(extras.categoryIdsInputRaw);
+        if (blankFields.category_id && blankFields.category_ids) {
+            // Treat derived category_name ("Uncategorized") as not provided by input.
+            blankFields.category_name = true;
+        }
+    }
+    if (extras.descriptionRaw !== undefined) blankFields.description = isBlankValue(extras.descriptionRaw);
+    if (extras.imageUrlRaw !== undefined) blankFields.image_url = isBlankValue(extras.imageUrlRaw);
+    if (extras.allocatedQuantityRaw !== undefined) blankFields.allocated_quantity = isBlankValue(extras.allocatedQuantityRaw);
+    if (extras.minStockRaw !== undefined) blankFields.min_stock = isBlankValue(extras.minStockRaw);
+    if (extras.binLocationRaw !== undefined) blankFields.bin_location = isBlankValue(extras.binLocationRaw);
+    if (extras.vehicleCompatibilityRaw !== undefined) blankFields.vehicle_compatibility = isBlankValue(extras.vehicleCompatibilityRaw);
+
     const preview: ImportPreviewRow = {
         row: row.rowNumber,
         sku,
@@ -828,6 +867,7 @@ export const buildPreviewRow = (row: ImportFileRow): ImportPreviewRow => {
     if (extras.binLocationRaw !== undefined) preview.bin_location = readCellText(extras.binLocationRaw) || null;
     if (extras.vehicleCompatibilityRaw !== undefined) preview.vehicle_compatibility = readCellText(extras.vehicleCompatibilityRaw) || null;
 
+    preview._import_meta = { blank_fields: blankFields };
     return preview;
 };
 
@@ -937,6 +977,18 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
         const rowNumber = Number(data.row) || idx + 2;
         const rawSku = readCellText(data.sku);
         const reasons: string[] = [];
+
+        const inputBlankFields = (() => {
+            const meta = (data as any)?._import_meta;
+            if (!meta || typeof meta !== 'object') return undefined;
+            const blanks = (meta as any).blank_fields;
+            if (!blanks || typeof blanks !== 'object' || Array.isArray(blanks)) return undefined;
+            const result: Record<string, boolean> = {};
+            Object.entries(blanks as Record<string, unknown>).forEach(([key, value]) => {
+                if (typeof value === 'boolean') result[key] = value;
+            });
+            return Object.keys(result).length > 0 ? result : undefined;
+        })();
 
         const rawName = readCellText(data.name);
         const sku = rawSku || rawName;
@@ -1066,7 +1118,8 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
             tipeModal: tipeModalText || null,
             varianHarga,
             grosir,
-            totalModal
+            totalModal,
+            inputBlankFields
         });
     });
 
@@ -1095,25 +1148,84 @@ export const normalizeCommitRows = (rowsPayload: unknown[]): { rows: ImportNorma
             return;
         }
 
-        const existingScore = getCompletenessScore(existing);
-        const currentScore = getCompletenessScore(row);
-        if (currentScore > existingScore) {
-            deduplicatedBySku.set(row.skuKey, row);
-            return;
-        }
+        // When duplicate SKU exists in a single import file:
+        // - keep the most complete row as the "base"
+        // - accumulate stockQuantity as a delta (to match additive stock import semantics)
+        // - merge non-blank fields so blank cells don't erase data
+        const existingScore = getCompletenessScore(existing) - (existing.stockQuantity > 0 ? 1 : 0);
+        const currentScore = getCompletenessScore(row) - (row.stockQuantity > 0 ? 1 : 0);
+        const existingTextWeight = existing.name.length + (existing.keterangan?.length ?? 0) + (existing.barcode?.length ?? 0);
+        const currentTextWeight = row.name.length + (row.keterangan?.length ?? 0) + (row.barcode?.length ?? 0);
 
-        if (currentScore === existingScore) {
-            const existingTextWeight = existing.name.length + (existing.keterangan?.length ?? 0) + (existing.barcode?.length ?? 0);
-            const currentTextWeight = row.name.length + (row.keterangan?.length ?? 0) + (row.barcode?.length ?? 0);
-            if (currentTextWeight > existingTextWeight) {
-                deduplicatedBySku.set(row.skuKey, row);
-                return;
-            }
+        const chooseCurrent = currentScore > existingScore
+            || (currentScore === existingScore && currentTextWeight > existingTextWeight)
+            || (currentScore === existingScore && currentTextWeight === existingTextWeight && row.row < existing.row);
 
-            if (currentTextWeight === existingTextWeight && row.row < existing.row) {
-                deduplicatedBySku.set(row.skuKey, row);
+        const preferred = chooseCurrent ? row : existing;
+        const other = chooseCurrent ? existing : row;
+
+        const mergeBlankFields = (
+            a?: Record<string, boolean>,
+            b?: Record<string, boolean>
+        ): Record<string, boolean> | undefined => {
+            if (!a && !b) return undefined;
+            const keys = new Set<string>([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
+            const merged: Record<string, boolean> = {};
+            keys.forEach((key) => {
+                merged[key] = Boolean(a?.[key] ?? false) && Boolean(b?.[key] ?? false);
+            });
+            return Object.keys(merged).length > 0 ? merged : undefined;
+        };
+        const isBlankInput = (r: ImportNormalizedRow, key: string): boolean => Boolean(r.inputBlankFields?.[key]);
+
+        const merged: ImportNormalizedRow = {
+            ...preferred,
+            row: Math.min(existing.row, row.row),
+            stockQuantity: Math.max(0, Math.trunc(Number(existing.stockQuantity || 0))) + Math.max(0, Math.trunc(Number(row.stockQuantity || 0))),
+            inputBlankFields: mergeBlankFields(existing.inputBlankFields, row.inputBlankFields)
+        };
+
+        const mergeText = (key: string, field: keyof ImportNormalizedRow) => {
+            const preferredBlank = isBlankInput(preferred, key);
+            const otherBlank = isBlankInput(other, key);
+            const preferredVal = merged[field];
+            const otherVal = other[field];
+            const preferredText = typeof preferredVal === 'string' ? preferredVal.trim() : '';
+            const otherText = typeof otherVal === 'string' ? otherVal.trim() : '';
+            if ((preferredBlank || !preferredText) && !otherBlank && otherText) {
+                (merged as any)[field] = otherVal;
             }
-        }
+        };
+        const mergeNullable = (key: string, field: keyof ImportNormalizedRow) => {
+            const preferredBlank = isBlankInput(preferred, key);
+            const otherBlank = isBlankInput(other, key);
+            const preferredVal = merged[field];
+            const otherVal = other[field];
+            if ((preferredBlank || preferredVal === null || preferredVal === undefined) && !otherBlank && otherVal !== null && otherVal !== undefined) {
+                (merged as any)[field] = otherVal;
+            }
+        };
+
+        mergeText('name', 'name');
+        mergeText('category_name', 'categoryName');
+        mergeNullable('category_id', 'categoryId');
+        mergeNullable('category_ids', 'categoryIds');
+        mergeText('unit', 'unit');
+        mergeNullable('barcode', 'barcode');
+        mergeNullable('description', 'description');
+        mergeNullable('image_url', 'imageUrl');
+        mergeNullable('allocated_quantity', 'allocatedQuantity');
+        mergeNullable('min_stock', 'minStock');
+        mergeNullable('bin_location', 'binLocation');
+        mergeNullable('vehicle_compatibility', 'vehicleCompatibility');
+        mergeText('keterangan', 'keterangan');
+        mergeText('tipe_modal', 'tipeModal');
+        mergeNullable('varian_harga_text', 'varianHarga');
+        mergeNullable('grosir_text', 'grosir');
+        mergeNullable('total_modal', 'totalModal');
+        if (isBlankInput(preferred, 'status') && !isBlankInput(other, 'status')) merged.status = other.status;
+
+        deduplicatedBySku.set(row.skuKey, merged);
     });
 
     const deduplicatedRows = [...deduplicatedBySku.values()].sort((a, b) => a.row - b.row);
@@ -1208,65 +1320,6 @@ export const commitNormalizedRows = async (
     for (const row of rows) {
         const transaction = await sequelize.transaction();
         try {
-            let categoryIds: number[] = [];
-            if (Array.isArray(row.categoryIds) && row.categoryIds.length > 0) {
-                const normalizedIds = row.categoryIds
-                    .map((value) => Number(value))
-                    .filter((value) => Number.isInteger(value) && value > 0);
-
-                if (normalizedIds.length === 0) {
-                    throw new Error('category_ids harus berisi daftar ID kategori yang valid');
-                }
-
-                const categories = await Category.findAll({
-                    attributes: ['id'],
-                    where: { id: { [Op.in]: normalizedIds } },
-                    transaction
-                });
-                const existingIds = new Set(categories.map((cat) => Number(cat.id)));
-                const missing = normalizedIds.filter((id) => !existingIds.has(id));
-                if (missing.length > 0) {
-                    throw new Error(`Kategori ID tidak ditemukan: ${missing.join(', ')}`);
-                }
-                // Preserve input order while removing duplicates.
-                const uniqueOrdered: number[] = [];
-                const seen = new Set<number>();
-                for (const id of normalizedIds) {
-                    if (seen.has(id)) continue;
-                    seen.add(id);
-                    uniqueOrdered.push(id);
-                }
-                categoryIds = uniqueOrdered;
-            } else if (row.categoryId) {
-                const existingCategory = await Category.findByPk(row.categoryId, { transaction });
-                if (existingCategory) categoryIds = [existingCategory.id];
-            }
-            if (categoryIds.length === 0) {
-                categoryIds = await getOrCreateCategoryIds(row.categoryName, transaction);
-            }
-            const primaryCategoryId = categoryIds[0];
-            const importPayload = {
-                sku: row.sku,
-                name: row.name,
-                category_id: primaryCategoryId,
-                unit: row.unit,
-                barcode: row.barcode,
-                base_price: row.basePrice,
-                price: row.price,
-                status: row.status,
-                keterangan: row.keterangan,
-                tipe_modal: row.tipeModal,
-                varian_harga: row.varianHarga,
-                grosir: row.grosir,
-                total_modal: row.totalModal
-            } as any;
-            if (row.description !== undefined) importPayload.description = row.description;
-            if (row.imageUrl !== undefined) importPayload.image_url = row.imageUrl;
-            if (row.allocatedQuantity !== undefined) importPayload.allocated_quantity = row.allocatedQuantity;
-            if (row.minStock !== undefined) importPayload.min_stock = row.minStock;
-            if (row.binLocation !== undefined) importPayload.bin_location = row.binLocation;
-            if (row.vehicleCompatibility !== undefined) importPayload.vehicle_compatibility = row.vehicleCompatibility;
-
             const existingProduct = await Product.findOne({
                 where: { sku: row.sku },
                 transaction,
@@ -1274,6 +1327,66 @@ export const commitNormalizedRows = async (
             });
 
             if (!existingProduct) {
+                let categoryIds: number[] = [];
+                if (Array.isArray(row.categoryIds) && row.categoryIds.length > 0) {
+                    const normalizedIds = row.categoryIds
+                        .map((value) => Number(value))
+                        .filter((value) => Number.isInteger(value) && value > 0);
+
+                    if (normalizedIds.length === 0) {
+                        throw new Error('category_ids harus berisi daftar ID kategori yang valid');
+                    }
+
+                    const categories = await Category.findAll({
+                        attributes: ['id'],
+                        where: { id: { [Op.in]: normalizedIds } },
+                        transaction
+                    });
+                    const existingIds = new Set(categories.map((cat) => Number(cat.id)));
+                    const missing = normalizedIds.filter((id) => !existingIds.has(id));
+                    if (missing.length > 0) {
+                        throw new Error(`Kategori ID tidak ditemukan: ${missing.join(', ')}`);
+                    }
+                    // Preserve input order while removing duplicates.
+                    const uniqueOrdered: number[] = [];
+                    const seen = new Set<number>();
+                    for (const id of normalizedIds) {
+                        if (seen.has(id)) continue;
+                        seen.add(id);
+                        uniqueOrdered.push(id);
+                    }
+                    categoryIds = uniqueOrdered;
+                } else if (row.categoryId) {
+                    const existingCategory = await Category.findByPk(row.categoryId, { transaction });
+                    if (existingCategory) categoryIds = [existingCategory.id];
+                }
+                if (categoryIds.length === 0) {
+                    categoryIds = await getOrCreateCategoryIds(row.categoryName, transaction);
+                }
+                const primaryCategoryId = categoryIds[0];
+
+                const importPayload = {
+                    sku: row.sku,
+                    name: row.name,
+                    category_id: primaryCategoryId,
+                    unit: row.unit,
+                    barcode: row.barcode,
+                    base_price: row.basePrice,
+                    price: row.price,
+                    status: row.status,
+                    keterangan: row.keterangan,
+                    tipe_modal: row.tipeModal,
+                    varian_harga: row.varianHarga,
+                    grosir: row.grosir,
+                    total_modal: row.totalModal
+                } as any;
+                if (row.description !== undefined) importPayload.description = row.description;
+                if (row.imageUrl !== undefined) importPayload.image_url = row.imageUrl;
+                if (row.allocatedQuantity !== undefined) importPayload.allocated_quantity = row.allocatedQuantity;
+                if (row.minStock !== undefined) importPayload.min_stock = row.minStock;
+                if (row.binLocation !== undefined) importPayload.bin_location = row.binLocation;
+                if (row.vehicleCompatibility !== undefined) importPayload.vehicle_compatibility = row.vehicleCompatibility;
+
                 if (row.stockQuantity > 0 && row.basePrice <= 0) {
                     throw new Error('HARGA BELI wajib > 0 jika STOK > 0 (untuk pencatatan HPP/profit).');
                 }
@@ -1310,14 +1423,111 @@ export const commitNormalizedRows = async (
                 continue;
             }
 
+            const isBlankInput = (key: string): boolean => Boolean(row.inputBlankFields?.[key]);
+
+            const categoryUpdateRequested = (() => {
+                const categoryNameProvided = !isBlankInput('category_name') && row.categoryName.trim() !== '';
+                const categoryIdProvided = !isBlankInput('category_id') && typeof row.categoryId === 'number' && row.categoryId > 0;
+                const categoryIdsProvided = !isBlankInput('category_ids') && Array.isArray(row.categoryIds) && row.categoryIds.length > 0;
+                return categoryNameProvided || categoryIdProvided || categoryIdsProvided;
+            })();
+
+            let categoryIds: number[] | null = null;
+            let primaryCategoryId: number | null = null;
+            if (categoryUpdateRequested) {
+                categoryIds = [];
+                if (Array.isArray(row.categoryIds) && row.categoryIds.length > 0) {
+                    const normalizedIds = row.categoryIds
+                        .map((value) => Number(value))
+                        .filter((value) => Number.isInteger(value) && value > 0);
+
+                    if (normalizedIds.length === 0) {
+                        throw new Error('category_ids harus berisi daftar ID kategori yang valid');
+                    }
+
+                    const categories = await Category.findAll({
+                        attributes: ['id'],
+                        where: { id: { [Op.in]: normalizedIds } },
+                        transaction
+                    });
+                    const existingIds = new Set(categories.map((cat) => Number(cat.id)));
+                    const missing = normalizedIds.filter((id) => !existingIds.has(id));
+                    if (missing.length > 0) {
+                        throw new Error(`Kategori ID tidak ditemukan: ${missing.join(', ')}`);
+                    }
+                    // Preserve input order while removing duplicates.
+                    const uniqueOrdered: number[] = [];
+                    const seen = new Set<number>();
+                    for (const id of normalizedIds) {
+                        if (seen.has(id)) continue;
+                        seen.add(id);
+                        uniqueOrdered.push(id);
+                    }
+                    categoryIds = uniqueOrdered;
+                } else if (row.categoryId) {
+                    const existingCategory = await Category.findByPk(row.categoryId, { transaction });
+                    if (existingCategory) categoryIds = [existingCategory.id];
+                }
+                if (categoryIds.length === 0) {
+                    categoryIds = await getOrCreateCategoryIds(row.categoryName, transaction);
+                }
+                primaryCategoryId = categoryIds[0] ?? null;
+            }
+
+            const updatePayload: any = {
+                base_price: row.basePrice,
+                price: row.price,
+            };
+
+            // Skip updates when corresponding import cell was blank.
+            if (!isBlankInput('name') && row.name.trim()) updatePayload.name = row.name;
+            if (!isBlankInput('unit') && row.unit.trim()) updatePayload.unit = row.unit;
+            if (!isBlankInput('status')) updatePayload.status = row.status;
+            if (!isBlankInput('barcode') && row.barcode && row.barcode.trim()) updatePayload.barcode = row.barcode;
+            if (!isBlankInput('keterangan') && row.keterangan && row.keterangan.trim()) updatePayload.keterangan = row.keterangan;
+            if (!isBlankInput('tipe_modal') && row.tipeModal && row.tipeModal.trim()) updatePayload.tipe_modal = row.tipeModal;
+
+            if (categoryUpdateRequested && primaryCategoryId) updatePayload.category_id = primaryCategoryId;
+
+            if (row.description !== undefined && !isBlankInput('description') && row.description && row.description.trim()) {
+                updatePayload.description = row.description;
+            }
+            if (row.imageUrl !== undefined && !isBlankInput('image_url') && row.imageUrl && row.imageUrl.trim()) {
+                updatePayload.image_url = row.imageUrl;
+            }
+            if (row.allocatedQuantity !== undefined && !isBlankInput('allocated_quantity') && row.allocatedQuantity !== null) {
+                updatePayload.allocated_quantity = row.allocatedQuantity;
+            }
+            if (row.minStock !== undefined && !isBlankInput('min_stock') && row.minStock !== null) {
+                updatePayload.min_stock = row.minStock;
+            }
+            if (row.binLocation !== undefined && !isBlankInput('bin_location') && row.binLocation && row.binLocation.trim()) {
+                updatePayload.bin_location = row.binLocation;
+            }
+            if (row.vehicleCompatibility !== undefined && !isBlankInput('vehicle_compatibility') && row.vehicleCompatibility && row.vehicleCompatibility.trim()) {
+                updatePayload.vehicle_compatibility = row.vehicleCompatibility;
+            }
+            if (!isBlankInput('varian_harga_text') && row.varianHarga !== null) updatePayload.varian_harga = row.varianHarga;
+            if (!isBlankInput('grosir_text') && row.grosir !== null) updatePayload.grosir = row.grosir;
+            if (!isBlankInput('total_modal') && row.totalModal !== null) updatePayload.total_modal = row.totalModal;
+
             const previousStock = Number(existingProduct.stock_quantity);
-            const stockDelta = row.stockQuantity - previousStock;
+            const importedQty = isBlankInput('stock_quantity') ? 0 : Math.max(0, Math.trunc(Number(row.stockQuantity || 0)));
+            const nextStock = previousStock + importedQty;
+            const stockDelta = importedQty;
+
+            if (stockDelta > 0 && row.basePrice <= 0) {
+                throw new Error('HARGA BELI wajib > 0 jika STOK bertambah (untuk pencatatan HPP/profit).');
+            }
 
             await existingProduct.update({
-                ...importPayload,
-                stock_quantity: row.stockQuantity
+                ...updatePayload,
+                stock_quantity: nextStock
             }, { transaction });
-            await syncProductCategories(existingProduct.id, categoryIds, transaction);
+
+            if (categoryUpdateRequested && categoryIds) {
+                await syncProductCategories(existingProduct.id, categoryIds, transaction);
+            }
 
             if (stockDelta !== 0) {
                 await StockMutation.create({
@@ -1325,20 +1535,16 @@ export const commitNormalizedRows = async (
                     type: 'adjustment',
                     qty: stockDelta,
                     reference_type: 'inventory_import',
-                    note: `Stock adjusted by import (${previousStock} -> ${row.stockQuantity})`,
+                    note: `Stock adjusted by import (${previousStock} -> ${nextStock})`,
                     reference_id: batchReference
                 }, { transaction });
-
-                if (stockDelta > 0 && row.basePrice <= 0) {
-                    throw new Error('HARGA BELI wajib > 0 jika STOK bertambah (untuk pencatatan HPP/profit).');
-                }
 
                 await InventoryCostService.recordAdjustment({
                     product_id: String(existingProduct.id),
                     qty_diff: stockDelta,
                     reference_type: 'inventory_import',
                     reference_id: batchReference,
-                    note: `Stock adjusted by import (${previousStock} -> ${row.stockQuantity})`,
+                    note: `Stock adjusted by import (${previousStock} -> ${nextStock})`,
                     transaction
                 });
             }
@@ -1478,6 +1684,3 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
     }
     return {};
 };
-
-
-
