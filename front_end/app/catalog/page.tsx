@@ -120,6 +120,7 @@ function CatalogContent() {
             const response = await api.catalog.getProducts({
                 search: appliedSearch || undefined,
                 category_id: activeCategoryId !== 'all' ? activeCategoryId : undefined,
+                sort: appliedSearch.trim() ? 'stock_desc' : undefined,
                 page: targetPage,
                 limit: CATALOG_PAGE_SIZE,
             });

@@ -42,10 +42,16 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
             if (max_price) whereClause.price[Op.lte] = max_price;
         }
 
-        let order: any = [['name', 'ASC']];
-        if (sort === 'price_asc') order = [['price', 'ASC']];
-        if (sort === 'price_desc') order = [['price', 'DESC']];
-        if (sort === 'newest') order = [['createdAt', 'DESC']];
+        const nameOrder: any = ['name', 'ASC'];
+        const stockDescOrder: any = [sequelize.literal('COALESCE(stock_quantity, 0)'), 'DESC'];
+        const stockAscOrder: any = [sequelize.literal('COALESCE(stock_quantity, 0)'), 'ASC'];
+
+        let order: any = [nameOrder];
+        if (sort === 'price_asc') order = [['price', 'ASC'], nameOrder];
+        if (sort === 'price_desc') order = [['price', 'DESC'], nameOrder];
+        if (sort === 'newest') order = [['createdAt', 'DESC'], nameOrder];
+        if (sort === 'stock_desc') order = [stockDescOrder, nameOrder];
+        if (sort === 'stock_asc') order = [stockAscOrder, nameOrder];
 
         const tokens = splitSearchTokens(search);
         const matchCountLiteral = tokens.length > 0
@@ -60,11 +66,19 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         };
 
         const tokensPresent = tokens.length > 0;
+        const isStockSort = sort === 'stock_desc' || sort === 'stock_asc';
+        const stockOrderForSearch = sort === 'stock_desc' ? stockDescOrder : sort === 'stock_asc' ? stockAscOrder : null;
         const orderForSearch = tokensPresent
-            ? [
-                ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
-                ...order
-            ]
+            ? (isStockSort
+                ? [
+                    ...(stockOrderForSearch ? [stockOrderForSearch] : []),
+                    ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
+                    nameOrder
+                ]
+                : [
+                    ...(matchCountLiteral ? [[matchCountLiteral, 'DESC'] as any] : []),
+                    ...order
+                ])
             : order;
 
         const runQuery = async (mode: 'and' | 'or') => {
