@@ -23,6 +23,7 @@ type ProductPicklistRow = {
     total_allocated_qty: number;
     order_count: number;
     customer_count: number;
+    batch_layers?: Array<{ unit_cost: number; qty_reserved: number }>;
 };
 
 type CustomerPicklistItem = {
@@ -217,6 +218,7 @@ export default function WarehouseHelperPage() {
                                             <th className="px-4 py-3">Bin</th>
                                             <th className="px-4 py-3">SKU</th>
                                             <th className="px-4 py-3">Produk</th>
+                                            <th className="px-4 py-3">Batch (HPP)</th>
                                             <th className="px-4 py-3 text-right">Qty</th>
                                             <th className="px-4 py-3 text-right">Order</th>
                                             <th className="px-4 py-3 text-right">Pemesan</th>
@@ -250,6 +252,18 @@ export default function WarehouseHelperPage() {
                                                             <p className="text-[11px] text-slate-400 font-bold truncate">ID: {row.product_id.slice(0, 8)}…</p>
                                                         </div>
                                                     </div>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    {Array.isArray(row.batch_layers) && row.batch_layers.length > 0 ? (
+                                                        <p className="text-[11px] font-bold text-slate-700 whitespace-normal break-words">
+                                                            {row.batch_layers
+                                                                .filter((l) => Number(l?.qty_reserved || 0) > 0)
+                                                                .map((l) => `${formatCurrency(Number(l.unit_cost || 0))} × ${Number(l.qty_reserved || 0)}`)
+                                                                .join(' • ')}
+                                                        </p>
+                                                    ) : (
+                                                        <p className="text-[11px] text-slate-500">FIFO (auto)</p>
+                                                    )}
                                                 </td>
                                                 <td className="px-4 py-3 text-right font-black text-slate-900">{Number(row.total_allocated_qty || 0)}</td>
                                                 <td className="px-4 py-3 text-right font-bold text-slate-700">{Number(row.order_count || 0)}</td>
@@ -322,11 +336,11 @@ export default function WarehouseHelperPage() {
                                                                 <p className="font-black text-slate-800 truncate">{item.name}</p>
                                                                 <p className="text-[11px] text-slate-400 font-bold truncate">Status alokasi: {item.allocation_status}</p>
                                                                 {Array.isArray(item.reserved_layers) && item.reserved_layers.length > 0 ? (
-                                                                    <p className="mt-1 text-[11px] text-slate-600 font-bold truncate">
-                                                                        Layer:{' '}
+                                                                    <p className="mt-1 text-[11px] text-slate-600 font-bold whitespace-normal break-words">
+                                                                        Batch (HPP):{' '}
                                                                         {item.reserved_layers
-                                                                            .map((layer) => `${formatCurrency(layer.unit_cost)} x ${Number(layer.qty_reserved || 0)}`)
-                                                                            .join(', ')}
+                                                                            .map((layer) => `${formatCurrency(Number(layer.unit_cost || 0))} × ${Number(layer.qty_reserved || 0)}`)
+                                                                            .join(' • ')}
                                                                     </p>
                                                                 ) : null}
                                                             </div>

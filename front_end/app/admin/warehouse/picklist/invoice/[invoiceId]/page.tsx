@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Printer, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { formatCurrency } from '@/lib/utils';
 
 type PicklistRow = {
   product_id: string;
@@ -215,7 +216,7 @@ export default function InvoicePicklistPage() {
                           <p className="text-[11px] font-bold text-slate-700">
                             {row.batch_layers
                               .filter((l) => Number(l?.qty_reserved || 0) > 0)
-                              .map((l) => `${toInt(l.unit_cost).toLocaleString('id-ID')} x ${toInt(l.qty_reserved)}`)
+                              .map((l) => `${formatCurrency(Number(l.unit_cost || 0))} × ${toInt(l.qty_reserved)}`)
                               .join(' • ')}
                           </p>
                         ) : (

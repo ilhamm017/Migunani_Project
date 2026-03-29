@@ -106,6 +106,42 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
     }
 
     if (view === 'product') {
+        const layersByProductId = new Map<string, Array<{ unit_cost: number; qty_reserved: number }>>();
+        const orderIdList = Array.from(orderIds).filter(Boolean);
+        const productIdList = Array.from(productIds).filter(Boolean);
+        if (orderIdList.length > 0 && productIdList.length > 0) {
+            const reservedRows = await sequelize.query(
+                `SELECT
+                    r.product_id AS product_id,
+                    b.unit_cost AS unit_cost,
+                    COALESCE(SUM(r.qty_reserved), 0) AS qty_reserved
+                 FROM inventory_batch_reservations r
+                 INNER JOIN inventory_batches b ON b.id = r.batch_id
+                 WHERE r.order_id IN (:orderIds)
+                   AND r.product_id IN (:productIds)
+                 GROUP BY r.product_id, b.unit_cost`,
+                {
+                    type: QueryTypes.SELECT,
+                    replacements: { orderIds: orderIdList, productIds: productIdList }
+                }
+            ) as any[];
+
+            (Array.isArray(reservedRows) ? reservedRows : []).forEach((row: any) => {
+                const productId = String(row?.product_id || '').trim();
+                if (!productId) return;
+                const unitCost = Number(row?.unit_cost || 0);
+                const qtyReserved = Math.max(0, Math.trunc(Number(row?.qty_reserved || 0)));
+                if (!Number.isFinite(unitCost) || unitCost <= 0 || qtyReserved <= 0) return;
+                const list = layersByProductId.get(productId) || [];
+                list.push({ unit_cost: unitCost, qty_reserved: qtyReserved });
+                layersByProductId.set(productId, list);
+            });
+
+            layersByProductId.forEach((list, productId) => {
+                layersByProductId.set(productId, [...list].sort((a, b) => a.unit_cost - b.unit_cost));
+            });
+        }
+
         const byProduct = new Map<string, any>();
         for (const row of filtered) {
             const productId = String(row?.product_id || row?.Product?.id || '').trim();
@@ -144,6 +180,7 @@ export const getPicklist = asyncWrapper(async (req: Request, res: Response) => {
                 total_allocated_qty: r.total_allocated_qty,
                 order_count: r.order_ids.size,
                 customer_count: r.customer_names.size,
+                batch_layers: layersByProductId.get(r.product_id) || [],
             }))
             .sort((a: any, b: any) => {
                 const binA = String(a.bin_location || '');

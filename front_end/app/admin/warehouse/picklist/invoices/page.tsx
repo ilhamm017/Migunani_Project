@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Printer, RefreshCw, Search } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { formatCurrency } from '@/lib/utils';
 
 type BatchLayer = { unit_cost: number; qty_reserved: number };
 type ProductRow = {
@@ -94,10 +95,10 @@ export default function WarehousePicklistProductsPage() {
     }
   }, [q]);
 
-  if (!allowed) return null;
-
   const rows = useMemo(() => (Array.isArray(data?.rows) ? data!.rows : []), [data]);
   const totals = data?.totals || { total_qty: 0, product_count: 0, invoice_count: 0, order_count: 0 };
+
+  if (!allowed) return null;
 
   return (
     <div className="warehouse-screen warehouse-screen-fill warehouse-screen-flush-bottom flex min-h-0 flex-col overflow-hidden bg-slate-50">
@@ -243,7 +244,7 @@ export default function WarehousePicklistProductsPage() {
                           <p className="text-[11px] font-bold text-slate-700">
                             {row.batch_layers
                               .filter((l) => Number(l?.qty_reserved || 0) > 0)
-                              .map((l) => `${toInt(l.unit_cost).toLocaleString('id-ID')} x ${toInt(l.qty_reserved)}`)
+                              .map((l) => `${formatCurrency(Number(l.unit_cost || 0))} × ${toInt(l.qty_reserved)}`)
                               .join(' • ')}
                           </p>
                         ) : (
@@ -266,4 +267,3 @@ export default function WarehousePicklistProductsPage() {
     </div>
   );
 }
-
