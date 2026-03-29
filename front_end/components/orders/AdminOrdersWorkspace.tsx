@@ -14,6 +14,29 @@ import { notifyClose, notifyOpen, notifyAlert } from '@/lib/notify';
 import axios from 'axios';
 import type { AdminOrderListRow, InvoiceDetailResponse, OrderDetailResponse, ProductLite } from '@/lib/apiTypes';
 
+const toFiniteNumber = (value: unknown): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+};
+
+const clampPercentage = (value: number): number => Math.min(100, Math.max(0, value));
+
+const formatIdrNumber = (value: unknown): string => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  const normalized = Math.max(0, Math.trunc(parsed));
+  return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(normalized);
+};
+
+const parseIdrInput = (raw: string): number | null => {
+  const digits = String(raw || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  const parsed = Number(digits);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.trunc(parsed));
+};
+
 type AdminOrdersWorkspaceProps = {
   forcedCustomerId?: string;
   forcedCustomerName?: string;
@@ -681,6 +704,8 @@ export default function AdminOrdersWorkspace({
     product_name: string;
     sku: string;
     qty: number;
+    regular_unit_price: number;
+    auto_discount_pct: number;
     baseline_unit_price: number;
     current_unit_price: number;
     cost_at_purchase: number | null;
@@ -688,10 +713,11 @@ export default function AdminOrdersWorkspace({
 
   type PricingEditorDraft = {
     unit_price_override: string;
+    unit_price_override_input?: string;
+    line_total_override_input?: string;
     preferred_unit_cost: string;
     reason: string;
-    deal_mode: 'price' | 'percent';
-    discount_pct: string;
+    discount_pct_input?: string;
   };
 
   type PricingCostLayerRow = {
@@ -1287,6 +1313,15 @@ export default function AdminOrdersWorkspace({
 	        const current = toFinite(row?.price_at_purchase) ?? 0;
 	        const cost = toFinite(row?.cost_at_purchase);
 	        const preferredUnitCostRaw = toFinite(row?.preferred_unit_cost);
+          const regularUnitPriceRaw = toFinite(snapshot?.base_price ?? snapshot?.basePrice) ?? toFinite((row?.Product || {})?.price) ?? toFinite(row?.Product?.price) ?? 0;
+          const snapshotDiscountPctRaw = toFinite(snapshot?.discount_pct ?? snapshot?.discountPct);
+          const snapshotDiscountPct = snapshotDiscountPctRaw !== null && snapshotDiscountPctRaw >= 0 && snapshotDiscountPctRaw <= 100
+            ? snapshotDiscountPctRaw
+            : null;
+          const inferredDiscountPct = regularUnitPriceRaw > 0 && baseline > 0
+            ? clampPercentage(Math.round(((1 - (baseline / regularUnitPriceRaw)) * 100) * 100) / 100)
+            : 0;
+          const autoDiscountPct = snapshotDiscountPct !== null && snapshotDiscountPct > 0 ? clampPercentage(snapshotDiscountPct) : inferredDiscountPct;
 	        const product = row?.Product || {};
 
 	        let existingItemReason = '';
@@ -1312,6 +1347,8 @@ export default function AdminOrdersWorkspace({
 	          product_name: String(product?.name || 'Produk'),
           sku: String(product?.sku || '-'),
           qty: Math.max(0, Number(row?.qty || 0)),
+          regular_unit_price: Math.max(0, regularUnitPriceRaw),
+          auto_discount_pct: autoDiscountPct > 0 ? autoDiscountPct : 0,
           baseline_unit_price: Math.max(0, baseline),
           current_unit_price: Math.max(0, current),
           cost_at_purchase: cost !== null ? Math.max(0, cost) : null,
@@ -1322,16 +1359,13 @@ export default function AdminOrdersWorkspace({
 	      items.forEach((row) => {
 	        const baseline = Math.max(0, Number(row.baseline_unit_price || 0));
 	        const current = Math.max(0, Number(row.current_unit_price || 0));
-	        const derivedPct = baseline > 0 && current > 0 && current <= baseline
-	          ? Math.max(0, Math.min(100, (1 - current / baseline) * 100))
-	          : 0;
 	        const existingReason = String(overrideReasonByItemId.get(row.order_item_id) || '').trim();
+          const isAutoPrice = Math.abs(current - baseline) <= 0.0001;
 	        drafts[row.order_item_id] = {
-	          unit_price_override: String(row.current_unit_price || 0),
+	          unit_price_override: String(Math.max(0, Math.trunc(current || 0))),
 	          preferred_unit_cost: row.preferred_unit_cost !== null ? Number(row.preferred_unit_cost).toFixed(4) : '',
 	          reason: existingReason,
-	          deal_mode: 'price',
-	          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
+            discount_pct_input: isAutoPrice ? undefined : '',
 	        };
 	      });
 
@@ -1400,26 +1434,11 @@ export default function AdminOrdersWorkspace({
 
 	    setPricingEditor((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
 	    try {
-	      const reason = pricingEditor.orderReason.trim();
-	      let dealModeError = '';
+	      const reason = '';
 	      const payloadItems = pricingEditor.items.map((item) => {
 	        const draft = pricingEditor.drafts[item.order_item_id];
-	        const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
 	        let unitPrice: number | null = null;
-	        if (dealMode === 'percent') {
-	          const pctRaw = String(draft?.discount_pct ?? '').trim();
-	          const pct = toFinite(pctRaw);
-	          if (pct === null) {
-	            if (!dealModeError) dealModeError = `Diskon (%) harus angka untuk SKU ${item.sku}.`;
-	          } else if (pct < 0 || pct > 100) {
-	            if (!dealModeError) dealModeError = `Diskon (%) harus 0-100 untuk SKU ${item.sku}.`;
-	          } else {
-	            const baseline = Math.max(0, Number(item.baseline_unit_price || 0));
-	            unitPrice = Math.round(baseline * (1 - pct / 100));
-	          }
-	        } else {
-	          unitPrice = toFinite(draft?.unit_price_override);
-	        }
+	        unitPrice = toFinite(draft?.unit_price_override);
 	        const preferredRaw = String(draft?.preferred_unit_cost ?? '').trim();
 	        const preferredParsed = preferredRaw ? toFinite(preferredRaw) : null;
 	        const preferredUnitCost = preferredParsed !== null && preferredParsed > 0 ? Number(preferredParsed.toFixed(4)) : null;
@@ -1431,10 +1450,6 @@ export default function AdminOrdersWorkspace({
 	        };
 	      });
 
-	      if (dealModeError) {
-	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: dealModeError } : prev);
-	        return;
-	      }
 	      if (payloadItems.some((row) => !row.order_item_id)) {
 	        setPricingEditor((prev) => prev ? { ...prev, saving: false, error: 'Order item tidak valid.' } : prev);
 	        return;
@@ -4110,28 +4125,16 @@ export default function AdminOrdersWorkspace({
 		            </div>
 
 		            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-		              <div>
-		                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-		                  {pricingEditorPriceEditable ? 'Keterangan Nego (Opsional)' : 'Keterangan (Opsional)'}
-		                </label>
-		                <textarea
-		                  value={pricingEditor.orderReason}
-		                  onChange={(e) => setPricingEditor((prev) => prev ? { ...prev, orderReason: e.target.value } : prev)}
-		                  rows={2}
-		                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-		                  placeholder={pricingEditorPriceEditable ? 'Mis: harga khusus kenalan / diskon nego...' : 'Mis: pilih layer modal tertentu untuk picking...'}
-		                />
-		                <p className="mt-1 text-[11px] text-slate-500">
-		                  {pricingEditorPriceEditable
-		                    ? pricingEditorHasInvoiceRef
-		                      ? 'Perubahan ini dipakai untuk invoice tambahan (backorder). Invoice lama tidak berubah. Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
-		                      : 'Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
-		                    : pricingEditorHasInvoiceRef
-		                      ? (pricingEditorLayerEditable
-		                        ? 'Invoice sudah terbit: harga deal terkunci. Kamu masih bisa pilih layer modal untuk alokasi/picking sebelum barang keluar gudang. Untuk diskon setelah invoice, gunakan credit note.'
-		                        : 'Invoice sudah terbit dan barang sudah keluar gudang: harga deal & layer modal tidak bisa diubah.')
-		                      : 'Harga deal tidak bisa diubah pada status ini, tapi layer modal masih bisa dipilih sebelum barang keluar gudang.'}
-		                </p>
+		              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+		                {pricingEditorPriceEditable
+		                  ? pricingEditorHasInvoiceRef
+		                    ? 'Perubahan ini dipakai untuk invoice tambahan (backorder). Invoice lama tidak berubah. Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
+		                    : 'Catatan: kasir tidak boleh di bawah modal, dan harga deal tidak boleh lebih tinggi dari harga normal (baseline).'
+		                  : pricingEditorHasInvoiceRef
+		                    ? (pricingEditorLayerEditable
+		                      ? 'Invoice sudah terbit: harga deal terkunci. Kamu masih bisa pilih layer modal untuk alokasi/picking sebelum barang keluar gudang. Untuk diskon setelah invoice, gunakan credit note.'
+		                      : 'Invoice sudah terbit dan barang sudah keluar gudang: harga deal & layer modal tidak bisa diubah.')
+		                    : 'Harga deal tidak bisa diubah pada status ini, tapi layer modal masih bisa dipilih sebelum barang keluar gudang.'}
 		              </div>
 
 		              {pricingEditorHasInvoiceRef ? (
@@ -4170,21 +4173,18 @@ export default function AdminOrdersWorkspace({
 	              <div className="space-y-2">
 	                {pricingEditor.items.map((row) => {
 	                  const draft = pricingEditor.drafts[row.order_item_id];
-	                  const dealMode = draft?.deal_mode === 'percent' ? 'percent' : 'price';
 	                  const baselineUnitPrice = Math.max(0, Number(row.baseline_unit_price || 0));
-	                  const discountPctRaw = String(draft?.discount_pct ?? '').trim();
-	                  const discountPct = Number(discountPctRaw);
-	                  const computedDealPrice = dealMode === 'percent' && Number.isFinite(discountPct)
-	                    ? Math.round(baselineUnitPrice * (1 - discountPct / 100))
-	                    : null;
-	                  const draftUnitPriceRaw = String(draft?.unit_price_override ?? '').trim();
-	                  const draftUnitPriceParsed = Number(draftUnitPriceRaw);
-	                  const selectedUnitPrice = computedDealPrice !== null && Number.isFinite(computedDealPrice) && computedDealPrice > 0
-	                    ? computedDealPrice
-	                    : Number.isFinite(draftUnitPriceParsed) && draftUnitPriceParsed > 0
-	                      ? draftUnitPriceParsed
-	                      : Math.max(0, Number(row.current_unit_price || 0));
+                    const regularUnitPrice = Math.max(0, Number(row.regular_unit_price || 0));
+                    const autoDiscountPct = clampPercentage(Number(row.auto_discount_pct || 0));
+                    const discountInputValue = draft?.discount_pct_input === undefined
+                      ? (autoDiscountPct > 0 ? String(autoDiscountPct) : '')
+                      : String(draft?.discount_pct_input || '');
+	                  const draftUnitPriceParsed = toFiniteNumber(String(draft?.unit_price_override ?? '').trim());
+	                  const selectedUnitPrice = draftUnitPriceParsed !== null && draftUnitPriceParsed > 0
+	                    ? draftUnitPriceParsed
+	                    : Math.max(0, Number(row.current_unit_price || 0));
 	                  const itemQty = Math.max(0, Math.trunc(Number(row.qty || 0)));
+                    const lineTotal = Math.max(0, Math.round((selectedUnitPrice * itemQty) * 100) / 100);
 	                  const baselineDelta = selectedUnitPrice - baselineUnitPrice;
 	                  const baselineDeltaAbs = Math.abs(baselineDelta);
 	                  const baselineDeltaPct = baselineUnitPrice > 0
@@ -4199,6 +4199,10 @@ export default function AdminOrdersWorkspace({
 	                    : null;
 	                  const layers = pricingCostLayersByProductId[row.product_id] || [];
 	                  const isPromoLocked = Boolean(row.clearance_promo_id);
+                    const overrideInvalid = pricingEditorPriceEditable && (
+                      selectedUnitPrice > baselineUnitPrice + 0.0001 ||
+                      (normalizedRole === 'kasir' && costAtPurchase !== null && selectedUnitPrice < costAtPurchase - 0.0001)
+                    );
 	                  return (
 	                    <div key={row.order_item_id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
 	                      <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4241,129 +4245,224 @@ export default function AdminOrdersWorkspace({
 	                          </p>
 	                        </div>
 	                        <div className="flex flex-col items-end gap-2">
-	                          <div className="flex items-center gap-2">
-	                            <label className="text-[10px] font-bold text-slate-500">Harga deal</label>
-	                            <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-[10px]">
-		                              <button
-		                                type="button"
-		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
-		                                onClick={() => {
-		                                  setPricingEditor((prev) => {
-		                                    if (!prev) return prev;
-	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
-	                                    const pct = Number(String(currentDraft.discount_pct ?? '').trim());
-	                                    const computed = baselineUnitPrice > 0 && Number.isFinite(pct)
-	                                      ? Math.round(baselineUnitPrice * (1 - pct / 100))
-	                                      : Number(String(currentDraft.unit_price_override ?? '').trim());
-	                                    const nextUnitPrice = Number.isFinite(computed) && computed > 0
-	                                      ? String(Math.trunc(computed))
-	                                      : String(currentDraft.unit_price_override || row.current_unit_price || 0);
-	                                    return {
-	                                      ...prev,
-	                                      drafts: {
-	                                        ...prev.drafts,
-	                                        [row.order_item_id]: {
-	                                          ...currentDraft,
-	                                          deal_mode: 'price',
-	                                          unit_price_override: nextUnitPrice,
-	                                        }
-	                                      }
-	                                    };
-	                                  });
-	                                }}
-	                                className={`rounded-lg px-2 py-1 font-black ${dealMode === 'price' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
-	                              >
-	                                Rp
-	                              </button>
-		                              <button
-		                                type="button"
-		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
-		                                onClick={() => {
-		                                  setPricingEditor((prev) => {
-		                                    if (!prev) return prev;
-	                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' };
-	                                    const currentPrice = Number(String(currentDraft.unit_price_override ?? '').trim());
-	                                    const safePrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : Number(row.current_unit_price || 0);
-	                                    const derivedPct = baselineUnitPrice > 0 && safePrice > 0
-	                                      ? Math.max(0, Math.min(100, (1 - safePrice / baselineUnitPrice) * 100))
-	                                      : 0;
-	                                    return {
-	                                      ...prev,
-	                                      drafts: {
-	                                        ...prev.drafts,
-	                                        [row.order_item_id]: {
-	                                          ...currentDraft,
-	                                          deal_mode: 'percent',
-	                                          discount_pct: Number.isFinite(derivedPct) ? derivedPct.toFixed(2) : '0',
-	                                        }
-	                                      }
-	                                    };
-	                                  });
-	                                }}
-	                                className={`rounded-lg px-2 py-1 font-black ${dealMode === 'percent' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
-	                              >
-	                                %
-	                              </button>
-	                            </div>
+                            <div className="w-60 max-w-full space-y-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase">Harga deal</label>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  autoComplete="off"
+                                  placeholder={`Baseline: ${formatIdrNumber(baselineUnitPrice)}`}
+                                  value={String(draft?.unit_price_override_input ?? formatIdrNumber(selectedUnitPrice))}
+                                  disabled={pricingEditor.saving || !pricingEditorPriceEditable || isPromoLocked}
+                                  onFocus={() => {
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
+                                      return {
+                                        ...prev,
+                                        drafts: {
+                                          ...prev.drafts,
+                                          [row.order_item_id]: { ...currentDraft, unit_price_override_input: String(Math.max(0, Math.trunc(selectedUnitPrice))) },
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  onBlur={() => {
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id];
+                                      if (!currentDraft) return prev;
+                                      const { unit_price_override_input, ...rest } = currentDraft;
+                                      return { ...prev, drafts: { ...prev.drafts, [row.order_item_id]: { ...rest } } };
+                                    });
+                                  }}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
+                                      if (raw.trim() === '') {
+                                        return {
+                                          ...prev,
+                                          drafts: {
+                                            ...prev.drafts,
+                                            [row.order_item_id]: {
+                                              ...currentDraft,
+                                              unit_price_override: String(Math.max(0, Math.trunc(baselineUnitPrice || 0))),
+                                              unit_price_override_input: undefined,
+                                              line_total_override_input: undefined,
+                                              discount_pct_input: undefined,
+                                            }
+                                          }
+                                        };
+                                      }
+                                      const parsed = parseIdrInput(raw);
+                                      const nextUnit = parsed !== null ? parsed : selectedUnitPrice;
+                                      return {
+                                        ...prev,
+                                        drafts: {
+                                          ...prev.drafts,
+                                          [row.order_item_id]: {
+                                            ...currentDraft,
+                                            unit_price_override_input: raw,
+                                            unit_price_override: String(Math.max(0, Math.trunc(nextUnit))),
+                                            line_total_override_input: undefined,
+                                            discount_pct_input: '',
+                                          }
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
+                                />
+                              </div>
 
-	                            {dealMode === 'price' ? (
-		                              <input
-		                                type="number"
-		                                min={0}
-		                                value={draft?.unit_price_override ?? ''}
-		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
-		                                onChange={(e) => {
-		                                  const value = e.target.value;
-		                                  setPricingEditor((prev) => {
-	                                    if (!prev) return prev;
-	                                    return {
-	                                      ...prev,
-	                                      drafts: {
-	                                        ...prev.drafts,
-	                                        [row.order_item_id]: {
-	                                          ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }),
-	                                          unit_price_override: value,
-	                                          deal_mode: 'price',
-	                                        }
-	                                      }
-	                                    };
-	                                  });
-	                                }}
-	                                className="w-28 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-	                              />
-	                            ) : (
-		                              <input
-		                                type="number"
-		                                min={0}
-		                                max={100}
-		                                value={draft?.discount_pct ?? ''}
-		                                disabled={pricingEditor.saving || !pricingEditorPriceEditable}
-		                                onChange={(e) => {
-		                                  const value = e.target.value;
-		                                  setPricingEditor((prev) => {
-	                                    if (!prev) return prev;
-	                                    return {
-	                                      ...prev,
-	                                      drafts: {
-	                                        ...prev.drafts,
-	                                        [row.order_item_id]: {
-	                                          ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'percent', discount_pct: '0' }),
-	                                          deal_mode: 'percent',
-	                                          discount_pct: value,
-	                                        }
-	                                      }
-	                                    };
-	                                  });
-	                                }}
-	                                className="w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-right"
-	                              />
-	                            )}
-	                          </div>
-	                          {dealMode === 'percent' ? (
-	                            <p className="text-[10px] text-slate-500 text-right">
-	                              Harga deal ≈ {computedDealPrice !== null ? formatCurrency(computedDealPrice) : '-'}
-	                            </p>
-	                          ) : null}
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase">Diskon dipakai (%)</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  autoComplete="off"
+                                  placeholder="-"
+                                  value={discountInputValue}
+                                  disabled={pricingEditor.saving || !pricingEditorPriceEditable || isPromoLocked}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
+                                      if (raw === '') {
+                                        return {
+                                          ...prev,
+                                          drafts: {
+                                            ...prev.drafts,
+                                            [row.order_item_id]: { ...currentDraft, discount_pct_input: '' }
+                                          }
+                                        };
+                                      }
+                                      const parsed = Number(raw);
+                                      if (!Number.isFinite(parsed)) {
+                                        return {
+                                          ...prev,
+                                          drafts: {
+                                            ...prev.drafts,
+                                            [row.order_item_id]: { ...currentDraft, discount_pct_input: raw }
+                                          }
+                                        };
+                                      }
+                                      const pct = clampPercentage(parsed);
+                                      if (!(regularUnitPrice > 0)) {
+                                        return {
+                                          ...prev,
+                                          drafts: {
+                                            ...prev.drafts,
+                                            [row.order_item_id]: { ...currentDraft, discount_pct_input: String(pct) }
+                                          }
+                                        };
+                                      }
+                                      const nextUnit = Math.max(0, Math.round(regularUnitPrice * (1 - pct / 100)));
+                                      return {
+                                        ...prev,
+                                        drafts: {
+                                          ...prev.drafts,
+                                          [row.order_item_id]: {
+                                            ...currentDraft,
+                                            discount_pct_input: String(pct),
+                                            unit_price_override: String(Math.max(0, Math.trunc(nextUnit || selectedUnitPrice))),
+                                            unit_price_override_input: undefined,
+                                            line_total_override_input: undefined,
+                                          }
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  autoComplete="off"
+                                  placeholder="-"
+                                  value={String(draft?.line_total_override_input ?? formatIdrNumber(lineTotal))}
+                                  disabled={pricingEditor.saving || !pricingEditorPriceEditable || isPromoLocked}
+                                  onFocus={() => {
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
+                                      return {
+                                        ...prev,
+                                        drafts: {
+                                          ...prev.drafts,
+                                          [row.order_item_id]: { ...currentDraft, line_total_override_input: String(Math.max(0, Math.trunc(lineTotal))) },
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  onBlur={() => {
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id];
+                                      if (!currentDraft) return prev;
+                                      const { line_total_override_input, ...rest } = currentDraft;
+                                      return { ...prev, drafts: { ...prev.drafts, [row.order_item_id]: { ...rest } } };
+                                    });
+                                  }}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setPricingEditor((prev) => {
+                                      if (!prev) return prev;
+                                      const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
+                                      if (raw.trim() === '') {
+                                        return {
+                                          ...prev,
+                                          drafts: {
+                                            ...prev.drafts,
+                                            [row.order_item_id]: {
+                                              ...currentDraft,
+                                              unit_price_override: String(Math.max(0, Math.trunc(baselineUnitPrice || 0))),
+                                              unit_price_override_input: undefined,
+                                              line_total_override_input: undefined,
+                                              discount_pct_input: undefined,
+                                            }
+                                          }
+                                        };
+                                      }
+                                      const parsed = parseIdrInput(raw);
+                                      const safeTotal = parsed === null ? lineTotal : parsed;
+                                      const qtySafe = Math.max(1, Math.trunc(itemQty || 1));
+                                      const nextUnit = Math.max(0, Math.round(safeTotal / qtySafe));
+                                      return {
+                                        ...prev,
+                                        drafts: {
+                                          ...prev.drafts,
+                                          [row.order_item_id]: {
+                                            ...currentDraft,
+                                            line_total_override_input: raw,
+                                            unit_price_override: String(Math.max(0, Math.trunc(nextUnit || selectedUnitPrice))),
+                                            unit_price_override_input: undefined,
+                                            discount_pct_input: '',
+                                          }
+                                        }
+                                      };
+                                    });
+                                  }}
+                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
+                                />
+                              </div>
+                            </div>
+
+                            {overrideInvalid ? (
+                              <p className="text-[10px] text-rose-700 text-right max-w-[280px]">
+                                {selectedUnitPrice > baselineUnitPrice + 0.0001
+                                  ? `Harga deal tidak boleh lebih tinggi dari baseline (${formatCurrency(baselineUnitPrice)}).`
+                                  : `Kasir tidak boleh di bawah modal (${formatCurrency(costAtPurchase || 0)}).`}
+                              </p>
+                            ) : null}
 	                          <div className="flex items-center gap-2">
 	                            <label className="text-[10px] font-bold text-slate-500">Layer modal</label>
 		                            <select
@@ -4373,11 +4472,12 @@ export default function AdminOrdersWorkspace({
 		                                const value = e.target.value;
 		                                setPricingEditor((prev) => {
 	                                  if (!prev) return prev;
+                                    const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
 	                                  return {
 	                                    ...prev,
 	                                    drafts: {
 	                                      ...prev.drafts,
-	                                      [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }), preferred_unit_cost: value }
+	                                      [row.order_item_id]: { ...currentDraft, preferred_unit_cost: value }
 	                                    }
 	                                  };
 	                                });
@@ -4410,11 +4510,12 @@ export default function AdminOrdersWorkspace({
 	                              const value = e.target.value;
 	                              setPricingEditor((prev) => {
 	                                if (!prev) return prev;
+                                  const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
 	                                return {
 	                                  ...prev,
 	                                  drafts: {
 	                                    ...prev.drafts,
-	                                    [row.order_item_id]: { ...(prev.drafts[row.order_item_id] || { unit_price_override: '', preferred_unit_cost: '', reason: '', deal_mode: 'price', discount_pct: '0' }), reason: value }
+	                                    [row.order_item_id]: { ...currentDraft, reason: value }
 	                                  }
 	                                };
 	                              });
