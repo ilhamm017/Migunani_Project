@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Camera, History as HistoryIcon, Package, Plus, Save, Search, Trash2, X } from 'lucide-react';
+import { AlertTriangle, History as HistoryIcon, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 
@@ -48,12 +48,6 @@ interface BackorderOrderRow {
   status_label?: 'fulfilled' | 'backorder' | 'preorder' | 'unallocated' | string;
 }
 
-type BarcodeDetectorInstance = {
-  detect: (video: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
-};
-
-type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorInstance;
-
 type ApiErrorWithMessage = {
   response?: { data?: { message?: string } };
 };
@@ -95,17 +89,6 @@ export default function InboundCreatePage() {
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<ProductRow[]>([]);
   const [searching, setSearching] = useState(false);
-
-  const [scanCode, setScanCode] = useState('');
-  const [scanning, setScanning] = useState(false);
-  const [scanMessage, setScanMessage] = useState('');
-  const scanInputRef = useRef<HTMLInputElement | null>(null);
-  const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanLoopRef = useRef<number | null>(null);
-  const lastCameraScanRef = useRef<{ value: string; at: number }>({ value: '', at: 0 });
 
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newSku, setNewSku] = useState('');
@@ -293,146 +276,9 @@ export default function InboundCreatePage() {
     });
   }, []);
 
-  const scanAndAdd = useCallback(async (codeRaw: string) => {
-    const code = String(codeRaw || '').trim();
-    if (!code) return;
-    try {
-      setScanning(true);
-      setScanMessage('');
-      const res = await api.admin.inventory.scanBySku(code);
-      const product = res.data as ProductRow;
-      addProductToItems(product);
-      setScanMessage(`Ditambahkan: ${product.sku} - ${product.name}`);
-      setTimeout(() => setScanMessage(''), 2500);
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      setScanMessage(err?.response?.data?.message || 'Gagal scan SKU/barcode.');
-    } finally {
-      setScanning(false);
-    }
-  }, [addProductToItems]);
-
-  const doScan = useCallback(async () => {
-    const code = scanCode.trim();
-    if (!code) return;
-    try {
-      await scanAndAdd(code);
-      setScanCode('');
-      requestAnimationFrame(() => scanInputRef.current?.focus());
-    } catch {
-      requestAnimationFrame(() => scanInputRef.current?.focus());
-    }
-  }, [scanAndAdd, scanCode]);
-
-  const stopCamera = useCallback(() => {
-    try {
-      if (scanLoopRef.current) {
-        window.clearTimeout(scanLoopRef.current);
-        scanLoopRef.current = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    } catch { }
-  }, []);
-
   useEffect(() => {
-    if (mode === 'manual') return;
-    if (cameraOpen) {
-      setCameraOpen(false);
-      stopCamera();
-    }
-    setShowCreateProduct(false);
-  }, [cameraOpen, mode, stopCamera]);
-
-  useEffect(() => {
-    if (!cameraOpen) {
-      stopCamera();
-      setCameraError('');
-      return;
-    }
-
-    let isCancelled = false;
-    const start = async () => {
-      try {
-        setCameraError('');
-        if (typeof window === 'undefined') return;
-        const BarcodeDetectorCtor = (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
-        if (!BarcodeDetectorCtor) {
-          setCameraError('Browser ini belum mendukung scan kamera. Gunakan Chrome/Edge terbaru, atau gunakan scanner (input field).');
-          return;
-        }
-
-        const video = videoRef.current;
-        if (!video) return;
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false,
-        });
-        if (isCancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-        video.srcObject = stream;
-        await video.play().catch(() => { });
-
-        const detector = new BarcodeDetectorCtor({
-          formats: ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code'],
-        });
-
-        const loop = async () => {
-          if (isCancelled) return;
-          const v = videoRef.current;
-          if (!v) return;
-
-          try {
-            if (v.readyState >= 2) {
-              const barcodes = await detector.detect(v);
-              const rawValue = String(barcodes?.[0]?.rawValue || '').trim();
-              if (rawValue) {
-                const now = Date.now();
-                const last = lastCameraScanRef.current;
-                if (last.value !== rawValue || now - last.at > 2000) {
-                  lastCameraScanRef.current = { value: rawValue, at: now };
-                  setCameraOpen(false);
-                  stopCamera();
-                  setScanCode(rawValue);
-                  void scanAndAdd(rawValue);
-                  requestAnimationFrame(() => scanInputRef.current?.focus());
-                  return;
-                }
-              }
-            }
-          } catch (e) {
-            // keep scanning; some browsers intermittently throw while focusing
-            console.warn('Camera scan detect error', e);
-          }
-
-          scanLoopRef.current = window.setTimeout(loop, 250);
-        };
-
-        void loop();
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e || 'Unknown error');
-        setCameraError(`Gagal akses kamera: ${msg}`);
-        stopCamera();
-      }
-    };
-
-    void start();
-
-    return () => {
-      isCancelled = true;
-      stopCamera();
-    };
-  }, [cameraOpen, scanAndAdd, stopCamera]);
+    if (mode !== 'manual') setShowCreateProduct(false);
+  }, [mode]);
 
   const removeItem = (productId: string) => setItems((prev) => prev.filter((p) => p.product.id !== productId));
 
@@ -758,7 +604,7 @@ export default function InboundCreatePage() {
                   onClick={() => setMode('manual')}
                   className={`px-4 py-2 rounded-2xl text-sm font-black transition-all ${mode === 'manual' ? 'bg-white shadow-sm border border-slate-200' : 'text-slate-600'}`}
                 >
-                  Manual
+                  Input Manual
                 </button>
               </div>
               {mode === 'empty' ? (
@@ -976,102 +822,6 @@ export default function InboundCreatePage() {
               </>
             ) : (
               <>
-                <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-xs font-black text-slate-500 uppercase tracking-widest">Scan SKU / Barcode</div>
-                    {scanning && (
-                      <div className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Scanning...</div>
-                    )}
-                  </div>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void doScan();
-                    }}
-                    className="flex gap-2"
-                  >
-                    <input
-                      ref={scanInputRef}
-                      value={scanCode}
-                      onChange={(e) => setScanCode(e.target.value)}
-                      placeholder="Scan di sini lalu Enter"
-                      className="flex-1 bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
-                      inputMode="text"
-                      autoComplete="off"
-                    />
-                    <button
-                      type="submit"
-                      disabled={scanning || !scanCode.trim()}
-                      className="rounded-2xl bg-slate-900 text-white text-sm font-black px-5 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-800 transition-all"
-                    >
-                      <Search size={18} />
-                      Scan
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCameraOpen(true)}
-                      disabled={scanning}
-                      className="rounded-2xl bg-white border border-slate-200 text-slate-700 text-sm font-black px-4 py-3 inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-slate-50 transition-all"
-                      title="Scan pakai kamera (preview kecil)"
-                    >
-                      <Camera size={18} />
-                      Kamera
-                    </button>
-                  </form>
-                  {scanMessage && (
-                    <div className="mt-2 text-xs font-bold text-slate-700">
-                      {scanMessage}
-                    </div>
-                  )}
-                  <div className="mt-2 text-[11px] text-slate-500 font-medium">
-                    Mendukung input <span className="font-black">SKU</span> atau <span className="font-black">barcode</span>.
-                  </div>
-                </div>
-
-                {cameraOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-                    <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-black uppercase tracking-widest text-slate-400">Scan Kamera</p>
-                          <p className="text-sm font-black text-slate-900">Arahkan kamera ke barcode</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCameraOpen(false);
-                            stopCamera();
-                            requestAnimationFrame(() => scanInputRef.current?.focus());
-                          }}
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
-                          aria-label="Tutup"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                      <div className="p-4">
-                        {cameraError ? (
-                          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
-                            {cameraError}
-                          </div>
-                        ) : (
-                          <div className="rounded-2xl border border-slate-200 bg-black overflow-hidden">
-                            <video
-                              ref={videoRef}
-                              className="w-full h-64 object-cover"
-                              muted
-                              playsInline
-                            />
-                          </div>
-                        )}
-                        <div className="mt-3 text-[11px] text-slate-500 font-medium">
-                          Preview dibuat kecil (tidak full screen). Barcode terdeteksi otomatis.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {showCreateProduct && (
                   <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1129,40 +879,45 @@ export default function InboundCreatePage() {
                   </div>
                 )}
 
-                <div className="mt-4 relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    placeholder="Cari SKU / nama produk (min 2 huruf)..."
-                    className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
-                  />
-                </div>
+                <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-xs font-black text-slate-500 uppercase tracking-widest">Search SKU</div>
+                  <div className="mt-2 relative">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      placeholder="Cari SKU / barcode / nama produk (min 2 huruf)..."
+                      className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm font-medium"
+                      inputMode="search"
+                      autoComplete="off"
+                    />
+                  </div>
 
-                <div className="mt-3 max-h-[520px] overflow-y-auto pr-1 space-y-2">
-                  {searching ? (
-                    <div className="text-sm text-slate-500">Mencari...</div>
-                  ) : productResults.length === 0 ? (
-                    <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
-                  ) : (
-                    productResults.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => addProductToItems(p)}
-                        className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
-                            <div className="font-black text-slate-900 truncate">{p.name}</div>
+                  <div className="mt-3 max-h-[520px] overflow-y-auto pr-1 space-y-2">
+                    {searching ? (
+                      <div className="text-sm text-slate-500">Mencari...</div>
+                    ) : productResults.length === 0 ? (
+                      <div className="text-sm text-slate-400">Hasil akan muncul di sini.</div>
+                    ) : (
+                      productResults.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => addProductToItems(p)}
+                          className="w-full text-left rounded-2xl border border-slate-200 bg-white p-3 hover:border-emerald-500 hover:shadow-sm transition-all"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-mono">{p.sku}</div>
+                              <div className="font-black text-slate-900 truncate">{p.name}</div>
+                            </div>
+                            <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
+                              <Plus size={14} /> Tambah
+                            </span>
                           </div>
-                          <span className="text-xs font-black text-emerald-700 inline-flex items-center gap-1">
-                            <Plus size={14} /> Tambah
-                          </span>
-                        </div>
-                      </button>
-                    ))
-                  )}
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
               </>
             )}
