@@ -320,8 +320,17 @@ function ManualOrderContent() {
 	            if (productSearch.length > 2) {
                 setSearchingProducts(true);
                 try {
-                    const res = await api.admin.inventory.getProducts({ search: productSearch, limit: 10, status: 'active' });
-                    setProducts(res.data.products);
+                    const res = await api.admin.inventory.getProducts({ search: productSearch, limit: 10, status: 'active', sort_by: 'stock_desc' });
+                    const rows = Array.isArray(res.data?.products) ? (res.data.products as ProductOption[]) : [];
+                    const sorted = rows.slice().sort((a, b) => {
+                        const qtyA = Number(a?.stock_quantity || 0);
+                        const qtyB = Number(b?.stock_quantity || 0);
+                        const safeA = Number.isFinite(qtyA) ? qtyA : 0;
+                        const safeB = Number.isFinite(qtyB) ? qtyB : 0;
+                        if (safeA !== safeB) return safeB - safeA;
+                        return String(a?.name || '').localeCompare(String(b?.name || ''));
+                    });
+                    setProducts(sorted);
                 } catch (error) {
                     console.error(error);
                 } finally {

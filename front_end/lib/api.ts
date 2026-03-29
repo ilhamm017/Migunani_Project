@@ -503,7 +503,7 @@ export const api = {
 	            moveToIndent: (id: string) => apiClient.post(`/orders/admin/${id}/move-to-indent`),
 	        },
 	        inventory: {
-            getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive'; stock_filter?: 'all' | 'empty' | 'low' }) =>
+            getProducts: (params?: { page?: number; limit?: number; search?: string; category_id?: number; status?: 'all' | 'active' | 'inactive'; stock_filter?: 'all' | 'empty' | 'low'; sort_by?: 'stock_desc' | 'stock_asc' | 'name' | 'relevance' | string }) =>
                 apiClient.get('/admin/products', { params }),
             getRestockSuggestions: (params?: { page?: number; limit?: number; search?: string; status?: 'active' | 'inactive' | 'all' }) =>
                 apiClient.get('/admin/products/restock-suggestions', { params }),

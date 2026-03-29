@@ -133,9 +133,18 @@ export default function AdminPosPage() {
       try {
         setSearchLoading(true);
         setSearchError('');
-        const res = await api.admin.inventory.getProducts({ search: q, page: 1, limit: 10, status: 'active' });
+        const res = await api.admin.inventory.getProducts({ search: q, page: 1, limit: 10, status: 'active', sort_by: 'stock_desc' });
         const payload = res.data || {};
-        setSearchResults(Array.isArray(payload.products) ? payload.products : []);
+        const rows = Array.isArray(payload.products) ? payload.products : [];
+        const sorted = rows.slice().sort((a: any, b: any) => {
+          const qtyA = Number(a?.stock_quantity || 0);
+          const qtyB = Number(b?.stock_quantity || 0);
+          const safeA = Number.isFinite(qtyA) ? qtyA : 0;
+          const safeB = Number.isFinite(qtyB) ? qtyB : 0;
+          if (safeA !== safeB) return safeB - safeA;
+          return String(a?.name || '').localeCompare(String(b?.name || ''));
+        });
+        setSearchResults(sorted);
       } catch (e: unknown) {
         const message = typeof e === 'object' && e && 'response' in e
           ? String((e as any).response?.data?.message || '')

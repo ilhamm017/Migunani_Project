@@ -18,8 +18,9 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
     try {
         await ensureProductColumnsReady();
 
-        const { page = 1, limit = 10, search, category_id, status = 'all', stock_filter = 'all' } = req.query;
+        const { page = 1, limit = 10, search, category_id, status = 'all', stock_filter = 'all', sort_by } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
+        const normalizedSortBy = String(sort_by ?? '').trim().toLowerCase();
 
         const whereClause: any = {};
         const normalizedStatus = String(status).toLowerCase();
@@ -106,9 +107,23 @@ export const getProducts = asyncWrapper(async (req: Request, res: Response) => {
                     ],
                     limit: normalizedLimit,
                     offset: (normalizedPage - 1) * normalizedLimit,
-                    order: matchCountLiteral
-                        ? [[matchCountLiteral, 'DESC'], ['name', 'ASC']]
-                        : [['name', 'ASC']],
+                    order: (() => {
+                        if (normalizedSortBy === 'stock_desc') {
+                            const orderParts: any[] = [['stock_quantity', 'DESC']];
+                            if (matchCountLiteral) orderParts.push([matchCountLiteral, 'DESC']);
+                            orderParts.push(['name', 'ASC']);
+                            return orderParts;
+                        }
+                        if (normalizedSortBy === 'stock_asc') {
+                            const orderParts: any[] = [['stock_quantity', 'ASC']];
+                            if (matchCountLiteral) orderParts.push([matchCountLiteral, 'DESC']);
+                            orderParts.push(['name', 'ASC']);
+                            return orderParts;
+                        }
+                        return matchCountLiteral
+                            ? [[matchCountLiteral, 'DESC'], ['name', 'ASC']]
+                            : [['name', 'ASC']];
+                    })(),
                     distinct: true
                 }),
                 Product.count({
