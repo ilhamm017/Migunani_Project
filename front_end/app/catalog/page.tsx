@@ -56,6 +56,9 @@ function CatalogContent() {
     const addItem = useCartStore((state) => state.addItem);
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
+    const restoreOnceRef = useRef(false);
+    const latestLoadRequestRef = useRef(0);
+    const appendInFlightRef = useRef(false);
 
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
@@ -91,6 +94,15 @@ function CatalogContent() {
     });
 
     const loadProducts = useCallback(async (targetPage: number, append: boolean) => {
+        if (!append) {
+            appendInFlightRef.current = false;
+            setLoadingMore(false);
+        }
+        if (append) {
+            if (appendInFlightRef.current) return;
+            appendInFlightRef.current = true;
+        }
+        const requestId = ++latestLoadRequestRef.current;
         try {
             if (append) {
                 setLoadingMore(true);
@@ -98,6 +110,12 @@ function CatalogContent() {
                 setLoading(true);
             }
             if (!append) setLoadError('');
+            if (!append && targetPage === 1) {
+                setProducts([]);
+                setCurrentPage(1);
+                setTotalPages(1);
+                setHasMore(false);
+            }
 
             const response = await api.catalog.getProducts({
                 search: appliedSearch || undefined,
@@ -105,6 +123,7 @@ function CatalogContent() {
                 page: targetPage,
                 limit: CATALOG_PAGE_SIZE,
             });
+            if (requestId !== latestLoadRequestRef.current) return;
             const rows = Array.isArray(response.data?.products) ? response.data.products : [];
             const mapped = rows.map(mapApiProduct);
             const nextCurrentPage = Number(response.data?.currentPage || targetPage);
@@ -123,6 +142,7 @@ function CatalogContent() {
                 return [...uniqueMap.values()];
             });
         } catch (error) {
+            if (requestId !== latestLoadRequestRef.current) return;
             console.error('Failed to load products:', error);
             const message = typeof error === 'object' && error && 'response' in error
                 ? String((error as { response?: { data?: { message?: string } } }).response?.data?.message || '')
@@ -136,8 +156,11 @@ function CatalogContent() {
             setLoadError(message || 'Gagal memuat katalog. Coba lagi sebentar.');
         } finally {
             if (append) {
+                appendInFlightRef.current = false;
                 setLoadingMore(false);
-            } else {
+            }
+            if (requestId !== latestLoadRequestRef.current) return;
+            if (!append) {
                 setLoading(false);
             }
         }
@@ -197,6 +220,8 @@ function CatalogContent() {
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
+        if (restoreOnceRef.current) return;
+        restoreOnceRef.current = true;
         try {
             const rawState = sessionStorage.getItem(stateKey);
             if (rawState) {
@@ -231,14 +256,17 @@ function CatalogContent() {
         } catch (error) {
             console.warn('Failed to restore catalog state:', error);
         }
+    }, [scrollKey, stateKey]);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
         const onPageHide = () => persistSnapshot();
         window.addEventListener('pagehide', onPageHide);
         return () => {
             window.removeEventListener('pagehide', onPageHide);
             persistSnapshot();
         };
-    }, [persistSnapshot, scrollKey, stateKey]);
+    }, [persistSnapshot]);
 
     useEffect(() => {
         if (skipInitialLoadRef.current) {
@@ -331,7 +359,9 @@ function CatalogContent() {
             (entries) => {
                 const entry = entries[0];
                 if (!entry?.isIntersecting) return;
+                if (appendInFlightRef.current) return;
                 if (loading || loadingMore || !hasMore) return;
+                if (currentPage >= totalPages) return;
                 void loadProducts(currentPage + 1, true);
             },
             { root: null, rootMargin: '300px 0px', threshold: 0.1 }
@@ -339,7 +369,7 @@ function CatalogContent() {
 
         observer.observe(node);
         return () => observer.disconnect();
-    }, [currentPage, hasMore, loading, loadingMore, loadProducts]);
+    }, [currentPage, totalPages, hasMore, loading, loadingMore, loadProducts]);
 
     return (
         <div className="p-6 space-y-6">
@@ -437,17 +467,13 @@ function CatalogContent() {
 
                     <div ref={loadMoreTriggerRef} className="h-8" />
 
-                    {loadingMore && (
-                        <div className="flex justify-center py-2">
+                    <div className="flex justify-center py-2 min-h-8">
+                        {loadingMore ? (
                             <p className="text-[10px] font-bold text-slate-400 uppercase">Memuat halaman berikutnya...</p>
-                        </div>
-                    )}
-
-                    {!hasMore && products.length > 0 && (
-                        <div className="flex justify-center py-2">
+                        ) : !hasMore && products.length > 0 ? (
                             <p className="text-[10px] font-bold text-slate-400 uppercase">Semua produk sudah ditampilkan</p>
-                        </div>
-                    )}
+                        ) : null}
+                    </div>
                 </>
             )}
         </div>
