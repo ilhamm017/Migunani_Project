@@ -87,7 +87,7 @@ export const api = {
 
     // Catalog (Public)
     catalog: {
-        getProducts: (params?: { search?: string; category?: string; category_id?: number | string; page?: number; limit?: number }) => {
+        getProducts: (params?: { search?: string; category?: string; category_id?: number | string; page?: number; limit?: number; sort?: 'stock_desc' | 'stock_asc' | 'price_asc' | 'price_desc' | 'newest' | string }) => {
             const fallbackCategoryId = typeof params?.category === 'string' && params.category.trim() && !Number.isNaN(Number(params.category))
                 ? Number(params.category)
                 : undefined;

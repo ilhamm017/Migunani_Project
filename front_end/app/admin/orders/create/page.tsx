@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal, Minus, Plus, Layers, X } from 'lucide-react';
@@ -88,7 +88,7 @@ type CartItem = {
     clearance_promo_id?: string | null;
     clearance_promo?: ClearancePromoOption | null;
     unit_price_override?: number | null;
-    unit_price_override_reason?: string;
+    discount_pct_input?: string;
 };
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
@@ -344,23 +344,24 @@ function ManualOrderContent() {
 	        return () => clearTimeout(delayDebounceFn);
 	    }, [productSearch]);
 
-        const loadActivePromos = useCallback(async () => {
-            try {
-                setPromoLoading(true);
-                setPromoError('');
-                const res = await api.clearancePromos.getActive();
-                const promos: ClearancePromoOption[] = Array.isArray(res.data?.promos) ? res.data.promos : [];
-                setActivePromos(promos);
-            } catch (e: unknown) {
-                const message = typeof e === 'object' && e && 'response' in e
-                    ? String((e as any).response?.data?.message || '')
-                    : '';
-                setActivePromos([]);
-                setPromoError(message || 'Gagal memuat promo cepat habis.');
-            } finally {
-                setPromoLoading(false);
-            }
-        }, []);
+	        const loadActivePromos = useCallback(async () => {
+	            try {
+	                setPromoLoading(true);
+	                setPromoError('');
+	                const res = await api.clearancePromos.getActive();
+	                const promos: ClearancePromoOption[] = Array.isArray(res.data?.promos) ? res.data.promos : [];
+	                setActivePromos(promos);
+	            } catch (e: unknown) {
+                    const err = e as { response?: { data?: { message?: unknown } } };
+                    const message = typeof err?.response?.data?.message === 'string'
+                        ? err.response.data.message
+                        : '';
+	                setActivePromos([]);
+	                setPromoError(message || 'Gagal memuat promo cepat habis.');
+	            } finally {
+	                setPromoLoading(false);
+	            }
+	        }, []);
 
         useEffect(() => {
             if (!allowed || !promoModalOpen) return;
@@ -371,7 +372,32 @@ function ManualOrderContent() {
 	        const parsed = Number(value);
 	        if (!Number.isFinite(parsed)) return null;
 	        return parsed;
-    };
+	    };
+
+        const clampPercentage = (value: number): number => {
+            return Math.min(100, Math.max(0, value));
+        };
+
+        const getProductBaseRegularPrice = (product: ProductOption): number => {
+            const variant = toObjectOrEmpty(product.varian_harga);
+            const prices = toObjectOrEmpty(variant.prices);
+            const candidates: unknown[] = [
+                variant.base_price,
+                prices.base_price,
+                prices.baseRegular,
+                variant.baseRegular,
+                prices.regular,
+                variant.regular,
+            ];
+
+            for (const candidate of candidates) {
+                const parsed = Number(candidate);
+                if (Number.isFinite(parsed) && parsed > 0) return Math.max(0, parsed);
+            }
+
+            const fallback = Number(product.price || 0);
+            return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+        };
 
     const getProductPrice = (product: ProductOption) => {
         const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
@@ -478,20 +504,33 @@ function ManualOrderContent() {
                 return true;
             }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
 		
-			    const addToCart = (product: ProductOption) => {
-			        setCart(prev => {
-			            const lineId = `product:${product.id}`;
-			            const existing = prev.find(item => item.line_id === lineId);
-		            if (existing) {
-		                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
-		            }
-		            const baseline = getProductPrice(product);
-		            // New picked product should appear on top (most recently added first).
-		            return [{ line_id: lineId, product_id: product.id, product, qty: 1, unit_price_override: baseline, unit_price_override_reason: '', clearance_promo_id: null, clearance_promo: null }, ...prev];
-		        });
-		        setProductSearch('');
-		        setProducts([]);
-		    };
+				    const addToCart = (product: ProductOption) => {
+				        setCart(prev => {
+				            const lineId = `product:${product.id}`;
+				            const existing = prev.find(item => item.line_id === lineId);
+			            if (existing) {
+			                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
+			            }
+			            const baseline = getProductPrice(product);
+                        const baseRegular = getProductBaseRegularPrice(product);
+                        const inferredDiscount = baseRegular > 0
+                            ? clampPercentage(Math.round((((baseRegular - baseline) / baseRegular) * 100) * 100) / 100)
+                            : 0;
+			            // New picked product should appear on top (most recently added first).
+			            return [{
+                            line_id: lineId,
+                            product_id: product.id,
+                            product,
+                            qty: 1,
+                            unit_price_override: baseline,
+                            discount_pct_input: String(inferredDiscount),
+                            clearance_promo_id: null,
+                            clearance_promo: null
+                        }, ...prev];
+			        });
+			        setProductSearch('');
+			        setProducts([]);
+			    };
 
             const addPromoToCart = (promo: ClearancePromoOption, qtyToAdd = 1) => {
                 const promoId = String(promo?.id || '').trim();
@@ -516,18 +555,18 @@ function ManualOrderContent() {
                     if (existing) {
                         return prev.map((row) => row.line_id === lineId ? { ...row, qty: row.qty + safeQty } : row);
                     }
-                    return [{
-                        line_id: lineId,
-                        product_id: productId,
-                        product,
-                        qty: safeQty,
-                        clearance_promo_id: promoId,
-                        clearance_promo: promo,
-                        unit_price_override: null,
-                        unit_price_override_reason: '',
-                    }, ...prev];
-                });
-            };
+	                    return [{
+	                        line_id: lineId,
+	                        product_id: productId,
+	                        product,
+	                        qty: safeQty,
+	                        clearance_promo_id: promoId,
+	                        clearance_promo: promo,
+	                        unit_price_override: null,
+                            discount_pct_input: '',
+	                    }, ...prev];
+	                });
+	            };
 
 	    const removeFromCart = (lineId: string) => {
 	        setCart(prev => prev.filter(item => item.line_id !== lineId));
@@ -566,13 +605,13 @@ function ManualOrderContent() {
                     })
                     : base;
 
-                return rows.slice().sort((a, b) => {
-                    const aRemaining = Math.max(0, Math.trunc(Number((a as any)?.remaining_qty || 0)));
-                    const bRemaining = Math.max(0, Math.trunc(Number((b as any)?.remaining_qty || 0)));
-                    if (aRemaining !== bRemaining) return bRemaining - aRemaining;
-                    return String(a?.Product?.name || a?.name || '').localeCompare(String(b?.Product?.name || b?.name || ''));
-                });
-            }, [activePromos, promoSearch]);
+	                return rows.slice().sort((a, b) => {
+	                    const aRemaining = Math.max(0, Math.trunc(Number(a?.remaining_qty || 0)));
+	                    const bRemaining = Math.max(0, Math.trunc(Number(b?.remaining_qty || 0)));
+	                    if (aRemaining !== bRemaining) return bRemaining - aRemaining;
+	                    return String(a?.Product?.name || a?.name || '').localeCompare(String(b?.Product?.name || b?.name || ''));
+	                });
+	            }, [activePromos, promoSearch]);
 
 	    const selectedShippingMethod = shippingMethods.find((item) => item.code === shippingMethodCode) || null;
     const shippingFee = Number(selectedShippingMethod?.fee || 0);
@@ -633,24 +672,22 @@ function ManualOrderContent() {
 			        setSubmitting(true);
 			        try {
 		            const orderReason = orderOverrideReason.trim();
-		            const payload: Parameters<typeof api.orders.checkout>[0] = {
-		                ...(selectedCustomer?.id ? { customer_id: selectedCustomer.id } : {}), // Only works if admin
-		                items: cart.map(item => {
-		                    const baseline = Math.max(0, getProductPrice(item.product));
-		                    const deal = Math.max(0, getDealUnitPrice(item));
-		                    const itemReason = String(item.unit_price_override_reason || '').trim();
-                            const promoId = String(item.clearance_promo_id || '').trim();
-		                    return {
-		                        product_id: item.product.id,
-		                        qty: item.qty,
-                                ...(promoId ? { clearance_promo_id: promoId } : {}),
-		                        ...(!promoId && canOverridePricing && deal > 0 && deal < baseline ? { unit_price_override: deal } : {}),
-		                        ...(!promoId && canOverridePricing && itemReason ? { unit_price_override_reason: itemReason } : {})
-		                    };
-		                }),
-	                shipping_method_code: shippingMethodCode || undefined,
-	                from_cart: false,
-	                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {}),
+			            const payload: Parameters<typeof api.orders.checkout>[0] = {
+			                ...(selectedCustomer?.id ? { customer_id: selectedCustomer.id } : {}), // Only works if admin
+			                items: cart.map(item => {
+			                    const baseline = Math.max(0, getProductPrice(item.product));
+			                    const deal = Math.max(0, getDealUnitPrice(item));
+	                            const promoId = String(item.clearance_promo_id || '').trim();
+			                    return {
+			                        product_id: item.product.id,
+			                        qty: item.qty,
+	                                ...(promoId ? { clearance_promo_id: promoId } : {}),
+			                        ...(!promoId && canOverridePricing && deal > 0 && Math.abs(deal - baseline) > 0.0001 ? { unit_price_override: deal } : {})
+			                    };
+			                }),
+		                shipping_method_code: shippingMethodCode || undefined,
+		                from_cart: false,
+		                ...(paymentMethod !== 'follow_driver' ? { payment_method: paymentMethod } : {}),
 	                ...(canOverridePricing && orderReason ? { price_override_reason: orderReason } : {})
 	            };
 
@@ -1236,44 +1273,101 @@ function ManualOrderContent() {
                                                             </div>
                                                         ) : null}
 
-	                                                        {canOverridePricing && !isPromoLine ? (
-	                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
-	                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px_1fr] sm:items-center">
-	                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
-	                                                                        Harga deal
+		                                                        {canOverridePricing && !isPromoLine ? (
+		                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
+		                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+		                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
+		                                                                        Harga deal
+		                                                                    </label>
+		                                                                    <input
+		                                                                        type="number"
+		                                                                        min={0}
+		                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
+		                                                                        onChange={(e) => {
+		                                                                            const raw = e.target.value;
+		                                                                            const next = raw === '' ? null : Number(raw);
+		                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+		                                                                                ? {
+                                                                                            ...row,
+                                                                                            unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null,
+                                                                                            discount_pct_input: '',
+                                                                                        }
+		                                                                                : row));
+		                                                                        }}
+		                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+		                                                                    />
+	                                                                </div>
+                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                                                        Diskon dipakai (%)
                                                                     </label>
                                                                     <input
                                                                         type="number"
                                                                         min={0}
-	                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
-	                                                                        onChange={(e) => {
-	                                                                            const raw = e.target.value;
-	                                                                            const next = raw === '' ? null : Number(raw);
-	                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
-	                                                                                ? { ...row, unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null }
-	                                                                                : row));
-	                                                                        }}
-	                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
-	                                                                    />
-                                                                    <input
-                                                                        type="text"
-                                                                        placeholder="Keterangan nego (opsional)"
-	                                                                        value={String(item.unit_price_override_reason || '')}
-	                                                                        onChange={(e) => {
-	                                                                            const next = e.target.value;
-	                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
-	                                                                                ? { ...row, unit_price_override_reason: next }
-	                                                                                : row));
-	                                                                        }}
-	                                                                        className="min-w-0 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs sm:w-auto"
-	                                                                    />
+                                                                        max={100}
+                                                                        step="0.01"
+                                                                        value={String(item.discount_pct_input ?? '')}
+                                                                        onChange={(e) => {
+                                                                            const raw = e.target.value;
+                                                                            setCart((prev) => prev.map((row) => {
+                                                                                if (row.line_id !== item.line_id) return row;
+                                                                                if (raw === '') return { ...row, discount_pct_input: '' };
+
+                                                                                const parsed = Number(raw);
+                                                                                if (!Number.isFinite(parsed)) return { ...row, discount_pct_input: raw };
+
+                                                                                const pct = clampPercentage(parsed);
+                                                                                const baseRegular = getProductBaseRegularPrice(row.product);
+                                                                                if (!(baseRegular > 0)) {
+                                                                                    return { ...row, discount_pct_input: String(pct) };
+                                                                                }
+
+                                                                                const nextUnit = Math.max(0, Math.round(baseRegular * (1 - pct / 100)));
+                                                                                return {
+                                                                                    ...row,
+                                                                                    discount_pct_input: String(pct),
+                                                                                    unit_price_override: nextUnit > 0 ? nextUnit : row.unit_price_override ?? null,
+                                                                                };
+                                                                            }));
+                                                                        }}
+                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+                                                                    />
                                                                 </div>
-                                                                <p className="text-[10px] text-slate-500">
-                                                                    Dipakai <span className="font-black text-slate-800">{formatCurrency(dealUnit)}</span> per item
-                                                                </p>
-                                                            </div>
-                                                        ) : null}
-                                                    </div>
+
+                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                                                        Dipakai (total)
+                                                                    </label>
+                                                                    <input
+                                                                        type="number"
+                                                                        min={0}
+                                                                        step="1"
+                                                                        value={Math.max(0, Math.round(lineTotal))}
+                                                                        onChange={(e) => {
+                                                                            const raw = e.target.value;
+                                                                            const nextTotal = raw === '' ? 0 : Number(raw);
+                                                                            const safeTotal = Number.isFinite(nextTotal) ? Math.max(0, Math.trunc(nextTotal)) : 0;
+                                                                            const qtySafe = Math.max(1, Math.trunc(Number(item.qty || 1)));
+                                                                            const nextUnit = Math.max(0, Math.round(safeTotal / qtySafe));
+
+                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+                                                                                ? {
+                                                                                    ...row,
+                                                                                    unit_price_override: nextUnit > 0 ? nextUnit : null,
+                                                                                    discount_pct_input: '',
+                                                                                }
+                                                                                : row));
+                                                                        }}
+                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+                                                                    />
+                                                                </div>
+
+		                                                                <p className="text-[10px] text-slate-500">
+		                                                                    Dipakai <span className="font-black text-slate-800">{formatCurrency(lineTotal)}</span> total • {Number(item.qty || 0)} item
+		                                                                </p>
+		                                                            </div>
+		                                                        ) : null}
+		                                                    </div>
 
 	                                                    <div className="text-right">
 	                                                        <p className="text-[10px] text-slate-400">Qty</p>
