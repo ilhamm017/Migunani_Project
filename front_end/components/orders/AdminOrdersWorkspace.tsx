@@ -4245,12 +4245,12 @@ export default function AdminOrdersWorkspace({
 	                          </p>
 	                        </div>
 	                        <div className="flex flex-col items-end gap-2">
-                            <div className="w-60 max-w-full space-y-2">
-                              <div>
-                                <label className="text-[10px] font-bold text-slate-500 uppercase">Harga deal</label>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
+	                            <div className="w-56 max-w-full grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-end">
+	                              <div>
+	                                <label className="text-[10px] font-bold text-slate-500 uppercase">Harga deal</label>
+	                                <input
+	                                  type="text"
+	                                  inputMode="numeric"
                                   autoComplete="off"
                                   placeholder={`Baseline: ${formatIdrNumber(baselineUnitPrice)}`}
                                   value={String(draft?.unit_price_override_input ?? formatIdrNumber(selectedUnitPrice))}
@@ -4277,9 +4277,9 @@ export default function AdminOrdersWorkspace({
                                       return { ...prev, drafts: { ...prev.drafts, [row.order_item_id]: { ...rest } } };
                                     });
                                   }}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
-                                    setPricingEditor((prev) => {
+	                                  onChange={(e) => {
+	                                    const raw = e.target.value;
+	                                    setPricingEditor((prev) => {
                                       if (!prev) return prev;
                                       const currentDraft = prev.drafts[row.order_item_id] || { unit_price_override: String(Math.max(0, Math.trunc(row.current_unit_price || 0))), preferred_unit_cost: '', reason: '', discount_pct_input: undefined };
                                       if (raw.trim() === '') {
@@ -4312,15 +4312,15 @@ export default function AdminOrdersWorkspace({
                                           }
                                         }
                                       };
-                                    });
-                                  }}
-                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
-                                />
-                              </div>
+	                                    });
+	                                  }}
+	                                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-right"
+	                                />
+	                              </div>
 
-                              <div>
-                                <label className="text-[10px] font-bold text-slate-500 uppercase">Diskon dipakai (%)</label>
-                                <input
+	                              <div>
+	                                <label className="text-[10px] font-bold text-slate-500 uppercase">Diskon dipakai (%)</label>
+	                                <input
                                   type="text"
                                   inputMode="decimal"
                                   autoComplete="off"
@@ -4375,17 +4375,17 @@ export default function AdminOrdersWorkspace({
                                           }
                                         }
                                       };
-                                    });
-                                  }}
-                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
-                                />
-                              </div>
+	                                    });
+	                                  }}
+	                                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-right"
+	                                />
+	                              </div>
 
-                              <div>
-                                <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
+	                              <div className="sm:col-span-2">
+	                                <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
+	                                <input
+	                                  type="text"
+	                                  inputMode="numeric"
                                   autoComplete="off"
                                   placeholder="-"
                                   value={String(draft?.line_total_override_input ?? formatIdrNumber(lineTotal))}
@@ -4449,12 +4449,12 @@ export default function AdminOrdersWorkspace({
                                           }
                                         }
                                       };
-                                    });
-                                  }}
-                                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-right"
-                                />
-                              </div>
-                            </div>
+	                                    });
+	                                  }}
+	                                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-right"
+	                                />
+	                              </div>
+	                            </div>
 
                             {overrideInvalid ? (
                               <p className="text-[10px] text-rose-700 text-right max-w-[280px]">
