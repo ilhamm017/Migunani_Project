@@ -1304,7 +1304,6 @@ function ManualOrderContent() {
                                                 const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
                                                     ? 'platinum'
                                                     : String(tierRaw || 'regular').trim().toLowerCase();
-                                                if (tier === 'regular') return 0;
 
                                                 const variant = toObjectOrEmpty(item.product?.varian_harga);
                                                 const discounts = toObjectOrEmpty(variant.discounts_pct);
@@ -1335,7 +1334,9 @@ function ManualOrderContent() {
                                                         ? category?.discount_premium_pct
                                                         : tier === 'gold'
                                                             ? category?.discount_gold_pct
-                                                            : null;
+                                                            : tier === 'regular'
+                                                                ? category?.discount_regular_pct
+                                                                : null;
                                                     if (typeof categoryPct === 'number' && categoryPct > 0) return clampPercentage(categoryPct);
                                                 }
 
