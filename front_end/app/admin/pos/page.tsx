@@ -711,7 +711,7 @@ export default function AdminPosPage() {
                           </div>
                         </div>
 		                        <div>
-                              <div className="space-y-2">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-end">
                                 <div>
                                   <label className="text-[10px] font-bold text-slate-500 uppercase">Harga deal</label>
                                   <input
@@ -731,7 +731,7 @@ export default function AdminPosPage() {
                                         : item));
                                     }}
                                     onChange={(e) => updateDealUnitInput(row.product_id, e.target.value, normalUnit)}
-                                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-base text-right"
+                                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-right"
                                   />
                                 </div>
 
@@ -744,11 +744,11 @@ export default function AdminPosPage() {
                                     placeholder="-"
                                     value={discountInputValue}
                                     onChange={(e) => updateDiscountPctInput(row.product_id, e.target.value, regularUnit)}
-                                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-base text-right"
+                                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-right"
                                   />
                                 </div>
 
-                                <div>
+                                <div className="sm:col-span-2">
                                   <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
                                   <input
                                     type="text"
@@ -767,7 +767,7 @@ export default function AdminPosPage() {
                                         : item));
                                     }}
                                     onChange={(e) => updateLineTotalInput(row.product_id, e.target.value, row.qty, normalUnit)}
-                                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-base text-right"
+                                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-right"
                                   />
                                 </div>
 
