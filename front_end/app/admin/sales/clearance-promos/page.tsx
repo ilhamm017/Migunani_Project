@@ -94,6 +94,14 @@ const computePromoUnitPrice = (promo: ClearancePromoRow): number => {
   return Math.round(normalPrice * (1 - pct / 100));
 };
 
+const computePercentOffPrice = (normalPriceRaw: unknown, pctRaw: unknown): number => {
+  const normalPrice = Number(normalPriceRaw || 0);
+  const pct = Number(pctRaw || 0);
+  if (!Number.isFinite(normalPrice) || normalPrice <= 0) return 0;
+  if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) return 0;
+  return Math.round(normalPrice * (1 - pct / 100));
+};
+
 export default function AdminClearancePromosPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir'], '/admin');
   const { user } = useAuthStore();
@@ -136,16 +144,16 @@ export default function AdminClearancePromosPage() {
   const [editQtyLimit, setEditQtyLimit] = useState('');
   const [editQtyUsed, setEditQtyUsed] = useState(0);
 
-  const [newName, setNewName] = useState('');
-  const [newProductId, setNewProductId] = useState('');
-  const [newTargetUnitCost, setNewTargetUnitCost] = useState('');
-  const [newPricingMode, setNewPricingMode] = useState<'fixed_price' | 'percent_off'>('fixed_price');
-  const [newPromoUnitPrice, setNewPromoUnitPrice] = useState('7000');
-  const [newDiscountPct, setNewDiscountPct] = useState('10');
-  const [newStartsAt, setNewStartsAt] = useState('');
-  const [newEndsAt, setNewEndsAt] = useState('');
-  const [newIsActive, setNewIsActive] = useState(true);
-  const [newQtyLimit, setNewQtyLimit] = useState('');
+	  const [newName, setNewName] = useState('');
+	  const [newProductId, setNewProductId] = useState('');
+	  const [newTargetUnitCost, setNewTargetUnitCost] = useState('');
+	  const [newPricingMode, setNewPricingMode] = useState<'fixed_price' | 'percent_off'>('fixed_price');
+	  const [newPromoUnitPrice, setNewPromoUnitPrice] = useState('');
+	  const [newDiscountPct, setNewDiscountPct] = useState('10');
+	  const [newStartsAt, setNewStartsAt] = useState('');
+	  const [newEndsAt, setNewEndsAt] = useState('');
+	  const [newIsActive, setNewIsActive] = useState(true);
+	  const [newQtyLimit, setNewQtyLimit] = useState('');
 
   useEffect(() => {
     const now = new Date();
@@ -572,6 +580,16 @@ export default function AdminClearancePromosPage() {
     }));
   }, [promos]);
 
+  const createPercentOffPreviewPrice = useMemo(() => {
+    if (newPricingMode !== 'percent_off') return 0;
+    return computePercentOffPrice(selectedCreateProduct?.price, newDiscountPct);
+  }, [newPricingMode, selectedCreateProduct?.price, newDiscountPct]);
+
+  const editPercentOffPreviewPrice = useMemo(() => {
+    if (editPricingMode !== 'percent_off') return 0;
+    return computePercentOffPrice(selectedEditProduct?.price, editDiscountPct);
+  }, [editPricingMode, selectedEditProduct?.price, editDiscountPct]);
+
   if (!allowed) return null;
 
   return (
@@ -726,15 +744,23 @@ export default function AdminClearancePromosPage() {
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
                 />
               ) : (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={editDiscountPct}
-                  onChange={(event) => setEditDiscountPct(event.target.value)}
-                  placeholder="Diskon (%)"
-                  disabled={updating}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
-                />
+                <div className="flex flex-col gap-1">
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editDiscountPct}
+                    onChange={(event) => setEditDiscountPct(event.target.value)}
+                    placeholder="Diskon (%)"
+                    disabled={updating}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                  />
+                  <p className="text-[10px] font-bold text-slate-500 px-1">
+                    Harga promo:{' '}
+                    <span className="text-slate-700">
+                      {editPercentOffPreviewPrice > 0 ? formatCurrency(editPercentOffPreviewPrice) : '-'}
+                    </span>
+                  </p>
+                </div>
               )}
               <input
                 type="datetime-local"
@@ -947,14 +973,22 @@ export default function AdminClearancePromosPage() {
                 className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
               />
             ) : (
-              <input
-                type="number"
-                step="0.01"
-                value={newDiscountPct}
-                onChange={(event) => setNewDiscountPct(event.target.value)}
-                placeholder="Diskon (%)"
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
-              />
+              <div className="flex flex-col gap-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newDiscountPct}
+                  onChange={(event) => setNewDiscountPct(event.target.value)}
+                  placeholder="Diskon (%)"
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                />
+                <p className="text-[10px] font-bold text-slate-500 px-1">
+                  Harga promo:{' '}
+                  <span className="text-slate-700">
+                    {createPercentOffPreviewPrice > 0 ? formatCurrency(createPercentOffPreviewPrice) : '-'}
+                  </span>
+                </p>
+              </div>
             )}
             <input
               type="datetime-local"
