@@ -63,10 +63,9 @@ export default function AdminPosPage() {
   const [quickSubmitting, setQuickSubmitting] = useState(false);
   const [quickError, setQuickError] = useState('');
 
-  const button3dBase = 'transition-all active:translate-y-[2px] disabled:opacity-60 disabled:cursor-not-allowed';
-  const button3dPrimary = `${button3dBase} shadow-sm hover:shadow-md bg-emerald-600 hover:bg-emerald-700 text-white border-b-4 border-emerald-800 active:border-b-2`;
-  const button3dNeutral = `${button3dBase} shadow-sm hover:shadow-md bg-white text-slate-700 border border-slate-200 border-b-4 border-slate-300 active:border-b-2`;
-  const button3dIcon = `${button3dBase} shadow-sm hover:shadow-md bg-white border border-slate-200 border-b-4 border-slate-300 active:border-b-2`;
+  const btn3dBase = 'btn-3d disabled:opacity-60';
+  const btn3dPrimary = `${btn3dBase} bg-emerald-600 hover:bg-emerald-700 text-white`;
+  const btn3dNeutral = `${btn3dBase} bg-white border border-slate-200 text-slate-700 hover:bg-slate-50`;
 
   const subtotal = useMemo(() => round2(cart.reduce((sum, line) => {
     const unitPrice = Number.isFinite(line.unit_price_override) ? Number(line.unit_price_override) : line.price;
@@ -308,13 +307,13 @@ export default function AdminPosPage() {
           <div className="flex items-center gap-2">
             <Link
               href="/admin/pos/history"
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${button3dNeutral}`}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
             >
               Riwayat
             </Link>
             <Link
               href="/admin/pos"
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${button3dNeutral}`}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
               onClick={() => searchInputRef.current?.focus()}
             >
               <Printer size={14} />
@@ -412,11 +411,11 @@ export default function AdminPosPage() {
                         <div>
                           <label className="text-[10px] font-bold text-slate-500 uppercase">Qty</label>
                           <div className="mt-1 flex items-center gap-2">
-                            <button type="button" onClick={() => updateQty(row.product_id, -1)} className={`h-9 w-9 rounded-lg grid place-items-center ${button3dIcon}`}>
+                            <button type="button" onClick={() => updateQty(row.product_id, -1)} className={`h-11 w-11 rounded-xl grid place-items-center ${btn3dNeutral}`}>
                               <Minus size={14} />
                             </button>
                             <div className="min-w-12 text-center text-sm font-black text-slate-900">{row.qty}</div>
-                            <button type="button" onClick={() => updateQty(row.product_id, +1)} className={`h-9 w-9 rounded-lg grid place-items-center ${button3dIcon}`}>
+                            <button type="button" onClick={() => updateQty(row.product_id, +1)} className={`h-11 w-11 rounded-xl grid place-items-center ${btn3dNeutral}`}>
                               <Plus size={14} />
                             </button>
                           </div>
@@ -480,7 +479,7 @@ export default function AdminPosPage() {
                     setCustomerSearchError('');
                     window.setTimeout(() => customerInputRef.current?.focus(), 0);
                   }}
-                  className={`rounded-lg px-3 py-2 text-[10px] font-black uppercase tracking-wide ${button3dNeutral}`}
+                  className={`rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-wide ${btn3dNeutral}`}
                   title="Clear customer"
                 >
                   Clear
@@ -534,7 +533,7 @@ export default function AdminPosPage() {
               <button
                 type="button"
                 onClick={() => openQuickCreate(customerQuery)}
-                className={`w-full rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${button3dNeutral}`}
+                className={`w-full rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
               >
                 Tambah Customer Baru: &quot;{customerQuery.trim()}&quot;
               </button>
@@ -543,7 +542,7 @@ export default function AdminPosPage() {
             <button
               type="button"
               onClick={() => openQuickCreate('')}
-              className={`w-full rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${button3dNeutral}`}
+              className={`w-full rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
             >
               Daftarkan Customer (Shortcut)
             </button>
@@ -614,7 +613,7 @@ export default function AdminPosPage() {
                 type="button"
                 onClick={() => void handleSubmit({ print: true })}
                 disabled={submitting || cart.length === 0}
-                className={`w-full inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${button3dPrimary}`}
+                className={`w-full inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${btn3dPrimary}`}
                 title="Simpan transaksi dan buka struk untuk print (pilih printer thermal bluetooth dari dialog print browser)."
               >
                 <Printer size={16} />
@@ -624,7 +623,7 @@ export default function AdminPosPage() {
                 type="button"
                 onClick={() => void handleSubmit({ print: false })}
                 disabled={submitting || cart.length === 0}
-                className={`w-full inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${button3dNeutral}`}
+                className={`w-full inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${btn3dNeutral}`}
               >
                 {submitting ? 'Menyimpan...' : 'Bayar & Simpan'}
               </button>
@@ -711,14 +710,14 @@ export default function AdminPosPage() {
                   }
                 }}
                 disabled={quickSubmitting}
-                className={`flex-1 rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${button3dPrimary}`}
+                className={`flex-1 rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${btn3dPrimary}`}
               >
                 {quickSubmitting ? 'Menyimpan...' : 'Simpan & Pilih'}
               </button>
               <button
                 type="button"
                 onClick={() => setQuickCreateOpen(false)}
-                className={`rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${button3dNeutral}`}
+                className={`rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
               >
                 Batal
               </button>
