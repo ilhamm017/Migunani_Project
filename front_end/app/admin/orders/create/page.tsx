@@ -592,19 +592,16 @@ function ManualOrderContent() {
 			            if (existing) {
 			                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
 			            }
-			            const baseline = getProductPrice(product);
-                        const regularUnit = getProductRegularUnitPrice(product);
-                        const inferredDiscount = regularUnit > 0
-                            ? clampPercentage(Math.round((((regularUnit - baseline) / regularUnit) * 100) * 100) / 100)
-                            : 0;
 			            // New picked product should appear on top (most recently added first).
 			            return [{
                             line_id: lineId,
                             product_id: product.id,
                             product,
                             qty: 1,
-                            unit_price_override: baseline,
-                            discount_pct_input: inferredDiscount > 0 ? String(inferredDiscount) : '',
+                            unit_price_override: null,
+                            discount_pct_input: undefined,
+                            unit_price_override_input: undefined,
+                            line_total_override_input: undefined,
                             clearance_promo_id: null,
                             clearance_promo: null
                         }, ...prev];
@@ -644,7 +641,9 @@ function ManualOrderContent() {
 	                        clearance_promo_id: promoId,
 	                        clearance_promo: promo,
 	                        unit_price_override: null,
-                            discount_pct_input: '',
+                            discount_pct_input: undefined,
+                            unit_price_override_input: undefined,
+                            line_total_override_input: undefined,
 	                    }, ...prev];
 	                });
 	            };
@@ -1296,10 +1295,17 @@ function ManualOrderContent() {
                                         const isOutOfStock = stockQty !== null && stockQty <= 0;
                                         const shortage = stockQty === null ? 0 : Math.max(0, Number(item.qty || 0) - stockQty);
 	                                        const hasShortage = shortage > 0;
-                                            const isPromoLine = Boolean(item.clearance_promo_id);
+	                                            const isPromoLine = Boolean(item.clearance_promo_id);
 	                                        const dealUnit = getDealUnitPrice(item);
 	                                        const normalUnit = getProductPrice(item.product);
 	                                        const lineTotal = dealUnit * Number(item.qty || 0);
+                                            const regularUnitForDiscount = getProductRegularUnitPrice(item.product);
+                                            const inferredDiscountPct = regularUnitForDiscount > 0
+                                                ? clampPercentage(Math.round((((regularUnitForDiscount - normalUnit) / regularUnitForDiscount) * 100) * 100) / 100)
+                                                : 0;
+                                            const discountInputValue = item.discount_pct_input === undefined
+                                                ? (inferredDiscountPct > 0 ? String(inferredDiscountPct) : '')
+                                                : String(item.discount_pct_input || '');
 	
 	                                        return (
 	                                            <div
@@ -1371,11 +1377,11 @@ function ManualOrderContent() {
 		                                                                                ? { ...row, unit_price_override_input: String(Math.max(0, Math.trunc(Number(row.unit_price_override ?? normalUnit) || 0))) }
 		                                                                                : row));
 		                                                                        }}
-		                                                                        onBlur={() => {
-		                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
-		                                                                                ? { ...row, unit_price_override_input: formatIdrNumber(Number(row.unit_price_override ?? normalUnit) || 0) }
-		                                                                                : row));
-		                                                                        }}
+			                                                                        onBlur={() => {
+			                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+			                                                                                ? { ...row, unit_price_override_input: undefined }
+			                                                                                : row));
+			                                                                        }}
 		                                                                        onChange={(e) => {
 		                                                                            const raw = e.target.value;
 		                                                                            const next = parseIdrInput(raw);
@@ -1401,12 +1407,12 @@ function ManualOrderContent() {
                                                                         inputMode="decimal"
                                                                         autoComplete="off"
                                                                         placeholder="-"
-                                                                        value={String(item.discount_pct_input ?? '')}
-                                                                        onChange={(e) => {
-                                                                            const raw = e.target.value;
-                                                                            setCart((prev) => prev.map((row) => {
-                                                                                if (row.line_id !== item.line_id) return row;
-                                                                                if (raw === '') return { ...row, discount_pct_input: '' };
+	                                                                        value={discountInputValue}
+	                                                                        onChange={(e) => {
+	                                                                            const raw = e.target.value;
+	                                                                            setCart((prev) => prev.map((row) => {
+	                                                                                if (row.line_id !== item.line_id) return row;
+	                                                                                if (raw === '') return { ...row, discount_pct_input: '' };
 
                                                                                 const parsed = Number(raw);
                                                                                 if (!Number.isFinite(parsed)) return { ...row, discount_pct_input: raw };
@@ -1446,7 +1452,7 @@ function ManualOrderContent() {
                                                                         }}
                                                                         onBlur={() => {
                                                                             setCart((prev) => prev.map((row) => row.line_id === item.line_id
-                                                                                ? { ...row, line_total_override_input: formatIdrNumber(Math.max(0, Math.round(lineTotal))) }
+                                                                                ? { ...row, line_total_override_input: undefined }
                                                                                 : row));
                                                                         }}
                                                                         onChange={(e) => {
