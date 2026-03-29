@@ -1299,12 +1299,55 @@ function ManualOrderContent() {
 	                                        const dealUnit = getDealUnitPrice(item);
 	                                        const normalUnit = getProductPrice(item.product);
 	                                        const lineTotal = dealUnit * Number(item.qty || 0);
-                                            const regularUnitForDiscount = getProductRegularUnitPrice(item.product);
-                                            const inferredDiscountPct = regularUnitForDiscount > 0
-                                                ? clampPercentage(Math.round((((regularUnitForDiscount - normalUnit) / regularUnitForDiscount) * 100) * 100) / 100)
-                                                : 0;
+                                            const autoDiscountPct = (() => {
+                                                const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
+                                                const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
+                                                    ? 'platinum'
+                                                    : String(tierRaw || 'regular').trim().toLowerCase();
+                                                if (tier === 'regular') return 0;
+
+                                                const variant = toObjectOrEmpty(item.product?.varian_harga);
+                                                const discounts = toObjectOrEmpty(variant.discounts_pct);
+                                                const aliases = tier === 'platinum' ? ['premium'] : [];
+
+                                                const discountCandidates: unknown[] = [
+                                                    discounts[tier],
+                                                    toObjectOrEmpty(variant[tier]).discount_pct,
+                                                    variant[`${tier}_discount_pct`]
+                                                ];
+                                                for (const alias of aliases) {
+                                                    discountCandidates.push(discounts[alias], toObjectOrEmpty(variant[alias]).discount_pct, variant[`${alias}_discount_pct`]);
+                                                }
+                                                for (const raw of discountCandidates) {
+                                                    const parsed = toFiniteNumber(raw);
+                                                    if (parsed === null) continue;
+                                                    if (parsed <= 0 || parsed > 100) continue;
+                                                    return clampPercentage(parsed);
+                                                }
+
+                                                const categoryIdRaw = (item.product?.Category && typeof item.product.Category === 'object')
+                                                    ? (item.product.Category as { id?: unknown }).id
+                                                    : item.product?.category_id;
+                                                const categoryId = Number(categoryIdRaw);
+                                                if (Number.isInteger(categoryId) && categoryId > 0) {
+                                                    const category = categoryDiscountById.get(categoryId);
+                                                    const categoryPct = tier === 'platinum'
+                                                        ? category?.discount_premium_pct
+                                                        : tier === 'gold'
+                                                            ? category?.discount_gold_pct
+                                                            : null;
+                                                    if (typeof categoryPct === 'number' && categoryPct > 0) return clampPercentage(categoryPct);
+                                                }
+
+                                                const regularUnit = getProductRegularUnitPrice(item.product);
+                                                const inferredFromPrice = regularUnit > 0
+                                                    ? clampPercentage(Math.round((((regularUnit - normalUnit) / regularUnit) * 100) * 100) / 100)
+                                                    : 0;
+                                                return inferredFromPrice > 0 ? inferredFromPrice : 0;
+                                            })();
+
                                             const discountInputValue = item.discount_pct_input === undefined
-                                                ? (inferredDiscountPct > 0 ? String(inferredDiscountPct) : '')
+                                                ? (autoDiscountPct > 0 ? String(autoDiscountPct) : '')
                                                 : String(item.discount_pct_input || '');
 	
 	                                        return (
