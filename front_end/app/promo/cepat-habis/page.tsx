@@ -32,6 +32,7 @@ type ClearancePromoRow = {
 };
 
 const DRAFT_KEY = 'clearance_checkout_draft';
+const REFRESH_MS = 10_000;
 
 export default function ClearancePromoPage() {
   const router = useRouter();
@@ -42,10 +43,10 @@ export default function ClearancePromoPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
+    const load = async (options?: { silent?: boolean }) => {
       try {
-        setLoading(true);
-        setError('');
+        if (!options?.silent) setLoading(true);
+        if (!options?.silent) setError('');
         const res = await api.clearancePromos.getActive();
         const promos: ClearancePromoRow[] = Array.isArray(res.data?.promos) ? res.data.promos : [];
         if (cancelled) return;
@@ -54,16 +55,42 @@ export default function ClearancePromoPage() {
         const message = typeof e === 'object' && e && 'response' in e
           ? String((e as any).response?.data?.message || '')
           : '';
-        if (!cancelled) setError(message || 'Gagal memuat promo cepat habis.');
+        if (!cancelled && !options?.silent) setError(message || 'Gagal memuat promo cepat habis.');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !options?.silent) setLoading(false);
       }
     };
     void load();
+    const interval = setInterval(() => {
+      void load({ silent: true });
+    }, REFRESH_MS);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!rows || rows.length === 0) return;
+    setQtyByPromoId((prev) => {
+      const next: Record<string, number> = { ...prev };
+      let changed = false;
+      const promoById = new Map<string, ClearancePromoRow>();
+      rows.forEach((p) => promoById.set(String(p.id), p));
+
+      Object.keys(next).forEach((promoId) => {
+        const promo = promoById.get(String(promoId));
+        if (!promo) return;
+        const remaining = Math.max(0, Math.trunc(Number(promo.remaining_qty || 0)));
+        if (next[promoId] > remaining) {
+          next[promoId] = remaining;
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [rows]);
 
   const selectedItems = useMemo(() => {
     return rows
@@ -126,6 +153,7 @@ export default function ClearancePromoPage() {
             const promoPrice = Number(promo.computed_promo_unit_price || 0);
             const normalPrice = Number(promo.normal_unit_price || promo?.Product?.price || 0);
             const qty = Math.max(0, Math.trunc(Number(qtyByPromoId[promo.id] || 0)));
+            const remainingPct = qtyLimit && qtyLimit > 0 ? Math.max(0, Math.min(100, (remaining / qtyLimit) * 100)) : 0;
 
             return (
               <div key={promo.id} className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex flex-col gap-3">
@@ -145,6 +173,28 @@ export default function ClearancePromoPage() {
                     <p className="text-sm font-black text-emerald-700">{formatCurrency(promoPrice)}</p>
                   </div>
                 </div>
+
+                {qtyLimit !== null && qtyLimit > 0 ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                      <span>Sisa promo</span>
+                      <span>
+                        {remaining.toLocaleString('id-ID')} / {qtyLimit.toLocaleString('id-ID')} {unit}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-600"
+                        style={{ width: `${remainingPct}%` }}
+                      />
+                    </div>
+                    {remainingAllocation !== null && remaining < remainingAllocation ? (
+                      <p className="text-[11px] text-amber-700 font-bold">
+                        Stok gudang membatasi promo (sisa alokasi {remainingAllocation.toLocaleString('id-ID')} {unit}).
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">

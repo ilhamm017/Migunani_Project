@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Layers, Pencil, Plus, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, Layers, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -573,6 +573,37 @@ export default function AdminClearancePromosPage() {
     }
   };
 
+  const handleDeletePromo = async (promo: ClearancePromoRow) => {
+    if (!isSuperAdmin) return;
+    const promoId = String(promo.id || '').trim();
+    if (!promoId) return;
+
+    const promoName = String(promo.name || 'promo');
+    if (typeof window !== 'undefined') {
+      const ok = window.confirm(
+        `Hapus promo "${promoName}"?\n\nCatatan: jika promo sudah pernah dipakai, penghapusan akan ditolak.`
+      );
+      if (!ok) return;
+    }
+
+    try {
+      setProcessingPromoId(promoId);
+      setError('');
+      setActionMessage('');
+      await api.admin.clearancePromos.remove(promoId);
+      setActionMessage('Promo berhasil dihapus.');
+      if (String(editingPromo?.id || '') === promoId) {
+        setEditingPromo(null);
+      }
+      await loadPromos();
+    } catch (e: unknown) {
+      const err = e as ApiErrorWithMessage;
+      setError(err?.response?.data?.message || 'Gagal menghapus promo');
+    } finally {
+      setProcessingPromoId('');
+    }
+  };
+
   const rowsWithComputedPrice = useMemo(() => {
     return promos.map((promo) => ({
       ...promo,
@@ -795,14 +826,24 @@ export default function AdminClearancePromosPage() {
                 Aktif
               </label>
 
-              <button
-                type="button"
-                onClick={() => void handleUpdate()}
-                disabled={updating || !editProductId || !selectedEditUnitCost || !String(editQtyLimit || '').trim()}
-                className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white disabled:opacity-60"
-              >
-                <Pencil size={12} /> {updating ? 'Menyimpan...' : 'Simpan Perubahan'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => editingPromo && void handleDeletePromo(editingPromo)}
+                  disabled={updating || processingPromoId === String(editingPromo?.id || '')}
+                  className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 disabled:opacity-60"
+                >
+                  <Trash2 size={12} /> {processingPromoId === String(editingPromo?.id || '') ? 'Menghapus...' : 'Hapus'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleUpdate()}
+                  disabled={updating || !editProductId || !selectedEditUnitCost || !String(editQtyLimit || '').trim()}
+                  className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-600 text-white disabled:opacity-60"
+                >
+                  <Pencil size={12} /> {updating ? 'Menyimpan...' : 'Simpan Perubahan'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1089,6 +1130,16 @@ export default function AdminClearancePromosPage() {
                           className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 disabled:opacity-60"
                         >
                           <Pencil size={14} /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isProcessing}
+                          onClick={() => {
+                            void handleDeletePromo(promo);
+                          }}
+                          className="inline-flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 disabled:opacity-60"
+                        >
+                          <Trash2 size={14} /> Hapus
                         </button>
                         <button
                           type="button"

@@ -22,7 +22,8 @@ const computeRemainingQtyByCost = async (productId: string, unitCost: number, t?
             unit_cost: round4(unitCost),
             qty_on_hand: { [Op.gt]: 0 }
         },
-        attributes: [[sequelize.fn('SUM', sequelize.col('qty_on_hand')), 'qty_sum']],
+        // Available = on_hand - reserved (cannot go below 0)
+        attributes: [[sequelize.fn('SUM', sequelize.literal('GREATEST(qty_on_hand - qty_reserved, 0)')), 'qty_sum']],
         transaction: t,
         raw: true,
     }) as any;
@@ -139,11 +140,12 @@ export const getActiveClearancePromos = asyncWrapper(async (req: Request, res: R
             discount_pct: promo.discount_pct,
             normal_price: normalPrice
         });
-        const remainingQtyByStock = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const remainingQtyByCost = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const productStockQty = product ? toInt(product?.stock_quantity) : Number.POSITIVE_INFINITY;
         const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : toInt(promo.qty_limit);
         const qtyUsed = usageByPromoId.get(String(promo.id)) || 0;
         const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
-        const remainingQty = Math.max(0, Math.min(remainingQtyByStock, remainingByLimit));
+        const remainingQty = Math.max(0, Math.min(remainingQtyByCost, remainingByLimit, productStockQty));
 
         return {
             ...promo.get({ plain: true }),
@@ -180,11 +182,13 @@ export const adminListClearancePromos = asyncWrapper(async (req: Request, res: R
     const usageByPromoId = await getClearancePromoUsageQtyByPromoIds((promos as any[]).map((p) => String((p as any).id || '')).filter(Boolean));
 
     const rows = await Promise.all((promos as any[]).map(async (promo: any) => {
-        const remainingQtyByStock = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const product = promo?.Product ? promo.Product : null;
+        const remainingQtyByCost = await computeRemainingQtyByCost(String(promo.product_id), Number(promo.target_unit_cost || 0));
+        const productStockQty = product ? toInt(product?.stock_quantity) : Number.POSITIVE_INFINITY;
         const qtyLimit = promo.qty_limit === null || promo.qty_limit === undefined ? null : toInt(promo.qty_limit);
         const qtyUsed = usageByPromoId.get(String(promo.id)) || 0;
         const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
-        const remainingQty = Math.max(0, Math.min(remainingQtyByStock, remainingByLimit));
+        const remainingQty = Math.max(0, Math.min(remainingQtyByCost, remainingByLimit, productStockQty));
         return {
             ...promo.get({ plain: true }),
             remaining_qty: remainingQty,
@@ -215,12 +219,14 @@ export const adminCreateClearancePromo = asyncWrapper(async (req: Request, res: 
     if (!startsAt || !endsAt) throw new CustomError('starts_at / ends_at wajib diisi', 400);
     if (startsAt.getTime() >= endsAt.getTime()) throw new CustomError('ends_at harus lebih besar dari starts_at', 400);
 
-    const product = await Product.findByPk(productId, { attributes: ['id'] });
+    const product = await Product.findByPk(productId, { attributes: ['id', 'stock_quantity'] });
     if (!product) throw new CustomError('Produk tidak ditemukan', 404);
 
-    const remainingQtyByStock = await computeRemainingQtyByCost(String(productId), Number(targetUnitCost || 0));
-    if (qtyLimit > remainingQtyByStock) {
-        throw new CustomError(`qty_limit melebihi stok batch tersedia (${remainingQtyByStock}).`, 400);
+    const remainingQtyByCost = await computeRemainingQtyByCost(String(productId), Number(targetUnitCost || 0));
+    const productStockQty = toInt((product as any)?.stock_quantity);
+    const maxAllocatable = Math.max(0, Math.min(remainingQtyByCost, productStockQty));
+    if (qtyLimit > maxAllocatable) {
+        throw new CustomError(`qty_limit melebihi stok tersedia (batch/stock: ${maxAllocatable}).`, 400);
     }
 
     const payload: any = {
@@ -333,4 +339,21 @@ export const adminUpdateClearancePromo = asyncWrapper(async (req: Request, res: 
     });
 
     res.json({ promo: promo.get({ plain: true }) });
+});
+
+export const adminDeleteClearancePromo = asyncWrapper(async (req: Request, res: Response) => {
+    const id = String(req.params.id || '').trim();
+    if (!id) throw new CustomError('id tidak valid', 400);
+
+    const promo = await ClearancePromo.findByPk(id);
+    if (!promo) throw new CustomError('Promo tidak ditemukan', 404);
+
+    const usageMap = await getClearancePromoUsageQtyByPromoIds([id]);
+    const qtyUsed = usageMap.get(id) || 0;
+    if (qtyUsed > 0) {
+        throw new CustomError(`Promo sudah digunakan (${qtyUsed}). Tidak bisa dihapus.`, 400);
+    }
+
+    await promo.destroy();
+    res.json({ message: 'Promo berhasil dihapus' });
 });

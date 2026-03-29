@@ -463,6 +463,7 @@ export const api = {
                 ends_at?: string;
                 is_active?: boolean;
             }) => apiClient.patch(`/admin/clearance-promos/${encodeURIComponent(id)}`, data),
+            remove: (id: string) => apiClient.delete(`/admin/clearance-promos/${encodeURIComponent(id)}`),
         },
 	        orderManagement: {
             getAll: (params?: {

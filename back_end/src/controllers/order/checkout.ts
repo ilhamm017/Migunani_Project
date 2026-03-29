@@ -294,17 +294,19 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                     unit_cost: targetUnitCost,
                     qty_on_hand: { [Op.gt]: 0 }
                 },
-                attributes: [[sequelize.fn('SUM', sequelize.col('qty_on_hand')), 'qty_sum']],
+                // Available = on_hand - reserved (cannot go below 0)
+                attributes: [[sequelize.fn('SUM', sequelize.literal('GREATEST(qty_on_hand - qty_reserved, 0)')), 'qty_sum']],
                 transaction: t,
                 raw: true,
             }) as any;
-            const remainingQty = Math.max(0, Math.trunc(Number(remainingAgg?.qty_sum || 0)));
+            const remainingQtyByCost = Math.max(0, Math.trunc(Number(remainingAgg?.qty_sum || 0)));
+            const productStockQty = Math.max(0, Math.trunc(Number((product as any)?.stock_quantity || 0)));
             const qtyLimit = (promo as any).qty_limit === null || (promo as any).qty_limit === undefined
                 ? null
                 : Math.max(0, Math.trunc(Number((promo as any).qty_limit || 0)));
             const qtyUsed = qtyLimit === null ? 0 : await getPromoUsedQty(String((promo as any).id));
             const remainingByLimit = qtyLimit === null ? Number.POSITIVE_INFINITY : Math.max(0, qtyLimit - qtyUsed);
-            const effectiveRemaining = Math.max(0, Math.min(remainingQty, remainingByLimit));
+            const effectiveRemaining = Math.max(0, Math.min(remainingQtyByCost, remainingByLimit, productStockQty));
 
             const promoQty = Math.max(0, Math.min(item.qty, effectiveRemaining));
             const normalQty = Math.max(0, item.qty - promoQty);
