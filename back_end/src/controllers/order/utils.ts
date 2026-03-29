@@ -344,6 +344,35 @@ export const resolveCategoryDiscountPct = (categoryRaw: unknown, tier: string): 
     return parsed;
 };
 
+const resolveVariantDiscountPct = (variantRaw: unknown, tier: string): number | null => {
+    const normalizedTier = String(tier || 'regular').trim().toLowerCase() === 'premium'
+        ? 'platinum'
+        : String(tier || 'regular').trim().toLowerCase();
+    if (normalizedTier === 'regular') return null;
+
+    const source = toObjectOrEmpty(variantRaw);
+    const discounts = toObjectOrEmpty(source.discounts_pct);
+    const aliases = normalizedTier === 'platinum' ? ['premium'] : [];
+
+    const candidates: unknown[] = [
+        discounts[normalizedTier],
+        toObjectOrEmpty(source[normalizedTier]).discount_pct,
+        source[`${normalizedTier}_discount_pct`]
+    ];
+    for (const alias of aliases) {
+        candidates.push(discounts[alias], toObjectOrEmpty(source[alias]).discount_pct, source[`${alias}_discount_pct`]);
+    }
+
+    for (const rawValue of candidates) {
+        const parsed = toFiniteNumber(rawValue);
+        if (parsed === null) continue;
+        if (parsed < 0 || parsed > 100) continue;
+        return parsed;
+    }
+
+    return null;
+};
+
 export const resolveEffectiveTierPricing = (
     basePrice: number,
     tierRaw: string,
@@ -360,6 +389,12 @@ export const resolveEffectiveTierPricing = (
             ? 0
             : Math.min(100, Math.max(0, Math.round((((effectiveBasePrice - directTierPrice) / effectiveBasePrice) * 100) * 100) / 100));
         return { finalPrice: directTierPrice, discountPct, discountSource: 'tier_fallback' };
+    }
+
+    const variantDiscountPct = resolveVariantDiscountPct(variantRaw, normalizedTier);
+    if (variantDiscountPct !== null && variantDiscountPct > 0) {
+        const finalPrice = Math.max(0, Math.round((effectiveBasePrice * (1 - variantDiscountPct / 100)) * 100) / 100);
+        return { finalPrice, discountPct: variantDiscountPct, discountSource: 'tier_fallback' };
     }
 
     const categoryDiscountPct = resolveCategoryDiscountPct(categoryRaw, normalizedTier);
