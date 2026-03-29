@@ -199,7 +199,11 @@ export const createCustomerQuickByAdmin = asyncWrapper(async (req: Request, res:
         }
 
         const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-        const normalizedWhatsapp = normalizeWhatsappNumber(req.body?.whatsapp_number);
+        const whatsappRaw = req.body?.whatsapp_number;
+        const hasWhatsappInput = typeof whatsappRaw === 'string'
+            ? Boolean(whatsappRaw.trim())
+            : whatsappRaw !== undefined && whatsappRaw !== null;
+        const normalizedWhatsapp = normalizeWhatsappNumber(whatsappRaw);
         const tier = normalizeTier(req.body?.tier);
         const address = typeof req.body?.address === 'string' ? req.body.address.trim() : '';
 
@@ -207,19 +211,21 @@ export const createCustomerQuickByAdmin = asyncWrapper(async (req: Request, res:
             await t.rollback();
             throw new CustomError('Nama customer wajib diisi', 400);
         }
-        if (!normalizedWhatsapp) {
+        if (hasWhatsappInput && !normalizedWhatsapp) {
             await t.rollback();
             throw new CustomError('Nomor WhatsApp tidak valid', 400);
         }
 
-        const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
-        const existing = await User.findOne({
-            where: { whatsapp_number: { [Op.in]: whatsappCandidates } },
-            transaction: t
-        });
-        if (existing) {
-            await t.rollback();
-            throw new CustomError('Nomor WhatsApp sudah terdaftar di sistem', 409);
+        if (normalizedWhatsapp) {
+            const whatsappCandidates = getWhatsappLookupCandidates(normalizedWhatsapp);
+            const existing = await User.findOne({
+                where: { whatsapp_number: { [Op.in]: whatsappCandidates } },
+                transaction: t
+            });
+            if (existing) {
+                await t.rollback();
+                throw new CustomError('Nomor WhatsApp sudah terdaftar di sistem', 409);
+            }
         }
 
         const user = await User.create({

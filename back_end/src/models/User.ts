@@ -6,7 +6,7 @@ interface UserAttributes {
     name: string;
     email?: string | null;
     password?: string | null;
-    whatsapp_number: string;
+    whatsapp_number?: string | null;
     role: 'super_admin' | 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     status: 'active' | 'banned';
     debt: number;
@@ -20,7 +20,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
     declare name: string;
     declare email: string | null;
     declare password: string | null;
-    declare whatsapp_number: string;
+    declare whatsapp_number: string | null;
     declare role: 'super_admin' | 'admin_gudang' | 'checker_gudang' | 'admin_finance' | 'kasir' | 'driver' | 'customer';
     declare status: 'active' | 'banned';
     declare debt: number;

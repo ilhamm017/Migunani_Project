@@ -377,7 +377,7 @@ export const api = {
             }) => apiClient.post('/admin/customers/create', data),
             quickCreate: (data: {
                 name: string;
-                whatsapp_number: string;
+                whatsapp_number?: string;
                 tier?: 'regular' | 'gold' | 'platinum';
                 address?: string;
             }) => apiClient.post('/admin/customers/quick-create', data),

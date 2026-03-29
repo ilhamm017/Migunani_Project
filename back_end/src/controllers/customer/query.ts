@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
-import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice, PosSale, PosSaleItem } from '../../models';
+import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice, PosSale, PosSaleItem, OrderEvent } from '../../models';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { OPEN_ORDER_STATUSES } from './types';
@@ -402,6 +402,44 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
     }
 
     const plainOrders = orders.rows.map((row: any) => row.get({ plain: true }) as any);
+    const orderIds = plainOrders.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+
+    const completedAtByOrderId = new Map<string, Date>();
+    const canceledAtByOrderId = new Map<string, Date>();
+    if (orderIds.length > 0) {
+        const events = await OrderEvent.findAll({
+            where: {
+                order_id: { [Op.in]: orderIds },
+                event_type: { [Op.in]: ['order_status_changed', 'order_canceled'] }
+            },
+            attributes: ['order_id', 'event_type', 'payload', 'occurred_at'],
+            order: [['occurred_at', 'ASC']]
+        });
+
+        (events as any[]).forEach((event: any) => {
+            const orderId = String(event?.order_id || '').trim();
+            if (!orderId) return;
+            const eventType = String(event?.event_type || '').trim().toLowerCase();
+            const occurredAt = event?.occurred_at ? new Date(event.occurred_at) : null;
+            if (!occurredAt || Number.isNaN(occurredAt.getTime())) return;
+
+            const payload = event?.payload as any;
+            const toStatus = String(payload?.after?.status || '').trim().toLowerCase();
+
+            if (eventType === 'order_canceled' || ['canceled', 'cancelled'].includes(toStatus)) {
+                if (!canceledAtByOrderId.has(orderId)) {
+                    canceledAtByOrderId.set(orderId, occurredAt);
+                }
+                return;
+            }
+
+            if (toStatus === 'completed') {
+                if (!completedAtByOrderId.has(orderId)) {
+                    completedAtByOrderId.set(orderId, occurredAt);
+                }
+            }
+        });
+    }
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Migunani System';
@@ -423,6 +461,8 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
         'No',
         'Order ID',
         'Tanggal Order',
+        'Tanggal Selesai',
+        'Tanggal Cancel',
         'Status',
         'Order Total',
         'Order Item ID',
@@ -446,6 +486,11 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
         const orderStatus = String(order?.status || '').trim();
         const isOrderCanceled = ['canceled', 'cancelled'].includes(orderStatus.toLowerCase());
         const orderCreatedAt = order?.createdAt ? new Date(order.createdAt) : null;
+        const orderUpdatedAt = order?.updatedAt ? new Date(order.updatedAt) : null;
+        const completedAt = completedAtByOrderId.get(orderId)
+            || (orderStatus.toLowerCase() === 'completed' && orderUpdatedAt ? orderUpdatedAt : null);
+        const canceledAt = canceledAtByOrderId.get(orderId)
+            || (isOrderCanceled && orderUpdatedAt ? orderUpdatedAt : null);
         const orderTotal = Number(order?.total_amount ?? order?.total ?? 0);
 
         const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
@@ -476,6 +521,8 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
                 rowNo,
                 sanitizeExcelText(orderId),
                 orderCreatedAt || '',
+                completedAt || '',
+                canceledAt || '',
                 sanitizeExcelText(orderStatus || '-'),
                 Number.isFinite(orderTotal) ? orderTotal : 0,
                 sanitizeExcelText(payload.orderItemId || ''),
@@ -494,9 +541,15 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
             if (orderCreatedAt) {
                 sheet.getRow(excelRowIndex).getCell(3).numFmt = 'yyyy-mm-dd hh:mm';
             }
+            if (completedAt) {
+                sheet.getRow(excelRowIndex).getCell(4).numFmt = 'yyyy-mm-dd hh:mm';
+            }
+            if (canceledAt) {
+                sheet.getRow(excelRowIndex).getCell(5).numFmt = 'yyyy-mm-dd hh:mm';
+            }
             sheet.getRow(excelRowIndex).getCell(1).numFmt = '#,##0';
-            sheet.getRow(excelRowIndex).getCell(5).numFmt = '#,##0';
-            for (const col of [9, 10, 11, 12, 13]) {
+            sheet.getRow(excelRowIndex).getCell(7).numFmt = '#,##0';
+            for (const col of [11, 12, 13, 14, 15]) {
                 sheet.getRow(excelRowIndex).getCell(col).numFmt = '#,##0';
             }
         };
@@ -571,6 +624,8 @@ export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: R
         { key: 'no', width: 6 },
         { key: 'order_id', width: 40 },
         { key: 'order_date', width: 18 },
+        { key: 'completed_at', width: 18 },
+        { key: 'canceled_at', width: 18 },
         { key: 'status', width: 14 },
         { key: 'total', width: 14 },
         { key: 'order_item_id', width: 40 },

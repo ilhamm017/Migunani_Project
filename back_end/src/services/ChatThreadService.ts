@@ -21,7 +21,7 @@ export type ThreadScope = ChatThreadType;
 export interface ChatActor {
     id: string;
     role: string;
-    whatsapp_number?: string;
+    whatsapp_number?: string | null;
 }
 
 const SUPPORT_ROLES = new Set(['super_admin', 'kasir']);

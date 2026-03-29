@@ -9,7 +9,7 @@ declare global {
             user?: {
                 id: string;
                 role: string;
-                whatsapp_number?: string;
+                whatsapp_number?: string | null;
             };
         }
     }
@@ -52,7 +52,7 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
         req.user = {
             id: String(dbUser.id),
             role: String(dbUser.role),
-            whatsapp_number: String(dbUser.whatsapp_number || '')
+            whatsapp_number: dbUser.whatsapp_number ?? null
         };
         next();
     } catch {
@@ -76,6 +76,10 @@ export const authorizeRoles = (...allowedRoles: string[]) => {
 };
 
 // Helper for generating tokens (can be used in AuthController later)
-export const generateToken = (user: { id: string; role: string; whatsapp_number: string }) => {
-    return jwt.sign(user, getJwtSecret(), { expiresIn: '24h' });
+export const generateToken = (user: { id: string; role: string; whatsapp_number?: string | null }) => {
+    const whatsapp = typeof user.whatsapp_number === 'string' ? user.whatsapp_number.trim() : '';
+    const payload = whatsapp
+        ? { id: user.id, role: user.role, whatsapp_number: whatsapp }
+        : { id: user.id, role: user.role };
+    return jwt.sign(payload, getJwtSecret(), { expiresIn: '24h' });
 };
