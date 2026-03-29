@@ -35,6 +35,14 @@ type ShippingMethodOption = {
     sort_order?: number;
 };
 
+type CategoryTierDiscountRow = {
+    id: number;
+    name?: string;
+    discount_regular_pct: number | null;
+    discount_gold_pct: number | null;
+    discount_premium_pct: number | null;
+};
+
 type CustomerOption = {
     id: string;
     name?: string;
@@ -53,6 +61,8 @@ type ProductOption = {
     stock_quantity?: number | string;
     price?: number | string;
     base_price?: number | string;
+    category_id?: number | string;
+    Category?: { id: number; name?: string } | null;
     varian_harga?: unknown;
 };
 
@@ -89,6 +99,8 @@ type CartItem = {
     clearance_promo?: ClearancePromoOption | null;
     unit_price_override?: number | null;
     discount_pct_input?: string;
+    unit_price_override_input?: string;
+    line_total_override_input?: string;
 };
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
@@ -147,6 +159,7 @@ function ManualOrderContent() {
     const [shippingMethods, setShippingMethods] = useState<ShippingMethodOption[]>([]);
     const [loadingShippingMethods, setLoadingShippingMethods] = useState(false);
     const [shippingMethodCode, setShippingMethodCode] = useState('');
+    const [categoryDiscountById, setCategoryDiscountById] = useState<Map<number, CategoryTierDiscountRow>>(new Map());
     const [chatReplyText, setChatReplyText] = useState('');
     const [chatReplyAttachment, setChatReplyAttachment] = useState<File | null>(null);
     const [sendingChatReply, setSendingChatReply] = useState(false);
@@ -280,11 +293,11 @@ function ManualOrderContent() {
         }
     }, []);
 
-    useEffect(() => {
-        const loadShippingMethods = async () => {
-            if (!allowed) return;
-            try {
-                setLoadingShippingMethods(true);
+	    useEffect(() => {
+	        const loadShippingMethods = async () => {
+	            if (!allowed) return;
+	            try {
+	                setLoadingShippingMethods(true);
                 const res = await api.admin.shippingMethods.getAll({ active_only: true });
                 const rows = Array.isArray(res.data?.shipping_methods)
                     ? (res.data.shipping_methods as ShippingMethodOption[])
@@ -303,8 +316,46 @@ function ManualOrderContent() {
             }
         };
 
-        void loadShippingMethods();
-    }, [allowed]);
+	        void loadShippingMethods();
+	    }, [allowed]);
+
+        useEffect(() => {
+            const loadCategoryDiscounts = async () => {
+                if (!allowed) return;
+                try {
+                    const res = await api.admin.inventory.getCategories();
+                    const rows = Array.isArray(res.data?.categories) ? (res.data.categories as unknown[]) : [];
+                    const next = new Map<number, CategoryTierDiscountRow>();
+
+                    const toNullablePct = (value: unknown): number | null => {
+                        const parsed = Number(value);
+                        if (!Number.isFinite(parsed)) return null;
+                        if (parsed < 0 || parsed > 100) return null;
+                        return parsed;
+                    };
+
+                    for (const row of rows) {
+                        const record = (row && typeof row === 'object' && !Array.isArray(row)) ? (row as Record<string, unknown>) : null;
+                        if (!record) continue;
+                        const id = Number(record.id);
+                        if (!Number.isInteger(id) || id <= 0) continue;
+                        next.set(id, {
+                            id,
+                            name: typeof record.name === 'string' ? record.name : undefined,
+                            discount_regular_pct: toNullablePct(record.discount_regular_pct),
+                            discount_gold_pct: toNullablePct(record.discount_gold_pct),
+                            discount_premium_pct: toNullablePct(record.discount_premium_pct),
+                        });
+                    }
+
+                    setCategoryDiscountById(next);
+                } catch {
+                    setCategoryDiscountById(new Map());
+                }
+            };
+
+            void loadCategoryDiscounts();
+        }, [allowed]);
 
     useEffect(() => {
         if (!allowed || !chatSessionIdParam) {
@@ -378,16 +429,30 @@ function ManualOrderContent() {
             return Math.min(100, Math.max(0, value));
         };
 
-        const getProductBaseRegularPrice = (product: ProductOption): number => {
+        const formatIdrNumber = (value: unknown): string => {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) return '';
+            const normalized = Math.max(0, Math.trunc(parsed));
+            return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(normalized);
+        };
+
+        const parseIdrInput = (raw: string): number | null => {
+            const digits = String(raw || '').replace(/[^\d]/g, '');
+            if (!digits) return null;
+            const parsed = Number(digits);
+            if (!Number.isFinite(parsed)) return null;
+            return Math.max(0, Math.trunc(parsed));
+        };
+
+        const getProductRegularUnitPrice = (product: ProductOption): number => {
             const variant = toObjectOrEmpty(product.varian_harga);
             const prices = toObjectOrEmpty(variant.prices);
             const candidates: unknown[] = [
-                variant.base_price,
-                prices.base_price,
-                prices.baseRegular,
-                variant.baseRegular,
+                product.price,
                 prices.regular,
                 variant.regular,
+                prices.base_price,
+                variant.base_price,
             ];
 
             for (const candidate of candidates) {
@@ -399,57 +464,73 @@ function ManualOrderContent() {
             return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
         };
 
-    const getProductPrice = (product: ProductOption) => {
-        const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
-        const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
-            ? 'platinum'
-            : String(tierRaw || 'regular').trim().toLowerCase();
+	    const getProductPrice = (product: ProductOption) => {
+	        const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
+	        const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
+	            ? 'platinum'
+	            : String(tierRaw || 'regular').trim().toLowerCase();
 
-        const variant = toObjectOrEmpty(product.varian_harga);
-        const prices = toObjectOrEmpty(variant.prices);
+            const effectiveBasePrice = getProductRegularUnitPrice(product);
+            const variant = toObjectOrEmpty(product.varian_harga);
+            const prices = toObjectOrEmpty(variant.prices);
 
-        const basePriceRaw = Number(product.price || 0);
-        const basePrice = Number.isFinite(basePriceRaw) && basePriceRaw > 0
-            ? basePriceRaw
-            : Number(prices.regular || variant.regular || prices.base_price || variant.base_price || 0) || 0;
+            const resolveCategoryDiscountPct = (): number | null => {
+                const categoryIdRaw = (product.Category && typeof product.Category === 'object')
+                    ? (product.Category as { id?: unknown }).id
+                    : product.category_id;
+                const categoryId = Number(categoryIdRaw);
+                if (!Number.isInteger(categoryId) || categoryId <= 0) return null;
+                const category = categoryDiscountById.get(categoryId);
+                if (!category) return null;
+                if (tier === 'platinum') return category.discount_premium_pct;
+                if (tier === 'gold') return category.discount_gold_pct;
+                if (tier === 'regular') return category.discount_regular_pct;
+                return null;
+            };
 
-        const normalizedBasePrice = Math.max(0, basePrice);
-        if (tier === 'regular') return normalizedBasePrice;
+            if (tier === 'regular') {
+                const categoryPct = resolveCategoryDiscountPct();
+                if (categoryPct !== null && categoryPct > 0) {
+                    return Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
+                }
+                return effectiveBasePrice;
+            }
 
-        const discounts = toObjectOrEmpty(variant.discounts_pct);
-        const aliases = tier === 'platinum' ? ['premium'] : [];
+            const aliases = tier === 'platinum' ? ['premium'] : [];
+            const directCandidates: unknown[] = [
+                variant[tier],
+                prices[tier],
+                toObjectOrEmpty(variant[tier]).price
+            ];
+            for (const alias of aliases) {
+                directCandidates.push(variant[alias], prices[alias], toObjectOrEmpty(variant[alias]).price);
+            }
+            for (const candidate of directCandidates) {
+                const directPrice = toFiniteNumber(candidate);
+                if (directPrice !== null && directPrice > 0) return Math.max(0, directPrice);
+            }
 
-        const directCandidates: unknown[] = [
-            variant[tier],
-            prices[tier],
-            toObjectOrEmpty(variant[tier]).price
-        ];
+            const discounts = toObjectOrEmpty(variant.discounts_pct);
+            const discountCandidates: unknown[] = [
+                discounts[tier],
+                toObjectOrEmpty(variant[tier]).discount_pct,
+                variant[`${tier}_discount_pct`]
+            ];
+            for (const alias of aliases) {
+                discountCandidates.push(discounts[alias], toObjectOrEmpty(variant[alias]).discount_pct, variant[`${alias}_discount_pct`]);
+            }
+            for (const discountRaw of discountCandidates) {
+                const discountPct = toFiniteNumber(discountRaw);
+                if (discountPct === null || discountPct <= 0 || discountPct > 100) continue;
+                return Math.max(0, Math.round((effectiveBasePrice * (1 - discountPct / 100)) * 100) / 100);
+            }
 
-        for (const alias of aliases) {
-            directCandidates.push(variant[alias], prices[alias], toObjectOrEmpty(variant[alias]).price);
-        }
+            const categoryPct = resolveCategoryDiscountPct();
+            if (categoryPct !== null && categoryPct > 0) {
+                return Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
+            }
 
-        for (const candidate of directCandidates) {
-            const directPrice = toFiniteNumber(candidate);
-            if (directPrice !== null) return Math.max(0, directPrice);
-        }
-
-        const discountCandidates: unknown[] = [
-            discounts[tier],
-            toObjectOrEmpty(variant[tier]).discount_pct,
-            variant[`${tier}_discount_pct`]
-        ];
-        for (const alias of aliases) {
-            discountCandidates.push(discounts[alias], toObjectOrEmpty(variant[alias]).discount_pct, variant[`${alias}_discount_pct`]);
-        }
-
-        for (const discountRaw of discountCandidates) {
-            const discountPct = toFiniteNumber(discountRaw);
-            if (discountPct === null || discountPct < 0 || discountPct > 100) continue;
-            return Math.max(0, Math.round((normalizedBasePrice * (1 - discountPct / 100)) * 100) / 100);
-        }
-
-	        return normalizedBasePrice;
+            return effectiveBasePrice;
 	    };
 
 			    const getDealUnitPrice = (item: CartItem) => {
@@ -504,7 +585,7 @@ function ManualOrderContent() {
                 return true;
             }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
 		
-				    const addToCart = (product: ProductOption) => {
+			    const addToCart = (product: ProductOption) => {
 				        setCart(prev => {
 				            const lineId = `product:${product.id}`;
 				            const existing = prev.find(item => item.line_id === lineId);
@@ -512,9 +593,9 @@ function ManualOrderContent() {
 			                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
 			            }
 			            const baseline = getProductPrice(product);
-                        const baseRegular = getProductBaseRegularPrice(product);
-                        const inferredDiscount = baseRegular > 0
-                            ? clampPercentage(Math.round((((baseRegular - baseline) / baseRegular) * 100) * 100) / 100)
+                        const regularUnit = getProductRegularUnitPrice(product);
+                        const inferredDiscount = regularUnit > 0
+                            ? clampPercentage(Math.round((((regularUnit - baseline) / regularUnit) * 100) * 100) / 100)
                             : 0;
 			            // New picked product should appear on top (most recently added first).
 			            return [{
@@ -523,7 +604,7 @@ function ManualOrderContent() {
                             product,
                             qty: 1,
                             unit_price_override: baseline,
-                            discount_pct_input: String(inferredDiscount),
+                            discount_pct_input: inferredDiscount > 0 ? String(inferredDiscount) : '',
                             clearance_promo_id: null,
                             clearance_promo: null
                         }, ...prev];
@@ -572,22 +653,22 @@ function ManualOrderContent() {
 	        setCart(prev => prev.filter(item => item.line_id !== lineId));
 	    };
 
-	    const updateQty = (lineId: string, delta: number) => {
-	        setCart(prev => prev.map(item => {
-	            if (item.line_id === lineId) {
-	                const newQty = Math.max(1, item.qty + delta);
-	                return { ...item, qty: newQty };
-	            }
-	            return item;
-	        }));
-	    };
+		    const updateQty = (lineId: string, delta: number) => {
+		        setCart(prev => prev.map(item => {
+		            if (item.line_id === lineId) {
+		                const newQty = Math.max(1, item.qty + delta);
+		                return { ...item, qty: newQty, line_total_override_input: undefined };
+		            }
+		            return item;
+		        }));
+		    };
 
-	    const setQty = (lineId: string, rawValue: string) => {
-	        const parsed = Number(rawValue);
-	        const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
-	        const nextQty = Math.max(1, normalized);
-	        setCart((prev) => prev.map((item) => (item.line_id === lineId ? { ...item, qty: nextQty } : item)));
-	    };
+		    const setQty = (lineId: string, rawValue: string) => {
+		        const parsed = Number(rawValue);
+		        const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
+		        const nextQty = Math.max(1, normalized);
+		        setCart((prev) => prev.map((item) => (item.line_id === lineId ? { ...item, qty: nextQty, line_total_override_input: undefined } : item)));
+		    };
 
 		    const calculateSubtotal = () => {
 		        return cart.reduce((sum, item) => sum + (getDealUnitPrice(item) * item.qty), 0);
@@ -1275,37 +1356,51 @@ function ManualOrderContent() {
 
 		                                                        {canOverridePricing && !isPromoLine ? (
 		                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
-		                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+		                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_128px] sm:items-center">
 		                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
 		                                                                        Harga deal
 		                                                                    </label>
 		                                                                    <input
-		                                                                        type="number"
-		                                                                        min={0}
-		                                                                        value={Number(item.unit_price_override ?? normalUnit) || 0}
+		                                                                        type="text"
+		                                                                        inputMode="numeric"
+		                                                                        autoComplete="off"
+		                                                                        placeholder="-"
+		                                                                        value={String(item.unit_price_override_input ?? formatIdrNumber(Number(item.unit_price_override ?? normalUnit) || 0))}
+		                                                                        onFocus={() => {
+		                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+		                                                                                ? { ...row, unit_price_override_input: String(Math.max(0, Math.trunc(Number(row.unit_price_override ?? normalUnit) || 0))) }
+		                                                                                : row));
+		                                                                        }}
+		                                                                        onBlur={() => {
+		                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+		                                                                                ? { ...row, unit_price_override_input: formatIdrNumber(Number(row.unit_price_override ?? normalUnit) || 0) }
+		                                                                                : row));
+		                                                                        }}
 		                                                                        onChange={(e) => {
 		                                                                            const raw = e.target.value;
-		                                                                            const next = raw === '' ? null : Number(raw);
+		                                                                            const next = parseIdrInput(raw);
 		                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
 		                                                                                ? {
                                                                                             ...row,
-                                                                                            unit_price_override: Number.isFinite(Number(next)) ? Number(next) : null,
+                                                                                            unit_price_override_input: raw,
+                                                                                            unit_price_override: next === null ? null : next,
                                                                                             discount_pct_input: '',
+                                                                                            line_total_override_input: undefined,
                                                                                         }
 		                                                                                : row));
 		                                                                        }}
-		                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+		                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-right sm:w-32"
 		                                                                    />
 	                                                                </div>
-                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_128px] sm:items-center">
                                                                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">
                                                                         Diskon dipakai (%)
                                                                     </label>
                                                                     <input
-                                                                        type="number"
-                                                                        min={0}
-                                                                        max={100}
-                                                                        step="0.01"
+                                                                        type="text"
+                                                                        inputMode="decimal"
+                                                                        autoComplete="off"
+                                                                        placeholder="-"
                                                                         value={String(item.discount_pct_input ?? '')}
                                                                         onChange={(e) => {
                                                                             const raw = e.target.value;
@@ -1316,13 +1411,13 @@ function ManualOrderContent() {
                                                                                 const parsed = Number(raw);
                                                                                 if (!Number.isFinite(parsed)) return { ...row, discount_pct_input: raw };
 
-                                                                                const pct = clampPercentage(parsed);
-                                                                                const baseRegular = getProductBaseRegularPrice(row.product);
-                                                                                if (!(baseRegular > 0)) {
+                                                                            const pct = clampPercentage(parsed);
+                                                                                const regularUnit = getProductRegularUnitPrice(row.product);
+                                                                                if (!(regularUnit > 0)) {
                                                                                     return { ...row, discount_pct_input: String(pct) };
                                                                                 }
 
-                                                                                const nextUnit = Math.max(0, Math.round(baseRegular * (1 - pct / 100)));
+                                                                                const nextUnit = Math.max(0, Math.round(regularUnit * (1 - pct / 100)));
                                                                                 return {
                                                                                     ...row,
                                                                                     discount_pct_input: String(pct),
@@ -1330,35 +1425,47 @@ function ManualOrderContent() {
                                                                                 };
                                                                             }));
                                                                         }}
-                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-right sm:w-32"
                                                                     />
                                                                 </div>
 
-                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_112px] sm:items-center">
+                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_128px] sm:items-center">
                                                                     <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">
                                                                         Dipakai (total)
                                                                     </label>
                                                                     <input
-                                                                        type="number"
-                                                                        min={0}
-                                                                        step="1"
-                                                                        value={Math.max(0, Math.round(lineTotal))}
+                                                                        type="text"
+                                                                        inputMode="numeric"
+                                                                        autoComplete="off"
+                                                                        placeholder="-"
+                                                                        value={String(item.line_total_override_input ?? formatIdrNumber(Math.max(0, Math.round(lineTotal))))}
+                                                                        onFocus={() => {
+                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+                                                                                ? { ...row, line_total_override_input: String(Math.max(0, Math.trunc(Math.round(lineTotal)))) }
+                                                                                : row));
+                                                                        }}
+                                                                        onBlur={() => {
+                                                                            setCart((prev) => prev.map((row) => row.line_id === item.line_id
+                                                                                ? { ...row, line_total_override_input: formatIdrNumber(Math.max(0, Math.round(lineTotal))) }
+                                                                                : row));
+                                                                        }}
                                                                         onChange={(e) => {
                                                                             const raw = e.target.value;
-                                                                            const nextTotal = raw === '' ? 0 : Number(raw);
-                                                                            const safeTotal = Number.isFinite(nextTotal) ? Math.max(0, Math.trunc(nextTotal)) : 0;
+                                                                            const nextTotal = parseIdrInput(raw);
+                                                                            const safeTotal = nextTotal === null ? 0 : nextTotal;
                                                                             const qtySafe = Math.max(1, Math.trunc(Number(item.qty || 1)));
                                                                             const nextUnit = Math.max(0, Math.round(safeTotal / qtySafe));
 
                                                                             setCart((prev) => prev.map((row) => row.line_id === item.line_id
                                                                                 ? {
                                                                                     ...row,
+                                                                                    line_total_override_input: raw,
                                                                                     unit_price_override: nextUnit > 0 ? nextUnit : null,
                                                                                     discount_pct_input: '',
                                                                                 }
                                                                                 : row));
                                                                         }}
-                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-right sm:w-28"
+                                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-right sm:w-32"
                                                                     />
                                                                 </div>
 
