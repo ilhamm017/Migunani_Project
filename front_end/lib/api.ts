@@ -343,6 +343,13 @@ export const api = {
                 endDate?: string;
                 include_collectible_total?: boolean;
             }) => apiClient.get(`/admin/customers/${id}/orders`, { params }),
+            exportOrdersXlsx: (id: string, params?: {
+                scope?: 'all' | 'open';
+                status?: string;
+                startDate?: string;
+                endDate?: string;
+                limit?: number;
+            }) => apiClient.get(`/admin/customers/${id}/orders/export-xlsx`, { params, responseType: 'blob' }),
             getTopProducts: (id: string, params?: {
                 startDate?: string;
                 endDate?: string;

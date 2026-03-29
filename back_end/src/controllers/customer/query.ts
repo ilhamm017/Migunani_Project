@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
 import { User, CustomerProfile, Order, OrderItem, Product, sequelize, Backorder, InvoiceItem, Invoice, PosSale, PosSaleItem } from '../../models';
 import { attachInvoicesToOrders } from '../../utils/invoiceLookup';
@@ -7,6 +8,12 @@ import { OPEN_ORDER_STATUSES } from './types';
 import { normalizeId, parsePositiveNumber, applyCustomerSearch, applyStatusFilter } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+
+const sanitizeExcelText = (value: unknown): string => {
+    const text = String(value ?? '');
+    if (!text) return '';
+    return /^[=+\-@]/.test(text) ? `'${text}` : text;
+};
 
 export const searchCustomers = asyncWrapper(async (req: Request, res: Response) => {
     try {
@@ -312,6 +319,285 @@ export const getCustomerOrders = asyncWrapper(async (req: Request, res: Response
         }
         throw new CustomError('Error fetching customer orders', 500);
     }
+});
+
+export const exportCustomerOrdersXlsx = asyncWrapper(async (req: Request, res: Response) => {
+    const customerId = normalizeId(req.params?.id);
+    if (!customerId) {
+        throw new CustomError('ID customer tidak valid', 400);
+    }
+
+    const customer = await User.findOne({
+        where: { id: customerId, role: 'customer' },
+        attributes: ['id', 'name']
+    });
+    if (!customer) {
+        throw new CustomError('Customer tidak ditemukan', 404);
+    }
+
+    const { scope = 'all', status, startDate, endDate } = req.query;
+    const orderLimit = parsePositiveNumber((req.query as any)?.limit, 5000, 5000);
+
+    const whereClause: any = {
+        customer_id: customerId,
+    };
+
+    const scopeParam = typeof scope === 'string' ? scope.trim().toLowerCase() : 'all';
+    const statusParam = typeof status === 'string' ? status.trim() : '';
+    if (scopeParam === 'open') {
+        whereClause.status = { [Op.in]: OPEN_ORDER_STATUSES as unknown as string[] };
+    } else if (statusParam && statusParam !== 'all') {
+        whereClause.status = statusParam;
+    }
+
+    const createdAtRange: Record<symbol, Date> = {} as Record<symbol, Date>;
+    const startDateText = typeof startDate === 'string' ? startDate.trim() : '';
+    const endDateText = typeof endDate === 'string' ? endDate.trim() : '';
+    if (startDateText) {
+        const parsedStart = new Date(startDateText);
+        if (!Number.isNaN(parsedStart.getTime())) {
+            parsedStart.setHours(0, 0, 0, 0);
+            createdAtRange[Op.gte] = parsedStart;
+        }
+    }
+    if (endDateText) {
+        const parsedEnd = new Date(endDateText);
+        if (!Number.isNaN(parsedEnd.getTime())) {
+            parsedEnd.setHours(23, 59, 59, 999);
+            createdAtRange[Op.lte] = parsedEnd;
+        }
+    }
+    if (Object.keys(createdAtRange).length > 0 || Object.getOwnPropertySymbols(createdAtRange).length > 0) {
+        whereClause.createdAt = createdAtRange;
+    }
+
+    const orders = await Order.findAndCountAll({
+        where: whereClause,
+        distinct: true,
+        limit: orderLimit,
+        offset: 0,
+        include: [
+            {
+                model: OrderItem,
+                include: [
+                    { model: Product, attributes: ['id', 'name', 'sku'] },
+                    { model: Backorder, attributes: ['id', 'qty_pending', 'status', 'notes'] },
+                    {
+                        model: InvoiceItem,
+                        as: 'InvoiceItems',
+                        attributes: ['id', 'invoice_id', 'order_item_id', 'qty', 'createdAt'],
+                        include: [{
+                            model: Invoice,
+                            attributes: ['id', 'invoice_number', 'payment_status', 'payment_method', 'createdAt']
+                        }]
+                    }
+                ]
+            }
+        ],
+        order: [['createdAt', 'DESC']]
+    });
+
+    if (orders.count > orderLimit) {
+        throw new CustomError(`Terlalu banyak order (${orders.count}). Perkecil rentang tanggal atau batasi hasil.`, 400);
+    }
+
+    const plainOrders = orders.rows.map((row: any) => row.get({ plain: true }) as any);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani System';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Customer Purchases');
+
+    const customerName = sanitizeExcelText((customer as any)?.name || 'Customer');
+    const headerRowIndex = 10;
+
+    sheet.getRow(1).values = ['Customer Purchases (Per OrderId)'];
+    sheet.getRow(1).font = { bold: true, size: 14 };
+    sheet.getRow(3).values = ['Customer', customerName || '-'];
+    sheet.getRow(4).values = ['Customer ID', sanitizeExcelText(customerId)];
+    sheet.getRow(5).values = ['Tanggal Mulai', sanitizeExcelText(startDateText || '-')];
+    sheet.getRow(6).values = ['Tanggal Akhir', sanitizeExcelText(endDateText || '-')];
+    sheet.getRow(7).values = ['Total Order', Number(plainOrders.length)];
+
+    sheet.getRow(headerRowIndex).values = [
+        'No',
+        'Order ID',
+        'Tanggal Order',
+        'Status',
+        'Order Total',
+        'Order Item ID',
+        'SKU',
+        'Produk',
+        'Qty Order',
+        'Qty Tersuplai',
+        'Qty Backorder',
+        'Qty Cancel',
+        'Qty Sisa',
+        'Invoice (Order)',
+        'Invoice Breakdown (Item)',
+    ];
+    sheet.getRow(headerRowIndex).font = { bold: true };
+
+    let rowNo = 0;
+    const startDataRow = headerRowIndex + 1;
+
+    plainOrders.forEach((order: any) => {
+        const orderId = String(order?.id || '').trim();
+        const orderStatus = String(order?.status || '').trim();
+        const isOrderCanceled = ['canceled', 'cancelled'].includes(orderStatus.toLowerCase());
+        const orderCreatedAt = order?.createdAt ? new Date(order.createdAt) : null;
+        const orderTotal = Number(order?.total_amount ?? order?.total ?? 0);
+
+        const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+        const orderInvoiceSet = new Set<string>();
+        orderItems.forEach((item: any) => {
+            const invoiceItems = Array.isArray(item?.InvoiceItems) ? item.InvoiceItems : [];
+            invoiceItems.forEach((invItem: any) => {
+                const invoiceNumber = String(invItem?.Invoice?.invoice_number || '').trim();
+                if (invoiceNumber) orderInvoiceSet.add(invoiceNumber);
+            });
+        });
+        const orderInvoiceNumbers = Array.from(orderInvoiceSet.values()).join(', ');
+
+        const writeRow = (payload: {
+            orderItemId: string;
+            sku: string;
+            productName: string;
+            orderedQty: number;
+            suppliedQty: number;
+            backorderQty: number;
+            canceledQty: number;
+            remainingQty: number;
+            invoiceBreakdown: string;
+        }) => {
+            rowNo += 1;
+            const excelRowIndex = startDataRow + (rowNo - 1);
+            const rowValues: any[] = [
+                rowNo,
+                sanitizeExcelText(orderId),
+                orderCreatedAt || '',
+                sanitizeExcelText(orderStatus || '-'),
+                Number.isFinite(orderTotal) ? orderTotal : 0,
+                sanitizeExcelText(payload.orderItemId || ''),
+                sanitizeExcelText(payload.sku || '-'),
+                sanitizeExcelText(payload.productName || '-'),
+                payload.orderedQty,
+                payload.suppliedQty,
+                payload.backorderQty,
+                payload.canceledQty,
+                payload.remainingQty,
+                sanitizeExcelText(orderInvoiceNumbers || '-'),
+                sanitizeExcelText(payload.invoiceBreakdown || '-'),
+            ];
+
+            sheet.getRow(excelRowIndex).values = rowValues;
+            if (orderCreatedAt) {
+                sheet.getRow(excelRowIndex).getCell(3).numFmt = 'yyyy-mm-dd hh:mm';
+            }
+            sheet.getRow(excelRowIndex).getCell(1).numFmt = '#,##0';
+            sheet.getRow(excelRowIndex).getCell(5).numFmt = '#,##0';
+            for (const col of [9, 10, 11, 12, 13]) {
+                sheet.getRow(excelRowIndex).getCell(col).numFmt = '#,##0';
+            }
+        };
+
+        if (orderItems.length === 0) {
+            writeRow({
+                orderItemId: '',
+                sku: '-',
+                productName: '-',
+                orderedQty: 0,
+                suppliedQty: 0,
+                backorderQty: 0,
+                canceledQty: 0,
+                remainingQty: 0,
+                invoiceBreakdown: '-',
+            });
+            return;
+        }
+
+        orderItems.forEach((item: any) => {
+            const orderItemId = String(item?.id || '').trim();
+            const sku = String(item?.Product?.sku || '').trim() || String(item?.Product?.id || '').trim() || '-';
+            const productName = String(item?.Product?.name || '').trim() || 'Produk';
+
+            const orderedQty = Math.max(
+                0,
+                Number(item?.ordered_qty_original ?? item?.qty ?? 0)
+            );
+
+            const invoiceItems = Array.isArray(item?.InvoiceItems) ? item.InvoiceItems : [];
+            const invoiceQtyByNumber = new Map<string, number>();
+            let suppliedQty = 0;
+            invoiceItems.forEach((invItem: any) => {
+                const qty = Math.max(0, Number(invItem?.qty || 0));
+                suppliedQty += qty;
+                const invNum = String(invItem?.Invoice?.invoice_number || '').trim();
+                if (!invNum) return;
+                invoiceQtyByNumber.set(invNum, Number(invoiceQtyByNumber.get(invNum) || 0) + qty);
+            });
+            const invoiceBreakdown = Array.from(invoiceQtyByNumber.entries())
+                .map(([invNum, qty]) => `${invNum}:${qty}`)
+                .join(' | ');
+
+            const backorderStatus = String(item?.Backorder?.status || '').trim().toLowerCase();
+            const backorderQty = backorderStatus && !['fulfilled', 'canceled', 'cancelled'].includes(backorderStatus)
+                ? Math.max(0, Number(item?.Backorder?.qty_pending || 0))
+                : 0;
+
+            const canceledManualQty = Math.max(0, Number((item as any)?.qty_canceled_manual || 0));
+            const canceledBackorderQty = Math.max(0, Number(item?.qty_canceled_backorder || 0));
+            const currentQty = Math.max(0, Number(item?.qty ?? orderedQty));
+            const canceledByOrderQty = isOrderCanceled ? Math.max(0, currentQty - suppliedQty) : 0;
+            const canceledQty = Math.max(0, canceledManualQty + canceledBackorderQty + canceledByOrderQty);
+
+            const remainingQty = Math.max(0, orderedQty - suppliedQty - canceledManualQty - canceledBackorderQty);
+
+            writeRow({
+                orderItemId,
+                sku,
+                productName,
+                orderedQty,
+                suppliedQty,
+                backorderQty,
+                canceledQty,
+                remainingQty,
+                invoiceBreakdown: invoiceBreakdown || '-',
+            });
+        });
+    });
+
+    sheet.columns = [
+        { key: 'no', width: 6 },
+        { key: 'order_id', width: 40 },
+        { key: 'order_date', width: 18 },
+        { key: 'status', width: 14 },
+        { key: 'total', width: 14 },
+        { key: 'order_item_id', width: 40 },
+        { key: 'sku', width: 18 },
+        { key: 'product', width: 44 },
+        { key: 'ordered_qty', width: 12 },
+        { key: 'supplied_qty', width: 12 },
+        { key: 'backorder_qty', width: 12 },
+        { key: 'canceled_qty', width: 12 },
+        { key: 'remaining_qty', width: 12 },
+        { key: 'order_invoices', width: 28 },
+        { key: 'item_invoices', width: 44 },
+    ];
+
+    const safeName = (customerName || 'customer').replace(/[^a-z0-9_-]/gi, '_').slice(0, 48) || 'customer';
+    const safeStart = (startDateText || '').replace(/[^0-9-]/g, '') || 'all';
+    const safeEnd = (endDateText || '').replace(/[^0-9-]/g, '') || 'all';
+    const timestamp = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const fileName = `customer-purchases-${safeName}-${safeStart}_${safeEnd}-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
 });
 
 export const getCustomerTopProducts = asyncWrapper(async (req: Request, res: Response) => {

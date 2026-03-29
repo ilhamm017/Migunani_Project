@@ -160,7 +160,9 @@ export default function CustomerPurchaseHistoryPanel({
   const [orders, setOrders] = useState<CustomerOrderRow[]>([]);
   const [totalOrdersFound, setTotalOrdersFound] = useState(0);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [exportingXlsx, setExportingXlsx] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [exportError, setExportError] = useState('');
   const [productPage, setProductPage] = useState(1);
   const [invoicePage, setInvoicePage] = useState(1);
 
@@ -243,6 +245,41 @@ export default function CustomerPurchaseHistoryPanel({
   useEffect(() => {
     void loadOrders();
   }, [loadOrders]);
+
+  const exportXlsx = useCallback(async () => {
+    if (!customerId) return;
+    try {
+      setExportingXlsx(true);
+      setExportError('');
+      const res = await api.admin.customers.exportOrdersXlsx(customerId, {
+        scope: 'all',
+        startDate,
+        endDate,
+      });
+      const contentDisposition = String(res.headers?.['content-disposition'] || '');
+      const filenameMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
+      const safeCustomer = String(customerName || customerId).trim().replace(/[^a-z0-9_-]/gi, '_').slice(0, 48) || 'customer';
+      const fallbackName = `customer-purchases-${safeCustomer}-${startDate}_${endDate}.xlsx`;
+      const filename = filenameMatch?.[1] || fallbackName;
+
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      console.error('Failed to export customer purchases XLSX:', error);
+      setExportError('Gagal ekstrak XLSX.');
+    } finally {
+      setExportingXlsx(false);
+    }
+  }, [customerId, customerName, endDate, startDate]);
 
   const productSummary = useMemo<AggregatedProduct[]>(() => {
     const bucket = new Map<string, AggregatedProduct>();
@@ -500,14 +537,24 @@ export default function CustomerPurchaseHistoryPanel({
             />
           </label>
           <div className="flex items-end">
-            <button
-              type="button"
-              onClick={() => void loadOrders()}
-              disabled={!customerId || loadingOrders}
-              className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-[11px] font-black uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {loadingOrders ? 'Memuat...' : 'Refresh Histori'}
-            </button>
+            <div className="w-full flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => void loadOrders()}
+                disabled={!customerId || loadingOrders}
+                className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-[11px] font-black uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {loadingOrders ? 'Memuat...' : 'Refresh Histori'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void exportXlsx()}
+                disabled={!customerId || loadingOrders || exportingXlsx}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-900 px-4 py-3 text-[11px] font-black uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {exportingXlsx ? 'Menyiapkan...' : 'Ekstrak XLSX'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -515,6 +562,11 @@ export default function CustomerPurchaseHistoryPanel({
       {searchError && (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
           {searchError}
+        </div>
+      )}
+      {exportError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+          {exportError}
         </div>
       )}
 
