@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import { Op, QueryTypes } from 'sequelize';
-import { Account, ClearancePromo, InventoryBatch, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
+import { Account, Category, ClearancePromo, CustomerProfile, InventoryBatch, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+import { resolveEffectiveTierPricing } from '../order/utils';
 
 const round2 = (value: unknown) => Math.round(Number(value || 0) * 100) / 100;
 const round4 = (value: unknown) => Number(Number(value || 0).toFixed(4));
@@ -111,9 +112,17 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const customerIdRaw = typeof req.body?.customer_id === 'string' ? req.body.customer_id.trim() : '';
         const customerId = customerIdRaw || null;
         const customer = customerId
-            ? await User.findOne({ where: { id: customerId, role: 'customer' }, transaction: t, lock: t.LOCK.SHARE })
+            ? await User.findOne({
+                where: { id: customerId, role: 'customer' },
+                include: [{ model: CustomerProfile, attributes: ['tier'], required: false }],
+                transaction: t,
+                lock: t.LOCK.SHARE
+            })
             : null;
         const customerName = customer ? String((customer as any).name || '').trim() || null : null;
+        const customerTier = customer && (customer as any).CustomerProfile && typeof (customer as any).CustomerProfile.tier === 'string'
+            ? String((customer as any).CustomerProfile.tier || '').trim().toLowerCase() || 'regular'
+            : 'regular';
         const note = typeof req.body?.note === 'string' && req.body.note.trim()
             ? req.body.note.trim()
             : null;
@@ -143,6 +152,7 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const productIds = items.map((it) => it.product_id);
         const products = await Product.findAll({
             where: { id: { [Op.in]: productIds } },
+            include: [{ model: Category, attributes: ['id', 'name', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'], required: false }],
             transaction: t,
             lock: t.LOCK.UPDATE,
         });
@@ -214,7 +224,9 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
         for (const it of items) {
             const product = productById.get(it.product_id);
-            const normalPrice = round2(product?.price);
+            const basePrice = Number(product?.price);
+            const pricing = resolveEffectiveTierPricing(basePrice, String(customerTier || 'regular'), product?.varian_harga, (product as any).Category);
+            const normalPrice = round2(pricing.finalPrice);
             const baseCost = round2(product?.base_price);
 
             let unitPrice = normalPrice;
@@ -416,7 +428,9 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
         for (const line of lines) {
             const product = line.product;
-            const normalPrice = round2(product?.price);
+            const basePrice = Number(product?.price);
+            const pricing = resolveEffectiveTierPricing(basePrice, String(customerTier || 'regular'), product?.varian_harga, (product as any).Category);
+            const normalPrice = round2(pricing.finalPrice);
 
             const clearancePromoId = String(line.clearance_promo_id || '').trim();
             const valuation = clearancePromoId
