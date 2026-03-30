@@ -972,7 +972,10 @@ export default function AdminPosPage() {
 	                  inputMode="numeric"
 	                  autoComplete="off"
 	                  value={String(amountReceivedInput ?? (amountReceived > 0 ? formatIdrNumber(amountReceived) : ''))}
-	                  onFocus={() => setAmountReceivedInput(String(Math.max(0, Math.trunc(Number(amountReceived || 0)))))}
+	                  onFocus={() => {
+	                    const v = Math.max(0, Math.trunc(Number(amountReceived || 0)));
+	                    setAmountReceivedInput(v > 0 ? String(v) : '');
+	                  }}
 	                  onBlur={() => setAmountReceivedInput(undefined)}
 	                  onChange={(e) => {
 	                    const raw = e.target.value;
