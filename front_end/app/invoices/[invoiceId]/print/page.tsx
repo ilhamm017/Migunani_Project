@@ -201,12 +201,14 @@ function InvoicePrintPageContent() {
         @media print {
           @page {
             size: 80mm auto;
-            margin: 4mm;
+            margin: 2mm;
           }
 
           body {
             background: #ffffff !important;
-            color: #0f172a !important;
+            color: #000000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
 
           header,
@@ -228,6 +230,20 @@ function InvoicePrintPageContent() {
             box-shadow: none !important;
             border-radius: 0 !important;
             border: none !important;
+          }
+
+          .thermal-print {
+            color: #000000 !important;
+            font-size: 12px !important;
+            line-height: 1.25 !important;
+          }
+
+          .thermal-print * {
+            color: #000000 !important;
+          }
+
+          .thermal-divider {
+            border-top: 1px dashed #000000 !important;
           }
         }
       `}</style>
@@ -479,17 +495,17 @@ function InvoicePrintPageContent() {
             </div>
 
             <div
-              className="print-only print-sheet bg-white border border-slate-200 rounded-2xl shadow-lg p-4 mt-4"
-              style={{ fontFamily: '"Space Mono", monospace' }}
+              className="print-only print-sheet thermal-print bg-white border border-slate-200 rounded-2xl shadow-lg p-4 mt-4 max-w-[76mm] mx-auto"
+              style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace' }}
             >
               <div className="text-center">
-                <p className="text-xs font-bold uppercase tracking-[0.35em] text-slate-900">Migunani Motor</p>
-                <p className="text-[10px] text-slate-500">Suku cadang motor terpercaya</p>
+                <p className="text-[13px] font-bold uppercase tracking-[0.25em] text-black">Migunani Motor</p>
+                <p className="text-[11px] text-black">Suku cadang motor terpercaya</p>
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-3" />
+              <div className="thermal-divider border-t border-dashed border-slate-300 my-3" />
 
-              <div className="text-[11px] space-y-1">
+              <div className="text-[12px] space-y-1">
                 <div className="flex items-center justify-between">
                   <span>No. Invoice</span>
                   <span className="font-bold">{detail.invoice_number}</span>
@@ -512,25 +528,25 @@ function InvoicePrintPageContent() {
                 </div>
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-3" />
+              <div className="thermal-divider border-t border-dashed border-slate-300 my-3" />
 
-              <div className="text-[11px] space-y-1">
-                <p className="font-bold text-slate-900">Customer</p>
+              <div className="text-[12px] space-y-1">
+                <p className="font-bold text-black">Customer</p>
                 <p>{detail.customer?.name || 'Customer'}</p>
-                <p className="text-slate-600">WA: {detail.customer?.whatsapp_number || '-'}</p>
-                <p className="text-slate-600">Email: {detail.customer?.email || '-'}</p>
+                <p className="text-black">WA: {detail.customer?.whatsapp_number || '-'}</p>
+                <p className="text-black">Email: {detail.customer?.email || '-'}</p>
               </div>
 
-              <div className="text-[10px] text-slate-500 mt-2">
+              <div className="text-[11px] text-black mt-2">
                 Order: {orderIds.length > 0 ? orderIds.join(', ') : '-'}
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-3" />
+              <div className="thermal-divider border-t border-dashed border-slate-300 my-3" />
 
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Item</div>
+              <div className="text-[12px] font-bold uppercase tracking-wider text-black">Item</div>
               <div className="mt-2 space-y-3">
                 {items.length === 0 && (
-                  <p className="text-[11px] text-slate-500">Tidak ada item di invoice ini.</p>
+                  <p className="text-[12px] text-black">Tidak ada item di invoice ini.</p>
                 )}
                 {items.map((item, idx: number) => {
                   const product = item.OrderItem?.Product || {};
@@ -552,16 +568,16 @@ function InvoicePrintPageContent() {
                   return (
                     <div key={String(item.id || item.OrderItem?.id || idx)} className="space-y-1">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-bold text-slate-900 truncate">{product.name || 'Produk'}</p>
-                          <p className="text-[10px] text-slate-500">SKU: {product.sku || '-'}</p>
-                          <p className="text-[10px] text-slate-500">Order: {orderId}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-bold text-black break-words">{product.name || 'Produk'}</p>
+                          <p className="text-[11px] text-black">SKU: {product.sku || '-'}</p>
+                          <p className="text-[11px] text-black">Order: {orderId}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[11px] font-bold text-slate-900">{formatCurrency(Number(item.line_total || 0))}</p>
+                          <p className="text-[12px] font-bold text-black">{formatCurrency(Number(item.line_total || 0))}</p>
                         </div>
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-600">
+                      <div className="flex items-center justify-between text-[11px] text-black">
                         <span>{orderedQty} x {formatCurrency(Number(item.unit_price || 0))}</span>
                         <span>Inv {invoiceQty} | Total {allocatedQty} | Sisa {remainingQty}</span>
                       </div>
@@ -570,12 +586,12 @@ function InvoicePrintPageContent() {
                 })}
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-3" />
+              <div className="thermal-divider border-t border-dashed border-slate-300 my-3" />
 
-              <div className="text-[11px] space-y-1">
+              <div className="text-[12px] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span>Subtotal</span>
-                  <span>{formatCurrency(displayedSubtotal)}</span>
+                  <span className="font-bold">Subtotal</span>
+                  <span className="font-bold">{formatCurrency(displayedSubtotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Diskon</span>
@@ -589,18 +605,18 @@ function InvoicePrintPageContent() {
                   <span>Pajak</span>
                   <span>{formatCurrency(Number(detail.tax_amount || 0))}</span>
                 </div>
-                <div className="flex items-center justify-between text-sm font-bold border-t border-dashed border-slate-300 pt-2 mt-2">
+                <div className="flex items-center justify-between text-[14px] font-black border-t border-dashed border-slate-300 pt-2 mt-2">
                   <span>Total</span>
                   <span>{formatCurrency(Number(detail.total || 0))}</span>
                 </div>
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-3" />
+              <div className="thermal-divider border-t border-dashed border-slate-300 my-3" />
 
-              <p className="text-[10px] text-slate-500 text-center">
+              <p className="text-[11px] text-black text-center">
                 {paymentInstructionLabel(detail.payment_method)}
               </p>
-              <p className="text-[10px] text-slate-400 text-center mt-1">Terima kasih telah berbelanja.</p>
+              <p className="text-[11px] text-black text-center mt-1">Terima kasih telah berbelanja.</p>
             </div>
           </>
         )}
