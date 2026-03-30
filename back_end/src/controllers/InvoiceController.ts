@@ -261,6 +261,8 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
                 order: [['checked_at', 'DESC'], ['id', 'DESC']],
                 attributes: ['id', 'invoice_id', 'courier_id', 'checker_id', 'status', 'checked_at', 'handed_over_at', 'note', 'evidence_url'],
                 include: [
+                    { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+                    { model: User, as: 'Checker', attributes: ['id', 'name', 'whatsapp_number'], required: false },
                     {
                         model: DeliveryHandoverItem,
                         as: 'Items',
@@ -274,6 +276,29 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         })()
         : null;
 
+    const warehouse_handover_history = isAdminRole
+        ? await (async () => {
+            const rows = await DeliveryHandover.findAll({
+                where: { invoice_id: invoiceId },
+                order: [['checked_at', 'DESC'], ['id', 'DESC']],
+                limit: 20,
+                attributes: ['id', 'invoice_id', 'courier_id', 'checker_id', 'status', 'checked_at', 'handed_over_at', 'note', 'evidence_url'],
+                include: [
+                    { model: User, as: 'Driver', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+                    { model: User, as: 'Checker', attributes: ['id', 'name', 'whatsapp_number'], required: false },
+                    {
+                        model: DeliveryHandoverItem,
+                        as: 'Items',
+                        attributes: ['id', 'product_id', 'qty_expected', 'qty_checked', 'condition', 'note', 'evidence_url'],
+                        required: false,
+                        include: [{ model: Product, as: 'Product', attributes: ['id', 'name', 'sku', 'unit'], required: false }]
+                    }
+                ]
+            }) as any[];
+            return (Array.isArray(rows) ? rows : []).map((row: any) => row.get({ plain: true }));
+        })()
+        : null;
+
     return res.json({
         ...plain,
         InvoiceItems: invoiceItems,
@@ -281,7 +306,8 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         customer: customer ? customer.get({ plain: true }) : null,
         delivery_returs: deliveryReturs.map((r: any) => r.get({ plain: true })),
         delivery_return_summary: deliveryReturnSummary,
-        warehouse_handover_latest
+        warehouse_handover_latest,
+        warehouse_handover_history
     });
 });
 

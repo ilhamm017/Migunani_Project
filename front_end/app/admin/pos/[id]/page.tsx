@@ -15,6 +15,11 @@ export default function PosSaleDetailPage() {
   const router = useRouter();
   const id = String(params?.id || '').trim();
 
+  const btn3dBase = 'btn-3d disabled:opacity-60';
+  const btn3dPrimary = `${btn3dBase} bg-emerald-600 hover:bg-emerald-700 text-white`;
+  const btn3dNeutral = `${btn3dBase} bg-white border border-slate-200 text-slate-700 hover:bg-slate-50`;
+  const btn3dDanger = `${btn3dBase} bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100`;
+
   const [sale, setSale] = useState<PosSaleRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -72,38 +77,44 @@ export default function PosSaleDetailPage() {
   if (!allowed) return null;
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link href="/admin/pos" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <ArrowLeft size={16} />
-            Kembali
-          </Link>
-          <Link href="/admin/pos/history" className="text-sm font-semibold text-slate-500 hover:text-slate-700">
-            Riwayat
-          </Link>
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
-            <h1 className="text-xl font-black text-slate-900">{receipt}</h1>
+	    <div className="p-6 space-y-5">
+	      <div className="flex items-center justify-between gap-3">
+	        <div className="flex items-center gap-3">
+	          <Link
+	            href="/admin/pos"
+	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	          >
+	            <ArrowLeft size={16} />
+	            Kembali
+	          </Link>
+	          <Link
+	            href="/admin/pos/history"
+	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	          >
+	            Riwayat
+	          </Link>
+	          <div>
+	            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
+	            <h1 className="text-xl font-black text-slate-900">{receipt}</h1>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/admin/pos/${encodeURIComponent(id)}/print`}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black uppercase tracking-wide text-white"
-          >
-            <Printer size={14} />
-            Print Struk
-          </Link>
-          <button
-            type="button"
-            onClick={handleRefund}
-            disabled={refunding || status !== 'paid'}
-            className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-black uppercase tracking-wide text-rose-700 disabled:opacity-60"
-            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa direfund' : ''}
-          >
-            <RotateCcw size={14} />
-            {refunding ? 'Refunding...' : 'Refund'}
+	        <div className="flex items-center gap-2">
+	          <Link
+	            href={`/admin/pos/${encodeURIComponent(id)}/print`}
+	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dPrimary}`}
+	          >
+	            <Printer size={14} />
+	            Print Struk
+	          </Link>
+	          <button
+	            type="button"
+	            onClick={handleRefund}
+	            disabled={refunding || status !== 'paid'}
+	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dDanger}`}
+	            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa direfund' : ''}
+	          >
+	            <RotateCcw size={14} />
+	            {refunding ? 'Refunding...' : 'Refund'}
           </button>
         </div>
       </div>
@@ -191,15 +202,15 @@ export default function PosSaleDetailPage() {
               ) : null}
             </div>
 
-            <button
-              type="button"
-              onClick={() => router.push('/admin/pos')}
-              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-700"
-            >
-              Buat Transaksi Baru
-            </button>
-          </div>
-        </div>
+	            <button
+	              type="button"
+	              onClick={() => router.push('/admin/pos')}
+	              className={`w-full rounded-2xl px-4 py-3 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	            >
+	              Buat Transaksi Baru
+	            </button>
+	          </div>
+	        </div>
       )}
     </div>
   );

@@ -571,8 +571,6 @@ export default function AdminInvoiceDetailPage() {
   const deliveryNetTotal = Number(deliveryReturnSummary.net_total);
   const deliveryReturnTotal = Number(deliveryReturnSummary.return_total || 0);
   const hasDeliveryReturnSummary = Object.keys(deliveryReturnSummary).length > 0 && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0;
-  const deliveryRetursRaw = Array.isArray(invoiceRow.delivery_returs) ? invoiceRow.delivery_returs : [];
-
   // If we have an actual invoice, prioritize its total field.
   // Fallback to allocatedSummary.total only if it's purely an order view without an invoice yet.
   const invoiceTotal = hasActualInvoice
@@ -599,24 +597,6 @@ export default function AdminInvoiceDetailPage() {
   const proofImageUrl = normalizeProofImageUrl(
     typeof invoiceRow.payment_proof_url === 'string' ? invoiceRow.payment_proof_url : null
   );
-  const deliveryProofImageUrl = normalizeProofImageUrl(
-    typeof invoiceRow.delivery_proof_url === 'string' ? invoiceRow.delivery_proof_url : null
-  );
-  const warehouseHandoverLatest = asRecord(invoiceRow.warehouse_handover_latest);
-  const checkerEvidenceUrl = normalizeProofImageUrl(
-    typeof warehouseHandoverLatest.evidence_url === 'string' ? (warehouseHandoverLatest.evidence_url as string) : null
-  );
-  const checkerItemEvidenceRows = Array.isArray(warehouseHandoverLatest.Items) ? (warehouseHandoverLatest.Items as unknown[]) : [];
-  const checkerItemEvidences = checkerItemEvidenceRows
-    .map((raw) => asRecord(raw))
-    .map((row) => ({
-      id: String(row.id || ''),
-      productId: String(asRecord(row.Product).id || row.product_id || '').trim(),
-      productName: String(asRecord(row.Product).name || '').trim(),
-      evidenceUrl: typeof row.evidence_url === 'string' ? normalizeProofImageUrl(row.evidence_url) : null,
-    }))
-    .filter((row) => Boolean(row.evidenceUrl));
-
   const handleAssignDriver = async () => {
     if (!selectedCourierId) {
       setError('Pilih driver terlebih dahulu.');
@@ -728,6 +708,16 @@ export default function AdminInvoiceDetailPage() {
               <p className="text-[11px] text-amber-700">Dibuka dari order #{resolvedFromOrderId.slice(-8).toUpperCase()}, otomatis dialihkan ke invoice ini.</p>
             )}
           </div>
+          <div className="flex items-center gap-2">
+            {resolvedInvoiceId && (
+              <Link
+                href={`/admin/orders/${encodeURIComponent(resolvedInvoiceId)}/delivery-history`}
+                className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black uppercase text-slate-700 hover:bg-slate-50"
+              >
+                Riwayat Pengiriman
+              </Link>
+            )}
+          </div>
           <div className="text-right">
             <p className="text-xs text-slate-500">{hasDeliveryReturnSummary ? 'Total Tagihan (Setelah Retur)' : 'Total Invoice'}</p>
             <p className="text-lg font-black text-slate-900">{formatCurrency(invoicePayableTotal)}</p>
@@ -829,85 +819,8 @@ export default function AdminInvoiceDetailPage() {
                 />
               </div>
             )}
-            {deliveryProofImageUrl && (
-              <div className="pt-2">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Bukti Pengiriman (Driver)</p>
-                <Image
-                  src={deliveryProofImageUrl}
-                  alt="Bukti pengiriman"
-                  width={960}
-                  height={540}
-                  className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
-                />
-              </div>
-            )}
-            {checkerEvidenceUrl && (
-              <div className="pt-2">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Bukti Checker Gudang</p>
-                <Image
-                  src={checkerEvidenceUrl}
-                  alt="Bukti checker gudang"
-                  width={960}
-                  height={540}
-                  className="w-full max-h-48 object-contain rounded-lg bg-white border border-slate-200"
-                />
-              </div>
-            )}
-            {checkerItemEvidences.length > 0 && (
-              <div className="pt-2">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Bukti Item Checker ({checkerItemEvidences.length})</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {checkerItemEvidences.map((row) => (
-                    <div key={row.id || `${row.productId}:${row.evidenceUrl}`} className="rounded-xl border border-slate-200 bg-white p-2">
-                      <p className="text-[10px] font-bold text-slate-700 truncate">
-                        {row.productName || (row.productId ? `Produk ${row.productId}` : 'Produk')}
-                      </p>
-                      {row.evidenceUrl ? (
-                        <Image
-                          src={row.evidenceUrl}
-                          alt="Bukti item checker"
-                          width={640}
-                          height={360}
-                          className="mt-1 w-full max-h-32 object-contain rounded-lg bg-slate-50 border border-slate-100"
-                        />
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
-
-        {hasDeliveryReturnSummary && deliveryRetursRaw.length > 0 && (
-          <div className="rounded-[24px] border border-rose-200 bg-rose-50/60 p-5 space-y-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-700">Retur Saat Pengiriman</p>
-              <p className="text-xs font-bold text-slate-700 mt-1">
-                Ada retur item pada invoice ini (nilai tagihan sudah menyesuaikan).
-              </p>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {(deliveryRetursRaw as unknown[]).map((raw) => {
-                const r = asRecord(raw);
-                const product = asRecord(r.Product);
-                const returType = String(r.retur_type || '');
-                const returTypeLabel = returType === 'delivery_damage' ? 'Barang rusak' : 'Tidak jadi beli';
-                return (
-                  <div key={String(r.id || Math.random())} className="rounded-2xl border border-rose-200/60 bg-white px-4 py-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-slate-900 truncate">{String(product.name || 'Produk')}</p>
-                      <p className="text-[10px] text-slate-500 truncate">
-                        {returTypeLabel} · Status {String(r.status || '-')} · {String(r.reason || '').trim() ? String(r.reason) : '-'}
-                      </p>
-                    </div>
-                    <span className="text-xs font-black text-rose-700">Qty {Number(r.qty || 0)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {!isWarehouseStaff && (
           <div className="space-y-2">
