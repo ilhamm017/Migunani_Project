@@ -5488,9 +5488,6 @@ export default function AdminOrdersWorkspace({
                           const allocatedQty = Math.max(0, Number(persistedAlloc[productId] || 0));
                           if (allocatedQty > 0) return null;
 
-                          const stockQtyRaw = Number(item?.Product?.stock_quantity);
-                          if (!Number.isFinite(stockQtyRaw) || stockQtyRaw > 0) return null;
-
                           const shortageQty = Math.max(0, orderedQty - allocatedQty);
                           if (shortageQty <= 0) return null;
 
@@ -5936,9 +5933,9 @@ export default function AdminOrdersWorkspace({
                               )}
                               {canMoveToIndent && (
                                 <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-3">
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">Indent (stok 0)</p>
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">Indent / Backorder (manual)</p>
                                   <p className="mt-1 text-[11px] text-indigo-700">
-                                    Ada <span className="font-black">{indentCandidates.length}</span> produk stok 0 yang belum dialokasikan (
+                                    Ada <span className="font-black">{indentCandidates.length}</span> produk yang belum dialokasikan (
                                     {indentCandidates.slice(0, 3).map((row) => row.sku).join(', ')}
                                     {indentCandidates.length > 3 ? ', …' : ''}
                                     ).
@@ -5953,7 +5950,7 @@ export default function AdminOrdersWorkspace({
                                       {allocationBusy ? 'Memproses...' : 'Pindahkan ke Indent'}
                                     </button>
                                     <p className="text-[10px] text-indigo-700">
-                                      Sistem akan membuat backorder untuk item yang stoknya 0 sehingga order masuk ke section backorder.
+                                      Sistem akan membuat backorder untuk item yang belum dialokasikan sehingga order masuk ke section backorder.
                                     </p>
                                   </div>
                                 </div>
