@@ -247,6 +247,21 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         };
     });
 
+    // Attach baseline (pricelist) vs final unit price so the invoice print page can show Subtotal from pricelist.
+    // NOTE: pricing_snapshot is still removed for non-admins below; we only expose the derived baseline number.
+    invoiceItems = invoiceItems.map((item: any) => {
+        const orderItem = item?.OrderItem || null;
+        const pricingSnapshot = toObjectOrEmpty(orderItem?.pricing_snapshot);
+        const baselineRaw = pricingSnapshot?.computed_unit_price ?? pricingSnapshot?.computedUnitPrice ?? null;
+        const finalUnitPrice = toFiniteNumberOrNull(item?.unit_price) ?? 0;
+        const baselineUnitPrice = toFiniteNumberOrNull(baselineRaw) ?? finalUnitPrice;
+        return {
+            ...item,
+            baseline_unit_price: baselineUnitPrice,
+            final_unit_price: finalUnitPrice,
+        };
+    });
+
     if (!isAdminRole) {
         invoiceItems = invoiceItems.map((item: any) => {
             if (!item || typeof item !== 'object') return item;
@@ -275,9 +290,8 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         invoiceItems = invoiceItems.map((item: any) => {
             const orderItem = item?.OrderItem || null;
             const pricingSnapshot = toObjectOrEmpty(orderItem?.pricing_snapshot);
-            const baselineRaw = pricingSnapshot?.computed_unit_price ?? pricingSnapshot?.computedUnitPrice ?? null;
-            const finalUnitPrice = toFiniteNumberOrNull(item?.unit_price) ?? 0;
-            const baselineUnitPrice = toFiniteNumberOrNull(baselineRaw) ?? finalUnitPrice;
+            const baselineUnitPrice = toFiniteNumberOrNull(item?.baseline_unit_price) ?? (toFiniteNumberOrNull(item?.unit_price) ?? 0);
+            const finalUnitPrice = toFiniteNumberOrNull(item?.final_unit_price) ?? (toFiniteNumberOrNull(item?.unit_price) ?? 0);
             const qty = Math.max(0, Number(item?.qty || 0));
             const diffPerUnit = Math.round((baselineUnitPrice - finalUnitPrice) * 100) / 100;
             const diffTotal = Math.round(diffPerUnit * qty * 100) / 100;

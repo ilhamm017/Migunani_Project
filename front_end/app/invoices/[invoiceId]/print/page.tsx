@@ -142,6 +142,20 @@ function InvoicePrintPageContent() {
     return Array.isArray(detail?.InvoiceItems) ? detail?.InvoiceItems || [] : [];
   }, [detail]);
 
+  const pricelistSubtotal = useMemo(() => {
+    return items.reduce((sum, item) => {
+      const qty = Number(item.invoice_qty ?? item.qty ?? 0);
+      const baseline = Number(item.baseline_unit_price ?? item.unit_price ?? 0);
+      const line = Math.round(baseline * qty * 100) / 100;
+      return sum + (Number.isFinite(line) ? line : 0);
+    }, 0);
+  }, [items]);
+
+  const displayedSubtotal = useMemo(() => {
+    if (items.length > 0) return pricelistSubtotal;
+    return Number(detail?.subtotal || 0);
+  }, [detail?.subtotal, items.length, pricelistSubtotal]);
+
   const orderIds = useMemo(() => {
     if (detail?.order_ids && detail.order_ids.length > 0) return detail.order_ids;
     const ids = new Set<string>();
@@ -436,7 +450,7 @@ function InvoicePrintPageContent() {
                   <div className="rounded-2xl bg-slate-900 text-white p-4">
                     <div className="flex items-center justify-between text-xs">
                       <span>Subtotal</span>
-                      <span>{formatCurrency(Number(detail.subtotal || 0))}</span>
+                      <span>{formatCurrency(displayedSubtotal)}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs mt-2">
                       <span>Diskon</span>
@@ -561,7 +575,7 @@ function InvoicePrintPageContent() {
               <div className="text-[11px] space-y-1">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatCurrency(Number(detail.subtotal || 0))}</span>
+                  <span>{formatCurrency(displayedSubtotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Diskon</span>
