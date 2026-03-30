@@ -24,6 +24,9 @@ export default function PosSalePrintPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const changeAmount = useMemo(() => Number(sale?.change_amount || 0), [sale]);
+  const isUnderpay = changeAmount < 0;
+
   const load = useCallback(async () => {
     if (!id) return;
     try {
@@ -195,10 +198,17 @@ export default function PosSalePrintPage() {
                 <span className="text-slate-500">Diterima</span>
                 <span className="font-bold text-slate-900">{formatCurrency(Number(sale.amount_received || 0))}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Kembalian</span>
-                <span className="font-bold text-slate-900">{formatCurrency(Number(sale.change_amount || 0))}</span>
-              </div>
+              {isUnderpay ? (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Hutang (kekurangan)</span>
+                  <span className="font-bold text-slate-900">{formatCurrency(Math.abs(changeAmount))}</span>
+                </div>
+              ) : (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Kembalian</span>
+                  <span className="font-bold text-slate-900">{formatCurrency(Math.max(0, changeAmount))}</span>
+                </div>
+              )}
             </div>
 
             {sale.note ? (

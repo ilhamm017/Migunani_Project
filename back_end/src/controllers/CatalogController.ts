@@ -9,7 +9,7 @@ import { applyTokenSearch, buildProductMatchCountLiteral, getCountNumber, splitS
 
 export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        const { page = 1, limit = 12, search, category_id, min_price, max_price, sort } = req.query;
+        const { page = 1, limit = 12, search, category_id, min_price, max_price, sort, featured } = req.query;
         const offset = (Number(page) - 1) * Number(limit);
 
         const whereClause: any = { status: 'active' };
@@ -42,6 +42,8 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
             if (max_price) whereClause.price[Op.lte] = max_price;
         }
 
+        const featuredMode = String(featured ?? '').trim().toLowerCase();
+
         const nameOrder: any = ['name', 'ASC'];
         // Qualify with the Product table alias to avoid ambiguity once Sequelize adds joins/subqueries.
         const stockDescOrder: any = [sequelize.literal('COALESCE(`Product`.`stock_quantity`, 0)'), 'DESC'];
@@ -55,6 +57,91 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         if (sort === 'stock_asc') order = [stockAscOrder, nameOrder];
 
         const tokens = splitSearchTokens(search);
+
+        if (featuredMode === 'home' && tokens.length === 0) {
+            const limitRaw = Number(limit);
+            const safeLimit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.trunc(limitRaw), 60) : 12;
+
+            const include = [
+                { model: Category, attributes: ['id', 'name', 'icon'] },
+                { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
+            ];
+            const attributes = [
+                'id',
+                'sku',
+                'name',
+                'price',
+                'unit',
+                'description',
+                'image_url',
+                'category_id',
+            ];
+
+            const total = await Product.count({ where: whereClause });
+
+            let featuredRows: any[] = [];
+
+            const initialRows = await Product.findAll({
+                where: whereClause,
+                attributes: [...attributes, 'stock_quantity'],
+                include,
+                order: [stockDescOrder, nameOrder],
+                limit: safeLimit
+            });
+
+            if (initialRows.length === 0) {
+                featuredRows = [];
+            } else {
+                const headStock = Number((initialRows[0] as any)?.get?.('stock_quantity') ?? (initialRows[0] as any)?.stock_quantity ?? 0);
+
+                if (!Number.isFinite(headStock) || headStock <= 0) {
+                    featuredRows = await Product.findAll({
+                        where: whereClause,
+                        attributes,
+                        include,
+                        order: sequelize.literal('RAND()') as any,
+                        limit: safeLimit
+                    });
+                } else {
+                    const restAllZero = initialRows.slice(1).every((row) => {
+                        const v = Number((row as any)?.get?.('stock_quantity') ?? (row as any)?.stock_quantity ?? 0);
+                        return !Number.isFinite(v) || v <= 0;
+                    });
+
+                    if (restAllZero && safeLimit > 1) {
+                        const head = initialRows[0];
+                        const headId = (head as any)?.id;
+                        const excludeWhere = headId ? { id: { [Op.notIn]: [headId] } } : {};
+                        const randomRows = await Product.findAll({
+                            where: { ...whereClause, ...excludeWhere },
+                            attributes,
+                            include,
+                            order: sequelize.literal('RAND()') as any,
+                            limit: safeLimit - 1
+                        });
+                        featuredRows = [head, ...randomRows];
+                    } else {
+                        featuredRows = initialRows;
+                    }
+                }
+            }
+
+            const safeRows = featuredRows.map((row) => {
+                const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
+                if (plain && typeof plain === 'object' && 'barcode' in plain) delete (plain as any).barcode;
+                if (plain && typeof plain === 'object' && 'stock_quantity' in plain) delete (plain as any).stock_quantity;
+                return plain;
+            });
+
+            res.json({
+                total,
+                totalPages: safeLimit > 0 ? Math.ceil(total / safeLimit) : 0,
+                currentPage: 1,
+                products: safeRows
+            });
+            return;
+        }
+
         const matchCountLiteral = tokens.length > 0
             ? buildProductMatchCountLiteral({ sequelize, tokens, productTableAlias: 'Product' })
             : null;

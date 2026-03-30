@@ -83,7 +83,7 @@ export default function GuestLanding() {
     const loadLandingData = async () => {
       try {
         const [productResponse, categoriesResponse] = await Promise.all([
-          api.catalog.getProducts({ page: 1, limit: 6 }),
+          api.catalog.getProducts({ page: 1, limit: 6, featured: 'home' }),
           api.catalog.getCategories({ limit: 6 }),
         ]);
 

@@ -53,6 +53,8 @@ export default function PosSaleDetailPage() {
     const raw = String(sale?.status || '').trim().toLowerCase();
     return raw === 'voided' ? 'refunded' : raw;
   }, [sale]);
+  const changeAmount = useMemo(() => Number(sale?.change_amount || 0), [sale]);
+  const isUnderpay = changeAmount < 0;
 
   const handleRefund = async () => {
     if (!sale?.id) return;
@@ -194,10 +196,17 @@ export default function PosSaleDetailPage() {
                 <span className="text-slate-500">Diterima</span>
                 <span className="font-black text-slate-900">{formatCurrency(Number(sale.amount_received || 0))}</span>
               </div>
-	              <div className="flex justify-between text-sm">
-	                <span className="text-slate-500">Kembalian</span>
-	                <span className="font-black text-emerald-700">{formatCurrency(Number(sale.change_amount || 0))}</span>
-	              </div>
+              {isUnderpay ? (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Hutang (kekurangan)</span>
+                  <span className="font-black text-rose-700">{formatCurrency(Math.abs(changeAmount))}</span>
+                </div>
+              ) : (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Kembalian</span>
+                  <span className="font-black text-emerald-700">{formatCurrency(Math.max(0, changeAmount))}</span>
+                </div>
+              )}
 	              <div className="flex justify-between text-sm">
 	                <span className="text-slate-500">Journal</span>
 	                <span className={`font-black ${String((sale as any).journal_status || '') === 'posted' ? 'text-emerald-700' : 'text-rose-700'}`}>

@@ -56,7 +56,7 @@ export default function MemberHome() {
       try {
         setLoading(true);
         const [productsRes, categoriesRes, ordersRes] = await Promise.all([
-          api.catalog.getProducts({ page: 1, limit: 4 }),
+          api.catalog.getProducts({ page: 1, limit: 4, featured: 'home' }),
           api.catalog.getCategories({ limit: 20 }),
           api.orders.getMyOrders({ page: 1, limit: 200 }),
         ]);
