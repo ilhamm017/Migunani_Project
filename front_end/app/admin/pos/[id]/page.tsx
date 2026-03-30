@@ -157,8 +157,8 @@ export default function PosSaleDetailPage() {
           </div>
 
           <div className="space-y-5">
-            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-2">
-              <p className="text-xs font-black uppercase tracking-widest text-slate-500">Ringkasan</p>
+	            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-2">
+	              <p className="text-xs font-black uppercase tracking-widest text-slate-500">Ringkasan</p>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Status</span>
                 <span className={`font-black ${status === 'paid' ? 'text-emerald-700' : 'text-rose-700'}`}>{status || '-'}</span>
@@ -194,14 +194,26 @@ export default function PosSaleDetailPage() {
                 <span className="text-slate-500">Diterima</span>
                 <span className="font-black text-slate-900">{formatCurrency(Number(sale.amount_received || 0))}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Kembalian</span>
-                <span className="font-black text-emerald-700">{formatCurrency(Number(sale.change_amount || 0))}</span>
-              </div>
-              {sale.note ? (
-                <div className="pt-3 border-t border-slate-100">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Catatan</p>
-                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{String(sale.note)}</p>
+	              <div className="flex justify-between text-sm">
+	                <span className="text-slate-500">Kembalian</span>
+	                <span className="font-black text-emerald-700">{formatCurrency(Number(sale.change_amount || 0))}</span>
+	              </div>
+	              <div className="flex justify-between text-sm">
+	                <span className="text-slate-500">Journal</span>
+	                <span className={`font-black ${String((sale as any).journal_status || '') === 'posted' ? 'text-emerald-700' : 'text-rose-700'}`}>
+	                  {String((sale as any).journal_status || '-') || '-'}
+	                </span>
+	              </div>
+	              {(sale as any).journal_error ? (
+	                <div className="pt-2">
+	                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Journal Error</p>
+	                  <p className="text-[11px] text-rose-700 whitespace-pre-wrap">{String((sale as any).journal_error)}</p>
+	                </div>
+	              ) : null}
+	              {sale.note ? (
+	                <div className="pt-3 border-t border-slate-100">
+	                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Catatan</p>
+	                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{String(sale.note)}</p>
                 </div>
               ) : null}
             </div>

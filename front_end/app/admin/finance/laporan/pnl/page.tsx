@@ -28,10 +28,12 @@ export default function PnLPage() {
     const [endDate, setEndDate] = useState(lastDay);
     const [data, setData] = useState<PnlSummary | null>(null);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const load = useCallback(async () => {
         try {
             setLoading(true);
+            setError('');
             const res = await api.admin.finance.getPnL({ startDate, endDate });
             const payload = res.data as Record<string, unknown>;
             setData({
@@ -44,6 +46,13 @@ export default function PnLPage() {
         } catch (e) {
             console.error(e);
             notifyAlert('Gagal memuat laporan');
+            const status = (e as any)?.response?.status;
+            const message = String((e as any)?.response?.data?.message || '').trim();
+            if (status === 403) {
+                setError('Tidak punya akses P&L. Login sebagai super_admin / admin_finance.');
+            } else {
+                setError(message || 'Gagal memuat laporan P&L.');
+            }
         } finally {
             setLoading(false);
         }
@@ -89,6 +98,11 @@ export default function PnLPage() {
             </div>
 
             <div className="p-5 space-y-4">
+                {error ? (
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 whitespace-pre-wrap">
+                        {error}
+                    </div>
+                ) : null}
                 {loading ? (
                     <div className="text-center py-10 text-slate-400">Loading...</div>
                 ) : data ? (
