@@ -76,6 +76,8 @@ export type PosSaleRow = {
   id?: string;
   receipt_no?: string | number;
   receipt_number?: string | null;
+  invoice_id?: string | null;
+  invoice_number?: string | null;
   cashier_user_id?: string;
   customer_name?: string | null;
   note?: string | null;
@@ -96,6 +98,7 @@ export type PosSaleRow = {
   refunded_by?: string | null;
   refund_reason?: string | null;
   Cashier?: UserLite | null;
+  Invoice?: { id?: string; invoice_number?: string; payment_status?: string } | null;
   Items?: PosSaleItemRow[];
   createdAt?: string;
   updatedAt?: string;

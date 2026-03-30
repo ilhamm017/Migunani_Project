@@ -5,6 +5,8 @@ interface InvoiceAttributes {
     id: string; // UUID
     order_id?: string | null; // UUID (legacy primary order)
     customer_id?: string | null; // UUID
+    sales_channel: 'app' | 'pos';
+    pos_sale_id?: string | null; // UUID
     invoice_number: string;
     payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
@@ -32,12 +34,14 @@ interface InvoiceAttributes {
     expiry_date?: Date | null;
 }
 
-interface InvoiceCreationAttributes extends Optional<InvoiceAttributes, 'id' | 'payment_status' | 'amount_paid' | 'change_amount' | 'tax_percent' | 'tax_amount' | 'pph_final_amount'> { }
+interface InvoiceCreationAttributes extends Optional<InvoiceAttributes, 'id' | 'sales_channel' | 'pos_sale_id' | 'payment_status' | 'amount_paid' | 'change_amount' | 'tax_percent' | 'tax_amount' | 'pph_final_amount'> { }
 
 class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implements InvoiceAttributes {
     declare id: string;
     declare order_id: string | null;
     declare customer_id: string | null;
+    declare sales_channel: 'app' | 'pos';
+    declare pos_sale_id: string | null;
     declare invoice_number: string;
     declare payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     declare payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
@@ -80,6 +84,15 @@ Invoice.init(
             allowNull: true,
         },
         customer_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        sales_channel: {
+            type: DataTypes.ENUM('app', 'pos'),
+            allowNull: false,
+            defaultValue: 'app',
+        },
+        pos_sale_id: {
             type: DataTypes.UUID,
             allowNull: true,
         },
@@ -208,6 +221,10 @@ Invoice.init(
             {
                 unique: true,
                 fields: ['invoice_number']
+            },
+            {
+                unique: true,
+                fields: ['pos_sale_id']
             }
         ]
     }

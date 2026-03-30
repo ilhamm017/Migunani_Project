@@ -139,6 +139,16 @@ Jalankan SQL ini untuk menambah field refund pada `pos_sales` (pengganti tombol 
 mysql -u root -p migunani_motor_db < back_end/sql/20260328_add_pos_sales_refund_fields.sql
 ```
 
+## Link POS sales to invoices (POS punya invoice_id + nomor invoice khusus)
+
+Jalankan SQL ini untuk menambah:
+- `invoices.sales_channel` (`app` vs `pos`)
+- `invoices.pos_sale_id` + FK ke `pos_sales`
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260331_add_invoices_sales_channel_and_pos_sale_link.sql
+```
+
 ## Bootstrap FIFO inventory batches dari stok legacy (fix "Insufficient inventory batches")
 
 Jika kamu sudah punya stok di `products.stock_quantity` / `products.allocated_quantity`, tapi modul FIFO baru (tabel `product_cost_states` + `inventory_batches`) masih kosong, posting goods out bisa gagal dengan pesan:

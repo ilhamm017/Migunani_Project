@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
-import { Invoice, InvoiceItem, OrderItem, Product, User, Order, Retur, DeliveryHandover, DeliveryHandoverItem, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, User, Order, Retur, DeliveryHandover, DeliveryHandoverItem, sequelize } from '../models';
 import { Op, QueryTypes } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
@@ -101,6 +101,88 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
         }
     } else if (!['super_admin', 'admin_finance', 'kasir', 'admin_gudang'].includes(userRole)) {
         throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
+    }
+
+    const salesChannel = String((invoice as any)?.sales_channel || '').trim().toLowerCase();
+    const posSaleId = normalizeNullableUuid((invoice as any)?.pos_sale_id);
+    if (salesChannel === 'pos' || posSaleId) {
+        if (!posSaleId) {
+            throw new CustomError('Invoice POS tidak memiliki pos_sale_id.', 409);
+        }
+
+        const sale = await PosSale.findByPk(posSaleId, {
+            include: [
+                { association: 'Cashier' as any, attributes: ['id', 'name', 'role'], required: false },
+                { association: 'Customer' as any, attributes: ['id', 'name', 'email', 'whatsapp_number'], required: false },
+            ]
+        }) as any;
+        if (!sale) {
+            throw new CustomError('Transaksi POS untuk invoice ini tidak ditemukan.', 404);
+        }
+
+        const items = await PosSaleItem.findAll({
+            where: { pos_sale_id: posSaleId },
+            order: [['id', 'ASC']]
+        }) as any[];
+
+        const plain = invoice.get({ plain: true }) as any;
+        const mappedItems = (Array.isArray(items) ? items : []).map((row: any) => {
+            const qty = Math.max(0, Math.trunc(Number(row?.qty || 0)));
+            const unitPrice = Number(row?.unit_price || 0);
+            const unitCost = Number(row?.unit_cost || 0);
+            const lineTotal = Number(row?.line_total || 0);
+            return {
+                id: row?.id,
+                qty,
+                unit_price: unitPrice,
+                unit_cost: unitCost,
+                line_total: lineTotal,
+                order_item_id: null,
+                OrderItem: {
+                    id: null,
+                    order_id: null,
+                    product_id: String(row?.product_id || '').trim() || null,
+                    qty,
+                    ordered_qty_original: qty,
+                    qty_canceled_backorder: 0,
+                    qty_canceled_manual: 0,
+                    pricing_snapshot: null,
+                    Product: {
+                        name: String(row?.name_snapshot || '').trim() || null,
+                        sku: String(row?.sku_snapshot || '').trim() || null,
+                        unit: String(row?.unit_snapshot || '').trim() || null,
+                    }
+                },
+                ordered_qty: qty,
+                invoice_qty: qty,
+                allocated_qty: qty,
+                remaining_qty: 0,
+                previously_allocated_qty: 0,
+                canceled_backorder_qty: 0,
+            };
+        });
+
+        plain.Items = mappedItems;
+
+        const invoiceCustomerId = String(plain?.customer_id || '').trim();
+        const customer = invoiceCustomerId
+            ? await User.findOne({
+                where: { id: invoiceCustomerId },
+                attributes: ['id', 'name', 'email', 'whatsapp_number']
+            })
+            : null;
+
+        return res.json({
+            ...plain,
+            InvoiceItems: mappedItems,
+            order_ids: [],
+            customer: customer ? customer.get({ plain: true }) : null,
+            delivery_returs: [],
+            delivery_return_summary: null,
+            warehouse_handover_latest: null,
+            warehouse_handover_history: null,
+            pos_sale: sale.get({ plain: true }),
+        });
     }
 
     const plain = invoice.get({ plain: true }) as any;

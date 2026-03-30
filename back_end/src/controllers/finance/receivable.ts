@@ -23,7 +23,8 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
         // 1. Get AR from Invoices (payment_status != 'paid')
         const ar = await Invoice.findAll({
             where: {
-                payment_status: { [Op.ne]: 'paid' } // unpaid, cod_pending
+                payment_status: { [Op.ne]: 'paid' }, // unpaid, cod_pending
+                sales_channel: 'app'
             },
             include: buildAccountsReceivableInclude(),
             order: [['createdAt', 'ASC']] // Oldest first
@@ -282,7 +283,8 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
         const invoice = await Invoice.findOne({
             where: {
                 id: invoiceId,
-                payment_status: { [Op.ne]: 'paid' }
+                payment_status: { [Op.ne]: 'paid' },
+                sales_channel: 'app'
             },
             include: buildAccountsReceivableInclude()
         });

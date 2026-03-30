@@ -53,3 +53,11 @@ export const generateInvoiceNumber = (orderId: string, now = new Date()): string
     const randomPart = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `INV/${datePart}/${uniquePart || 'ORDER'}-${timePart}${randomPart}`;
 };
+
+export const generatePosInvoiceNumber = (receiptNo: unknown, paidAt = new Date()): string => {
+    const safe = Number(receiptNo);
+    const seq = Number.isFinite(safe) && safe > 0 ? Math.trunc(safe) : 0;
+    const datePart = `${paidAt.getFullYear()}${String(paidAt.getMonth() + 1).padStart(2, '0')}${String(paidAt.getDate()).padStart(2, '0')}`;
+    const seqPart = String(seq).padStart(9, '0');
+    return `POS/${datePart}/${seqPart}`;
+};

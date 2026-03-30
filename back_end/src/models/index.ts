@@ -361,6 +361,8 @@ OrderItem.hasOne(Backorder, { foreignKey: 'order_item_id' });
 	// POS Sales (Kasir Offline)
 	PosSale.hasMany(PosSaleItem, { foreignKey: 'pos_sale_id', as: 'Items' });
 	PosSaleItem.belongsTo(PosSale, { foreignKey: 'pos_sale_id', as: 'Sale' });
+	PosSale.hasOne(Invoice, { foreignKey: 'pos_sale_id', as: 'Invoice' });
+	Invoice.belongsTo(PosSale, { foreignKey: 'pos_sale_id', as: 'PosSale' });
 	PosSale.belongsTo(User, { foreignKey: 'cashier_user_id', as: 'Cashier' });
 	User.hasMany(PosSale, { foreignKey: 'cashier_user_id', as: 'PosSales' });
 	PosSale.belongsTo(User, { foreignKey: 'customer_id', as: 'Customer' });

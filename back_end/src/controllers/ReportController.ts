@@ -948,6 +948,7 @@ const computeTopCustomersMergedRows = async (params: { start: Date; end: Date; l
                 payment_status: 'paid',
                 verified_at: { [Op.between]: [start, end] },
                 customer_id: { [Op.ne]: null },
+                sales_channel: 'app',
             },
             group: [sequelize.col('Invoice.customer_id')],
             order: [[sequelize.literal('tx_count'), 'DESC']],
@@ -967,6 +968,7 @@ const computeTopCustomersMergedRows = async (params: { start: Date; end: Date; l
                         payment_status: 'paid',
                         verified_at: { [Op.between]: [start, end] },
                         customer_id: { [Op.ne]: null },
+                        sales_channel: 'app',
                     }
                 }
             ],

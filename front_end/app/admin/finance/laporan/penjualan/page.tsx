@@ -27,19 +27,63 @@ export default function LaporanPenjualanPage() {
   const [startDate, setStartDate] = useState(defaults.startDate);
   const [endDate, setEndDate] = useState(defaults.endDate);
   const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState<OrderRow[]>([]);
+  const [rows, setRows] = useState<Array<OrderRow & { channel?: 'APP' | 'POS'; doc_number?: string | null; href?: string | null; ts?: number }>>([]);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await api.admin.orderManagement.getAll({
-        page: 1,
-        limit: 200,
-        status: 'all',
-        startDate,
-        endDate,
-      });
-      setRows(Array.isArray(res.data?.orders) ? (res.data.orders as OrderRow[]) : []);
+      const [orderRes, posRes] = await Promise.all([
+        api.admin.orderManagement.getAll({
+          page: 1,
+          limit: 200,
+          status: 'all',
+          startDate,
+          endDate,
+        }),
+        api.admin.pos.listSales({
+          page: 1,
+          limit: 200,
+          status: 'paid',
+          startDate,
+          endDate,
+        }),
+      ]);
+
+      const orderRows = Array.isArray(orderRes.data?.orders) ? (orderRes.data.orders as OrderRow[]) : [];
+      const posRows = Array.isArray(posRes.data?.rows) ? (posRes.data.rows as any[]) : [];
+
+      const merged = [
+        ...orderRows.map((row) => {
+          const ts = Date.parse(String(row.createdAt || '')) || 0;
+          return {
+            ...row,
+            channel: 'APP' as const,
+            doc_number: row.invoice_number ? String(row.invoice_number) : null,
+            href: row.id ? `/admin/orders/${row.id}` : null,
+            ts,
+          };
+        }),
+        ...posRows.map((row) => {
+          const paidAt = String(row?.paid_at || row?.createdAt || '').trim();
+          const ts = Date.parse(paidAt) || 0;
+          const doc = String(row?.invoice_number || row?.receipt_number || '').trim() || null;
+          return {
+            id: String(row?.id || ''),
+            status: String(row?.status || ''),
+            createdAt: paidAt || null,
+            customer_name: String(row?.Customer?.name || row?.customer_name || 'Walk-in'),
+            total_amount: Number(row?.total || 0),
+            invoice_number: doc,
+            channel: 'POS' as const,
+            doc_number: doc,
+            href: row?.id ? `/admin/pos/${encodeURIComponent(String(row.id))}` : null,
+            ts,
+          } as any;
+        }),
+      ].filter((row) => row && row.id);
+
+      merged.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+      setRows(merged);
     } catch (e) {
       console.error(e);
       notifyAlert('Gagal memuat laporan penjualan');
@@ -55,7 +99,10 @@ export default function LaporanPenjualanPage() {
   const normalizedRows = useMemo(() => rows.filter((row) => row && row.id), [rows]);
 
   const { totalOmzet, totalOrder } = useMemo(() => {
-    const validRows = normalizedRows.filter((row) => !EXCLUDED_STATUSES.has(String(row.status || '').trim()));
+    const validRows = normalizedRows.filter((row) => {
+      if (row.channel === 'POS') return String(row.status || '').trim() === 'paid';
+      return !EXCLUDED_STATUSES.has(String(row.status || '').trim());
+    });
     return {
       totalOmzet: validRows.reduce((sum, row) => sum + toNumber(row.total_amount), 0),
       totalOrder: validRows.length,
@@ -92,7 +139,7 @@ export default function LaporanPenjualanPage() {
           </button>
         </div>
         <p className="text-[10px] text-slate-500 mt-2">
-          Catatan: list dibatasi 200 order terbaru pada periode.
+          Catatan: list dibatasi 200 order + 200 transaksi POS pada periode.
         </p>
       </div>
 
@@ -127,14 +174,15 @@ export default function LaporanPenjualanPage() {
               {normalizedRows.map((row) => (
                 <Link
                   key={String(row.id)}
-                  href={`/admin/orders/${row.id}`}
+                  href={String(row.href || `/admin/orders/${row.id}`)}
                   className="block rounded-xl border border-slate-200 bg-slate-50 p-3 hover:bg-slate-100"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-sm font-bold text-slate-900 truncate">{toText(row.customer_name, 'Customer')}</p>
                       <p className="text-xs text-slate-600 truncate">
-                        Order {toText(row.id).slice(-8).toUpperCase()} • {row.invoice_number ? `Inv ${row.invoice_number} • ` : ''}
+                        {row.channel === 'POS' ? 'POS' : 'Order'} {toText(row.id).slice(-8).toUpperCase()}
+                        {row.doc_number ? ` • ${row.channel === 'POS' ? 'Doc' : 'Inv'} ${row.doc_number} • ` : ' • '}
                         Status {toText(row.status)}
                       </p>
                       {row.createdAt ? (

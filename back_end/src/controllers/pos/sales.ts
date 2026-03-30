@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import { Op, QueryTypes } from 'sequelize';
-import { Account, Category, ClearancePromo, CustomerProfile, InventoryBatch, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
+import { Account, Category, ClearancePromo, CustomerProfile, InventoryBatch, Invoice, PosSale, PosSaleItem, Product, StockMutation, User, sequelize } from '../../models';
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
+import { generatePosInvoiceNumber } from '../../utils/invoice';
 import { resolveEffectiveTierPricing } from '../order/utils';
 
 const round2 = (value: unknown) => Math.round(Number(value || 0) * 100) / 100;
@@ -387,6 +388,31 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
 
         await sale.reload({ transaction: t });
         const receiptNumber = String((sale as any).receipt_number || '').trim() || null;
+        const receiptNo = (sale as any).receipt_no;
+
+        const invoicePaymentStatus = amountReceived >= total ? 'paid' : 'unpaid';
+        const invoice = await Invoice.create({
+            order_id: null,
+            customer_id: customer ? String((customer as any).id) : null,
+            sales_channel: 'pos',
+            pos_sale_id: String(sale.id),
+            invoice_number: generatePosInvoiceNumber(receiptNo, paidAt),
+            payment_method: 'cash_store',
+            payment_status: invoicePaymentStatus as any,
+            amount_paid: round2(Math.min(amountReceived, total)),
+            amount_received: amountReceived,
+            change_amount: changeAmount,
+            subtotal: subtotalBase,
+            discount_amount: discountAmount,
+            shipping_fee_total: 0,
+            tax_mode_snapshot: computedTax.tax_mode_snapshot,
+            tax_percent: taxPercent,
+            tax_amount: taxAmount,
+            pph_final_amount: computedTax.pph_final_amount,
+            total,
+            verified_by: invoicePaymentStatus === 'paid' ? userId : null,
+            verified_at: invoicePaymentStatus === 'paid' ? paidAt : null,
+        } as any, { transaction: t });
 
         const itemRows: any[] = [];
         let totalCogs = 0;
@@ -552,6 +578,10 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
         const responsePayload = {
             id: sale.id,
             receipt_number: receiptNumber,
+            receipt_no: receiptNo,
+            invoice_id: String(invoice.id),
+            invoice_number: String((invoice as any).invoice_number || ''),
+            payment_status: String((invoice as any).payment_status || ''),
             total,
             amount_received: amountReceived,
             change_amount: changeAmount
@@ -632,6 +662,10 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
             association: 'Cashier' as any,
             attributes: ['id', 'name', 'role'],
             required: false,
+        }, {
+            association: 'Invoice' as any,
+            attributes: ['id', 'invoice_number', 'payment_status'],
+            required: false,
         }],
         order: [['paid_at', 'DESC'], ['createdAt', 'DESC']],
         limit,
@@ -642,7 +676,13 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
         page,
         limit,
         total: result.count,
-        rows: result.rows.map((row: any) => row.get({ plain: true })),
+        rows: result.rows.map((row: any) => {
+            const plain: any = row.get({ plain: true });
+            const inv = plain?.Invoice || null;
+            plain.invoice_id = inv?.id ? String(inv.id) : null;
+            plain.invoice_number = inv?.invoice_number ? String(inv.invoice_number) : null;
+            return plain;
+        }),
         period: {
             start: start.toISOString(),
             end: end.toISOString(),
@@ -660,6 +700,11 @@ export const getPosSaleById = asyncWrapper(async (req: Request, res: Response) =
                 association: 'Cashier' as any,
                 attributes: ['id', 'name', 'role'],
                 required: false
+            },
+            {
+                association: 'Invoice' as any,
+                attributes: ['id', 'invoice_number', 'payment_status'],
+                required: false
             }
         ]
     });
@@ -672,6 +717,9 @@ export const getPosSaleById = asyncWrapper(async (req: Request, res: Response) =
     });
 
     const payload: any = sale.get({ plain: true });
+    const inv = payload?.Invoice || null;
+    payload.invoice_id = inv?.id ? String(inv.id) : null;
+    payload.invoice_number = inv?.invoice_number ? String(inv.invoice_number) : null;
     payload.Items = items.map((row: any) => row.get({ plain: true }));
 
     res.json(payload);
