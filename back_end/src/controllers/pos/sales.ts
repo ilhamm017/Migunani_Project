@@ -232,14 +232,6 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
             let unitPrice = normalPrice;
             if (it.unit_price_override !== null) {
                 const override = round2(it.unit_price_override);
-                if (override > normalPrice) {
-                    await t.rollback();
-                    throw new CustomError(`Harga override tidak boleh lebih tinggi dari harga normal untuk ${String(product?.sku || it.product_id)}`, 400);
-                }
-                if (userRole === 'kasir' && override < baseCost) {
-                    await t.rollback();
-                    throw new CustomError(`Kasir tidak boleh menurunkan harga di bawah modal untuk ${String(product?.sku || it.product_id)}`, 400);
-                }
                 unitPrice = override;
             }
 

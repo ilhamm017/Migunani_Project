@@ -430,8 +430,13 @@ export default function AdminPosPage() {
     setCart((prev) => prev.map((row) => {
       if (row.product_id !== productId) return row;
       if (raw.trim() === '') {
-        const { unit_price_override, discount_pct_input, unit_price_override_input, line_total_override_input, ...rest } = row;
-        return { ...rest, discount_pct_input: undefined, unit_price_override_input: undefined, line_total_override_input: undefined } as CartLine;
+        return {
+          ...row,
+          unit_price_override: undefined,
+          discount_pct_input: undefined,
+          unit_price_override_input: undefined,
+          line_total_override_input: undefined,
+        };
       }
       return {
         ...row,
@@ -446,7 +451,15 @@ export default function AdminPosPage() {
   const updateDiscountPctInput = (productId: string, raw: string, regularUnit: number) => {
     setCart((prev) => prev.map((row) => {
       if (row.product_id !== productId) return row;
-      if (raw === '') return { ...row, discount_pct_input: '' };
+      if (raw.trim() === '') {
+        return {
+          ...row,
+          unit_price_override: undefined,
+          discount_pct_input: undefined,
+          unit_price_override_input: undefined,
+          line_total_override_input: undefined,
+        };
+      }
       const parsed = Number(raw);
       if (!Number.isFinite(parsed)) return { ...row, discount_pct_input: raw };
       const pct = clampPercentage(parsed);
@@ -468,8 +481,13 @@ export default function AdminPosPage() {
     setCart((prev) => prev.map((row) => {
       if (row.product_id !== productId) return row;
       if (raw.trim() === '') {
-        const { unit_price_override, discount_pct_input, unit_price_override_input, line_total_override_input, ...rest } = row;
-        return { ...rest, discount_pct_input: undefined, unit_price_override_input: undefined, line_total_override_input: undefined } as CartLine;
+        return {
+          ...row,
+          unit_price_override: undefined,
+          discount_pct_input: undefined,
+          unit_price_override_input: undefined,
+          line_total_override_input: undefined,
+        };
       }
       const safeTotal = parsed === null ? 0 : parsed;
       const nextUnit = Math.max(0, Math.round(safeTotal / qtySafe));
@@ -677,8 +695,6 @@ export default function AdminPosPage() {
                   const discountInputValue = row.discount_pct_input === undefined
                     ? (autoDiscountPct > 0 ? String(autoDiscountPct) : '')
                     : String(row.discount_pct_input || '');
-                  const overrideInvalid =
-                    (Number.isFinite(row.unit_price_override) && (Number(row.unit_price_override) > normalUnit || Number(row.unit_price_override) < row.base_price));
 
                   return (
                     <div key={row.product_id} className="rounded-2xl border border-slate-200 p-4">
@@ -748,9 +764,9 @@ export default function AdminPosPage() {
                                   />
                                 </div>
 
-                                <div className="sm:col-span-2">
-                                  <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
-                                  <input
+	                                <div className="sm:col-span-2">
+	                                  <label className="text-[10px] font-bold text-slate-500 uppercase">Dipakai (total)</label>
+	                                  <input
                                     type="text"
                                     inputMode="numeric"
                                     autoComplete="off"
@@ -768,17 +784,18 @@ export default function AdminPosPage() {
                                     }}
                                     onChange={(e) => updateLineTotalInput(row.product_id, e.target.value, row.qty, normalUnit)}
                                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-right"
-                                  />
-                                </div>
+	                                  />
+	                                </div>
 
-                                {overrideInvalid ? (
-                                  <p className="mt-1 text-[11px] text-rose-600">
-                                    Override tidak valid (maks {formatCurrency(normalUnit)} / min modal {formatCurrency(row.base_price)}).
-                                  </p>
-                                ) : null}
-                              </div>
-                        </div>
-                        <div>
+	                                <div className="sm:col-span-2">
+	                                  <p className="text-[11px] text-slate-500">
+	                                    Harga jual fix (DB): <span className="font-black text-slate-900">{formatCurrency(regularUnit)}</span> / unit
+	                                  </p>
+	                                </div>
+
+	                              </div>
+	                        </div>
+	                        <div>
                           <label className="text-[10px] font-bold text-slate-500 uppercase">Line Total</label>
                           <p className="mt-2 text-sm font-black text-slate-900">{formatCurrency(lineTotal)}</p>
                         </div>

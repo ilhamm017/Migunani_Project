@@ -568,22 +568,8 @@ function ManualOrderContent() {
                     return false;
                 }
 
-	                if (canOverridePricing && String(user?.role || '').trim() === 'kasir') {
-	                    const invalid = cart.find((item) => {
-                            if (item.clearance_promo_id) return false;
-	                        const deal = getDealUnitPrice(item);
-	                        const costRaw = Number(item?.product?.base_price);
-	                        if (!Number.isFinite(costRaw) || costRaw <= 0) return false;
-	                        return deal < costRaw;
-	                    });
-                    if (invalid) {
-                        showSubmitPopup('error', 'Tidak Diizinkan', 'Kasir tidak boleh menurunkan harga di bawah modal. (Cek harga deal vs base_price produk)');
-                        return false;
-                    }
-                }
-
-                return true;
-            }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
+	                return true;
+	            }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
 		
 			    const addToCart = (product: ProductOption) => {
 				        setCart(prev => {
