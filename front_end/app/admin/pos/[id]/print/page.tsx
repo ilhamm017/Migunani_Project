@@ -15,6 +15,7 @@ export default function PosSalePrintPage() {
   const searchParams = useSearchParams();
   const id = String(params?.id || '').trim();
   const autoPrint = (searchParams?.get('autoPrint') || '') === '1';
+  const closeAfterPrint = (searchParams?.get('closeAfterPrint') || '') === '1';
   const hasPrintedRef = useRef(false);
 
   const [sale, setSale] = useState<PosSaleRow | null>(null);
@@ -49,8 +50,25 @@ export default function PosSalePrintPage() {
     if (loading || error || !sale) return;
     if (hasPrintedRef.current) return;
     hasPrintedRef.current = true;
-    window.setTimeout(() => window.print(), 250);
+    window.setTimeout(() => {
+      try {
+        window.focus();
+      } catch { }
+      window.print();
+    }, 350);
   }, [allowed, autoPrint, error, loading, sale]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (!closeAfterPrint) return;
+    const onAfterPrint = () => {
+      try {
+        window.close();
+      } catch { }
+    };
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => window.removeEventListener('afterprint', onAfterPrint);
+  }, [allowed, closeAfterPrint]);
 
   const receipt = useMemo(() => String(sale?.receipt_number || '').trim() || '-', [sale]);
   const paidAt = useMemo(() => (sale as any)?.paid_at || (sale as any)?.paidAt || sale?.createdAt, [sale]);
@@ -59,6 +77,12 @@ export default function PosSalePrintPage() {
 
   return (
     <div className="p-6 space-y-4">
+      <style>{`
+        @media print {
+          @page { margin: 0; }
+          html, body { background: #fff !important; }
+        }
+      `}</style>
       <div className="flex items-center justify-between gap-3 print:hidden">
         <Link href={`/admin/pos/${encodeURIComponent(id)}`} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <ArrowLeft size={16} />
@@ -73,6 +97,9 @@ export default function PosSalePrintPage() {
           Print
         </button>
       </div>
+      <p className="text-[12px] text-slate-500 print:hidden">
+        Catatan: browser tidak bisa memilih printer secara otomatis; printer yang dipakai mengikuti default/terakhir dipilih di dialog print.
+      </p>
 
       {error ? <p className="text-sm text-rose-700 print:hidden">{error}</p> : null}
       {loading || !sale ? (

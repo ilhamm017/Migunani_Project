@@ -514,6 +514,7 @@ export default function AdminPosPage() {
 
   const handleSubmit = async (options?: { print: boolean }) => {
     const shouldPrint = !!options?.print;
+    let printWindow: Window | null = null;
     try {
       setSubmitting(true);
       setSubmitError('');
@@ -527,6 +528,10 @@ export default function AdminPosPage() {
       if (Number(amountReceived || 0) < Number(subtotalAfterDiscountEst || 0) && !selectedCustomer?.id) {
         setSubmitError('Transaksi hutang: wajib pilih customer yang terdaftar.');
         return;
+      }
+
+      if (shouldPrint) {
+        printWindow = window.open('', '_blank', 'noopener,noreferrer');
       }
 
       const payload = {
@@ -557,11 +562,16 @@ export default function AdminPosPage() {
       setCustomerQuery('');
       setCustomerResults([]);
       setNote('');
-      setDiscountPercent(0);
+      setDiscountPercentInput('');
 
       if (shouldPrint) {
-        const printUrl = `/admin/pos/${encodeURIComponent(id)}/print?autoPrint=1`;
-        router.push(printUrl);
+        const printUrl = `/admin/pos/${encodeURIComponent(id)}/print?autoPrint=1&closeAfterPrint=1`;
+        if (printWindow) {
+          printWindow.location.href = printUrl;
+          printWindow.focus();
+        } else {
+          router.push(printUrl);
+        }
         return;
       }
 
@@ -570,6 +580,11 @@ export default function AdminPosPage() {
       const message = typeof e === 'object' && e && 'response' in e
         ? String((e as any).response?.data?.message || '')
         : '';
+      if (printWindow && !printWindow.closed) {
+        try {
+          printWindow.close();
+        } catch { }
+      }
       setSubmitError(message || 'Gagal menyimpan transaksi POS.');
     } finally {
       setSubmitting(false);
@@ -990,7 +1005,7 @@ export default function AdminPosPage() {
                 onClick={() => void handleSubmit({ print: true })}
                 disabled={submitting || cart.length === 0}
                 className={`w-full inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${btn3dPrimary}`}
-                title="Simpan transaksi dan buka struk untuk print (pilih printer thermal bluetooth dari dialog print browser)."
+                title="Simpan transaksi lalu buka struk dan otomatis memunculkan dialog print (printer mengikuti default/terakhir dipilih di browser)."
               >
                 <Printer size={16} />
                 {submitting ? 'Menyimpan...' : 'Bayar & Print'}
