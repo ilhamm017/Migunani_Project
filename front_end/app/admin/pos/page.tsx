@@ -103,10 +103,11 @@ export default function AdminPosPage() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
 
   const [note, setNote] = useState('');
-  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [discountPercentInput, setDiscountPercentInput] = useState<string>('');
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [amountReceived, setAmountReceived] = useState<number>(0);
+  const [amountReceivedInput, setAmountReceivedInput] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
@@ -236,6 +237,14 @@ export default function AdminPosPage() {
     const unitPrice = Number.isFinite(line.unit_price_override) ? Number(line.unit_price_override) : normalUnit;
     return sum + (unitPrice * line.qty);
   }, 0)), [cart, getProductPrice, selectedTier]);
+
+  const discountPercent = useMemo(() => {
+    const normalized = String(discountPercentInput || '').trim();
+    if (!normalized) return 0;
+    const parsed = Number(normalized.replace(',', '.'));
+    if (!Number.isFinite(parsed)) return 0;
+    return clampPercentage(parsed);
+  }, [discountPercentInput]);
 
   const discountAmountEst = useMemo(() => {
     const pct = Math.min(100, Math.max(0, Number(discountPercent || 0)));
@@ -523,7 +532,7 @@ export default function AdminPosPage() {
       const payload = {
         customer_id: selectedCustomer?.id || undefined,
         note: note.trim() || undefined,
-        discount_percent: Math.min(100, Math.max(0, Number(discountPercent || 0))) || undefined,
+        discount_percent: discountPercent > 0 ? discountPercent : undefined,
         amount_received: Number(amountReceived || 0),
         items: cart.map((row) => {
           const normalUnit = getProductPrice(row, selectedTier);
@@ -581,23 +590,15 @@ export default function AdminPosPage() {
         </div>
         <div className="ml-auto">
           <div className="flex items-center gap-2">
-            <Link
-              href="/admin/pos/history"
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
-            >
-              Riwayat
-            </Link>
-            <Link
-              href="/admin/pos"
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
-              onClick={() => searchInputRef.current?.focus()}
-            >
-              <Printer size={14} />
-              Fokus Cari
-            </Link>
-          </div>
-        </div>
-      </div>
+	            <Link
+	              href="/admin/pos/history"
+	              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	            >
+	              Riwayat
+	            </Link>
+	          </div>
+	        </div>
+	      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -936,29 +937,39 @@ export default function AdminPosPage() {
                 Catatan: total final dihitung oleh backend (termasuk pajak jika aktif).
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-1">
-                <label className="text-[10px] font-bold text-slate-500 uppercase">Diskon (%)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={discountPercent}
-                  onChange={(e) => setDiscountPercent(Number(e.target.value || 0))}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              </div>
-              <div className="col-span-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase">Uang dibayar</label>
-                <input
-                  type="number"
-                  value={amountReceived}
-                  onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-                  placeholder="Nominal dibayar customer"
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
-                />
-              </div>
-            </div>
+	            <div className="grid grid-cols-3 gap-2">
+	              <div className="col-span-1">
+	                <label className="text-[10px] font-bold text-slate-500 uppercase">Diskon (%)</label>
+	                <input
+	                  type="text"
+	                  inputMode="decimal"
+	                  autoComplete="off"
+	                  placeholder="-"
+	                  value={discountPercentInput}
+	                  onChange={(e) => setDiscountPercentInput(e.target.value)}
+	                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+	                />
+	              </div>
+	              <div className="col-span-2">
+	                <label className="text-[10px] font-bold text-slate-500 uppercase">Uang dibayar</label>
+	                <input
+	                  type="text"
+	                  inputMode="numeric"
+	                  autoComplete="off"
+	                  value={String(amountReceivedInput ?? (amountReceived > 0 ? formatIdrNumber(amountReceived) : ''))}
+	                  onFocus={() => setAmountReceivedInput(String(Math.max(0, Math.trunc(Number(amountReceived || 0)))))}
+	                  onBlur={() => setAmountReceivedInput(undefined)}
+	                  onChange={(e) => {
+	                    const raw = e.target.value;
+	                    setAmountReceivedInput(raw);
+	                    const parsed = parseIdrInput(raw);
+	                    setAmountReceived(parsed === null ? 0 : parsed);
+	                  }}
+	                  placeholder="Nominal dibayar customer"
+	                  className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-2 text-sm"
+	                />
+	              </div>
+	            </div>
 
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase">Catatan (Opsional)</label>

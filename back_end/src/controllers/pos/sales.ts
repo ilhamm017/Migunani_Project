@@ -582,8 +582,23 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
     const startDateRaw = String((req.query as any)?.startDate || '').trim();
     const endDateRaw = String((req.query as any)?.endDate || '').trim();
 
-    const start = startDateRaw ? new Date(startDateRaw) : new Date();
-    const end = endDateRaw ? new Date(endDateRaw) : new Date();
+    const parseDateOnlyLocal = (raw: string): Date | null => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw || '').trim());
+        if (!m) return null;
+        const year = Number(m[1]);
+        const month = Number(m[2]);
+        const day = Number(m[3]);
+        if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+        if (month < 1 || month > 12) return null;
+        if (day < 1 || day > 31) return null;
+        return new Date(year, month - 1, day);
+    };
+
+    const fallbackEnd = new Date();
+    const fallbackStart = new Date(fallbackEnd.getTime());
+    fallbackStart.setDate(fallbackStart.getDate() - 30);
+    const start = startDateRaw ? (parseDateOnlyLocal(startDateRaw) || new Date(startDateRaw)) : fallbackStart;
+    const end = endDateRaw ? (parseDateOnlyLocal(endDateRaw) || new Date(endDateRaw)) : fallbackEnd;
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
         throw new CustomError('startDate/endDate tidak valid', 400);
     }
@@ -591,7 +606,12 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
     end.setHours(23, 59, 59, 999);
 
     const andClauses: any[] = [];
-    andClauses.push({ paid_at: { [Op.between]: [start, end] } });
+    andClauses.push({
+        [Op.or]: [
+            { paid_at: { [Op.between]: [start, end] } },
+            { paid_at: null, createdAt: { [Op.between]: [start, end] } },
+        ]
+    });
     if (q) {
         andClauses.push({
             [Op.or]: [

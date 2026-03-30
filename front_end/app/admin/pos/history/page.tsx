@@ -12,15 +12,29 @@ type SaleRow = any;
 
 const safeStr = (v: unknown) => String(v ?? '').trim();
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const toLocalDateInputValue = (d: Date) => {
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 export default function AdminPosHistoryPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
   const router = useRouter();
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const btn3dBase = 'btn-3d disabled:opacity-60';
+  const btn3dNeutral = `${btn3dBase} bg-white border border-slate-200 text-slate-700 hover:bg-slate-50`;
+
+  const today = useMemo(() => toLocalDateInputValue(new Date()), []);
+  const defaultStart = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return toLocalDateInputValue(d);
+  }, []);
 
   const [q, setQ] = useState('');
-  const [startDate, setStartDate] = useState<string>(today);
+  const [startDate, setStartDate] = useState<string>(defaultStart);
   const [endDate, setEndDate] = useState<string>(today);
   const [status, setStatus] = useState<'all' | 'paid' | 'refunded'>('all');
 
@@ -76,28 +90,31 @@ export default function AdminPosHistoryPage() {
 
   if (!allowed) return null;
 
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link href="/admin/pos" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <ArrowLeft size={16} />
-            Kembali
-          </Link>
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
+	  return (
+	    <div className="p-6 space-y-6">
+	      <div className="flex items-center justify-between gap-3">
+	        <div className="flex items-center gap-3">
+	          <Link
+	            href="/admin/pos"
+	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	          >
+	            <ArrowLeft size={16} />
+	            Kembali
+	          </Link>
+	          <div>
+	            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
             <h1 className="text-xl font-black text-slate-900">Riwayat</h1>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-wide text-slate-700 disabled:opacity-60"
-        >
-          {loading ? '...' : 'Refresh'}
-        </button>
-      </div>
+	        <button
+	          type="button"
+	          onClick={() => void load()}
+	          disabled={loading}
+	          className={`rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	        >
+	          {loading ? '...' : 'Refresh'}
+	        </button>
+	      </div>
 
       <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
@@ -196,25 +213,25 @@ export default function AdminPosHistoryPage() {
             Halaman <span className="font-black text-slate-700">{page}</span> / {totalPages}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={!canPrev || loading}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-slate-700 disabled:opacity-60"
-            >
-              Prev
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={!canNext || loading}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-slate-700 disabled:opacity-60"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      </div>
+	            <button
+	              type="button"
+	              onClick={() => setPage((p) => Math.max(1, p - 1))}
+	              disabled={!canPrev || loading}
+	              className={`rounded-xl px-3 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	            >
+	              Prev
+	            </button>
+	            <button
+	              type="button"
+	              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+	              disabled={!canNext || loading}
+	              className={`rounded-xl px-3 py-2 text-xs font-black uppercase tracking-wide ${btn3dNeutral}`}
+	            >
+	              Next
+	            </button>
+	          </div>
+	        </div>
+	      </div>
     </div>
   );
 }
