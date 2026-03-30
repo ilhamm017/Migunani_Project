@@ -406,6 +406,20 @@ const indexExists = async (tableName: string, indexName: string): Promise<boolea
     return Array.isArray(rows) && rows.length > 0;
 };
 
+const indexOnColumnExists = async (tableName: string, columnName: string): Promise<boolean> => {
+    if (sequelize.getDialect() !== 'mysql') return true;
+    const [rows] = await sequelize.query(
+        `SELECT 1
+         FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = :tableName
+           AND COLUMN_NAME = :columnName
+         LIMIT 1`,
+        { replacements: { tableName, columnName } }
+    ) as any;
+    return Array.isArray(rows) && rows.length > 0;
+};
+
 const ensureReportIndexesReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -721,6 +735,38 @@ const ensureClearancePromoQtyLimitColumnReady = async () => {
     }
 };
 
+const ensureProductsBarcodeColumnReady = async () => {
+    const tableName = 'products';
+    const exists = await tableExists(tableName);
+    if (!exists) return;
+
+    const columnName = 'barcode';
+    const ok = await columnExists(tableName, columnName);
+    if (!ok) {
+        console.warn(`[Startup] Missing column in ${tableName}: ${columnName}. Applying targeted ALTER TABLE...`);
+        try {
+            await sequelize.query(
+                `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` VARCHAR(255) NULL AFTER \`sku\``
+            );
+        } catch (error: any) {
+            const code = error?.parent?.code || error?.original?.code || error?.code;
+            if (code !== 'ER_DUP_FIELDNAME') throw error;
+        }
+    }
+
+    const hasIndex = await indexOnColumnExists(tableName, columnName);
+    if (hasIndex) return;
+
+    console.warn(`[Startup] Missing index in ${tableName}: ${columnName}. Creating index...`);
+    try {
+        await sequelize.query(`CREATE INDEX \`idx_products_barcode\` ON \`${tableName}\` (\`${columnName}\`)`);
+    } catch (error: any) {
+        const code = error?.parent?.code || error?.original?.code || error?.code;
+        if (code === 'ER_DUP_KEYNAME') return;
+        throw error;
+    }
+};
+
 const syncDatabaseWithRetry = async () => {
     const syncMode = resolveDbSyncMode();
     if (syncMode === 'off') {
@@ -737,6 +783,7 @@ const syncDatabaseWithRetry = async () => {
         await ensureDeliveryHandoverItemEvidenceColumnsReady();
         await ensureInvoiceAmountReceivedColumnReady();
         await ensureClearancePromoQtyLimitColumnReady();
+        await ensureProductsBarcodeColumnReady();
         await ensureReportIndexesReady();
         return;
     }
@@ -754,6 +801,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
             await ensureClearancePromoQtyLimitColumnReady();
+            await ensureProductsBarcodeColumnReady();
             await ensureReportIndexesReady();
             return;
         } catch (error) {
@@ -774,6 +822,7 @@ const syncDatabaseWithRetry = async () => {
             await ensureDeliveryHandoverItemEvidenceColumnsReady();
             await ensureInvoiceAmountReceivedColumnReady();
             await ensureClearancePromoQtyLimitColumnReady();
+            await ensureProductsBarcodeColumnReady();
             await ensureReportIndexesReady();
             return;
         }
