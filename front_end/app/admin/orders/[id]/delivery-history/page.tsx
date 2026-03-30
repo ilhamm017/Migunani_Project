@@ -125,13 +125,9 @@ export default function AdminDeliveryHistoryPage() {
       const orderDetailsResults = await Promise.allSettled(
         Array.from(orderIds).map((id) => api.orders.getOrderById(id))
       );
-      const orderRows: LooseRecord[] = orderDetailsResults
-        .map((result) => {
-          if (result.status !== 'fulfilled') return null;
-          const data = result.value.data;
-          return data && typeof data === 'object' ? (data as LooseRecord) : null;
-        })
-        .filter((row): row is LooseRecord => Boolean(row));
+      const orderRows = orderDetailsResults
+        .map((result) => (result.status === 'fulfilled' ? (result.value.data as unknown) : null))
+        .filter((row) => Boolean(row && typeof row === 'object')) as LooseRecord[];
 
       setInvoice(invoiceData);
       setOrders(orderRows);

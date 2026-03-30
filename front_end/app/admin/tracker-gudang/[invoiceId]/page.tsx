@@ -87,7 +87,7 @@ type CameraTarget =
   | { kind: 'item'; productId: string };
 
 export default function TrackerGudangCheckPage() {
-  const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang'], '/admin/orders');
+  const allowed = useRequireRoles(['super_admin', 'checker_gudang'], '/admin/orders');
   const router = useRouter();
   const params = useParams<{ invoiceId: string }>();
   const invoiceId = normalizeText(params?.invoiceId);

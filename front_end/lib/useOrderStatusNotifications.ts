@@ -39,8 +39,8 @@ type DashboardStats = {
 const MAX_EVENTS = 30;
 const ACTIONABLE_STATUSES_BY_ROLE: Record<Exclude<SupportedRole, 'driver'>, string[]> = {
   super_admin: ['pending', 'waiting_invoice', 'ready_to_ship', 'checked', 'waiting_admin_verification', 'delivered', 'allocated', 'partially_fulfilled', 'shipped', 'hold'],
-  admin_gudang: ['pending', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'hold'],
-  checker_gudang: ['pending', 'ready_to_ship', 'checked', 'allocated', 'partially_fulfilled', 'hold'],
+  admin_gudang: ['pending', 'ready_to_ship', 'allocated', 'partially_fulfilled', 'hold'],
+  checker_gudang: ['ready_to_ship', 'checked', 'hold'],
   admin_finance: ['waiting_invoice', 'waiting_admin_verification', 'delivered'],
   kasir: ['pending'],
 };
@@ -70,7 +70,6 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
     return (
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
-      toNumber(stats.checked) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
       toNumber(stats.hold)
@@ -78,11 +77,8 @@ const resolveOrderActionableCount = (stats: DashboardStats, role: SupportedRole)
   }
   if (role === 'checker_gudang') {
     return (
-      toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
       toNumber(stats.checked) +
-      toNumber(stats.allocated) +
-      toNumber(stats.partially_fulfilled) +
       toNumber(stats.hold)
     );
   }

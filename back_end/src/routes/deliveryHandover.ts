@@ -22,7 +22,7 @@ const uploadEvidenceMiddleware = createFieldsUploadMiddleware(upload, {
 router.post(
     '/check',
     authenticateToken,
-    authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang'),
+    authorizeRoles('super_admin', 'checker_gudang'),
     uploadEvidenceMiddleware,
     DeliveryHandoverController.checkInvoice
 );
@@ -30,14 +30,14 @@ router.post(
 router.get(
     '/latest',
     authenticateToken,
-    authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang'),
+    authorizeRoles('super_admin', 'checker_gudang'),
     DeliveryHandoverController.getLatestByInvoice
 );
 
 router.post(
     '/:id/handover',
     authenticateToken,
-    authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang'),
+    authorizeRoles('super_admin', 'checker_gudang'),
     DeliveryHandoverController.handoverToDriver
 );
 

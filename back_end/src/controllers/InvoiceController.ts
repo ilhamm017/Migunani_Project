@@ -1228,8 +1228,8 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
         const actorId = String(req.user!.id);
         const userRole = req.user!.role;
 
-        if (!['super_admin', 'admin_gudang', 'checker_gudang'].includes(userRole)) {
-            throw new CustomError('Hanya super admin / admin gudang / checker gudang yang dapat melakukan penugasan driver.', 403);
+        if (!['super_admin', 'admin_gudang'].includes(userRole)) {
+            throw new CustomError('Hanya super admin / admin gudang yang dapat melakukan penugasan driver.', 403);
         }
 
         if (!invoiceId) {

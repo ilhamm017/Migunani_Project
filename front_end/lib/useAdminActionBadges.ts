@@ -72,13 +72,20 @@ const resolveOrderBadgeCount = (stats: DashboardStats, role: string): number => 
     );
   }
   // Gudang cares about new orders to pick and ready items to ship
-  if (role === 'admin_gudang' || role === 'checker_gudang') {
+  if (role === 'admin_gudang') {
     return (
       toNumber(stats.pending) +
       toNumber(stats.ready_to_ship) +
-      toNumber(stats.checked) +
       toNumber(stats.allocated) +
       toNumber(stats.partially_fulfilled) +
+      toNumber(stats.hold)
+    );
+  }
+  // Checker focuses on checking & handover flow
+  if (role === 'checker_gudang') {
+    return (
+      toNumber(stats.ready_to_ship) +
+      toNumber(stats.checked) +
       toNumber(stats.hold)
     );
   }

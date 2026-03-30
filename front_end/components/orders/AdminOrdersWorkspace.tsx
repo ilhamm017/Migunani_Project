@@ -252,9 +252,14 @@ const ORDER_FILTER_OPTIONS_WAREHOUSE: OrderSectionFilter[] = [
   'allocated',
   'pembayaran',
   'gudang',
-  'checker',
   'pengiriman',
   'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
+const ORDER_FILTER_OPTIONS_CHECKER: OrderSectionFilter[] = [
+  'checker',
+  'pengiriman',
   'selesai',
   'canceled',
 ];
@@ -275,9 +280,14 @@ const ORDER_SECTION_OPTIONS_WAREHOUSE: OrderSection[] = [
   'allocated',
   'pembayaran',
   'gudang',
-  'checker',
   'pengiriman',
   'partially_fulfilled',
+  'selesai',
+  'canceled',
+];
+const ORDER_SECTION_OPTIONS_CHECKER: OrderSection[] = [
+  'checker',
+  'pengiriman',
   'selesai',
   'canceled',
 ];
@@ -690,9 +700,11 @@ export default function AdminOrdersWorkspace({
   const canEditPricing = useMemo(() => ['super_admin', 'kasir'].includes(normalizedRole), [normalizedRole]);
   const canViewAllocation = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
   const canMoveToIndentAction = useMemo(() => ['super_admin', 'kasir', 'admin_gudang', 'admin_finance'].includes(normalizedRole), [normalizedRole]);
-  const canManageWarehouseFlow = useMemo(() => ['super_admin', 'admin_gudang', 'checker_gudang'].includes(normalizedRole), [normalizedRole]);
+  const canManageCheckerFlow = useMemo(() => ['super_admin', 'checker_gudang'].includes(normalizedRole), [normalizedRole]);
   const isFinanceRole = useMemo(() => normalizedRole === 'admin_finance', [normalizedRole]);
-  const isWarehouseRole = useMemo(() => normalizedRole === 'admin_gudang' || normalizedRole === 'checker_gudang', [normalizedRole]);
+  const isWarehouseAdminRole = useMemo(() => normalizedRole === 'admin_gudang', [normalizedRole]);
+  const isCheckerRole = useMemo(() => normalizedRole === 'checker_gudang', [normalizedRole]);
+  const isWarehouseRole = useMemo(() => isWarehouseAdminRole || isCheckerRole, [isWarehouseAdminRole, isCheckerRole]);
   const canAssignDriverWarehouse = useMemo(() => normalizedRole === 'admin_gudang' || normalizedRole === 'super_admin', [normalizedRole]);
   type OrderDetailsMap = Record<string, OrderDetailResponse | undefined>;
   type InvoiceDetailsMap = Record<string, InvoiceDetailResponse | null | undefined>;
@@ -783,13 +795,33 @@ export default function AdminOrdersWorkspace({
   const warehouseCustomerFocusMode = isWarehouseRole && Boolean(forcedCustomerId || forcedCustomerKey);
   const showInlineOrderDetailPanel = Boolean(forcedCustomerId || forcedCustomerKey);
   const sectionFilterOptions = useMemo<OrderSectionFilter[]>(
-    () => (warehouseCustomerFocusMode ? ['allocated', 'gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_FILTER_OPTIONS_WAREHOUSE : ORDER_FILTER_OPTIONS_ALL),
-    [isWarehouseRole, warehouseCustomerFocusMode]
+    () => {
+      if (warehouseCustomerFocusMode) {
+        return isWarehouseAdminRole ? ['allocated', 'gudang', 'pengiriman'] : ['checker', 'pengiriman'];
+      }
+      if (isWarehouseAdminRole) return ORDER_FILTER_OPTIONS_WAREHOUSE;
+      if (isCheckerRole) return ORDER_FILTER_OPTIONS_CHECKER;
+      return ORDER_FILTER_OPTIONS_ALL;
+    },
+    [isCheckerRole, isWarehouseAdminRole, warehouseCustomerFocusMode]
   );
   const sectionOptions = useMemo<OrderSection[]>(
-    () => (warehouseCustomerFocusMode ? ['allocated', 'gudang', 'checker', 'pengiriman'] : isWarehouseRole ? ORDER_SECTION_OPTIONS_WAREHOUSE : ORDER_SECTION_OPTIONS_ALL),
-    [isWarehouseRole, warehouseCustomerFocusMode]
+    () => {
+      if (warehouseCustomerFocusMode) {
+        return isWarehouseAdminRole ? ['allocated', 'gudang', 'pengiriman'] : ['checker', 'pengiriman'];
+      }
+      if (isWarehouseAdminRole) return ORDER_SECTION_OPTIONS_WAREHOUSE;
+      if (isCheckerRole) return ORDER_SECTION_OPTIONS_CHECKER;
+      return ORDER_SECTION_OPTIONS_ALL;
+    },
+    [isCheckerRole, isWarehouseAdminRole, warehouseCustomerFocusMode]
   );
+
+  useEffect(() => {
+    if (!sectionFilterOptions.includes(orderSectionFilter)) {
+      setOrderSectionFilter(sectionFilterOptions[0] || 'baru');
+    }
+  }, [orderSectionFilter, sectionFilterOptions]);
 
   const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
@@ -880,7 +912,7 @@ export default function AdminOrdersWorkspace({
   }, [hasRenderableAccess]);
 
   const loadCouriers = useCallback(async () => {
-    if (!canManageWarehouseFlow) return;
+    if (!canAssignDriverWarehouse) return;
     try {
       const res = await api.admin.orderManagement.getCouriers();
       const rows = Array.isArray(res.data?.employees) ? res.data.employees : [];
@@ -893,7 +925,7 @@ export default function AdminOrdersWorkspace({
     } catch (error) {
       console.error('Failed to load couriers:', error);
     }
-  }, [canManageWarehouseFlow]);
+  }, [canAssignDriverWarehouse]);
 
   const classifyOrderSections = useCallback((order: AdminOrderListRow, detail?: OrderDetailResponse): OrderSection[] => {
     const rawStatus = String(order?.status || '');
@@ -4956,7 +4988,7 @@ export default function AdminOrdersWorkspace({
                 const label = getSectionLabel(section);
                 const list = filteredGroupedOrders[section] as AdminOrderListRow[];
                 if (list.length === 0) return null;
-	                const isWarehouseCompactView = isWarehouseRole || (canManageWarehouseFlow && ['gudang', 'checker', 'pengiriman'].includes(section));
+	                const isWarehouseCompactView = isWarehouseRole || (canManageCheckerFlow && ['gudang', 'checker', 'pengiriman'].includes(section));
                 const canUseWarehouseChecklist = canAssignDriverWarehouse;
                 const isFinanceCompactView = isFinanceRole && ['pembayaran', 'gudang', 'pengiriman', 'selesai'].includes(section);
                 const isInvoiceCompactView = isWarehouseCompactView || isFinanceCompactView;
@@ -5308,7 +5340,7 @@ export default function AdminOrdersWorkspace({
                                   Buka Verifikasi
                                 </Link>
                               )}
-                              {canManageWarehouseFlow && section === 'checker' && card.invoiceId && (
+                              {canManageCheckerFlow && section === 'checker' && card.invoiceId && (
                                 <div className="mt-2 flex flex-col items-end gap-2">
                                   {card.hasReadyToShip && !card.hasChecked && !card.hasShipped && (
                                     card.courierId ? (
@@ -5405,10 +5437,12 @@ export default function AdminOrdersWorkspace({
                         ? invoicePrimaryOrderId.slice(-8).toUpperCase()
                         : '-';
                       const isInvoicePrimaryOrder = invoiceGroupCount <= 1 || String(order.id || '') === invoicePrimaryOrderId;
-                      const canOpenWarehouseAction =
-                        canManageWarehouseFlow &&
-                        WAREHOUSE_STATUSES.has(orderStatus) &&
-                        (orderStatus !== 'ready_to_ship' || isInvoicePrimaryOrder);
+                      const canOpenWarehouseAction = (() => {
+                        if (!WAREHOUSE_STATUSES.has(orderStatus)) return false;
+                        if (orderStatus === 'ready_to_ship') return canAssignDriverWarehouse && isInvoicePrimaryOrder;
+                        if (orderStatus === 'checked') return canManageCheckerFlow;
+                        return (normalizedRole === 'admin_gudang' || normalizedRole === 'super_admin');
+                      })();
                       const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
                       const invoiceRefLabel = formatInvoiceReference(invoiceId, invoiceNumber);
                       const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
@@ -5632,7 +5666,7 @@ export default function AdminOrdersWorkspace({
 	                                    Harga Nego
 	                                  </button>
 	                                )}
-	                              {!canOpenWarehouseAction && canManageWarehouseFlow && orderStatus === 'ready_to_ship' && invoiceGroupCount > 1 && (
+	                              {!canOpenWarehouseAction && canAssignDriverWarehouse && orderStatus === 'ready_to_ship' && invoiceGroupCount > 1 && (
 	                                <p className="mt-1 text-[10px] text-amber-600">
 	                                  Invoice gabungan ({invoiceGroupCount} order), proses dari invoice (ref order #{invoicePrimaryOrderDisplayId}).
 	                                </p>

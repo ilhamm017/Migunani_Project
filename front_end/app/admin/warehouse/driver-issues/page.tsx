@@ -6,6 +6,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { useAuthStore } from '@/store/authStore';
 import Image from 'next/image';
 import Link from 'next/link';
 
@@ -82,6 +83,9 @@ const normalizeEvidenceUrl = (raw?: string | null): string | null => {
 
 export default function WarehouseDriverIssuesPage() {
   const allowed = useRequireRoles(['admin_gudang', 'super_admin', 'checker_gudang'], '/admin');
+  const { user } = useAuthStore();
+  const normalizedRole = String(user?.role || '').trim();
+  const canOpenChecker = normalizedRole === 'checker_gudang' || normalizedRole === 'super_admin';
   const [orders, setOrders] = useState<DriverIssueOrder[]>([]);
   const [couriers, setCouriers] = useState<CourierOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -422,7 +426,7 @@ export default function WarehouseDriverIssuesPage() {
                   >
                     <ShieldCheck size={14} /> {form.submitting ? 'Memproses...' : 'Selesaikan & Kembali ke Checker'}
                   </button>
-                  {invoiceId && (
+                  {invoiceId && canOpenChecker && (
                     <Link
                       href={`/admin/tracker-gudang/${encodeURIComponent(invoiceId)}`}
                       className="px-4 py-2.5 rounded-xl border border-cyan-200 bg-cyan-50 text-cyan-700 text-xs font-black uppercase inline-flex items-center justify-center gap-2"
