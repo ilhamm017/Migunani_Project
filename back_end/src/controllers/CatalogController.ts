@@ -156,9 +156,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 ],
                 limit: Number(limit),
                 offset: Number(offset),
-                order: tokensPresent
-                    ? order
-                    : order,
+                order,
                 distinct: true
             });
         };
@@ -203,7 +201,13 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         if (error instanceof CustomError) {
             throw error;
         }
-        throw new CustomError('Error fetching catalog', 500);
+
+        // Keep production responses stable, but don't hide the real error in development.
+        if (process.env.NODE_ENV === 'production') {
+            throw new CustomError('Error fetching catalog', 500);
+        }
+
+        throw error;
     }
 });
 

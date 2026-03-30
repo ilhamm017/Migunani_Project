@@ -266,7 +266,7 @@ export default function AdminPosPage() {
 
     setCart((prev) => {
       const idx = prev.findIndex((p) => p.product_id === productId);
-      if (idx < 0) return [...prev, nextLine];
+      if (idx < 0) return [nextLine, ...prev];
       const existing = prev[idx]!;
       const nextQty = existing.qty + 1;
       return prev.map((row, i) => i === idx ? { ...row, qty: nextQty } : row);

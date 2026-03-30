@@ -145,8 +145,14 @@ function CatalogContent() {
         } catch (error) {
             if (requestId !== latestLoadRequestRef.current) return;
             console.error('Failed to load products:', error);
-            const message = typeof error === 'object' && error && 'response' in error
-                ? String((error as { response?: { data?: { message?: string } } }).response?.data?.message || '')
+            const responseData = typeof error === 'object' && error && 'response' in error
+                ? (error as { response?: { data?: any } }).response?.data
+                : null;
+            const message = responseData && typeof responseData === 'object'
+                ? String(responseData?.message || '')
+                : '';
+            const requestIdFromApi = responseData && typeof responseData === 'object'
+                ? String(responseData?.request_id || '')
                 : '';
             if (!append) {
                 setProducts([]);
@@ -154,7 +160,10 @@ function CatalogContent() {
                 setTotalPages(1);
                 setHasMore(false);
             }
-            setLoadError(message || 'Gagal memuat katalog. Coba lagi sebentar.');
+            const withRequestId = message && requestIdFromApi
+                ? `${message} (request_id: ${requestIdFromApi})`
+                : message;
+            setLoadError(withRequestId || 'Gagal memuat katalog. Coba lagi sebentar.');
         } finally {
             if (append) {
                 appendInFlightRef.current = false;
