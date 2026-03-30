@@ -126,8 +126,12 @@ export default function AdminDeliveryHistoryPage() {
         Array.from(orderIds).map((id) => api.orders.getOrderById(id))
       );
       const orderRows: LooseRecord[] = orderDetailsResults
-        .map((result) => (result.status === 'fulfilled' ? result.value.data : null))
-        .filter((row): row is LooseRecord => Boolean(row && typeof row === 'object'));
+        .map((result) => {
+          if (result.status !== 'fulfilled') return null;
+          const data = result.value.data;
+          return data && typeof data === 'object' ? (data as LooseRecord) : null;
+        })
+        .filter((row): row is LooseRecord => Boolean(row));
 
       setInvoice(invoiceData);
       setOrders(orderRows);
@@ -442,4 +446,3 @@ export default function AdminDeliveryHistoryPage() {
     </div>
   );
 }
-
