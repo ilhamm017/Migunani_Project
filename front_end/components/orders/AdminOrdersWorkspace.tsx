@@ -4464,7 +4464,7 @@ export default function AdminOrdersWorkspace({
                               </p>
                             ) : null}
 	                          <div className="flex items-center gap-2">
-	                            <label className="text-[10px] font-bold text-slate-500">Layer modal</label>
+	                            <label className="text-[10px] font-bold text-slate-500 uppercase">Layer modal</label>
 		                            <select
 		                              value={draft?.preferred_unit_cost ?? ''}
 		                              disabled={pricingEditor.saving || pricingCostLayersLoading || isPromoLocked || !pricingEditorLayerEditable}
@@ -4482,7 +4482,7 @@ export default function AdminOrdersWorkspace({
 	                                  };
 	                                });
 	                              }}
-	                              className="w-60 max-w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+	                              className="w-56 max-w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
 	                            >
 	                              <option value="">{pricingCostLayersLoading ? 'Memuat layer...' : 'FIFO (Auto)'}</option>
 	                              {layers.map((layer) => {
@@ -4520,7 +4520,7 @@ export default function AdminOrdersWorkspace({
 	                                };
 	                              });
 	                            }}
-	                            className="w-60 max-w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+	                            className="w-56 max-w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
 	                          />
 	                        </div>
 	                      </div>
