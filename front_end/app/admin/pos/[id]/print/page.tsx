@@ -9,6 +9,8 @@ import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import type { PosSaleRow } from '@/lib/apiTypes';
 
+const RECEIPT_WIDTH_MM = 58;
+
 export default function PosSalePrintPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
   const params = useParams<{ id: string }>();
@@ -79,8 +81,20 @@ export default function PosSalePrintPage() {
     <div className="p-6 space-y-4">
       <style>{`
         @media print {
-          @page { margin: 0; }
+          @page { size: ${RECEIPT_WIDTH_MM}mm auto; margin: 0; }
           html, body { background: #fff !important; }
+          .receipt-wrap { max-width: none !important; width: ${RECEIPT_WIDTH_MM}mm !important; margin: 0 !important; }
+          .receipt {
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            padding: 2.5mm !important;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+            font-variant-numeric: tabular-nums;
+          }
+          .receipt, .receipt * { font-size: 12px !important; line-height: 1.25 !important; }
+          .receipt .receipt-title { font-size: 13px !important; font-weight: 800 !important; }
+          .receipt .receipt-subtitle { font-size: 12px !important; font-weight: 700 !important; }
         }
       `}</style>
       <div className="flex items-center justify-between gap-3 print:hidden">
@@ -98,18 +112,18 @@ export default function PosSalePrintPage() {
         </button>
       </div>
       <p className="text-[12px] text-slate-500 print:hidden">
-        Catatan: browser tidak bisa memilih printer secara otomatis; printer yang dipakai mengikuti default/terakhir dipilih di dialog print.
+        Catatan: hasil struk sangat dipengaruhi setting dialog print. Rekomendasi: pilih ukuran kertas 58mm, margin = none, scale = 100% (jangan “fit to page”), matikan header/footer.
       </p>
 
       {error ? <p className="text-sm text-rose-700 print:hidden">{error}</p> : null}
       {loading || !sale ? (
         <p className="text-sm text-slate-500 print:hidden">{loading ? 'Memuat...' : 'Tidak ada data.'}</p>
       ) : (
-        <div className="mx-auto max-w-md">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:shadow-none">
+        <div className="receipt-wrap mx-auto max-w-md">
+          <div className="receipt rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:shadow-none">
             <div className="text-center">
-              <p className="text-sm font-black text-slate-900">MIGUNANI MOTOR</p>
-              <p className="text-[11px] text-slate-500">STRUK POS</p>
+              <p className="receipt-title text-sm font-black text-slate-900">MIGUNANI MOTOR</p>
+              <p className="receipt-subtitle text-[11px] text-slate-500">STRUK POS</p>
             </div>
 
             <div className="mt-4 text-[12px]">
