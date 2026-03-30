@@ -119,7 +119,7 @@ export default function AdminPosHistoryPage() {
       <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
           <div className="lg:col-span-2">
-            <label className="text-[10px] font-bold text-slate-500 uppercase">Cari (No Struk / Nama)</label>
+            <label className="text-[10px] font-bold text-slate-500 uppercase">Cari (No Struk / No Invoice / Nama)</label>
             <div className="mt-1 relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -175,6 +175,7 @@ export default function AdminPosHistoryPage() {
             {rows.map((s: any, idx: number) => {
               const id = safeStr(s?.id);
               const receipt = safeStr(s?.receipt_number) || '-';
+              const invoiceNumber = safeStr(s?.invoice_number || s?.Invoice?.invoice_number);
               const paidAt = safeStr(s?.paid_at || s?.paidAt || s?.createdAt);
               const rowStatusRaw = safeStr(s?.status).toLowerCase();
               const rowStatus = rowStatusRaw === 'voided' ? 'refunded' : rowStatusRaw;
@@ -192,7 +193,10 @@ export default function AdminPosHistoryPage() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-sm font-black text-slate-900 truncate">{receipt}</p>
+                      <p className="text-sm font-black text-slate-900 truncate">
+                        {receipt}
+                        {invoiceNumber ? <span className="font-bold text-slate-500"> • {invoiceNumber}</span> : null}
+                      </p>
                       <p className="text-[11px] text-slate-500">
                         {paidAt ? formatDateTime(paidAt) : '-'}
                         {rowStatus ? ` • ${rowStatus}` : ''}

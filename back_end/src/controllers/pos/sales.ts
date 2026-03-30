@@ -647,6 +647,7 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
             [Op.or]: [
                 { receipt_number: { [Op.like]: `%${q}%` } },
                 { customer_name: { [Op.like]: `%${q}%` } },
+                { '$Invoice.invoice_number$': { [Op.like]: `%${q}%` } },
                 ...(q.length >= 8 ? [{ id: q }] : [])
             ]
         });

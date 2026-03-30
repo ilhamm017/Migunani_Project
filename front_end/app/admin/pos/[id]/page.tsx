@@ -48,6 +48,7 @@ export default function PosSaleDetailPage() {
   }, [allowed, load]);
 
   const receipt = useMemo(() => String(sale?.receipt_number || '').trim() || '-', [sale]);
+  const invoiceNumber = useMemo(() => String((sale as any)?.invoice_number || '').trim() || '', [sale]);
   const status = useMemo(() => {
     const raw = String(sale?.status || '').trim().toLowerCase();
     return raw === 'voided' ? 'refunded' : raw;
@@ -96,8 +97,11 @@ export default function PosSaleDetailPage() {
 	          <div>
 	            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">POS</p>
 	            <h1 className="text-xl font-black text-slate-900">{receipt}</h1>
-          </div>
-        </div>
+	            {invoiceNumber ? (
+	              <p className="text-[11px] font-bold text-slate-500">Invoice: {invoiceNumber}</p>
+	            ) : null}
+	          </div>
+	        </div>
 	        <div className="flex items-center gap-2">
 	          <Link
 	            href={`/admin/pos/${encodeURIComponent(id)}/print`}

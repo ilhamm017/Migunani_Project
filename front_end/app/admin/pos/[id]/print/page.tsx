@@ -73,6 +73,7 @@ export default function PosSalePrintPage() {
   }, [allowed, closeAfterPrint]);
 
   const receipt = useMemo(() => String(sale?.receipt_number || '').trim() || '-', [sale]);
+  const invoiceNumber = useMemo(() => String((sale as any)?.invoice_number || '').trim() || '', [sale]);
   const paidAt = useMemo(() => (sale as any)?.paid_at || (sale as any)?.paidAt || sale?.createdAt, [sale]);
 
   if (!allowed) return null;
@@ -126,15 +127,21 @@ export default function PosSalePrintPage() {
               <p className="receipt-subtitle text-[11px] text-slate-500">STRUK POS</p>
             </div>
 
-            <div className="mt-4 text-[12px]">
-              <div className="flex justify-between">
-                <span className="text-slate-500">No</span>
-                <span className="font-bold text-slate-900">{receipt}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Waktu</span>
-                <span className="font-bold text-slate-900">{formatDateTime(paidAt)}</span>
-              </div>
+	            <div className="mt-4 text-[12px]">
+	              <div className="flex justify-between">
+	                <span className="text-slate-500">No Struk</span>
+	                <span className="font-bold text-slate-900">{receipt}</span>
+	              </div>
+	              {invoiceNumber ? (
+	                <div className="flex justify-between">
+	                  <span className="text-slate-500">No Invoice</span>
+	                  <span className="font-bold text-slate-900">{invoiceNumber}</span>
+	                </div>
+	              ) : null}
+	              <div className="flex justify-between">
+	                <span className="text-slate-500">Waktu</span>
+	                <span className="font-bold text-slate-900">{formatDateTime(paidAt)}</span>
+	              </div>
               {sale.customer_name ? (
                 <div className="flex justify-between">
                   <span className="text-slate-500">Customer</span>
