@@ -43,8 +43,9 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         }
 
         const nameOrder: any = ['name', 'ASC'];
-        const stockDescOrder: any = [sequelize.literal('COALESCE(stock_quantity, 0)'), 'DESC'];
-        const stockAscOrder: any = [sequelize.literal('COALESCE(stock_quantity, 0)'), 'ASC'];
+        // Qualify with the Product table alias to avoid ambiguity once Sequelize adds joins/subqueries.
+        const stockDescOrder: any = [sequelize.literal('COALESCE(`Product`.`stock_quantity`, 0)'), 'DESC'];
+        const stockAscOrder: any = [sequelize.literal('COALESCE(`Product`.`stock_quantity`, 0)'), 'ASC'];
 
         let order: any = [nameOrder];
         if (sort === 'price_asc') order = [['price', 'ASC'], nameOrder];
@@ -67,6 +68,10 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
 
         const tokensPresent = tokens.length > 0;
         const isStockSort = sort === 'stock_desc' || sort === 'stock_asc';
+        // When sorting by stock, Sequelize may push ORDER BY to an outer query (derived table),
+        // which requires the ordered column to be part of the SELECT list. We include it but
+        // strip it from the public response below.
+        const includeStockForOrdering = isStockSort;
         const stockOrderForSearch = sort === 'stock_desc' ? stockDescOrder : sort === 'stock_asc' ? stockAscOrder : null;
         const orderForSearch = tokensPresent
             ? (isStockSort
@@ -92,6 +97,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 'description',
                 'image_url',
                 'category_id',
+                ...(includeStockForOrdering ? (['stock_quantity'] as const) : []),
                 ...(tokensPresent ? (['barcode'] as const) : []),
             ];
             return Product.findAndCountAll({
@@ -146,6 +152,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 'description',
                 'image_url',
                 'category_id',
+                ...(includeStockForOrdering ? (['stock_quantity'] as const) : []),
             ];
             return Product.findAndCountAll({
                 where: whereForQuery,
@@ -181,12 +188,11 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
 
         const { count, rows } = result;
 
-        const safeRows = tokensPresent
+        const safeRows = (tokensPresent || includeStockForOrdering)
             ? (rows as any[]).map((row) => {
                 const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
-                if (plain && typeof plain === 'object' && 'barcode' in plain) {
-                    delete (plain as any).barcode;
-                }
+                if (plain && typeof plain === 'object' && 'barcode' in plain) delete (plain as any).barcode;
+                if (plain && typeof plain === 'object' && 'stock_quantity' in plain) delete (plain as any).stock_quantity;
                 return plain;
             })
             : rows;

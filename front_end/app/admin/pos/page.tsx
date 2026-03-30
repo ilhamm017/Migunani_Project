@@ -557,7 +557,7 @@ export default function AdminPosPage() {
       setCustomerQuery('');
       setCustomerResults([]);
       setNote('');
-      setDiscountPercent(0);
+      setDiscountPercentInput('');
 
       if (shouldPrint) {
         const printUrl = `/admin/pos/${encodeURIComponent(id)}/print?autoPrint=1`;
