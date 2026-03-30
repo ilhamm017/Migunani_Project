@@ -36,6 +36,8 @@ type CustomerPick = {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const round2 = (v: number) => Math.round(v * 100) / 100;
+const FAR_PRICE_DIFF_PCT = 20;
+const FAR_PRICE_DIFF_IDR = 50_000;
 
 type CategoryTierDiscountRow = {
   id: number;
@@ -658,15 +660,18 @@ export default function AdminPosPage() {
               <p className="text-sm text-slate-500">Belum ada item.</p>
             ) : (
               <div className="space-y-3">
-                {cart.map((row) => {
-                  const normalUnit = getProductPrice(row, selectedTier);
-                  const dealUnit = Number.isFinite(row.unit_price_override) ? Number(row.unit_price_override) : normalUnit;
-                  const lineTotal = round2(dealUnit * row.qty);
-                  const regularUnit = getProductRegularUnitPrice(row);
-                  const autoDiscountPct = (() => {
-                    const tier = selectedTier;
-                    const variant = toObjectOrEmpty(row.varian_harga);
-                    const discounts = toObjectOrEmpty(variant.discounts_pct);
+	                {cart.map((row) => {
+	                  const normalUnit = getProductPrice(row, selectedTier);
+	                  const dealUnit = Number.isFinite(row.unit_price_override) ? Number(row.unit_price_override) : normalUnit;
+	                  const lineTotal = round2(dealUnit * row.qty);
+	                  const unitDiff = Math.abs(round2(dealUnit) - round2(normalUnit));
+	                  const unitDiffPct = normalUnit > 0 ? (unitDiff / normalUnit) * 100 : 0;
+	                  const warnFarDiff = unitDiff > 0 && (unitDiff >= FAR_PRICE_DIFF_IDR || unitDiffPct >= FAR_PRICE_DIFF_PCT);
+	                  const regularUnit = getProductRegularUnitPrice(row);
+	                  const autoDiscountPct = (() => {
+	                    const tier = selectedTier;
+	                    const variant = toObjectOrEmpty(row.varian_harga);
+	                    const discounts = toObjectOrEmpty(variant.discounts_pct);
                     const aliases = tier === 'platinum' ? ['premium'] : [];
 
                     const discountCandidates: unknown[] = [
@@ -792,6 +797,14 @@ export default function AdminPosPage() {
 	                                    Harga jual fix (DB): <span className="font-black text-slate-900">{formatCurrency(regularUnit)}</span> / unit
 	                                  </p>
 	                                </div>
+
+	                                {warnFarDiff ? (
+	                                  <div className="sm:col-span-2">
+	                                    <p className="text-[11px] text-amber-700">
+	                                      Peringatan: harga deal berbeda jauh dari harga normal (Normal {formatCurrency(normalUnit)} → Deal {formatCurrency(dealUnit)}).
+	                                    </p>
+	                                  </div>
+	                                ) : null}
 
 	                              </div>
 	                        </div>
