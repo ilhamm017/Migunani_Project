@@ -198,15 +198,6 @@ export const checkout = asyncWrapper(async (req: Request, res: Response) => {
                     await t.rollback();
                     throw new CustomError('Harga deal tidak valid', 400);
                 }
-                // Negotiation is intended to lower price, not raise it.
-                if (overrideUnitPrice > computedUnitPrice) {
-                    await t.rollback();
-                    throw new CustomError('Harga deal tidak boleh lebih tinggi dari harga normal', 400);
-                }
-                if (userRole === 'kasir' && Number.isFinite(costAtPurchase) && overrideUnitPrice < costAtPurchase) {
-                    await t.rollback();
-                    throw new CustomError('Kasir tidak boleh menurunkan harga di bawah modal', 400);
-                }
                 finalUnitPrice = overrideUnitPrice;
                 overridePayload = {
                     unit_price: overrideUnitPrice,

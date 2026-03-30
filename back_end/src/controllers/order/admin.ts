@@ -1078,9 +1078,6 @@ export const moveOrderToIndent = asyncWrapper(async (req: Request, res: Response
                 const allocatedTotalForProduct = Math.max(0, Number(allocatedByProduct[productId] || 0));
                 if (allocatedTotalForProduct > 0) return null;
 
-                const productStock = Number(row?.Product?.stock_quantity);
-                if (!Number.isFinite(productStock) || productStock > 0) return null;
-
                 const orderedQtyOriginal = Math.max(0, Number(row?.ordered_qty_original || row?.qty || 0));
                 const canceledBackorderQty = Math.max(0, Number(row?.qty_canceled_backorder || 0));
                 const qtyPending = Math.max(0, orderedQtyOriginal - allocatedTotalForProduct - canceledBackorderQty);
@@ -1092,7 +1089,7 @@ export const moveOrderToIndent = asyncWrapper(async (req: Request, res: Response
 
         if (candidates.length === 0) {
             await t.rollback();
-            throw new CustomError('Tidak ada item yang memenuhi syarat indent (stok 0 dan belum dialokasikan).', 409);
+            throw new CustomError('Tidak ada item yang memenuhi syarat indent (belum dialokasikan).', 409);
         }
 
         const actorId = req.user?.id ? String(req.user.id) : null;
@@ -1115,7 +1112,7 @@ export const moveOrderToIndent = asyncWrapper(async (req: Request, res: Response
                     order_item_id: candidate.orderItemId,
                     qty_pending: candidate.qtyPending,
                     status: 'waiting_stock',
-                    notes: 'dipindahkan ke indent (stok 0, belum dialokasikan)'
+                    notes: 'dipindahkan ke indent (manual, belum dialokasikan)'
                 }, { transaction: t });
                 createdCount += 1;
                 touchedBackorderIds.push(String(created.id));
