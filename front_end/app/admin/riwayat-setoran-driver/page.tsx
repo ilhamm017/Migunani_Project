@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { RefreshCw, ChevronDown, ChevronUp, Wallet, PackageCheck } from 'lucide-react';
+import { useAuthStore } from '@/store/authStore';
 
 type DriverOption = { id: string; name: string; whatsapp_number?: string | null };
 
@@ -61,6 +62,7 @@ const toIsoEnd = (yyyyMmDd: string) => new Date(`${yyyyMmDd}T23:59:59.999`).toIS
 
 export default function AdminRiwayatSetoranDriverPage() {
   const allowed = useRequireRoles(['kasir', 'super_admin'], '/admin');
+  const { user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -92,6 +94,39 @@ export default function AdminRiwayatSetoranDriverPage() {
 
   const [expandedCod, setExpandedCod] = useState<Record<string, boolean>>({});
   const [expandedHandover, setExpandedHandover] = useState<Record<string, boolean>>({});
+
+  const bumpLastSeenFromHistoryData = useCallback((data: any) => {
+    try {
+      const userId = String(user?.id || '').trim();
+      if (!userId) return;
+
+      const storageKey = `migunani:last_seen:driver_deposit_history:${userId}`;
+      const parseIsoMs = (iso: string) => {
+        const ms = Date.parse(iso);
+        return Number.isFinite(ms) ? ms : 0;
+      };
+
+      const latestCodIso = Array.isArray(data?.cod_settlements) && data.cod_settlements[0]?.settled_at
+        ? String(data.cod_settlements[0].settled_at)
+        : '';
+      const latestHandoverIso = Array.isArray(data?.retur_handovers)
+        ? String(data.retur_handovers[0]?.received_at || data.retur_handovers[0]?.submitted_at || '')
+        : '';
+
+      const latestCodMs = latestCodIso ? parseIsoMs(latestCodIso) : 0;
+      const latestHandoverMs = latestHandoverIso ? parseIsoMs(latestHandoverIso) : 0;
+      const latestMs = Math.max(latestCodMs, latestHandoverMs);
+      if (!Number.isFinite(latestMs) || latestMs <= 0) return;
+
+      const prev = window?.localStorage?.getItem(storageKey);
+      const prevMs = prev ? parseIsoMs(prev) : 0;
+      if (latestMs <= prevMs) return;
+
+      const latestIso = latestMs === latestCodMs ? latestCodIso : latestHandoverIso;
+      if (!latestIso) return;
+      window?.localStorage?.setItem(storageKey, latestIso);
+    } catch { }
+  }, [user?.id]);
 
   const loadDrivers = useCallback(async () => {
     try {
@@ -135,6 +170,7 @@ export default function AdminRiwayatSetoranDriverPage() {
       setHandoverRows(Array.isArray(data.retur_handovers) ? (data.retur_handovers as HistoryReturHandoverRow[]) : []);
       setExpandedCod({});
       setExpandedHandover({});
+      bumpLastSeenFromHistoryData(data);
     } catch (err: any) {
       const message = String(err?.response?.data?.message || err?.message || 'Gagal memuat riwayat.');
       setErrorMsg(message);
@@ -143,7 +179,7 @@ export default function AdminRiwayatSetoranDriverPage() {
     } finally {
       setLoading(false);
     }
-  }, [driverId, fromDate, toDate, includeUnreceived]);
+  }, [bumpLastSeenFromHistoryData, driverId, fromDate, toDate, includeUnreceived]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -154,6 +190,22 @@ export default function AdminRiwayatSetoranDriverPage() {
     if (!allowed) return;
     void loadHistory();
   }, [allowed, loadHistory]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    void (async () => {
+      try {
+        const res = await api.admin.driverDeposit.getHistory({
+          from: '2000-01-01T00:00:00.000Z',
+          to: new Date().toISOString(),
+          include_status: 'all',
+          limit: 1,
+          offset: 0,
+        });
+        bumpLastSeenFromHistoryData((res as any)?.data || {});
+      } catch { }
+    })();
+  }, [allowed, bumpLastSeenFromHistoryData]);
 
   if (!allowed) return null;
 

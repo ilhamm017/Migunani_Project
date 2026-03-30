@@ -163,7 +163,31 @@ export default function AdminOverviewPage() {
       }
 
       if (role === 'kasir' || role === 'super_admin') {
-        const depositsRes = await api.admin.driverDeposit.getList().catch(() => ({ data: [] }));
+        const getDriverDepositHistoryLastSeenKey = (userId: string) => `migunani:last_seen:driver_deposit_history:${userId}`;
+        const readLastSeenMsSafe = () => {
+          try {
+            const userId = String(user?.id || '').trim();
+            if (!userId) return 0;
+            const key = getDriverDepositHistoryLastSeenKey(userId);
+            const raw = window?.localStorage?.getItem(key);
+            const ms = raw ? Date.parse(raw) : 0;
+            return Number.isFinite(ms) ? ms : 0;
+          } catch {
+            return 0;
+          }
+        };
+
+        const [depositsRes, historyRes] = await Promise.all([
+          api.admin.driverDeposit.getList().catch(() => ({ data: [] })),
+          api.admin.driverDeposit.getHistory({
+            from: '2000-01-01T00:00:00.000Z',
+            to: new Date().toISOString(),
+            include_status: 'all',
+            limit: 1,
+            offset: 0,
+          }).catch(() => ({ data: {} })),
+        ]);
+
         const deposits = Array.isArray((depositsRes as any).data) ? ((depositsRes as any).data as any[]) : [];
         const pendingTasks = deposits.reduce((sum, d) => {
           const cod = Array.isArray(d?.cod_invoices_pending) ? d.cod_invoices_pending.length : 0;
@@ -171,6 +195,25 @@ export default function AdminOverviewPage() {
           return sum + cod + handovers;
         }, 0);
         newWarehouseBadges['/admin/setoran-driver'] = pendingTasks;
+
+        const historyData = (historyRes as any)?.data || {};
+        const latestCodIso = Array.isArray(historyData?.cod_settlements) && historyData.cod_settlements[0]?.settled_at
+          ? String(historyData.cod_settlements[0].settled_at)
+          : '';
+        const latestHandoverIso = Array.isArray(historyData?.retur_handovers)
+          ? String(historyData.retur_handovers[0]?.received_at || historyData.retur_handovers[0]?.submitted_at || '')
+          : '';
+        const parseIsoMs = (iso: string) => {
+          const ms = Date.parse(iso);
+          return Number.isFinite(ms) ? ms : 0;
+        };
+        const latestMs = Math.max(
+          latestCodIso ? parseIsoMs(latestCodIso) : 0,
+          latestHandoverIso ? parseIsoMs(latestHandoverIso) : 0
+        );
+        const lastSeenMs = readLastSeenMsSafe();
+        const hasNewHistory = Number.isFinite(latestMs) && latestMs > 0 && latestMs > lastSeenMs;
+        newWarehouseBadges['/admin/riwayat-setoran-driver'] = hasNewHistory ? 1 : 0;
       }
 
       if (!isMountedRef.current) return;
@@ -201,7 +244,7 @@ export default function AdminOverviewPage() {
     } catch (error) {
       console.error('Failed to load admin summary:', error);
     }
-  }, [allowed, user?.role]);
+  }, [allowed, user?.id, user?.role]);
 
   useRealtimeRefresh({
     enabled: Boolean(allowed && user?.role && user?.role !== 'driver'),
@@ -930,7 +973,7 @@ export default function AdminOverviewPage() {
     let quickActionCards = [
       { href: '/admin/finance/verifikasi', title: 'Verifikasi Transfer', desc: 'Validasi transfer customer.', icon: CheckCircle, badge: financeCardBadges.verifyPayment, tone: 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white' },
       { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0, tone: 'bg-amber-100 text-amber-700 group-hover:bg-amber-700 group-hover:text-white' },
-      { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0, tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white' },
+      { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: warehouseCardBadges['/admin/riwayat-setoran-driver'] || 0, tone: 'bg-slate-100 text-slate-700 group-hover:bg-slate-900 group-hover:text-white' },
       { href: '/admin/finance/retur', title: 'Refund Retur', desc: 'Pengembalian dana retur.', icon: RotateCcw, badge: financeCardBadges.refundRetur, tone: 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white' },
       { href: '/admin/finance/biaya', title: 'Cairkan Expense', desc: 'Pengajuan biaya operasional.', icon: DollarSign, badge: financeStats.pendingExpense, tone: 'bg-blue-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white' },
       { href: '/admin/warehouse/pesanan', title: 'Tracker Gudang', desc: 'Checking & handover (checked→shipped).', icon: UserCheck, badge: warehouseCardBadges['/admin/tracker-gudang'] || 0, tone: 'bg-cyan-100 text-cyan-700 group-hover:bg-cyan-700 group-hover:text-white' },
@@ -980,7 +1023,7 @@ export default function AdminOverviewPage() {
           { href: '/admin/warehouse/driver-issues', title: 'Laporan Driver', desc: 'Follow-up barang kurang.', icon: AlertTriangle, badge: warehouseCardBadges['/admin/warehouse/driver-issues'] || 0 },
           { href: '/admin/warehouse/retur', title: 'Retur Barang', desc: 'Proses barang retur.', icon: RotateCcw, badge: warehouseCardBadges['/admin/warehouse/retur'] || 0 },
           { href: '/admin/setoran-driver', title: 'Setoran Driver', desc: 'Terima uang COD & retur driver.', icon: Wallet, badge: warehouseCardBadges['/admin/setoran-driver'] || 0 },
-          { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran Driver', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: 0 },
+          { href: '/admin/riwayat-setoran-driver', title: 'Riwayat Setoran Driver', desc: 'Audit penyerahan COD & retur.', icon: Receipt, badge: warehouseCardBadges['/admin/riwayat-setoran-driver'] || 0 },
           { href: '/admin/warehouse/audit', title: 'Stock Opname', desc: 'Audit stok fisik.', icon: Shield, badge: warehouseCardBadges['/admin/warehouse/audit'] || 0 },
           { href: '/admin/warehouse/scanner', title: 'Scanner SKU', desc: 'Scan barcode cepat.', icon: ScanBarcode },
           { href: '/admin/warehouse/categories', title: 'Kategori Produk', desc: 'Kelola grouping produk.', icon: Layers },
