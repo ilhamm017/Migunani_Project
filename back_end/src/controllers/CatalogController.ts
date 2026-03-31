@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
-import { Product, Category, ProductCategory, sequelize } from '../models';
+import { Product, Category, ProductCategory, CustomerProfile, sequelize } from '../models';
 import { Op, fn, col } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { applyTokenSearch, buildProductMatchCountLiteral, getCountNumber, splitSearchTokens } from '../utils/productSearch';
+import { resolveEffectiveTierPricing } from './order/utils';
 
 // Public Catalog API - Safe for Customers (Hides base_price/COGS)
 
@@ -43,6 +44,10 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
         }
 
         const featuredMode = String(featured ?? '').trim().toLowerCase();
+        const shouldComputeTierPricing = String(req.user?.role || '') === 'customer' && Boolean(req.user?.id);
+        const userTier = shouldComputeTierPricing
+            ? (await CustomerProfile.findByPk(String(req.user!.id), { attributes: ['tier'] }))?.tier || 'regular'
+            : null;
 
         const nameOrder: any = ['name', 'ASC'];
         // Qualify with the Product table alias to avoid ambiguity once Sequelize adds joins/subqueries.
@@ -63,7 +68,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
             const safeLimit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.trunc(limitRaw), 60) : 12;
 
             const include = [
-                { model: Category, attributes: ['id', 'name', 'icon'] },
+                { model: Category, attributes: ['id', 'name', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'] },
                 { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
             ];
             const attributes = [
@@ -71,6 +76,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 'sku',
                 'name',
                 'price',
+                'varian_harga',
                 'unit',
                 'description',
                 'image_url',
@@ -128,8 +134,28 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
 
             const safeRows = featuredRows.map((row) => {
                 const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
-                if (plain && typeof plain === 'object' && 'barcode' in plain) delete (plain as any).barcode;
-                if (plain && typeof plain === 'object' && 'stock_quantity' in plain) delete (plain as any).stock_quantity;
+                if (plain && typeof plain === 'object') {
+                    const record = plain as any;
+                    if ('barcode' in record) delete record.barcode;
+                    if ('stock_quantity' in record) delete record.stock_quantity;
+
+                    if (userTier) {
+                        const basePrice = Number(record.price || 0);
+                        const pricing = resolveEffectiveTierPricing(basePrice, String(userTier || 'regular'), record.varian_harga, record.Category);
+                        record.effective_tier = String(userTier || 'regular');
+                        record.effective_price = pricing.finalPrice;
+                        record.effective_discount_pct = pricing.discountPct;
+                        record.effective_discount_source = pricing.discountSource;
+                    }
+
+                    // Never expose internal pricing structures in public responses.
+                    if ('varian_harga' in record) delete record.varian_harga;
+                    if (record.Category && typeof record.Category === 'object') {
+                        delete record.Category.discount_regular_pct;
+                        delete record.Category.discount_gold_pct;
+                        delete record.Category.discount_premium_pct;
+                    }
+                }
                 return plain;
             });
 
@@ -180,6 +206,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 'sku',
                 'name',
                 'price',
+                'varian_harga',
                 'unit',
                 'description',
                 'image_url',
@@ -191,7 +218,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 where: whereForQuery,
                 attributes: productAttributes, // Explicit attributes (hide stock from public)
                 include: [
-                    { model: Category, attributes: ['id', 'name', 'icon'] },
+                    { model: Category, attributes: ['id', 'name', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'] },
                     { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
                 ],
                 limit: Number(limit),
@@ -235,6 +262,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 'sku',
                 'name',
                 'price',
+                'varian_harga',
                 'unit',
                 'description',
                 'image_url',
@@ -245,7 +273,7 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
                 where: whereForQuery,
                 attributes: productAttributes,
                 include: [
-                    { model: Category, attributes: ['id', 'name', 'icon'] },
+                    { model: Category, attributes: ['id', 'name', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'] },
                     { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
                 ],
                 limit: Number(limit),
@@ -275,14 +303,31 @@ export const getCatalog = asyncWrapper(async (req: Request, res: Response) => {
 
         const { count, rows } = result;
 
-        const safeRows = (tokensPresent || includeStockForOrdering)
-            ? (rows as any[]).map((row) => {
-                const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
-                if (plain && typeof plain === 'object' && 'barcode' in plain) delete (plain as any).barcode;
-                if (plain && typeof plain === 'object' && 'stock_quantity' in plain) delete (plain as any).stock_quantity;
-                return plain;
-            })
-            : rows;
+        const safeRows = (rows as any[]).map((row) => {
+            const plain = typeof (row as any)?.get === 'function' ? (row as any).get({ plain: true }) : row;
+            if (plain && typeof plain === 'object') {
+                const record = plain as any;
+                if ('barcode' in record) delete record.barcode;
+                if ('stock_quantity' in record) delete record.stock_quantity;
+
+                if (userTier) {
+                    const basePrice = Number(record.price || 0);
+                    const pricing = resolveEffectiveTierPricing(basePrice, String(userTier || 'regular'), record.varian_harga, record.Category);
+                    record.effective_tier = String(userTier || 'regular');
+                    record.effective_price = pricing.finalPrice;
+                    record.effective_discount_pct = pricing.discountPct;
+                    record.effective_discount_source = pricing.discountSource;
+                }
+
+                if ('varian_harga' in record) delete record.varian_harga;
+                if (record.Category && typeof record.Category === 'object') {
+                    delete record.Category.discount_regular_pct;
+                    delete record.Category.discount_gold_pct;
+                    delete record.Category.discount_premium_pct;
+                }
+            }
+            return plain;
+        });
 
         res.json({
             total: count,
@@ -313,14 +358,19 @@ export const getProductDetails = asyncWrapper(async (req: Request, res: Response
         // But for SEO, SKU or Slug is better. 
         // Let's assume ID for now.
 
+        const shouldComputeTierPricing = String(req.user?.role || '') === 'customer' && Boolean(req.user?.id);
+        const userTier = shouldComputeTierPricing
+            ? (await CustomerProfile.findByPk(String(req.user!.id), { attributes: ['tier'] }))?.tier || 'regular'
+            : null;
+
         const product = await Product.findOne({
             where: {
                 [Op.or]: [{ id }, { sku: id }], // Friendly URL support
                 status: 'active'
             },
-            attributes: ['id', 'sku', 'name', 'price', 'unit', 'description', 'image_url', 'category_id'],
+            attributes: ['id', 'sku', 'name', 'price', 'varian_harga', 'unit', 'description', 'image_url', 'category_id'],
             include: [
-                { model: Category, attributes: ['id', 'name', 'icon'] },
+                { model: Category, attributes: ['id', 'name', 'icon', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'] },
                 { model: Category, as: 'Categories', attributes: ['id', 'name', 'icon'], through: { attributes: [] }, required: false }
             ]
         });
@@ -329,7 +379,27 @@ export const getProductDetails = asyncWrapper(async (req: Request, res: Response
             throw new CustomError('Product not found', 404);
         }
 
-        res.json(product);
+        const plain = typeof (product as any)?.get === 'function' ? (product as any).get({ plain: true }) : product;
+        if (plain && typeof plain === 'object') {
+            const record = plain as any;
+            if (userTier) {
+                const basePrice = Number(record.price || 0);
+                const pricing = resolveEffectiveTierPricing(basePrice, String(userTier || 'regular'), record.varian_harga, record.Category);
+                record.effective_tier = String(userTier || 'regular');
+                record.effective_price = pricing.finalPrice;
+                record.effective_discount_pct = pricing.discountPct;
+                record.effective_discount_source = pricing.discountSource;
+            }
+
+            if ('varian_harga' in record) delete record.varian_harga;
+            if (record.Category && typeof record.Category === 'object') {
+                delete record.Category.discount_regular_pct;
+                delete record.Category.discount_gold_pct;
+                delete record.Category.discount_premium_pct;
+            }
+        }
+
+        res.json(plain);
     } catch (error) {
         if (error instanceof CustomError) {
             throw error;

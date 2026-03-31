@@ -61,6 +61,17 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     }
 };
 
+// Optional authentication: if no token is present, continue as guest.
+// If a token is present but invalid/expired, it returns 401 (so FE can clear session).
+export const authenticateTokenOptional = async (req: Request, res: Response, next: NextFunction) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+        return next();
+    }
+    return authenticateToken(req, res, next);
+};
+
 // Stateless auth that does not hit DB (use sparingly for endpoints that must stay responsive even if DB is slow).
 // It trusts the signed JWT payload, so user role/status changes won't take effect until token expiry.
 export const authenticateTokenStateless = (req: Request, res: Response, next: NextFunction) => {

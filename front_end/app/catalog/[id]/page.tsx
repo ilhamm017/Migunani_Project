@@ -17,6 +17,8 @@ interface ProductDetail {
   name: string;
   sku?: string;
   price: number;
+  originalPrice?: number;
+  discountPct?: number;
   imageUrl?: string;
   description?: string;
   unit?: string;
@@ -32,6 +34,8 @@ type ProductApiDetail = {
   name: string;
   sku?: string;
   price?: number;
+  effective_price?: number;
+  effective_discount_pct?: number;
   image_url?: string | null;
   description?: string;
   unit?: string;
@@ -76,11 +80,19 @@ export default function ProductDetailPage() {
         setLoading(true);
         const res = await api.catalog.getProductById(productId);
         const p = res.data as ProductApiDetail;
+        const basePrice = Number(p.price || 0);
+        const effectivePriceRaw = Number(p.effective_price);
+        const effectivePrice = Number.isFinite(effectivePriceRaw) && effectivePriceRaw > 0 ? effectivePriceRaw : null;
+        const discountPctRaw = Number(p.effective_discount_pct);
+        const discountPct = Number.isFinite(discountPctRaw) && discountPctRaw > 0 ? discountPctRaw : undefined;
+
         setProduct({
           id: String(p.id),
           name: p.name,
           sku: p.sku,
-          price: Number(p.price || 0),
+          price: effectivePrice ?? basePrice,
+          originalPrice: effectivePrice !== null && basePrice > 0 && effectivePrice < basePrice ? basePrice : undefined,
+          discountPct,
           imageUrl: p.image_url ? String(p.image_url) : undefined,
           description: p.description,
           unit: p.unit,
@@ -102,6 +114,13 @@ export default function ProductDetailPage() {
   const tierPriceText = useMemo(() => {
     if (!product) return '-';
     return formatCurrency(product.price);
+  }, [product]);
+
+  const showDiscount = useMemo(() => {
+    if (!product) return false;
+    if (!Number.isFinite(Number(product.originalPrice)) || !(Number(product.originalPrice) > Number(product.price))) return false;
+    if (!Number.isFinite(Number(product.discountPct)) || !(Number(product.discountPct) > 0)) return false;
+    return true;
   }, [product]);
 
   const handleAddToCart = async () => {
@@ -230,7 +249,19 @@ export default function ProductDetailPage() {
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-slate-50 rounded-2xl p-3">
             <p className="text-[11px] text-slate-500">Harga</p>
-            <p className="text-sm font-black text-emerald-700">{tierPriceText}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-black text-emerald-700">{tierPriceText}</p>
+              {showDiscount ? (
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide bg-rose-50 text-rose-700 border border-rose-200">
+                  -{Math.round(Number(product.discountPct))}%
+                </span>
+              ) : null}
+            </div>
+            {showDiscount ? (
+              <p className="text-[11px] font-bold text-slate-400 line-through">
+                {formatCurrency(Number(product.originalPrice))}
+              </p>
+            ) : null}
           </div>
           <div className="bg-slate-50 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
             <p className="text-[11px] text-slate-500">Ketersediaan</p>

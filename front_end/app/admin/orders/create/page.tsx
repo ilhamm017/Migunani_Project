@@ -784,6 +784,21 @@ function ManualOrderContent() {
             const effectiveBasePrice = getProductRegularUnitPrice(product);
             const variant = toObjectOrEmpty(product.varian_harga);
             const prices = toObjectOrEmpty(variant.prices);
+            const regularVariantPrice = (() => {
+                const candidates: unknown[] = [
+                    prices.regular,
+                    variant.regular,
+                    prices.base_price,
+                    variant.base_price,
+                    prices.price,
+                    variant.price,
+                ];
+                for (const candidate of candidates) {
+                    const parsed = toFiniteNumber(candidate);
+                    if (parsed !== null && parsed > 0) return parsed;
+                }
+                return null;
+            })();
 
             const resolveCategoryDiscountPct = (): number | null => {
                 const categoryIdRaw = (product.Category && typeof product.Category === 'object')
@@ -818,7 +833,13 @@ function ManualOrderContent() {
             }
             for (const candidate of directCandidates) {
                 const directPrice = toFiniteNumber(candidate);
-                if (directPrice !== null && directPrice > 0) return Math.max(0, directPrice);
+                if (directPrice === null || directPrice <= 0) continue;
+                // Ignore "direct tier price" that is effectively identical to the base price,
+                // so category-tier discounts can still apply.
+                if (effectiveBasePrice > 0 && Math.abs(directPrice - effectiveBasePrice) <= 0.0001) continue;
+                // Ignore placeholder tier prices that just repeat the regular variant price.
+                if (regularVariantPrice !== null && regularVariantPrice > 0 && Math.abs(directPrice - regularVariantPrice) <= 0.0001) continue;
+                return Math.max(0, directPrice);
             }
 
             const discounts = toObjectOrEmpty(variant.discounts_pct);

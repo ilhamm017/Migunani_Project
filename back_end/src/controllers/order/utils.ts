@@ -303,7 +303,7 @@ export const resolveTierPriceFromVariant = (basePrice: number, tier: string, var
     return effectiveBasePrice;
 };
 
-const tryResolveTierPriceDirect = (variantRaw: unknown, tier: string): number | null => {
+const tryResolveTierPriceDirect = (variantRaw: unknown, tier: string, effectiveBasePrice: number): number | null => {
     const normalizedTier = String(tier || 'regular').trim().toLowerCase() === 'premium'
         ? 'platinum'
         : String(tier || 'regular').trim().toLowerCase();
@@ -312,6 +312,26 @@ const tryResolveTierPriceDirect = (variantRaw: unknown, tier: string): number | 
     const source = toObjectOrEmpty(variantRaw);
     const prices = toObjectOrEmpty(source.prices);
     const aliases = normalizedTier === 'platinum' ? ['premium'] : [];
+
+    // Some datasets store `prices.<tier>` but keep all tiers equal to the "regular" price.
+    // In that case, the tier price isn't a real override and should not block category-tier discounts.
+    const regularVariantPrice = (() => {
+        const regularCandidates: unknown[] = [
+            prices.regular,
+            source.regular,
+            prices.base_price,
+            source.base_price,
+            prices.price,
+            source.price
+        ];
+        for (const candidate of regularCandidates) {
+            const parsed = Number(candidate);
+            if (!Number.isFinite(parsed)) continue;
+            if (parsed <= 0) continue;
+            return parsed;
+        }
+        return null;
+    })();
 
     const directCandidates: unknown[] = [
         source[normalizedTier],
@@ -325,7 +345,17 @@ const tryResolveTierPriceDirect = (variantRaw: unknown, tier: string): number | 
     for (const candidate of directCandidates) {
         const parsed = Number(candidate);
         if (!Number.isFinite(parsed)) continue;
-        return Math.max(0, parsed);
+        if (parsed <= 0) continue;
+        // Ignore "direct tier price" that is effectively identical to the base price.
+        // This allows category-tier discounts to apply when tier-pricing is present but not meaningful.
+        if (Number.isFinite(effectiveBasePrice) && effectiveBasePrice > 0 && Math.abs(parsed - effectiveBasePrice) <= 0.0001) {
+            continue;
+        }
+        // Ignore "direct tier price" that is identical to the regular variant price.
+        if (Number.isFinite(regularVariantPrice) && (regularVariantPrice as number) > 0 && Math.abs(parsed - (regularVariantPrice as number)) <= 0.0001) {
+            continue;
+        }
+        return parsed;
     }
 
     return null;
@@ -383,7 +413,7 @@ export const resolveEffectiveTierPricing = (
     const normalizedTier = tier === 'premium' ? 'platinum' : tier;
     const effectiveBasePrice = resolveTierPriceFromVariant(basePrice, 'regular', variantRaw);
 
-    const directTierPrice = tryResolveTierPriceDirect(variantRaw, normalizedTier);
+    const directTierPrice = tryResolveTierPriceDirect(variantRaw, normalizedTier, effectiveBasePrice);
     if (directTierPrice !== null) {
         const discountPct = effectiveBasePrice <= 0
             ? 0
@@ -413,6 +443,96 @@ export const resolveEffectiveTierPricing = (
         ? 0
         : Math.min(100, Math.max(0, Math.round((((effectiveBasePrice - normalizedPrice) / effectiveBasePrice) * 100) * 100) / 100));
     return { finalPrice: normalizedPrice, discountPct, discountSource: 'tier_fallback' };
+};
+
+export const debugResolveEffectiveTierPricing = (
+    basePrice: number,
+    tierRaw: string,
+    variantRaw: unknown,
+    categoryRaw: unknown
+) => {
+    const tier = String(tierRaw || 'regular').trim().toLowerCase();
+    const normalizedTier = tier === 'premium' ? 'platinum' : tier;
+
+    const effectiveBasePrice = resolveTierPriceFromVariant(basePrice, 'regular', variantRaw);
+
+    const source = toObjectOrEmpty(variantRaw);
+    const prices = toObjectOrEmpty(source.prices);
+    const aliases = normalizedTier === 'platinum' ? ['premium'] : [];
+
+    const regularVariantPrice = (() => {
+        const regularCandidates: unknown[] = [
+            prices.regular,
+            source.regular,
+            prices.base_price,
+            source.base_price,
+            prices.price,
+            source.price
+        ];
+        for (const candidate of regularCandidates) {
+            const parsed = Number(candidate);
+            if (!Number.isFinite(parsed)) continue;
+            if (parsed <= 0) continue;
+            return parsed;
+        }
+        return null;
+    })();
+
+    const directCandidates: unknown[] = normalizedTier === 'regular'
+        ? []
+        : [
+            source[normalizedTier],
+            prices[normalizedTier],
+            toObjectOrEmpty(source[normalizedTier]).price,
+        ];
+    for (const alias of aliases) {
+        directCandidates.push(source[alias], prices[alias], toObjectOrEmpty(source[alias]).price);
+    }
+
+    let directTierPrice: number | null = null;
+    let directTierPriceSkippedEqualsBase = false;
+    let directTierPriceSkippedNonPositive = false;
+    let directTierPriceSkippedEqualsRegularVariant = false;
+    for (const candidate of directCandidates) {
+        const parsed = Number(candidate);
+        if (!Number.isFinite(parsed)) continue;
+        if (parsed <= 0) {
+            directTierPriceSkippedNonPositive = true;
+            continue;
+        }
+        if (Number.isFinite(effectiveBasePrice) && effectiveBasePrice > 0 && Math.abs(parsed - effectiveBasePrice) <= 0.0001) {
+            directTierPriceSkippedEqualsBase = true;
+            continue;
+        }
+        if (Number.isFinite(regularVariantPrice) && (regularVariantPrice as number) > 0 && Math.abs(parsed - (regularVariantPrice as number)) <= 0.0001) {
+            directTierPriceSkippedEqualsRegularVariant = true;
+            continue;
+        }
+        directTierPrice = parsed;
+        break;
+    }
+
+    const variantDiscountPct = resolveVariantDiscountPct(variantRaw, normalizedTier);
+    const categoryDiscountPct = resolveCategoryDiscountPct(categoryRaw, normalizedTier);
+    const resolved = resolveEffectiveTierPricing(basePrice, tierRaw, variantRaw, categoryRaw);
+
+    return {
+        debug_version: '2026-03-31-tier-discount-v1',
+        input: {
+            basePrice,
+            tierRaw,
+        },
+        normalizedTier,
+        effectiveBasePrice,
+        regularVariantPrice,
+        directTierPrice,
+        directTierPriceSkippedEqualsBase,
+        directTierPriceSkippedNonPositive,
+        directTierPriceSkippedEqualsRegularVariant,
+        variantDiscountPct,
+        categoryDiscountPct,
+        resolved,
+    };
 };
 
 

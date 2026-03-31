@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import * as CatalogController from '../controllers/CatalogController';
+import { authenticateTokenOptional } from '../middleware/authMiddleware';
 
 const router = Router();
 
 // Public Routes (No Auth Middleware needed for viewing)
-router.get('/', CatalogController.getCatalog);
+router.get('/', authenticateTokenOptional, CatalogController.getCatalog);
 router.get('/categories', CatalogController.getPublicCategories);
-router.get('/:id', CatalogController.getProductDetails);
+router.get('/:id', authenticateTokenOptional, CatalogController.getProductDetails);
 
 export default router;

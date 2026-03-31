@@ -224,6 +224,7 @@ import accountRoutes from './routes/accounts';
 import profileRoutes from './routes/profile';
 import promoRoutes from './routes/promo';
 import procurementRoutes from './routes/procurement';
+import debugRoutes from './routes/debug';
 
 // Routes
 app.use('/api/v1/auth', authRoutes);
@@ -252,6 +253,7 @@ app.use('/api/v1/admin/shipping-methods', shippingMethodRoutes);
 app.use('/api/v1/shipping-methods', publicShippingMethodRoutes);
 app.use('/api/v1/admin/discount-vouchers', discountVoucherRoutes);
 app.use('/api/v1/admin/accounts', accountRoutes);
+app.use('/api/v1/admin/debug', debugRoutes);
 app.use('/api/v1/profile', profileRoutes);
 app.use('/api/v1/promos', promoRoutes);
 

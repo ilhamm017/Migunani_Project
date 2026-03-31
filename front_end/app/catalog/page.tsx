@@ -14,6 +14,8 @@ interface Product {
     id: string;
     name: string;
     price: number;
+    originalPrice?: number;
+    discountPct?: number;
     imageUrl?: string;
     stock?: number;
 }
@@ -22,6 +24,8 @@ type ApiCatalogRow = {
     id: string;
     name?: string;
     price?: number;
+    effective_price?: number;
+    effective_discount_pct?: number;
     image_url?: string | null;
     stock_quantity?: number;
 };
@@ -85,13 +89,26 @@ function CatalogContent() {
     const pendingScrollRestoreRef = useRef<number | null>(null);
     const snapshotRef = useRef<CatalogPersistedState | null>(null);
 
-    const mapApiProduct = (item: ApiCatalogRow): Product => ({
-        id: String(item.id),
-        name: String(item.name || ''),
-        price: Number(item.price || 0),
-        imageUrl: item.image_url ? String(item.image_url) : undefined,
-        stock: Number(item.stock_quantity || 0),
-    });
+    const mapApiProduct = (item: ApiCatalogRow): Product => {
+        const basePrice = Number(item.price || 0);
+        const effectivePriceRaw = Number(item.effective_price);
+        const effectivePrice = Number.isFinite(effectivePriceRaw) && effectivePriceRaw > 0 ? effectivePriceRaw : null;
+        const discountPctRaw = Number(item.effective_discount_pct);
+        const discountPct = Number.isFinite(discountPctRaw) && discountPctRaw > 0 ? discountPctRaw : undefined;
+
+        const finalPrice = effectivePrice ?? basePrice;
+        const originalPrice = effectivePrice !== null && basePrice > 0 && effectivePrice < basePrice ? basePrice : undefined;
+
+        return {
+            id: String(item.id),
+            name: String(item.name || ''),
+            price: finalPrice,
+            originalPrice,
+            discountPct,
+            imageUrl: item.image_url ? String(item.image_url) : undefined,
+            stock: Number(item.stock_quantity || 0),
+        };
+    };
 
     const loadProducts = useCallback(async (targetPage: number, append: boolean) => {
         if (!append) {

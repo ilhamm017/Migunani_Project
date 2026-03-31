@@ -10,6 +10,8 @@ interface ProductCardProps {
     id: string;
     name: string;
     price: number;
+    originalPrice?: number;
+    discountPct?: number;
     imageUrl?: string;
     stock?: number;
     onAddToCart?: (productId: string) => void;
@@ -19,10 +21,13 @@ export default function ProductCard({
     id,
     name,
     price,
+    originalPrice,
+    discountPct,
     imageUrl,
     onAddToCart,
 }: ProductCardProps) {
     const normalizedImageUrl = normalizeProductImageUrl(imageUrl);
+    const showDiscount = Number.isFinite(Number(originalPrice)) && Number(originalPrice) > Number(price) && Number.isFinite(Number(discountPct)) && Number(discountPct) > 0;
 
     return (
         <Link href={`/catalog/${id}`}>
@@ -51,9 +56,23 @@ export default function ProductCard({
                     </h3>
 
                     {/* Price */}
-                    <p className="text-sm font-black text-emerald-700 mb-2">
-                        {formatCurrency(price)}
-                    </p>
+                    <div className="mb-2">
+                        <div className="flex items-center gap-2">
+                            <p className="text-sm font-black text-emerald-700">
+                                {formatCurrency(price)}
+                            </p>
+                            {showDiscount ? (
+                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide bg-rose-50 text-rose-700 border border-rose-200">
+                                    -{Math.round(Number(discountPct))}%
+                                </span>
+                            ) : null}
+                        </div>
+                        {showDiscount ? (
+                            <p className="text-[11px] font-bold text-slate-400 line-through">
+                                {formatCurrency(Number(originalPrice))}
+                            </p>
+                        ) : null}
+                    </div>
 
                     {/* Add to Cart Button */}
                     <button
