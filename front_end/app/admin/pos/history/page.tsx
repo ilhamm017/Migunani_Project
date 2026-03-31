@@ -8,10 +8,54 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
-type SaleRow = any;
+type SaleRow = {
+  id?: string;
+  receipt_number?: string | null;
+  receipt_no?: string | number;
+  status?: string | null;
+  total?: number | string | null;
+  amount_received?: number | string | null;
+  change_amount?: number | string | null;
+  paid_at?: string | null;
+  paidAt?: string | null;
+  createdAt?: string | null;
+  customer_name?: string | null;
+  note?: string | null;
+  invoice_id?: string | null;
+  invoice_number?: string | null;
+  Invoice?: {
+    id?: string | null;
+    invoice_number?: string | null;
+    payment_status?: string | null;
+  } | null;
+};
 
 const safeStr = (v: unknown) => String(v ?? '').trim();
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const apiErrorMessage = (e: unknown) => {
+  if (!e || typeof e !== 'object') return '';
+  if (!('response' in e)) return '';
+  const response = (e as { response?: unknown }).response;
+  if (!response || typeof response !== 'object') return '';
+  if (!('data' in response)) return '';
+  const data = (response as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return '';
+  if (!('message' in data)) return '';
+  const message = (data as { message?: unknown }).message;
+  return typeof message === 'string' ? message : '';
+};
+
+type StatusFilter = 'all' | 'paid' | 'refunded';
+type PaymentFilter = 'all' | 'settled' | 'underpay';
+const parseStatusFilter = (raw: string): StatusFilter => {
+  if (raw === 'paid' || raw === 'refunded') return raw;
+  return 'all';
+};
+const parsePaymentFilter = (raw: string): PaymentFilter => {
+  if (raw === 'settled' || raw === 'underpay') return raw;
+  return 'all';
+};
+
 const toLocalDateInputValue = (d: Date) => {
   const yyyy = String(d.getFullYear());
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -36,7 +80,8 @@ export default function AdminPosHistoryPage() {
   const [q, setQ] = useState('');
   const [startDate, setStartDate] = useState<string>(defaultStart);
   const [endDate, setEndDate] = useState<string>(today);
-  const [status, setStatus] = useState<'all' | 'paid' | 'refunded'>('all');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [payment, setPayment] = useState<PaymentFilter>('all');
 
   const [page, setPage] = useState(1);
   const limit = 20;
@@ -59,19 +104,17 @@ export default function AdminPosHistoryPage() {
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         status: status === 'all' ? undefined : status,
+        payment: payment === 'all' ? undefined : payment,
       });
       const payload = res.data || {};
       setRows(Array.isArray(payload.rows) ? payload.rows : []);
       setCount(Number(payload.count || payload.total || 0) || 0);
     } catch (e: unknown) {
-      const message = typeof e === 'object' && e && 'response' in e
-        ? String((e as any).response?.data?.message || '')
-        : '';
-      setError(message || 'Gagal memuat riwayat POS.');
+      setError(apiErrorMessage(e) || 'Gagal memuat riwayat POS.');
     } finally {
       if (!options?.silent) setLoading(false);
     }
-  }, [endDate, limit, page, q, startDate, status]);
+  }, [endDate, limit, page, payment, q, startDate, status]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -83,7 +126,7 @@ export default function AdminPosHistoryPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, startDate, endDate, status]);
+  }, [q, startDate, endDate, status, payment]);
 
   const canPrev = page > 1;
   const canNext = page < totalPages;
@@ -154,12 +197,23 @@ export default function AdminPosHistoryPage() {
           <label className="text-[10px] font-bold text-slate-500 uppercase">Status</label>
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as any)}
+            onChange={(e) => setStatus(parseStatusFilter(e.target.value))}
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
           >
             <option value="all">Semua</option>
             <option value="paid">Paid</option>
             <option value="refunded">Refunded</option>
+          </select>
+          <label className="text-[10px] font-bold text-slate-500 uppercase ml-2">Pembayaran</label>
+          <select
+            value={payment}
+            onChange={(e) => setPayment(parsePaymentFilter(e.target.value))}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            title="Lunas vs Hutang hanya relevan untuk transaksi status paid."
+          >
+            <option value="all">Semua</option>
+            <option value="settled">Lunas</option>
+            <option value="underpay">Hutang</option>
           </select>
           <div className="ml-auto text-xs text-slate-500">
             Total: <span className="font-black text-slate-700">{count}</span>
@@ -172,7 +226,7 @@ export default function AdminPosHistoryPage() {
           <p className="text-sm text-slate-500">{loading ? 'Memuat...' : 'Belum ada transaksi.'}</p>
         ) : (
           <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 overflow-hidden">
-            {rows.map((s: any, idx: number) => {
+            {rows.map((s: SaleRow, idx: number) => {
               const id = safeStr(s?.id);
               const receipt = safeStr(s?.receipt_number) || '-';
               const invoiceNumber = safeStr(s?.invoice_number || s?.Invoice?.invoice_number);
@@ -180,8 +234,17 @@ export default function AdminPosHistoryPage() {
               const rowStatusRaw = safeStr(s?.status).toLowerCase();
               const rowStatus = rowStatusRaw === 'voided' ? 'refunded' : rowStatusRaw;
               const total = n(s?.total);
+              const received = n(s?.amount_received);
+              const changeAmount = n(s?.change_amount);
+              const isUnderpay = changeAmount < 0;
+              const due = Math.max(0, Math.round((total - received) * 100) / 100);
               const customer = safeStr(s?.customer_name);
               const note = safeStr(s?.note);
+              const badge = rowStatus === 'refunded'
+                ? { label: 'REFUND', cls: 'bg-rose-50 text-rose-700 border-rose-200' }
+                : isUnderpay
+                  ? { label: `HUTANG ${formatCurrency(due)}`, cls: 'bg-rose-50 text-rose-700 border-rose-200' }
+                  : { label: 'LUNAS', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
 
               return (
                 <button
@@ -204,7 +267,12 @@ export default function AdminPosHistoryPage() {
                       </p>
                       {note ? <p className="mt-1 text-[11px] text-slate-400 truncate">{note}</p> : null}
                     </div>
-                    <div className="text-sm font-black text-slate-900">{formatCurrency(total)}</div>
+                    <div className="text-right shrink-0">
+                      <div className="text-sm font-black text-slate-900">{formatCurrency(total)}</div>
+                      <div className={`mt-1 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black tracking-widest ${badge.cls}`}>
+                        {badge.label}
+                      </div>
+                    </div>
                   </div>
                 </button>
               );

@@ -627,6 +627,7 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
 
     const q = String((req.query as any)?.q || '').trim();
     const status = String((req.query as any)?.status || '').trim().toLowerCase();
+    const payment = String((req.query as any)?.payment || '').trim().toLowerCase();
     const cashierUserId = String((req.query as any)?.cashier_user_id || '').trim();
     const startDateRaw = String((req.query as any)?.startDate || '').trim();
     const endDateRaw = String((req.query as any)?.endDate || '').trim();
@@ -672,6 +673,8 @@ export const listPosSales = asyncWrapper(async (req: Request, res: Response) => 
         });
     }
     if (status && ['paid', 'voided', 'refunded'].includes(status)) andClauses.push({ status });
+    if (payment === 'underpay') andClauses.push({ change_amount: { [Op.lt]: 0 } });
+    if (payment === 'settled') andClauses.push({ change_amount: { [Op.gte]: 0 } });
     if (cashierUserId) andClauses.push({ cashier_user_id: cashierUserId });
 
     const where = andClauses.length > 0 ? { [Op.and]: andClauses } : {};

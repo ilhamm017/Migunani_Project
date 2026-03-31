@@ -295,6 +295,7 @@ export const api = {
                 endDate?: string;
                 cashier_user_id?: string;
                 status?: 'paid' | 'voided' | 'refunded' | string;
+                payment?: 'settled' | 'underpay' | string;
             }) => apiClient.get('/admin/pos/sales', { params }),
             getSaleById: (id: string) => apiClient.get(`/admin/pos/sales/${id}`),
             refundSale: (id: string, data: { reason?: string }) =>
