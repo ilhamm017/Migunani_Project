@@ -755,9 +755,9 @@ function ManualOrderContent() {
             return Math.max(0, Math.trunc(parsed));
         };
 
-        const getProductRegularUnitPrice = (product: ProductOption): number => {
-            const variant = toObjectOrEmpty(product.varian_harga);
-            const prices = toObjectOrEmpty(variant.prices);
+	        const getProductRegularUnitPrice = (product: ProductOption): number => {
+	            const variant = toObjectOrEmpty(product.varian_harga);
+	            const prices = toObjectOrEmpty(variant.prices);
             const candidates: unknown[] = [
                 product.price,
                 prices.regular,
@@ -771,98 +771,123 @@ function ManualOrderContent() {
                 if (Number.isFinite(parsed) && parsed > 0) return Math.max(0, parsed);
             }
 
-            const fallback = Number(product.price || 0);
-            return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
-        };
+	            const fallback = Number(product.price || 0);
+	            return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+	        };
 
-	    const getProductPrice = (product: ProductOption) => {
-	        const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
-	        const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
-	            ? 'platinum'
-	            : String(tierRaw || 'regular').trim().toLowerCase();
-
-            const effectiveBasePrice = getProductRegularUnitPrice(product);
-            const variant = toObjectOrEmpty(product.varian_harga);
-            const prices = toObjectOrEmpty(variant.prices);
-            const regularVariantPrice = (() => {
-                const candidates: unknown[] = [
-                    prices.regular,
-                    variant.regular,
-                    prices.base_price,
-                    variant.base_price,
-                    prices.price,
-                    variant.price,
-                ];
-                for (const candidate of candidates) {
-                    const parsed = toFiniteNumber(candidate);
-                    if (parsed !== null && parsed > 0) return parsed;
-                }
-                return null;
-            })();
-
-            const resolveCategoryDiscountPct = (): number | null => {
-                const categoryIdRaw = (product.Category && typeof product.Category === 'object')
-                    ? (product.Category as { id?: unknown }).id
-                    : product.category_id;
-                const categoryId = Number(categoryIdRaw);
-                if (!Number.isInteger(categoryId) || categoryId <= 0) return null;
-                const category = categoryDiscountById.get(categoryId);
-                if (!category) return null;
-                if (tier === 'platinum') return category.discount_premium_pct;
-                if (tier === 'gold') return category.discount_gold_pct;
-                if (tier === 'regular') return category.discount_regular_pct;
-                return null;
+            type PricingSource = 'category' | 'per_sku' | 'none';
+            type ProductPricingMeta = {
+                basePrice: number;
+                finalPrice: number;
+                source: PricingSource;
+                discountPct: number;
             };
 
-            if (tier === 'regular') {
+            const calcDiscountPct = (basePrice: number, finalPrice: number): number => {
+                const base = Number(basePrice || 0);
+                const final = Number(finalPrice || 0);
+                if (!(base > 0) || !Number.isFinite(base) || !Number.isFinite(final)) return 0;
+                const raw = ((base - final) / base) * 100;
+                const rounded = Math.round(raw * 100) / 100;
+                return clampPercentage(rounded);
+            };
+
+            const getProductPricingMeta = (product: ProductOption): ProductPricingMeta => {
+                const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
+                const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
+                    ? 'platinum'
+                    : String(tierRaw || 'regular').trim().toLowerCase();
+
+                const effectiveBasePrice = getProductRegularUnitPrice(product);
+                const variant = toObjectOrEmpty(product.varian_harga);
+                const prices = toObjectOrEmpty(variant.prices);
+                const regularVariantPrice = (() => {
+                    const candidates: unknown[] = [
+                        prices.regular,
+                        variant.regular,
+                        prices.base_price,
+                        variant.base_price,
+                        prices.price,
+                        variant.price,
+                    ];
+                    for (const candidate of candidates) {
+                        const parsed = toFiniteNumber(candidate);
+                        if (parsed !== null && parsed > 0) return parsed;
+                    }
+                    return null;
+                })();
+
+                const resolveCategoryDiscountPct = (): number | null => {
+                    const categoryIdRaw = (product.Category && typeof product.Category === 'object')
+                        ? (product.Category as { id?: unknown }).id
+                        : product.category_id;
+                    const categoryId = Number(categoryIdRaw);
+                    if (!Number.isInteger(categoryId) || categoryId <= 0) return null;
+                    const category = categoryDiscountById.get(categoryId);
+                    if (!category) return null;
+                    if (tier === 'platinum') return category.discount_premium_pct;
+                    if (tier === 'gold') return category.discount_gold_pct;
+                    if (tier === 'regular') return category.discount_regular_pct;
+                    return null;
+                };
+
+                if (tier === 'regular') {
+                    const categoryPct = resolveCategoryDiscountPct();
+                    if (categoryPct !== null && categoryPct > 0) {
+                        const finalPrice = Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
+                        return { basePrice: effectiveBasePrice, finalPrice, source: 'category', discountPct: clampPercentage(categoryPct) };
+                    }
+                    return { basePrice: effectiveBasePrice, finalPrice: effectiveBasePrice, source: 'none', discountPct: 0 };
+                }
+
+                const aliases = tier === 'platinum' ? ['premium'] : [];
+                const directCandidates: unknown[] = [
+                    variant[tier],
+                    prices[tier],
+                    toObjectOrEmpty(variant[tier]).price
+                ];
+                for (const alias of aliases) {
+                    directCandidates.push(variant[alias], prices[alias], toObjectOrEmpty(variant[alias]).price);
+                }
+                for (const candidate of directCandidates) {
+                    const directPrice = toFiniteNumber(candidate);
+                    if (directPrice === null || directPrice <= 0) continue;
+                    // Ignore "direct tier price" that is effectively identical to the base price,
+                    // so category-tier discounts can still apply.
+                    if (effectiveBasePrice > 0 && Math.abs(directPrice - effectiveBasePrice) <= 0.0001) continue;
+                    // Ignore placeholder tier prices that just repeat the regular variant price.
+                    if (regularVariantPrice !== null && regularVariantPrice > 0 && Math.abs(directPrice - regularVariantPrice) <= 0.0001) continue;
+                    const finalPrice = Math.max(0, directPrice);
+                    return { basePrice: effectiveBasePrice, finalPrice, source: 'per_sku', discountPct: calcDiscountPct(effectiveBasePrice, finalPrice) };
+                }
+
+                const discounts = toObjectOrEmpty(variant.discounts_pct);
+                const discountCandidates: unknown[] = [
+                    discounts[tier],
+                    toObjectOrEmpty(variant[tier]).discount_pct,
+                    variant[`${tier}_discount_pct`]
+                ];
+                for (const alias of aliases) {
+                    discountCandidates.push(discounts[alias], toObjectOrEmpty(variant[alias]).discount_pct, variant[`${alias}_discount_pct`]);
+                }
+                for (const discountRaw of discountCandidates) {
+                    const discountPct = toFiniteNumber(discountRaw);
+                    if (discountPct === null || discountPct <= 0 || discountPct > 100) continue;
+                    const finalPrice = Math.max(0, Math.round((effectiveBasePrice * (1 - discountPct / 100)) * 100) / 100);
+                    return { basePrice: effectiveBasePrice, finalPrice, source: 'per_sku', discountPct: clampPercentage(discountPct) };
+                }
+
                 const categoryPct = resolveCategoryDiscountPct();
                 if (categoryPct !== null && categoryPct > 0) {
-                    return Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
+                    const finalPrice = Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
+                    return { basePrice: effectiveBasePrice, finalPrice, source: 'category', discountPct: clampPercentage(categoryPct) };
                 }
-                return effectiveBasePrice;
-            }
 
-            const aliases = tier === 'platinum' ? ['premium'] : [];
-            const directCandidates: unknown[] = [
-                variant[tier],
-                prices[tier],
-                toObjectOrEmpty(variant[tier]).price
-            ];
-            for (const alias of aliases) {
-                directCandidates.push(variant[alias], prices[alias], toObjectOrEmpty(variant[alias]).price);
-            }
-            for (const candidate of directCandidates) {
-                const directPrice = toFiniteNumber(candidate);
-                if (directPrice === null || directPrice <= 0) continue;
-                // Ignore "direct tier price" that is effectively identical to the base price,
-                // so category-tier discounts can still apply.
-                if (effectiveBasePrice > 0 && Math.abs(directPrice - effectiveBasePrice) <= 0.0001) continue;
-                // Ignore placeholder tier prices that just repeat the regular variant price.
-                if (regularVariantPrice !== null && regularVariantPrice > 0 && Math.abs(directPrice - regularVariantPrice) <= 0.0001) continue;
-                return Math.max(0, directPrice);
-            }
+                return { basePrice: effectiveBasePrice, finalPrice: effectiveBasePrice, source: 'none', discountPct: 0 };
+            };
 
-            const discounts = toObjectOrEmpty(variant.discounts_pct);
-            const discountCandidates: unknown[] = [
-                discounts[tier],
-                toObjectOrEmpty(variant[tier]).discount_pct,
-                variant[`${tier}_discount_pct`]
-            ];
-            for (const alias of aliases) {
-                discountCandidates.push(discounts[alias], toObjectOrEmpty(variant[alias]).discount_pct, variant[`${alias}_discount_pct`]);
-            }
-            for (const discountRaw of discountCandidates) {
-                const discountPct = toFiniteNumber(discountRaw);
-                if (discountPct === null || discountPct <= 0 || discountPct > 100) continue;
-                return Math.max(0, Math.round((effectiveBasePrice * (1 - discountPct / 100)) * 100) / 100);
-            }
-
-            const categoryPct = resolveCategoryDiscountPct();
-            if (categoryPct !== null && categoryPct > 0) {
-                return Math.max(0, Math.round((effectiveBasePrice * (1 - categoryPct / 100)) * 100) / 100);
-            }
-
-            return effectiveBasePrice;
+	    const getProductPrice = (product: ProductOption) => {
+            return getProductPricingMeta(product).finalPrice;
 	    };
 
 			    const getDealUnitPrice = (item: CartItem) => {
@@ -2156,18 +2181,76 @@ function ManualOrderContent() {
 	                                        const name = String(item.product?.name || '').trim() || 'Produk';
 	                                        const sku = String(item.product?.sku || '').trim();
 	                                        const stockParsed = Number(item.product?.stock_quantity);
-                                        const stockQty = Number.isFinite(stockParsed) ? stockParsed : null;
-                                        const isOutOfStock = stockQty !== null && stockQty <= 0;
-                                        const shortage = stockQty === null ? 0 : Math.max(0, Number(item.qty || 0) - stockQty);
-	                                        const hasShortage = shortage > 0;
-	                                            const isPromoLine = Boolean(item.clearance_promo_id);
+	                                        const stockQty = Number.isFinite(stockParsed) ? stockParsed : null;
+	                                        const isOutOfStock = stockQty !== null && stockQty <= 0;
+	                                        const shortage = stockQty === null ? 0 : Math.max(0, Number(item.qty || 0) - stockQty);
+		                                        const hasShortage = shortage > 0;
+		                                            const isPromoLine = Boolean(item.clearance_promo_id);
+                                                const pricingMeta = getProductPricingMeta(item.product);
 	                                        const dealUnit = getDealUnitPrice(item);
-	                                        const normalUnit = getProductPrice(item.product);
+	                                        const normalUnit = pricingMeta.finalPrice;
 	                                        const lineTotal = dealUnit * Number(item.qty || 0);
-                                            const autoDiscountPct = (() => {
-                                                const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
-                                                const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
-                                                    ? 'platinum'
+                                            const formatPctBadge = (value: number): string => {
+                                                const parsed = Number(value);
+                                                if (!Number.isFinite(parsed) || parsed <= 0) return '';
+                                                const rounded = Math.round(parsed);
+                                                if (Math.abs(parsed - rounded) <= 0.05) return String(rounded);
+                                                return parsed.toFixed(1).replace(/\.0$/, '');
+                                            };
+                                            const resolvePctFromPrices = (base: number, final: number): number => {
+                                                const b = Number(base || 0);
+                                                const f = Number(final || 0);
+                                                if (!(b > 0) || !Number.isFinite(b) || !Number.isFinite(f)) return 0;
+                                                return clampPercentage(Math.round((((b - f) / b) * 100) * 100) / 100);
+                                            };
+                                            const discountBadge = (() => {
+                                                if (isPromoLine) {
+                                                    const promo = item.clearance_promo;
+                                                    const pricingMode = String(promo?.pricing_mode || '').trim();
+                                                    const pctFromPromo = toFiniteNumber(promo?.discount_pct);
+                                                    const inferredPct = resolvePctFromPrices(normalUnit, dealUnit);
+                                                    const pct = pricingMode === 'percent_off' && pctFromPromo !== null && pctFromPromo > 0
+                                                        ? clampPercentage(pctFromPromo)
+                                                        : inferredPct;
+                                                    return {
+                                                        label: 'Promo',
+                                                        pct,
+                                                        className: 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                    };
+                                                }
+
+                                                const overrideRaw = item?.unit_price_override;
+                                                const override = overrideRaw === undefined || overrideRaw === null ? NaN : Number(overrideRaw);
+                                                const isCustom = Number.isFinite(override) && override > 0 && Math.abs(override - normalUnit) > 0.0001;
+                                                if (isCustom) {
+                                                    return {
+                                                        label: 'Custom',
+                                                        pct: resolvePctFromPrices(normalUnit, dealUnit),
+                                                        className: 'bg-rose-100 text-rose-800 border border-rose-200'
+                                                    };
+                                                }
+
+                                                if (pricingMeta.source === 'category') {
+                                                    return {
+                                                        label: 'Kategori',
+                                                        pct: pricingMeta.discountPct,
+                                                        className: 'bg-sky-100 text-sky-800 border border-sky-200'
+                                                    };
+                                                }
+                                                if (pricingMeta.source === 'per_sku') {
+                                                    return {
+                                                        label: 'Per-SKU',
+                                                        pct: pricingMeta.discountPct,
+                                                        className: 'bg-amber-100 text-amber-800 border border-amber-200'
+                                                    };
+                                                }
+
+                                                return { label: 'Normal', pct: 0, className: 'bg-slate-100 text-slate-700 border border-slate-200' };
+                                            })();
+	                                            const autoDiscountPct = (() => {
+	                                                const tierRaw = selectedCustomer?.CustomerProfile?.tier || 'regular';
+	                                                const tier = String(tierRaw || 'regular').trim().toLowerCase() === 'premium'
+	                                                    ? 'platinum'
                                                     : String(tierRaw || 'regular').trim().toLowerCase();
 
                                                 const variant = toObjectOrEmpty(item.product?.varian_harga);
@@ -2226,18 +2309,17 @@ function ManualOrderContent() {
                                                     : 'border border-slate-100 bg-white'
                                                     }`}
                                             >
-	                                                <div className="flex items-start justify-between gap-3">
-	                                                    <div className="min-w-0">
-	                                                        <div className="flex flex-wrap items-center gap-2">
-	                                                            <p className="text-xs font-bold text-slate-900">{name}</p>
-                                                                {isPromoLine ? (
-                                                                    <span className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                                                        Promo Cepat Habis
-                                                                    </span>
-                                                                ) : null}
-	                                                            {stockQty !== null ? (
-	                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${isOutOfStock
-	                                                                    ? 'bg-rose-600 text-white'
+		                                                <div className="flex items-start justify-between gap-3">
+		                                                    <div className="min-w-0">
+		                                                        <div className="flex flex-wrap items-center gap-2">
+		                                                            <p className="text-xs font-bold text-slate-900">{name}</p>
+                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${discountBadge.className}`}>
+                                                                    {discountBadge.label}
+                                                                    {discountBadge.pct > 0 ? ` ${formatPctBadge(discountBadge.pct)}%` : ''}
+                                                                </span>
+		                                                            {stockQty !== null ? (
+		                                                                <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${isOutOfStock
+		                                                                    ? 'bg-rose-600 text-white'
 	                                                                    : hasShortage
                                                                         ? 'bg-amber-100 text-amber-800 border border-amber-200'
                                                                         : 'bg-slate-100 text-slate-700'

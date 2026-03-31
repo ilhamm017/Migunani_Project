@@ -29,10 +29,20 @@ Resolver harga sebelumnya memprioritaskan “direct tier price” (`varian_harga
 Jalankan audit untuk mengukur seberapa luas mismatch `products.price` vs `varian_harga.prices.regular`, dan seberapa banyak `prices.<tier>` hanya placeholder.
 
 - Gunakan: `scripts/sql/audit_tier_pricing.sql`
+- Tambahan (estimasi impact lebih “langsung” untuk kasus placeholder): `scripts/sql/audit_tier_pricing_impact.sql`
 - Output penting:
   - Produk dengan `products.price != varian_harga.prices.regular`
   - Produk dengan `prices.gold == prices.regular` (placeholder)
   - Kategori yang punya diskon tier (non-null) dan terdampak oleh placeholder
+
+## Audit Transaksi (Disarankan karena berdampak ke pembayaran)
+Jika bug sempat terjadi di production, dampaknya bukan cuma tampilan katalog, tapi juga bisa “snap” ke transaksi (order) karena `order_items.price_at_purchase` + `pricing_snapshot` disimpan saat checkout.
+
+- Gunakan shortlist ini untuk verifikasi manual + rencana kompensasi:
+  - `scripts/sql/audit_order_items_tier_pricing_overcharge.sql`
+- Catatan:
+  - Script ini bersifat **heuristic** (menandai kandidat). Kalau ada produk yang memang sengaja punya override tier-per-item, bisa ikut ter-flag.
+  - Untuk POS, saat ini data snapshot yang disimpan lebih terbatas (tidak selengkap `order_items.pricing_snapshot`), jadi audit POS yang presisi membutuhkan penambahan snapshot (opsional improvement).
 
 ## Opsi Perbaikan Data (Opsional, setelah audit)
 Tujuan: membuat data lebih “bersih” dan mengurangi kebingungan di masa depan.

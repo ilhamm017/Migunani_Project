@@ -1520,6 +1520,22 @@ export const commitNormalizedRows = async (
                 throw new Error('HARGA BELI wajib > 0 jika STOK bertambah (untuk pencatatan HPP/profit).');
             }
 
+            // Guardrail: if an import updates `products.price` but doesn't include varian_harga,
+            // keep `varian_harga` consistent so placeholder tier prices don't become unintended overrides.
+            const prevSellingPrice = Number((existingProduct as any)?.price ?? 0);
+            const nextSellingPrice = Number(row.price ?? 0);
+            const priceChanged = Number.isFinite(prevSellingPrice) && Number.isFinite(nextSellingPrice)
+                ? Math.abs(prevSellingPrice - nextSellingPrice) > 0.0001
+                : false;
+            const importProvidesVariantHarga = Object.prototype.hasOwnProperty.call(updatePayload, 'varian_harga');
+            if (priceChanged && !importProvidesVariantHarga) {
+                const existingVariantRaw = (existingProduct as any)?.varian_harga;
+                const guardedVariant = buildGuardedVariantHargaForPriceUpdate(existingVariantRaw, prevSellingPrice, nextSellingPrice);
+                if (guardedVariant) {
+                    updatePayload.varian_harga = guardedVariant;
+                }
+            }
+
             await existingProduct.update({
                 ...updatePayload,
                 stock_quantity: nextStock
@@ -1683,4 +1699,204 @@ export const toObjectOrEmpty = (value: unknown): Record<string, unknown> => {
         return value as Record<string, unknown>;
     }
     return {};
+};
+
+const PRICE_GUARDRAIL_EPS = 0.0001;
+
+const approxEqual = (a: number, b: number): boolean => Math.abs(a - b) <= PRICE_GUARDRAIL_EPS;
+
+const toFinitePositiveNumber = (value: unknown): number | null => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    if (parsed <= 0) return null;
+    return parsed;
+};
+
+const resolveVariantRegularPrice = (variant: Record<string, unknown>, productPriceFallback: number): number => {
+    const prices = toObjectOrEmpty((variant as any)?.prices);
+    const candidates: unknown[] = [
+        (prices as any).regular,
+        (variant as any).regular,
+        (prices as any).base_price,
+        (variant as any).base_price,
+        (prices as any).price,
+        (variant as any).price,
+        productPriceFallback
+    ];
+
+    for (const candidate of candidates) {
+        const parsed = toFinitePositiveNumber(candidate);
+        if (parsed !== null) return parsed;
+    }
+
+    const fallback = Number(productPriceFallback || 0);
+    return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+};
+
+const resolveTierDiscountPct = (variantRaw: unknown, tier: string, aliases: string[] = []): number | null => {
+    const source = toObjectOrEmpty(variantRaw);
+    const discounts = toObjectOrEmpty((source as any)?.discounts_pct);
+
+    const candidates: unknown[] = [
+        (discounts as any)[tier],
+        toObjectOrEmpty((source as any)[tier]).discount_pct,
+        (source as any)[`${tier}_discount_pct`]
+    ];
+    for (const alias of aliases) {
+        candidates.push(
+            (discounts as any)[alias],
+            toObjectOrEmpty((source as any)[alias]).discount_pct,
+            (source as any)[`${alias}_discount_pct`]
+        );
+    }
+
+    for (const candidate of candidates) {
+        const parsed = toPercentageNumber(candidate);
+        if (parsed === null) continue;
+        if (parsed <= 0) continue;
+        return parsed;
+    }
+
+    return null;
+};
+
+const setTierPriceKeepingShape = (variant: Record<string, unknown>, tierKey: string, tierPrice: number): boolean => {
+    let changed = false;
+    const v = variant as any;
+
+    const currentPrices = toObjectOrEmpty(v.prices);
+    const nextPrices = { ...currentPrices } as Record<string, unknown>;
+    if (!v.prices || typeof v.prices !== 'object' || Array.isArray(v.prices)) {
+        v.prices = nextPrices;
+        changed = true;
+    } else {
+        v.prices = nextPrices;
+    }
+
+    const prevPrice = toFinitePositiveNumber((nextPrices as any)[tierKey]);
+    if (prevPrice === null || !approxEqual(prevPrice, tierPrice)) {
+        (nextPrices as any)[tierKey] = tierPrice;
+        changed = true;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(v, tierKey)) {
+        const topVal = v[tierKey];
+        if (topVal && typeof topVal === 'object' && !Array.isArray(topVal)) {
+            const prevTopPrice = toFinitePositiveNumber((topVal as any).price);
+            if (prevTopPrice === null || !approxEqual(prevTopPrice, tierPrice)) {
+                (topVal as any).price = tierPrice;
+                changed = true;
+            }
+        } else {
+            const prevTop = toFinitePositiveNumber(topVal);
+            if (prevTop === null || !approxEqual(prevTop, tierPrice)) {
+                v[tierKey] = tierPrice;
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+};
+
+const cleanupPlaceholderTierPrice = (variant: Record<string, unknown>, tierKey: string, placeholder: number): boolean => {
+    if (!Number.isFinite(placeholder) || placeholder <= 0) return false;
+    let changed = false;
+    const v = variant as any;
+
+    const prices = toObjectOrEmpty(v.prices);
+    if (prices && typeof prices === 'object' && !Array.isArray(prices) && Object.prototype.hasOwnProperty.call(prices, tierKey)) {
+        const parsed = toFinitePositiveNumber((prices as any)[tierKey]);
+        if (parsed !== null && approxEqual(parsed, placeholder)) {
+            const next = { ...prices } as any;
+            delete next[tierKey];
+            v.prices = next;
+            changed = true;
+        }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(v, tierKey)) {
+        const topVal = v[tierKey];
+        if (topVal && typeof topVal === 'object' && !Array.isArray(topVal)) {
+            if (Object.prototype.hasOwnProperty.call(topVal as any, 'price')) {
+                const parsed = toFinitePositiveNumber((topVal as any).price);
+                if (parsed !== null && approxEqual(parsed, placeholder)) {
+                    delete (topVal as any).price;
+                    changed = true;
+                }
+            }
+        } else {
+            const parsed = toFinitePositiveNumber(topVal);
+            if (parsed !== null && approxEqual(parsed, placeholder)) {
+                delete v[tierKey];
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+};
+
+const buildGuardedVariantHargaForPriceUpdate = (
+    variantRaw: unknown,
+    prevProductPrice: number,
+    nextRegularPrice: number
+): Record<string, unknown> | null => {
+    const prevVariant = toObjectOrEmpty(variantRaw);
+    if (Object.keys(prevVariant).length === 0) return null;
+
+    const prevPrices = toObjectOrEmpty((prevVariant as any).prices);
+    const prevRegularVariantPrice = resolveVariantRegularPrice(prevVariant, prevProductPrice);
+
+    const nextVariant = { ...prevVariant } as Record<string, unknown>;
+    let changed = false;
+
+    const nextPrices = { ...prevPrices } as Record<string, unknown>;
+    (nextVariant as any).prices = nextPrices;
+
+    const nextRegularRounded = roundPrice(Number(nextRegularPrice || 0));
+    if (!approxEqual(toFinitePositiveNumber((nextPrices as any).regular) ?? 0, nextRegularRounded)) {
+        (nextPrices as any).regular = nextRegularRounded;
+        changed = true;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(prevVariant as any, 'regular')) {
+        const prevTop = toFinitePositiveNumber((prevVariant as any).regular);
+        if (prevTop === null || !approxEqual(prevTop, nextRegularRounded)) {
+            (nextVariant as any).regular = nextRegularRounded;
+            changed = true;
+        }
+    }
+
+    const tiers: Array<{ key: 'gold' | 'platinum'; aliases: string[] }> = [
+        { key: 'gold', aliases: [] },
+        { key: 'platinum', aliases: ['premium'] }
+    ];
+
+    for (const { key, aliases } of tiers) {
+        const discountPct = resolveTierDiscountPct(nextVariant, key, aliases);
+        if (discountPct !== null) {
+            const tierPrice = roundPrice(nextRegularRounded * (1 - discountPct / 100));
+            changed = setTierPriceKeepingShape(nextVariant, key, tierPrice) || changed;
+
+            // Some datasets use `premium` as an alias for `platinum`.
+            if (key === 'platinum') {
+                const hasPremium =
+                    Object.prototype.hasOwnProperty.call(prevVariant as any, 'premium') ||
+                    Object.prototype.hasOwnProperty.call(prevPrices as any, 'premium');
+                if (hasPremium) {
+                    changed = setTierPriceKeepingShape(nextVariant, 'premium', tierPrice) || changed;
+                }
+            }
+
+            continue;
+        }
+
+        changed = cleanupPlaceholderTierPrice(nextVariant, key, prevRegularVariantPrice) || changed;
+        if (key === 'platinum') {
+            changed = cleanupPlaceholderTierPrice(nextVariant, 'premium', prevRegularVariantPrice) || changed;
+        }
+    }
+
+    return changed ? nextVariant : null;
 };

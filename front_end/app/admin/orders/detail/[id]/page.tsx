@@ -14,6 +14,40 @@ import type { OrderDetailResponse } from '@/lib/apiTypes';
 type LooseRecord = Record<string, unknown>;
 const asRecord = (value: unknown): LooseRecord => (value && typeof value === 'object' ? (value as LooseRecord) : {});
 
+const toObjectOrEmpty = (value: unknown): LooseRecord => {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as LooseRecord;
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) return value as LooseRecord;
+  return {};
+};
+
+const clampPercentage = (value: number): number => Math.min(100, Math.max(0, value));
+
+const formatPctBadge = (value: number): string => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return '';
+  const rounded = Math.round(parsed);
+  if (Math.abs(parsed - rounded) <= 0.05) return String(rounded);
+  return parsed.toFixed(1).replace(/\.0$/, '');
+};
+
+const resolvePctFromPrices = (base: number, final: number): number => {
+  const b = Number(base || 0);
+  const f = Number(final || 0);
+  if (!(b > 0) || !Number.isFinite(b) || !Number.isFinite(f)) return 0;
+  return clampPercentage(Math.round((((b - f) / b) * 100) * 100) / 100);
+};
+
 export default function AdminOrderDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir']);
   const params = useParams<{ id?: string }>();
@@ -50,26 +84,66 @@ export default function AdminOrderDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowed, orderId]);
 
-  const items = useMemo(() => {
-    const raw = Array.isArray(order?.OrderItems) ? order!.OrderItems! : [];
-    return raw
-      .map((row) => {
-        const rec = asRecord(row);
-        const product = asRecord(rec.Product);
-        const productId = String(rec.product_id || product.id || '').trim();
-        const qty = Math.max(0, Math.trunc(Number(rec.qty || 0)));
-        return {
-          id: String(rec.id || '').trim() || productId,
-          productId,
-          sku: String(product.sku || productId || '-'),
-          name: String(product.name || rec.name || '-'),
-          qty,
-          unitPrice: Number(rec.unit_price || 0),
-          lineTotal: Number(rec.line_total || 0),
-        };
-      })
-      .filter((row) => row.productId && row.qty > 0);
-  }, [order]);
+	  const items = useMemo(() => {
+	    const raw = Array.isArray(order?.OrderItems) ? order!.OrderItems! : [];
+	    return raw
+	      .map((row) => {
+	        const rec = asRecord(row);
+	        const product = asRecord(rec.Product);
+	        const productId = String(rec.product_id || product.id || '').trim();
+	        const qty = Math.max(0, Math.trunc(Number(rec.qty || 0)));
+          const unitPrice = Number(rec.price_at_purchase ?? rec.unit_price ?? 0);
+          const lineTotal = Number.isFinite(unitPrice) ? unitPrice * qty : 0;
+          const pricingSnapshot = toObjectOrEmpty(rec.pricing_snapshot);
+          const clearancePromo = toObjectOrEmpty(pricingSnapshot.clearance_promo);
+          const override = toObjectOrEmpty(pricingSnapshot.override);
+          const computedUnit = Number(pricingSnapshot.computed_unit_price ?? 0);
+          const finalUnit = Number(pricingSnapshot.final_unit_price ?? unitPrice ?? 0);
+          const snapshotDiscountPct = Number(pricingSnapshot.discount_pct ?? 0);
+          const discountSource = String(pricingSnapshot.discount_source || '').trim();
+          const hasPromo = Object.keys(clearancePromo).length > 0 || Boolean(rec.clearance_promo_id);
+          const hasOverride = Object.keys(override).length > 0;
+
+          const discountBadge = (() => {
+            if (hasPromo) {
+              const promoMode = String(clearancePromo.pricing_mode || '').trim();
+              const pctFromPromo = Number(clearancePromo.discount_pct ?? 0);
+              const pct = promoMode === 'percent_off' && Number.isFinite(pctFromPromo) && pctFromPromo > 0
+                ? clampPercentage(pctFromPromo)
+                : resolvePctFromPrices(Number.isFinite(computedUnit) && computedUnit > 0 ? computedUnit : unitPrice, finalUnit);
+              return { label: 'Promo', pct, className: 'bg-emerald-100 text-emerald-800 border border-emerald-200' };
+            }
+
+            if (hasOverride) {
+              const pct = resolvePctFromPrices(Number.isFinite(computedUnit) && computedUnit > 0 ? computedUnit : unitPrice, finalUnit);
+              return { label: 'Custom', pct, className: 'bg-rose-100 text-rose-800 border border-rose-200' };
+            }
+
+            if (discountSource === 'category') {
+              const pct = Number.isFinite(snapshotDiscountPct) && snapshotDiscountPct > 0 ? clampPercentage(snapshotDiscountPct) : 0;
+              return { label: 'Kategori', pct, className: 'bg-sky-100 text-sky-800 border border-sky-200' };
+            }
+
+            if (discountSource === 'tier_fallback') {
+              const pct = Number.isFinite(snapshotDiscountPct) && snapshotDiscountPct > 0 ? clampPercentage(snapshotDiscountPct) : 0;
+              return { label: 'Per-SKU', pct, className: 'bg-amber-100 text-amber-800 border border-amber-200' };
+            }
+
+            return { label: 'Normal', pct: 0, className: 'bg-slate-100 text-slate-700 border border-slate-200' };
+          })();
+	        return {
+	          id: String(rec.id || '').trim() || productId,
+	          productId,
+	          sku: String(product.sku || productId || '-'),
+	          name: String(product.name || rec.name || '-'),
+	          qty,
+	          unitPrice,
+	          lineTotal,
+            discountBadge,
+	        };
+	      })
+	      .filter((row) => row.productId && row.qty > 0);
+	  }, [order]);
 
   if (!allowed) return null;
 
@@ -155,25 +229,32 @@ export default function AdminOrderDetailPage() {
             ) : (
               <div className="mt-2 overflow-x-auto rounded-2xl border border-slate-200">
                 <table className="min-w-full text-left text-xs">
-                  <thead className="bg-slate-50">
-                    <tr className="text-[10px] uppercase tracking-widest text-slate-500">
-                      <th className="px-4 py-3 font-black">SKU</th>
-                      <th className="px-4 py-3 font-black">Nama</th>
-                      <th className="px-4 py-3 font-black">Qty</th>
-                      <th className="px-4 py-3 font-black">Harga</th>
-                      <th className="px-4 py-3 font-black">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white">
-                    {items.map((row) => (
-                      <tr key={row.id} className="border-t">
-                        <td className="px-4 py-3 font-black text-slate-900 whitespace-nowrap">{row.sku}</td>
-                        <td className="px-4 py-3 text-slate-800">{row.name}</td>
-                        <td className="px-4 py-3 font-black">{row.qty}</td>
-                        <td className="px-4 py-3">{formatCurrency(row.unitPrice)}</td>
-                        <td className="px-4 py-3 font-black">{formatCurrency(row.lineTotal)}</td>
-                      </tr>
-                    ))}
+	                  <thead className="bg-slate-50">
+	                    <tr className="text-[10px] uppercase tracking-widest text-slate-500">
+	                      <th className="px-4 py-3 font-black">SKU</th>
+	                      <th className="px-4 py-3 font-black">Nama</th>
+                        <th className="px-4 py-3 font-black">Diskon</th>
+	                      <th className="px-4 py-3 font-black">Qty</th>
+	                      <th className="px-4 py-3 font-black">Harga</th>
+	                      <th className="px-4 py-3 font-black">Total</th>
+	                    </tr>
+	                  </thead>
+	                  <tbody className="bg-white">
+	                    {items.map((row) => (
+	                      <tr key={row.id} className="border-t">
+	                        <td className="px-4 py-3 font-black text-slate-900 whitespace-nowrap">{row.sku}</td>
+	                        <td className="px-4 py-3 text-slate-800">{row.name}</td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide ${row.discountBadge.className}`}>
+                              {row.discountBadge.label}
+                              {row.discountBadge.pct > 0 ? ` ${formatPctBadge(row.discountBadge.pct)}%` : ''}
+                            </span>
+                          </td>
+	                        <td className="px-4 py-3 font-black">{row.qty}</td>
+	                        <td className="px-4 py-3">{formatCurrency(row.unitPrice)}</td>
+	                        <td className="px-4 py-3 font-black">{formatCurrency(row.lineTotal)}</td>
+	                      </tr>
+	                    ))}
                   </tbody>
                 </table>
               </div>
@@ -184,4 +265,3 @@ export default function AdminOrderDetailPage() {
     </div>
   );
 }
-
