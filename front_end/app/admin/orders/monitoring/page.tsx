@@ -106,6 +106,12 @@ export default function AdminOrdersMonitoringPage() {
           >
             Kembali ke Orders
           </Link>
+          <Link
+            href="/admin/orders/monitoring/sku"
+            className="px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+          >
+            Monitoring SKU
+          </Link>
           <button
             type="button"
             onClick={() => load()}

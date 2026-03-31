@@ -195,6 +195,32 @@ export type AdminOrderMonitoringResponse = {
   };
 };
 
+export type AdminOrderMonitoringSkuRow = {
+  product_id: string;
+  sku: string;
+  name: string;
+  product_status: string;
+  stock_quantity: number;
+  min_stock: number;
+  order_count: number;
+  ordered_net_qty: number;
+  allocated_qty: number;
+  backorder_pending_qty: number;
+  canceled_qty: number;
+  unallocated_qty: number;
+  suggested_purchase_qty: number;
+};
+
+export type AdminOrderMonitoringSkuResponse = {
+  scope: 'active' | 'all';
+  range: { startDate?: string; endDate?: string };
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  rows: AdminOrderMonitoringSkuRow[];
+};
+
 export type OrderItemSummaryRow = {
   order_item_id: string;
   ordered_qty_original: number;

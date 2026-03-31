@@ -1963,3 +1963,178 @@ export const getMonitoringSummary = asyncWrapper(async (req: Request, res: Respo
         }
     });
 });
+
+export const getMonitoringSkuSummary = asyncWrapper(async (req: Request, res: Response) => {
+    const scopeRaw = String(req.query.scope || 'active').trim().toLowerCase();
+    const scope: 'active' | 'all' = scopeRaw === 'all' ? 'all' : 'active';
+
+    const pageRaw = Number(req.query.page || 1);
+    const limitRaw = Number(req.query.limit || 50);
+    const page = Math.max(1, Number.isFinite(pageRaw) ? Math.trunc(pageRaw) : 1);
+    const limit = Math.max(1, Math.min(200, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 50));
+    const offset = (page - 1) * limit;
+
+    const searchText = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+
+    const startDateRaw = typeof req.query.startDate === 'string' ? req.query.startDate : '';
+    const endDateRaw = typeof req.query.endDate === 'string' ? req.query.endDate : '';
+
+    const createdAtRange: any = {};
+    if (startDateRaw) {
+        const start = new Date(startDateRaw);
+        if (!Number.isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            createdAtRange[Op.gte] = start;
+        }
+    }
+    if (endDateRaw) {
+        const end = new Date(endDateRaw);
+        if (!Number.isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            createdAtRange[Op.lte] = end;
+        }
+    }
+
+    const filters: string[] = [];
+    const replacements: Record<string, unknown> = {
+        limit,
+        offset,
+        search: `%${searchText}%`,
+    };
+
+    if (scope === 'active') {
+        filters.push("o.status NOT IN ('completed','canceled','expired')");
+    }
+    if (createdAtRange[Op.gte]) {
+        filters.push('o.createdAt >= :startAt');
+        replacements.startAt = createdAtRange[Op.gte];
+    }
+    if (createdAtRange[Op.lte]) {
+        filters.push('o.createdAt <= :endAt');
+        replacements.endAt = createdAtRange[Op.lte];
+    }
+    if (searchText) {
+        filters.push('(p.sku LIKE :search OR p.name LIKE :search)');
+    }
+
+    const whereSql = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+    const countRows = await sequelize.query(
+        `
+        SELECT COUNT(*) AS total
+        FROM (
+          SELECT p.id
+          FROM (
+            SELECT
+              oi.order_id AS order_id,
+              oi.product_id AS product_id,
+              SUM(oi.qty) AS ordered_net_qty,
+              SUM(oi.qty_canceled_manual + oi.qty_canceled_backorder) AS canceled_qty
+            FROM order_items oi
+            GROUP BY oi.order_id, oi.product_id
+          ) ia
+          JOIN orders o ON o.id = ia.order_id
+          JOIN products p ON p.id = ia.product_id
+          ${whereSql}
+          GROUP BY p.id
+        ) t
+        `,
+        { replacements, type: QueryTypes.SELECT }
+    ) as Array<{ total: unknown }>;
+
+    const total = Math.max(0, Number((countRows?.[0] as any)?.total || 0));
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    const rows = await sequelize.query(
+        `
+        SELECT
+          p.id AS product_id,
+          p.sku AS sku,
+          p.name AS name,
+          p.status AS product_status,
+          p.stock_quantity AS stock_quantity,
+          p.min_stock AS min_stock,
+          COUNT(DISTINCT o.id) AS order_count,
+          SUM(ia.ordered_net_qty) AS ordered_net_qty,
+          SUM(IFNULL(aa.allocated_qty, 0)) AS allocated_qty,
+          SUM(IFNULL(ba.backorder_pending_qty, 0)) AS backorder_pending_qty,
+          SUM(ia.canceled_qty) AS canceled_qty
+        FROM (
+          SELECT
+            oi.order_id AS order_id,
+            oi.product_id AS product_id,
+            SUM(oi.qty) AS ordered_net_qty,
+            SUM(oi.qty_canceled_manual + oi.qty_canceled_backorder) AS canceled_qty
+          FROM order_items oi
+          GROUP BY oi.order_id, oi.product_id
+        ) ia
+        JOIN orders o ON o.id = ia.order_id
+        JOIN products p ON p.id = ia.product_id
+        LEFT JOIN (
+          SELECT
+            oa.order_id AS order_id,
+            oa.product_id AS product_id,
+            SUM(oa.allocated_qty) AS allocated_qty
+          FROM order_allocations oa
+          GROUP BY oa.order_id, oa.product_id
+        ) aa ON aa.order_id = ia.order_id AND aa.product_id = ia.product_id
+        LEFT JOIN (
+          SELECT
+            oi.order_id AS order_id,
+            oi.product_id AS product_id,
+            SUM(b.qty_pending) AS backorder_pending_qty
+          FROM backorders b
+          JOIN order_items oi ON oi.id = b.order_item_id
+          WHERE b.qty_pending > 0
+            AND b.status NOT IN ('fulfilled', 'canceled')
+          GROUP BY oi.order_id, oi.product_id
+        ) ba ON ba.order_id = ia.order_id AND ba.product_id = ia.product_id
+        ${whereSql}
+        GROUP BY p.id, p.sku, p.name, p.status, p.stock_quantity, p.min_stock
+        ORDER BY backorder_pending_qty DESC, ordered_net_qty DESC, p.sku ASC
+        LIMIT :limit OFFSET :offset
+        `,
+        { replacements, type: QueryTypes.SELECT }
+    ) as Array<Record<string, unknown>>;
+
+    const range: { startDate?: string; endDate?: string } = {};
+    if (startDateRaw) range.startDate = startDateRaw;
+    if (endDateRaw) range.endDate = endDateRaw;
+
+    const toNumber = (value: unknown): number => {
+        const n = Number(value || 0);
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    res.json({
+        scope,
+        range,
+        page,
+        limit,
+        total,
+        totalPages,
+        rows: (Array.isArray(rows) ? rows : []).map((row) => {
+            const orderedNetQty = Math.max(0, Math.trunc(toNumber((row as any)?.ordered_net_qty)));
+            const allocatedQty = Math.max(0, Math.trunc(toNumber((row as any)?.allocated_qty)));
+            const backorderPendingQty = Math.max(0, Math.trunc(toNumber((row as any)?.backorder_pending_qty)));
+            const canceledQty = Math.max(0, Math.trunc(toNumber((row as any)?.canceled_qty)));
+            const stockQty = Math.trunc(toNumber((row as any)?.stock_quantity));
+            const minStock = Math.max(0, Math.trunc(toNumber((row as any)?.min_stock)));
+            return {
+                product_id: String((row as any)?.product_id || ''),
+                sku: String((row as any)?.sku || ''),
+                name: String((row as any)?.name || ''),
+                product_status: String((row as any)?.product_status || ''),
+                stock_quantity: stockQty,
+                min_stock: minStock,
+                order_count: Math.max(0, Math.trunc(toNumber((row as any)?.order_count))),
+                ordered_net_qty: orderedNetQty,
+                allocated_qty: allocatedQty,
+                backorder_pending_qty: backorderPendingQty,
+                canceled_qty: canceledQty,
+                unallocated_qty: Math.max(0, orderedNetQty - allocatedQty),
+                suggested_purchase_qty: Math.max(0, backorderPendingQty - Math.max(0, stockQty)),
+            };
+        }),
+    });
+});

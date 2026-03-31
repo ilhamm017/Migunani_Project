@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
     AdminOrderListResponse,
     AdminOrderMonitoringResponse,
+    AdminOrderMonitoringSkuResponse,
     DriverAssignedOrderRow,
     InvoiceDetailResponse,
     OrderDetailResponse,
@@ -488,6 +489,15 @@ export const api = {
 	                limitTop?: number;
 	            }) =>
 	                apiClient.get<AdminOrderMonitoringResponse>('/orders/admin/monitoring', { params }),
+	            getMonitoringSku: (params?: {
+	                scope?: 'active' | 'all';
+	                startDate?: string;
+	                endDate?: string;
+	                search?: string;
+	                page?: number;
+	                limit?: number;
+	            }) =>
+	                apiClient.get<AdminOrderMonitoringSkuResponse>('/orders/admin/monitoring/sku', { params }),
 	            getStats: () => apiClient.get('/orders/admin/stats'),
 	            getCouriers: () => apiClient.get('/orders/admin/couriers'),
 		            updateStatus: (id: string, data: {
