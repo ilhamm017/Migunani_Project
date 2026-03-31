@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { ShoppingCart, Package, ArrowRight, Trash2, Plus, Minus } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { formatCurrency } from '@/lib/utils';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 
@@ -12,6 +12,9 @@ type ApiCartProduct = {
     id: string;
     name?: string;
     price?: number;
+    effective_price?: number;
+    effective_discount_pct?: number;
+    effective_discount_source?: string;
     image_url?: string | null;
 };
 
@@ -27,6 +30,57 @@ export default function CartPage() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
     const [syncing, setSyncing] = useState(false);
     const [syncError, setSyncError] = useState('');
+
+    const mapApiItems = (rawItems: ApiCartItem[]): Parameters<typeof setCart>[0] => {
+        return rawItems
+            .map((row) => {
+                const productId = String(row?.product_id || '').trim();
+                if (!productId) return null;
+                const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
+                const product = row?.Product;
+
+                const basePrice = Number(product?.price || 0);
+                const effectivePriceRaw = Number(product?.effective_price);
+                const effectivePrice = Number.isFinite(effectivePriceRaw) && effectivePriceRaw > 0 ? effectivePriceRaw : null;
+                const discountPctRaw = Number(product?.effective_discount_pct);
+                const discountPct = Number.isFinite(discountPctRaw) && discountPctRaw > 0 ? discountPctRaw : undefined;
+
+                const finalPrice = effectivePrice ?? basePrice;
+                const originalPrice = effectivePrice !== null && basePrice > 0 && effectivePrice < basePrice ? basePrice : undefined;
+                const discountSourceRaw = typeof product?.effective_discount_source === 'string'
+                    ? String(product.effective_discount_source).trim()
+                    : '';
+                const discountSource = discountSourceRaw ? discountSourceRaw : undefined;
+
+                return {
+                    id: productId,
+                    cartItemId: String(row?.id ?? ''),
+                    productId,
+                    productName: String(product?.name || ''),
+                    price: Number(finalPrice || 0),
+                    ...(originalPrice !== undefined ? { originalPrice } : {}),
+                    ...(discountPct !== undefined ? { discountPct } : {}),
+                    ...(discountSource !== undefined ? { discountSource } : {}),
+                    quantity: qty,
+                    imageUrl: product?.image_url ? String(product.image_url) : undefined,
+                };
+            })
+            .filter(Boolean) as Parameters<typeof setCart>[0];
+    };
+
+    const subtotalBeforeDiscount = useMemo(() => {
+        return items.reduce((sum, item) => {
+            const base = Number(item.originalPrice ?? item.price ?? 0);
+            const qty = Math.max(0, Math.trunc(Number(item.quantity || 0)));
+            return sum + base * qty;
+        }, 0);
+    }, [items]);
+
+    const totalSavings = useMemo(() => {
+        const savings = subtotalBeforeDiscount - totalPrice;
+        if (!Number.isFinite(savings) || savings <= 0) return 0;
+        return Math.round(savings * 100) / 100;
+    }, [subtotalBeforeDiscount, totalPrice]);
 
     useEffect(() => {
         if (!isAuthenticated) return;
@@ -45,23 +99,7 @@ export default function CartPage() {
                         ? cart.items
                         : [];
 
-                const mapped = rawItems
-                    .map((row) => {
-                        const productId = String(row?.product_id || '').trim();
-                        if (!productId) return null;
-                        const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
-                        const product = row?.Product;
-                        return {
-                            id: productId,
-                            cartItemId: String(row?.id ?? ''),
-                            productId,
-                            productName: String(product?.name || ''),
-                            price: Number(product?.price || 0),
-                            quantity: qty,
-                            imageUrl: product?.image_url ? String(product.image_url) : undefined,
-                        };
-                    })
-                    .filter(Boolean) as Parameters<typeof setCart>[0];
+                const mapped = mapApiItems(rawItems);
 
                 if (!cancelled) {
                     setCart(mapped);
@@ -93,8 +131,8 @@ export default function CartPage() {
             setSyncError('');
             await api.cart.updateCartItem(cartItemId, normalizedQty);
         } catch (error) {
-            console.error('Failed to sync cart qty:', error);
-            setSyncError('Gagal menyimpan perubahan keranjang. Memuat ulang data server...');
+                console.error('Failed to sync cart qty:', error);
+                setSyncError('Gagal menyimpan perubahan keranjang. Memuat ulang data server...');
             try {
                 const res = await api.cart.getCart();
                 const cart = res.data;
@@ -103,23 +141,7 @@ export default function CartPage() {
                     : Array.isArray(cart?.items)
                         ? cart.items
                         : [];
-                const mapped = rawItems
-                    .map((row) => {
-                        const pid = String(row?.product_id || '').trim();
-                        if (!pid) return null;
-                        const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
-                        const product = row?.Product;
-                        return {
-                            id: pid,
-                            cartItemId: String(row?.id ?? ''),
-                            productId: pid,
-                            productName: String(product?.name || ''),
-                            price: Number(product?.price || 0),
-                            quantity: qty,
-                            imageUrl: product?.image_url ? String(product.image_url) : undefined,
-                        };
-                    })
-                    .filter(Boolean) as Parameters<typeof setCart>[0];
+                const mapped = mapApiItems(rawItems);
                 setCart(mapped);
             } catch (reloadError) {
                 console.error('Failed to reload cart after sync failure:', reloadError);
@@ -139,8 +161,8 @@ export default function CartPage() {
             setSyncError('');
             await api.cart.removeCartItem(cartItemId);
         } catch (error) {
-            console.error('Failed to remove item from backend cart:', error);
-            setSyncError('Gagal menghapus item. Memuat ulang data server...');
+                console.error('Failed to remove item from backend cart:', error);
+                setSyncError('Gagal menghapus item. Memuat ulang data server...');
             try {
                 const res = await api.cart.getCart();
                 const cart = res.data;
@@ -149,23 +171,7 @@ export default function CartPage() {
                     : Array.isArray(cart?.items)
                         ? cart.items
                         : [];
-                const mapped = rawItems
-                    .map((row) => {
-                        const pid = String(row?.product_id || '').trim();
-                        if (!pid) return null;
-                        const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
-                        const product = row?.Product;
-                        return {
-                            id: pid,
-                            cartItemId: String(row?.id ?? ''),
-                            productId: pid,
-                            productName: String(product?.name || ''),
-                            price: Number(product?.price || 0),
-                            quantity: qty,
-                            imageUrl: product?.image_url ? String(product.image_url) : undefined,
-                        };
-                    })
-                    .filter(Boolean) as Parameters<typeof setCart>[0];
+                const mapped = mapApiItems(rawItems);
                 setCart(mapped);
             } catch (reloadError) {
                 console.error('Failed to reload cart after remove failure:', reloadError);
@@ -228,7 +234,31 @@ export default function CartPage() {
                             </div>
                             <div className="flex-1 min-w-0">
                                 <h4 className="text-xs font-bold text-slate-900 truncate">{item.productName}</h4>
-                                <p className="text-[11px] font-black text-emerald-600 mt-0.5">{formatCurrency(item.price)}</p>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                                    <p className="text-[11px] font-black text-emerald-600">{formatCurrency(item.price)}</p>
+                                    {Number.isFinite(Number(item.originalPrice)) && Number(item.originalPrice) > Number(item.price) ? (
+                                        <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-0.5 rounded-lg">
+                                            Diskon {(() => {
+                                                const rawPct = Number(item.discountPct);
+                                                const pct = Number.isFinite(rawPct) && rawPct > 0
+                                                    ? rawPct
+                                                    : Number(item.originalPrice) > 0
+                                                        ? ((Number(item.originalPrice) - Number(item.price)) / Number(item.originalPrice)) * 100
+                                                        : 0;
+                                                const rounded = Math.round(pct * 10) / 10;
+                                                const text = rounded.toFixed(1).replace(/\.0$/, '');
+                                                return `${text}%`;
+                                            })()}
+                                        </span>
+                                    ) : null}
+                                </div>
+                                {Number.isFinite(Number(item.originalPrice)) && Number(item.originalPrice) > Number(item.price) ? (
+                                    <p className="text-[10px] font-bold text-slate-500">
+                                        <span className="line-through text-slate-400">{formatCurrency(Number(item.originalPrice))}</span>
+                                        <span className="mx-1">•</span>
+                                        Potongan {formatCurrency(Math.max(0, (Number(item.originalPrice) - Number(item.price)) * Number(item.quantity || 0)))}
+                                    </p>
+                                ) : null}
                                 <div className="flex items-center gap-2 mt-2">
                                     <button
                                         onClick={() => void syncUpdateQty(item.productId, Math.max(1, item.quantity - 1))}
@@ -256,10 +286,29 @@ export default function CartPage() {
 
                     {/* Total Section */}
                     <div className="bg-slate-900 rounded-[32px] p-6 text-white shadow-xl mt-4">
-                        <div className="flex justify-between items-center mb-4">
-                            <span className="text-xs font-bold uppercase tracking-widest opacity-50">Total</span>
-                            <span className="text-xl font-black">{formatCurrency(totalPrice)}</span>
-                        </div>
+                        {totalSavings > 0 ? (
+                            <div className="space-y-1 mb-4">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs font-bold uppercase tracking-widest opacity-50">Subtotal</span>
+                                    <span className="text-xs font-bold opacity-60 line-through">
+                                        {formatCurrency(subtotalBeforeDiscount)}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs font-bold uppercase tracking-widest opacity-50">Potongan</span>
+                                    <span className="text-xs font-black text-emerald-300">- {formatCurrency(totalSavings)}</span>
+                                </div>
+                                <div className="flex justify-between items-center pt-2">
+                                    <span className="text-xs font-bold uppercase tracking-widest opacity-50">Total</span>
+                                    <span className="text-xl font-black">{formatCurrency(totalPrice)}</span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex justify-between items-center mb-4">
+                                <span className="text-xs font-bold uppercase tracking-widest opacity-50">Total</span>
+                                <span className="text-xl font-black">{formatCurrency(totalPrice)}</span>
+                            </div>
+                        )}
                         <Link href="/checkout">
                             <button className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl text-xs uppercase shadow-lg shadow-emerald-800/30 active:scale-95 transition-all">
                                 Checkout Sekarang

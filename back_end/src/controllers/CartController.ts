@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
-import { Cart, CartItem, Product, sequelize } from '../models';
+import { Cart, CartItem, Category, CustomerProfile, Product, User, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
+import { resolveEffectiveTierPricing } from './order/utils';
 
 // Helper to get or create cart
 const getOrCreateCart = async (userId: string, transaction?: any) => {
@@ -14,6 +15,13 @@ const getOrCreateCart = async (userId: string, transaction?: any) => {
 
 export const getCart = asyncWrapper(async (req: Request, res: Response) => {
     const userId = req.user!.id;
+
+    const customer = await User.findByPk(userId, {
+        attributes: ['id'],
+        include: [{ model: CustomerProfile, attributes: ['tier'], required: false }],
+    });
+    const userTier = String((customer as any)?.CustomerProfile?.tier || 'regular');
+
     const cart = await Cart.findOne({
         where: { user_id: userId },
         include: [
@@ -21,7 +29,12 @@ export const getCart = asyncWrapper(async (req: Request, res: Response) => {
                 model: CartItem,
                 include: [{
                     model: Product,
-                    attributes: ['id', 'name', 'price', 'sku', 'stock_quantity', 'image_url']
+                    attributes: ['id', 'name', 'price', 'sku', 'stock_quantity', 'image_url', 'varian_harga', 'category_id'],
+                    include: [{
+                        model: Category,
+                        attributes: ['id', 'name', 'discount_regular_pct', 'discount_gold_pct', 'discount_premium_pct'],
+                        required: false,
+                    }],
                 }]
             }
         ]
@@ -32,7 +45,31 @@ export const getCart = asyncWrapper(async (req: Request, res: Response) => {
         return res.json({ id: null, items: [] });
     }
 
-    res.json(cart);
+    const payload = typeof (cart as any)?.toJSON === 'function'
+        ? (cart as any).toJSON()
+        : cart;
+
+    const rawItems = Array.isArray(payload?.CartItems) ? payload.CartItems : [];
+    for (const item of rawItems) {
+        const product = item?.Product;
+        if (!product) continue;
+
+        const basePrice = Number(product.price || 0);
+        const pricing = resolveEffectiveTierPricing(basePrice, userTier, product.varian_harga, product.Category);
+        product.effective_tier = String(userTier || 'regular');
+        product.effective_price = pricing.finalPrice;
+        product.effective_discount_pct = pricing.discountPct;
+        product.effective_discount_source = pricing.discountSource;
+
+        if ('varian_harga' in product) delete product.varian_harga;
+        if (product.Category && typeof product.Category === 'object') {
+            delete product.Category.discount_regular_pct;
+            delete product.Category.discount_gold_pct;
+            delete product.Category.discount_premium_pct;
+        }
+    }
+
+    res.json(payload);
 });
 
 export const addToCart = asyncWrapper(async (req: Request, res: Response) => {

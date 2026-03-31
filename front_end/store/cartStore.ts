@@ -7,6 +7,9 @@ interface CartItem {
     productId: string;
     productName: string;
     price: number;
+    originalPrice?: number;
+    discountPct?: number;
+    discountSource?: string;
     quantity: number;
     imageUrl?: string;
 }
@@ -42,6 +45,16 @@ export const useCartStore = create<CartState>()(
                 const existingIndex = items.findIndex((i) => i.productId === item.productId);
 
                 if (existingIndex >= 0) {
+                    const existing = items[existingIndex];
+                    items[existingIndex] = {
+                        ...existing,
+                        // Refresh metadata when available (price/discount may change over time)
+                        price: item.price,
+                        ...(item.originalPrice !== undefined ? { originalPrice: item.originalPrice } : {}),
+                        ...(item.discountPct !== undefined ? { discountPct: item.discountPct } : {}),
+                        ...(item.discountSource !== undefined ? { discountSource: item.discountSource } : {}),
+                        ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
+                    };
                     items[existingIndex].quantity += item.quantity;
                 } else {
                     items.push(item);

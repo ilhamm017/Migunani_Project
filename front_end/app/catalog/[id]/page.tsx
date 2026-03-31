@@ -139,6 +139,9 @@ export default function ProductDetailPage() {
         productId: product.id,
         productName: product.name,
         price: product.price,
+        ...(product.originalPrice !== undefined ? { originalPrice: product.originalPrice } : {}),
+        ...(product.discountPct !== undefined ? { discountPct: product.discountPct } : {}),
+        ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
         quantity: normalizedQty,
       });
       await api.cart.addToCart({ productId: product.id, quantity: normalizedQty });

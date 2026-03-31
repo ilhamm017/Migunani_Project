@@ -366,6 +366,8 @@ function CatalogContent() {
             productId,
             productName: product.name,
             price: product.price,
+            ...(product.originalPrice !== undefined ? { originalPrice: product.originalPrice } : {}),
+            ...(product.discountPct !== undefined ? { discountPct: product.discountPct } : {}),
             quantity: 1,
             imageUrl: product.imageUrl,
         });

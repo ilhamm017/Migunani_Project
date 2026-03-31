@@ -21,6 +21,9 @@ type ApiCartProduct = {
   id: string;
   name?: string;
   price?: number;
+  effective_price?: number;
+  effective_discount_pct?: number;
+  effective_discount_source?: string;
   image_url?: string | null;
 };
 
@@ -59,6 +62,9 @@ type CheckoutDisplayItem = {
   productId: string;
   productName: string;
   price: number;
+  originalPrice?: number;
+  discountPct?: number;
+  discountSource?: string;
   quantity: number;
 };
 
@@ -66,6 +72,9 @@ type ClearancePromoRow = {
   id: string;
   product_id: string;
   computed_promo_unit_price: number;
+  normal_unit_price?: number;
+  pricing_mode?: string;
+  discount_pct?: number;
   Product?: { name?: string } | null;
   name?: string;
 };
@@ -164,6 +173,20 @@ export default function CheckoutPage() {
     [checkoutItems]
   );
 
+  const subtotalBeforeDiscount = useMemo(() => {
+    return checkoutItems.reduce((sum, item) => {
+      const base = Number(item.originalPrice ?? item.price ?? 0);
+      const qty = Math.max(0, Math.trunc(Number(item.quantity || 0)));
+      return sum + base * qty;
+    }, 0);
+  }, [checkoutItems]);
+
+  const itemSavings = useMemo(() => {
+    const savings = subtotalBeforeDiscount - subtotalPrice;
+    if (!Number.isFinite(savings) || savings <= 0) return 0;
+    return Math.round(savings * 100) / 100;
+  }, [subtotalBeforeDiscount, subtotalPrice]);
+
   const promoEligibleTotal = useMemo(() => {
     if (!promoData) return 0;
     return checkoutItems.reduce((sum, item) => {
@@ -181,6 +204,12 @@ export default function CheckoutPage() {
     );
     return discount;
   }, [promoData, promoEligibleTotal]);
+
+  const totalSavings = useMemo(() => {
+    const savings = itemSavings + promoDiscount;
+    if (!Number.isFinite(savings) || savings <= 0) return 0;
+    return Math.round(savings * 100) / 100;
+  }, [itemSavings, promoDiscount]);
 
   const grandTotal = Math.max(0, subtotalPrice + shippingFee - promoDiscount);
 
@@ -271,11 +300,18 @@ export default function CheckoutPage() {
           const promo = promoById.get(String(row.clearance_promo_id || ''));
           const name = promo?.Product?.name || promo?.name || 'Produk';
           const price = Number(promo?.computed_promo_unit_price || 0);
+          const normalPrice = Number(promo?.normal_unit_price || 0);
+          const originalPrice = Number.isFinite(normalPrice) && normalPrice > 0 && price > 0 && price < normalPrice ? normalPrice : undefined;
+          const discountPctRaw = promo?.pricing_mode === 'percent_off' ? Number(promo?.discount_pct) : Number.NaN;
+          const discountPct = Number.isFinite(discountPctRaw) && discountPctRaw > 0 ? discountPctRaw : (originalPrice && originalPrice > 0 ? ((originalPrice - price) / originalPrice) * 100 : undefined);
           return {
             id: `${row.product_id}:${row.clearance_promo_id}:${idx}`,
             productId: row.product_id,
             productName: String(name),
             price,
+            ...(originalPrice !== undefined ? { originalPrice } : {}),
+            ...(discountPct !== undefined && Number.isFinite(discountPct) && discountPct > 0 ? { discountPct } : {}),
+            discountSource: 'promo',
             quantity: row.qty,
           };
         });
@@ -324,12 +360,28 @@ export default function CheckoutPage() {
             if (!productId) return null;
             const qty = Math.max(1, Math.trunc(Number(row?.qty || 0)));
             const product = row?.Product;
+
+            const basePrice = Number(product?.price || 0);
+            const effectivePriceRaw = Number(product?.effective_price);
+            const effectivePrice = Number.isFinite(effectivePriceRaw) && effectivePriceRaw > 0 ? effectivePriceRaw : null;
+            const discountPctRaw = Number(product?.effective_discount_pct);
+            const discountPct = Number.isFinite(discountPctRaw) && discountPctRaw > 0 ? discountPctRaw : undefined;
+
+            const finalPrice = effectivePrice ?? basePrice;
+            const originalPrice = effectivePrice !== null && basePrice > 0 && effectivePrice < basePrice ? basePrice : undefined;
+            const discountSourceRaw = typeof product?.effective_discount_source === 'string'
+              ? String(product.effective_discount_source).trim()
+              : '';
+            const discountSource = discountSourceRaw ? discountSourceRaw : undefined;
             return {
               id: productId,
               cartItemId: String(row?.id ?? ''),
               productId,
               productName: String(product?.name || ''),
-              price: Number(product?.price || 0),
+              price: Number(finalPrice || 0),
+              ...(originalPrice !== undefined ? { originalPrice } : {}),
+              ...(discountPct !== undefined ? { discountPct } : {}),
+              ...(discountSource !== undefined ? { discountSource } : {}),
               quantity: qty,
               imageUrl: product?.image_url ? String(product.image_url) : undefined,
             };
@@ -818,10 +870,44 @@ export default function CheckoutPage() {
               {checkoutItems.map((item) => (
                 <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
                   <p className="text-xs font-bold text-slate-900">{item.productName}</p>
-                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-                    <span>{item.quantity} x {formatCurrency(item.price)}</span>
-                    <span className="font-bold text-slate-700">{formatCurrency(item.price * item.quantity)}</span>
-                  </div>
+                  {(() => {
+                    const base = Number(item.originalPrice ?? item.price ?? 0);
+                    const final = Number(item.price || 0);
+                    const qty = Math.max(0, Math.trunc(Number(item.quantity || 0)));
+                    const hasDiscount = Number.isFinite(base) && base > 0 && Number.isFinite(final) && final > 0 && base > final;
+                    const lineSavings = hasDiscount ? Math.max(0, (base - final) * qty) : 0;
+                    const pctRaw = Number(item.discountPct);
+                    const pct = Number.isFinite(pctRaw) && pctRaw > 0
+                      ? pctRaw
+                      : base > 0 && final > 0 && base > final
+                        ? ((base - final) / base) * 100
+                        : 0;
+                    const pctRounded = Math.round(pct * 10) / 10;
+                    const pctText = pctRounded > 0 ? pctRounded.toFixed(1).replace(/\.0$/, '') : '';
+
+                    return (
+                      <>
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                          <span className="flex flex-wrap items-center gap-2">
+                            {qty} x {formatCurrency(final)}
+                            {hasDiscount && pctText ? (
+                              <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-0.5 rounded-lg">
+                                Diskon {pctText}%
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="font-bold text-slate-700">{formatCurrency(final * qty)}</span>
+                        </div>
+                        {hasDiscount ? (
+                          <p className="mt-1 text-[10px] font-bold text-slate-500">
+                            <span className="line-through text-slate-400">{formatCurrency(base)}</span>
+                            <span className="mx-1">•</span>
+                            Potongan {formatCurrency(lineSavings)}
+                          </p>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -837,10 +923,27 @@ export default function CheckoutPage() {
           </div>
 
           <div className="bg-slate-900 rounded-3xl p-5 text-white space-y-2 shadow-xl shadow-slate-200">
-            <div className="flex justify-between text-sm opacity-80">
-              <span>Subtotal</span>
-              <span>{formatCurrency(subtotalPrice)}</span>
-            </div>
+            {itemSavings > 0 ? (
+              <>
+                <div className="flex justify-between text-sm opacity-80">
+                  <span>Subtotal Normal</span>
+                  <span className="line-through">{formatCurrency(subtotalBeforeDiscount)}</span>
+                </div>
+                <div className="flex justify-between text-sm text-emerald-400 font-bold">
+                  <span>Potongan Harga</span>
+                  <span>-{formatCurrency(itemSavings)}</span>
+                </div>
+                <div className="flex justify-between text-sm opacity-80">
+                  <span>Subtotal</span>
+                  <span>{formatCurrency(subtotalPrice)}</span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-sm opacity-80">
+                <span>Subtotal</span>
+                <span>{formatCurrency(subtotalPrice)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm opacity-80">
               <span>Ongkir ({selectedShippingMethod.name})</span>
               <span>{shippingFee === 0 ? 'Gratis' : formatCurrency(shippingFee)}</span>
@@ -856,6 +959,11 @@ export default function CheckoutPage() {
               <span>Total</span>
               <span>{formatCurrency(grandTotal)}</span>
             </div>
+            {totalSavings > 0 ? (
+              <p className="text-[11px] font-bold opacity-80">
+                Hemat total: {formatCurrency(totalSavings)}
+              </p>
+            ) : null}
           </div>
 
           <button
