@@ -91,3 +91,18 @@ Go lebih aman jika:
 - COD exposure/debt driver konsisten sebelum & sesudah settlement.
 - Upload proof transfer tidak bisa dilakukan untuk invoice “lama” (sudah digantikan).
 
+## 8) WhatsApp testing mode (isolated)
+
+Untuk testing sementara (mis. ambil data grup/chat pribadi) tanpa nyimpen status koneksi ke sistem:
+- Pakai env `WA_SESSION_PATH=./.wwebjs_auth_test` supaya session LocalAuth terpisah.
+- Set `WA_PERSIST_STATUS_TO_DB=false` supaya `settings.key='whatsapp_session'` tidak di-update.
+- Jalankan `back_end/scripts/start_wa_test.sh` (buat `back_end/.env.wa_test` dari `back_end/.env.wa_test.example`).
+
+Ambil daftar nama grup (tanpa nyimpen ke DB):
+- Jalankan dari `back_end/`:
+  - `ENV_FILE=.env.wa_test npm run wa:export-groups`
+- Output JSON tersimpan di `back_end/testing/wa_groups_<timestamp>.json` (folder ini di-ignore git).
+
+Fitur scraping grup order (admin-only):
+- Set env `WA_SCRAPE_ENABLED=true` untuk mengaktifkan endpoint scraping.
+- Daftar grup via `GET /api/v1/whatsapp/groups` lalu buat scrape session via `POST /api/v1/whatsapp/scrape/sessions`.

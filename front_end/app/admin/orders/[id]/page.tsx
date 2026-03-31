@@ -18,8 +18,10 @@ const normalizeStatus = (raw: unknown) => {
   return status === 'waiting_payment' ? 'ready_to_ship' : status;
 };
 
+const EMPTY_RECORD: LooseRecord = {};
+
 const asRecord = (value: unknown): LooseRecord =>
-  value && typeof value === 'object' ? (value as LooseRecord) : {};
+  value && typeof value === 'object' ? (value as LooseRecord) : EMPTY_RECORD;
 
 const resolveInvoiceScopedOrderStatus = (orderData: unknown, invoiceData: unknown) => {
   const invoiceRow = asRecord(invoiceData);
@@ -380,6 +382,8 @@ export default function AdminInvoiceDetailPage() {
       .map((row) => row.id);
   }, [orderRows]);
 
+  const activeDispatchOrderIdsKey = useMemo(() => activeDispatchOrderIds.join(','), [activeDispatchOrderIds]);
+
   const readyToShipOrderIds = useMemo(() => {
     return orderRows
       .filter((row) => row.status === 'ready_to_ship' && row.id)
@@ -388,8 +392,9 @@ export default function AdminInvoiceDetailPage() {
 
   useEffect(() => {
     if (!allowed) return;
-    if (activeDispatchOrderIds.length === 0) {
-      setReservedLayersByOrderProductKey({});
+    if (!activeDispatchOrderIdsKey) {
+      setReservedLayersLoading(false);
+      setReservedLayersByOrderProductKey((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       return;
     }
     let cancelled = false;
@@ -399,7 +404,7 @@ export default function AdminInvoiceDetailPage() {
         const res = await api.allocation.getPicklist({
           view: 'customer',
           allocation_status: 'all',
-          order_ids: activeDispatchOrderIds.join(','),
+          order_ids: activeDispatchOrderIdsKey,
           limit: 20000,
         });
         const rows = Array.isArray((res.data as any)?.rows) ? (res.data as any).rows : [];
@@ -434,7 +439,7 @@ export default function AdminInvoiceDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeDispatchOrderIds, allowed]);
+  }, [activeDispatchOrderIdsKey, allowed]);
 
   const pickingItems = useMemo(() => {
     const activeOrderSet = new Set(activeDispatchOrderIds);

@@ -367,7 +367,7 @@ export default function BackorderReportPage() {
                                                         <div className="min-w-0">
                                                             {row.order_id ? (
                                                                 <Link
-                                                                    href={`/admin/orders/${row.order_id}`}
+                                                                    href={`/admin/orders/detail/${encodeURIComponent(String(row.order_id))}`}
                                                                     className="font-bold text-slate-900 hover:underline truncate inline-block"
                                                                 >
                                                                     {row.customer_name}
@@ -485,7 +485,7 @@ export default function BackorderReportPage() {
                                                 <h4 className="font-bold text-slate-900 text-sm">{item.product_name}</h4>
                                                 {item.order_id ? (
                                                     <Link
-                                                        href={`/admin/orders/${item.order_id}`}
+                                                        href={`/admin/orders/detail/${encodeURIComponent(String(item.order_id))}`}
                                                         className="text-[10px] text-slate-500 mb-1 inline-block hover:underline"
                                                     >
                                                         {item.customer_name}

@@ -199,7 +199,7 @@ export default function AdminIssueOrdersPage() {
           {filteredOrders.map((order) => (
             <Link
               key={order.id}
-              href={`/admin/orders/${order.id}`}
+              href={`/admin/orders/detail/${encodeURIComponent(String(order.id))}`}
               className="block bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-violet-300 transition-colors"
             >
               <div className="flex items-start justify-between gap-3">

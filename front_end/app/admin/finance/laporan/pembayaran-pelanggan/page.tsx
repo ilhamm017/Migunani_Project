@@ -115,7 +115,7 @@ export default function LaporanPembayaranPelangganPage() {
               {rows.map((row) => (
                 <Link
                   key={String(row.id)}
-                  href={`/admin/orders/${row.id}`}
+                  href={`/admin/orders/detail/${encodeURIComponent(String(row.id))}`}
                   className="block rounded-xl border border-slate-200 bg-slate-50 p-3 hover:bg-slate-100"
                 >
                   <div className="flex items-start justify-between gap-2">

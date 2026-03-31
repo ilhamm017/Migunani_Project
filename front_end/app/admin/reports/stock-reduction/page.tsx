@@ -255,7 +255,7 @@ export default function StockReductionReportPage() {
                         {(row.related_order_ids || []).slice(0, 5).map((orderId) => (
                           <Link
                             key={`${row.product_id}-${orderId}`}
-                            href={`/admin/orders/${orderId}`}
+                            href={`/admin/orders/detail/${encodeURIComponent(String(orderId))}`}
                             className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600 hover:border-emerald-300 hover:text-emerald-700"
                           >
                             #{String(orderId).slice(-8).toUpperCase()}

@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, FileText, Paperclip, RefreshCw, Search, ShoppingCart, Star, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, FileText, Paperclip, RefreshCw, Search, ShoppingCart, Star, X } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import getSocket from '@/lib/socket';
@@ -446,6 +446,25 @@ function AdminChatInboxContent() {
       </div>
 
       <AdminChatTabs />
+
+      {canSelectWhatsappChannel && (
+        <Card className="border border-slate-200 bg-white">
+          <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Tools</p>
+              <p className="text-sm font-black text-slate-900">Scrap Data Grup (WhatsApp)</p>
+              <p className="text-xs text-slate-500 mt-1">Ambil order dari WhatsApp group untuk dibantu input ke order manual.</p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => router.push('/admin/chat/whatsapp/scraping-grup-order')}
+              className="shrink-0 flex items-center gap-2"
+            >
+              Buka <ArrowRight className="h-4 w-4" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="shadow-xl border border-slate-200 bg-white overflow-visible">
         <div className="bg-slate-50 py-3 px-6 border-b border-slate-200 flex items-center justify-between">

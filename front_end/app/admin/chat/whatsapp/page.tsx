@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
-import { RefreshCw, LogOut, CheckCircle, AlertCircle, Loader2, Link2 } from 'lucide-react';
+import { RefreshCw, LogOut, CheckCircle, AlertCircle, Loader2, Link2, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import getSocket from '@/lib/socket';
@@ -160,6 +160,23 @@ export default function WhatsappConfigPage() {
           Kanal WhatsApp dikelola oleh <b>Super Admin</b> dan <b>Admin Pemasaran</b> (role kasir). Role operasional lain hanya memakai chat aplikasi.
         </p>
       </div>
+
+      <Card className="border border-slate-200 bg-white">
+        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Tools</p>
+            <p className="text-sm font-black text-slate-900">Scraping Grub Order</p>
+            <p className="text-xs text-slate-500 mt-1">Ambil data order dari WhatsApp group untuk dibantu input ke order manual.</p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => router.push('/admin/chat/whatsapp/scraping-grup-order')}
+            className="shrink-0 flex items-center gap-2"
+          >
+            Buka <ArrowRight className="h-4 w-4" />
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
         <Card className="shadow-xl border-none bg-gradient-to-br from-white to-gray-50">

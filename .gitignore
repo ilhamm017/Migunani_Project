@@ -14,6 +14,8 @@ front_end/.next
 back_end/uploads
 back_end/.wwebjs_auth
 back_end/.wwebjs_cache
+back_end/.wwebjs_auth_test
+back_end/testing
 
 # Logs
 *.log

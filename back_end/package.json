@@ -31,6 +31,7 @@
     "test:catalog-stock-sort": "ts-node src/scripts/regression_catalog_search_stock_sort.ts",
     "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
     "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts",
+    "wa:export-groups": "ts-node src/scripts/export_wa_groups.ts",
     "purge:customer-transactions": "ts-node src/scripts/purge_customer_transactions.ts",
     "repoint:sku-transactions": "ts-node src/scripts/repoint_product_transactions_by_sku.ts"
   },

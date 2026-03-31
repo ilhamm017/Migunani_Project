@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Search, Trash2, ShoppingCart, User as UserIcon, Check, MessageSquare, Paperclip, SendHorizontal, Minus, Plus, Layers, X } from 'lucide-react';
@@ -10,6 +10,17 @@ import Image from 'next/image';
 import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { notifyOpen, notifyAlert } from '@/lib/notify';
+import {
+    buildWaScrapeOrderedScopeKey,
+    getWaScrapeCustomerProcessedItemKeys,
+    getWaScrapeCustomerProcessedMessageIds,
+    getWaScrapeOrderedMap,
+    listWaScrapeCustomerOrders,
+    markWaScrapeCustomerOrdered,
+    type WaScrapeOrderRecord,
+    type WaScrapeOrderedMap,
+} from '@/lib/waScrapeLocal';
+import { normalizeProductImageUrl } from '@/lib/image';
 import ProductAliasModal from '@/components/admin/products/ProductAliasModal';
 import CustomerTopProductsCard from '@/components/admin/orders/CustomerTopProductsCard';
 
@@ -105,6 +116,68 @@ type CartItem = {
 
 type PaymentMethodUi = 'transfer_manual' | 'cod' | 'cash_store' | 'follow_driver';
 
+type ScrapeCustomerCandidate = {
+    id: string;
+    name: string;
+    whatsapp_number: string | null;
+    status: string;
+};
+
+type ScrapeItem = {
+    item_id: string;
+    kind: 'text' | 'image';
+    raw: string;
+    search_text: string;
+    qty: number | null;
+    qty_unit: 'pcs' | 'pc' | 'dus' | null;
+    qty_source: 'paren' | 'pcs' | 'colon' | 'trailing' | null;
+    message_id: string;
+    message_timestamp: number;
+    line_index: number | null;
+};
+
+type ScrapeBlock = {
+    block_id: string;
+    is_addon: boolean;
+    marker_message_id: string;
+    marker_timestamp: number;
+    items: ScrapeItem[];
+};
+
+type ScrapeCustomerDetail = {
+    customer_key: string;
+    chat_name: string;
+    match_status: 'unique' | 'ambiguous' | 'unmatched' | string;
+    candidates: ScrapeCustomerCandidate[];
+    blocks: ScrapeBlock[];
+};
+
+type ScrapeCustomerDetailResponse = {
+    session_id: string;
+    group: { id: string; name: string; participants_count: number | null };
+    range: { date_from: string; date_to: string; timezone: string };
+    message_limit: number;
+    truncated: boolean;
+    customer: ScrapeCustomerDetail;
+};
+
+type ScrapeMessageGrouping = {
+    customer_key: string;
+    block_id: string;
+    is_addon: boolean;
+    kind: 'marker' | 'item';
+};
+
+type ScrapeRawChatMessage = {
+    message_id: string;
+    timestamp: number;
+    type: string;
+    body: string;
+    has_media: boolean;
+    author: string | null;
+    scrape_groups?: ScrapeMessageGrouping[];
+};
+
 function ManualOrderContent() {
     const allowed = useRequireRoles(['super_admin', 'admin_gudang', 'admin_finance', 'kasir']);
     const { user } = useAuthStore();
@@ -113,6 +186,9 @@ function ManualOrderContent() {
     const customerIdParam = searchParams.get('customerId') || '';
     const chatSessionIdParam = searchParams.get('chatSessionId') || '';
     const isChatDrivenOrder = Boolean(chatSessionIdParam && customerIdParam);
+    const scrapeSessionIdParam = searchParams.get('scrapeSessionId') || '';
+    const scrapeCustomerKeyParam = searchParams.get('scrapeCustomerKey') || '';
+    const isScrapeDrivenOrder = Boolean(scrapeSessionIdParam && scrapeCustomerKeyParam);
     const canManageShippingConfig = ['super_admin', 'kasir'].includes(String(user?.role || ''));
     const canOverridePricing = ['super_admin', 'kasir'].includes(String(user?.role || '').trim());
     const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
@@ -135,10 +211,11 @@ function ManualOrderContent() {
     const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
     const [, setSearchingCustomers] = useState(false);
 
-    // Product Search State
-    const [productSearch, setProductSearch] = useState('');
-    const [products, setProducts] = useState<ProductOption[]>([]);
-    const [, setSearchingProducts] = useState(false);
+	    // Product Search State
+	    const [productSearch, setProductSearch] = useState('');
+	    const [products, setProducts] = useState<ProductOption[]>([]);
+	    const [, setSearchingProducts] = useState(false);
+	    const productSearchInputRef = useRef<HTMLInputElement | null>(null);
 
     // Clearance Promo (Active) Picker
     const [promoModalOpen, setPromoModalOpen] = useState(false);
@@ -165,9 +242,156 @@ function ManualOrderContent() {
     const [sendingChatReply, setSendingChatReply] = useState(false);
     const [chatReplyError, setChatReplyError] = useState('');
 
-    const normalizeWhatsapp = useCallback((value?: string | null) => {
-        const digits = String(value || '').replace(/\D/g, '');
-        if (!digits) return '';
+	    // Scrape Mode (WhatsApp group order scraping)
+	    const [scrapeDetail, setScrapeDetail] = useState<ScrapeCustomerDetailResponse | null>(null);
+	    const [scrapeLoading, setScrapeLoading] = useState(false);
+	    const [scrapeError, setScrapeError] = useState('');
+	    const [activeScrapeItemId, setActiveScrapeItemId] = useState<string | null>(null);
+	    const [scrapeQtyInputByItemId, setScrapeQtyInputByItemId] = useState<Record<string, string>>({});
+	    const [ignoredScrapeItemById, setIgnoredScrapeItemById] = useState<Record<string, boolean>>({});
+	    const [addedScrapeItemById, setAddedScrapeItemById] = useState<Record<string, boolean>>({});
+	    const [scrapeMediaUrlByMessageId, setScrapeMediaUrlByMessageId] = useState<Record<string, string>>({});
+	    const [scrapeMediaLoadingByMessageId, setScrapeMediaLoadingByMessageId] = useState<Record<string, boolean>>({});
+	    const [scrapeRawChatExpanded, setScrapeRawChatExpanded] = useState(false);
+	    const [scrapeRawChatLoading, setScrapeRawChatLoading] = useState(false);
+	    const [scrapeRawChatError, setScrapeRawChatError] = useState('');
+	    const [scrapeRawChatMessages, setScrapeRawChatMessages] = useState<ScrapeRawChatMessage[]>([]);
+	    const [scrapeOrderCreated, setScrapeOrderCreated] = useState<{ orderId: string; createdAtMs: number } | null>(null);
+	    const [scrapeOrderedMap, setScrapeOrderedMap] = useState<WaScrapeOrderedMap>({});
+	    const [scrapeSelectedExistingOrderId, setScrapeSelectedExistingOrderId] = useState('');
+
+	    const scrapeOrderedScopeKey = useMemo(() => {
+	        return buildWaScrapeOrderedScopeKey({
+	            groupId: scrapeDetail?.group?.id,
+	            dateFrom: scrapeDetail?.range?.date_from,
+	            dateTo: scrapeDetail?.range?.date_to,
+	            timezone: scrapeDetail?.range?.timezone,
+	            sessionIdFallback: scrapeSessionIdParam,
+	        });
+	    }, [scrapeDetail?.group?.id, scrapeDetail?.range?.date_from, scrapeDetail?.range?.date_to, scrapeDetail?.range?.timezone, scrapeSessionIdParam]);
+
+	    const formatJakartaDateTime = useCallback((ms: number) => {
+	        const value = Number(ms || 0);
+	        if (!Number.isFinite(value) || value <= 0) return '';
+	        return new Date(value).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false });
+	    }, []);
+
+	    const formatJakartaTimestamp = useCallback((unixSeconds: number) => {
+	        const value = Number(unixSeconds || 0);
+	        if (!Number.isFinite(value) || value <= 0) return '';
+	        return new Date(value * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false });
+	    }, []);
+
+	    const authorLabel = useCallback((author: string | null) => {
+	        const raw = String(author || '').trim();
+	        if (!raw) return '';
+	        return raw.includes('@') ? raw.split('@')[0] : raw;
+	    }, []);
+
+	    const refreshScrapeOrderedMap = useCallback(() => {
+	        if (!isScrapeDrivenOrder) return;
+	        if (!scrapeOrderedScopeKey && !scrapeSessionIdParam) return;
+	        setScrapeOrderedMap(getWaScrapeOrderedMap({ scopeKey: scrapeOrderedScopeKey, legacySessionId: scrapeSessionIdParam }));
+	    }, [isScrapeDrivenOrder, scrapeOrderedScopeKey, scrapeSessionIdParam]);
+
+	    useEffect(() => {
+	        if (!allowed) return;
+	        refreshScrapeOrderedMap();
+	    }, [allowed, refreshScrapeOrderedMap]);
+
+	    useEffect(() => {
+	        if (typeof window === 'undefined') return;
+	        const handler = () => refreshScrapeOrderedMap();
+	        window.addEventListener('focus', handler);
+	        window.addEventListener('storage', handler);
+	        return () => {
+	            window.removeEventListener('focus', handler);
+	            window.removeEventListener('storage', handler);
+	        };
+	    }, [refreshScrapeOrderedMap]);
+
+	    const scrapeItemStableKey = useCallback((item: ScrapeItem) => {
+	        const messageId = String(item?.message_id || '').trim();
+	        const kind = String(item?.kind || '').trim() || 'text';
+	        const line = item?.line_index === null || item?.line_index === undefined ? 'm' : String(item.line_index);
+	        return `${messageId}:${line}:${kind}`;
+	    }, []);
+
+	    const scrapeExistingOrders = useMemo(() => {
+	        return listWaScrapeCustomerOrders(scrapeOrderedMap, scrapeCustomerKeyParam);
+	    }, [scrapeCustomerKeyParam, scrapeOrderedMap]);
+
+	    useEffect(() => {
+	        if (!isScrapeDrivenOrder) return;
+	        if (scrapeExistingOrders.length === 0) {
+	            setScrapeSelectedExistingOrderId('');
+	            return;
+	        }
+	        const wanted = String(scrapeSelectedExistingOrderId || '').trim();
+	        if (wanted && scrapeExistingOrders.some((o) => String(o.order_id || '').trim() === wanted)) return;
+	        setScrapeSelectedExistingOrderId(String(scrapeExistingOrders[0].order_id || '').trim());
+	    }, [isScrapeDrivenOrder, scrapeExistingOrders, scrapeSelectedExistingOrderId]);
+
+	    const processedFromExistingOrders = useMemo(() => {
+	        const orders = scrapeExistingOrders as WaScrapeOrderRecord[];
+	        const messageIds = getWaScrapeCustomerProcessedMessageIds(orders);
+	        const itemKeys = getWaScrapeCustomerProcessedItemKeys(orders);
+	        const messageOrderId: Record<string, string> = {};
+	        const itemOrderId: Record<string, string> = {};
+	        for (const o of orders || []) {
+	            for (const mid of o.message_ids || []) {
+	                const id = String(mid || '').trim();
+	                if (id && !messageOrderId[id]) messageOrderId[id] = String(o.order_id || '').trim();
+	            }
+	            for (const key of o.item_keys || []) {
+	                const k = String(key || '').trim();
+	                if (k && !itemOrderId[k]) itemOrderId[k] = String(o.order_id || '').trim();
+	            }
+	        }
+	        return { messageIds, itemKeys, messageOrderId, itemOrderId };
+	    }, [scrapeExistingOrders]);
+
+	    const scrapeItemsByMessageId = useMemo(() => {
+	        const map: Record<string, ScrapeItem[]> = {};
+	        const blocks = Array.isArray(scrapeDetail?.customer?.blocks) ? scrapeDetail!.customer.blocks : [];
+	        for (const b of blocks) {
+	            const items = Array.isArray(b.items) ? b.items : [];
+	            for (const it of items) {
+	                const mid = String(it.message_id || '').trim();
+	                if (!mid) continue;
+	                if (!map[mid]) map[mid] = [];
+	                map[mid].push(it);
+	            }
+	        }
+	        return map;
+	    }, [scrapeDetail]);
+
+	    const loadScrapeRawChat = useCallback(async () => {
+	        if (!allowed || !isScrapeDrivenOrder) return;
+	        if (scrapeRawChatLoading) return;
+	        if (!scrapeSessionIdParam) return;
+	        try {
+	            setScrapeRawChatLoading(true);
+	            setScrapeRawChatError('');
+	            const res = await api.whatsapp.scrapeGetMessages(scrapeSessionIdParam);
+	            const payload = (res.data || {}) as { messages?: unknown };
+	            const rows = Array.isArray(payload.messages) ? (payload.messages as ScrapeRawChatMessage[]) : [];
+	            setScrapeRawChatMessages(rows);
+	        } catch (e: unknown) {
+	            console.error(e);
+	            const statusCode = Number((e as { response?: { status?: unknown } })?.response?.status || 0);
+	            const message = typeof e === 'object' && e && 'response' in e
+	                ? String((e as { response?: { data?: { message?: string } } }).response?.data?.message || '')
+	                : '';
+	            setScrapeRawChatError(statusCode === 409 ? (message || 'WhatsApp belum READY.') : (message || 'Gagal memuat chat asli.'));
+	        } finally {
+	            setScrapeRawChatLoading(false);
+	        }
+	    }, [allowed, isScrapeDrivenOrder, scrapeRawChatLoading, scrapeSessionIdParam]);
+
+	    const normalizeWhatsapp = useCallback((value?: string | null) => {
+	        const digits = String(value || '').replace(/\D/g, '');
+	        if (!digits) return '';
         if (digits.startsWith('0')) return `62${digits.slice(1)}`;
         if (digits.startsWith('62')) return digits;
         if (digits.startsWith('8')) return `62${digits}`;
@@ -278,6 +502,93 @@ function ManualOrderContent() {
 
         void loadPrefilledCustomer();
     }, [allowed, customerIdParam, selectedCustomer?.id, isChatDrivenOrder, tryResolveCustomerFromChatSession]);
+
+    useEffect(() => {
+        if (!allowed || !isScrapeDrivenOrder) {
+            setScrapeDetail(null);
+            setScrapeError('');
+            return;
+        }
+
+        let active = true;
+        (async () => {
+            try {
+                setScrapeLoading(true);
+                setScrapeError('');
+                setScrapeDetail(null);
+                setActiveScrapeItemId(null);
+                setScrapeQtyInputByItemId({});
+                setIgnoredScrapeItemById({});
+                setAddedScrapeItemById({});
+                setScrapeMediaLoadingByMessageId({});
+	                setScrapeMediaUrlByMessageId((prev) => {
+	                    for (const url of Object.values(prev)) {
+	                        try { URL.revokeObjectURL(url); } catch { }
+	                    }
+	                    return {};
+	                });
+	                setScrapeRawChatExpanded(false);
+	                setScrapeRawChatLoading(false);
+	                setScrapeRawChatError('');
+	                setScrapeRawChatMessages([]);
+	
+	                const res = await api.whatsapp.scrapeGetCustomer(scrapeSessionIdParam, scrapeCustomerKeyParam);
+	                if (!active) return;
+	                setScrapeDetail(res.data as ScrapeCustomerDetailResponse);
+            } catch (e: unknown) {
+                console.error(e);
+                const statusCode = Number((e as { response?: { status?: unknown } })?.response?.status || 0);
+                const message = typeof e === 'object' && e && 'response' in e
+                    ? String((e as { response?: { data?: { message?: string } } }).response?.data?.message || '')
+                    : '';
+                if (!active) return;
+                setScrapeError(statusCode === 404
+                    ? 'Fitur scraping belum aktif. Set `WA_SCRAPE_ENABLED=true` di backend.'
+                    : (message || 'Gagal memuat hasil scraping.'));
+                setScrapeDetail(null);
+            } finally {
+                if (!active) return;
+                setScrapeLoading(false);
+            }
+        })();
+
+        return () => {
+            active = false;
+        };
+    }, [allowed, isScrapeDrivenOrder, scrapeSessionIdParam, scrapeCustomerKeyParam]);
+
+    useEffect(() => {
+        if (!allowed || !isScrapeDrivenOrder) return;
+        if (selectedCustomer) return;
+        const matchStatus = String(scrapeDetail?.customer?.match_status || '');
+        const candidates = Array.isArray(scrapeDetail?.customer?.candidates)
+            ? scrapeDetail!.customer.candidates
+            : [];
+        if (matchStatus !== 'unique') return;
+        if (candidates.length !== 1) return;
+
+        let active = true;
+        (async () => {
+            try {
+                setPrefillingCustomer(true);
+                const res = await api.admin.customers.getById(candidates[0].id);
+                const customer = res.data?.customer as CustomerOption | undefined;
+                if (!active) return;
+                if (customer && customer.status === 'active') {
+                    setSelectedCustomer(customer);
+                    setCustomerSearch('');
+                    setCustomers([]);
+                }
+            } catch (e) {
+                console.error('Failed to auto-select scrape customer:', e);
+            } finally {
+                if (!active) return;
+                setPrefillingCustomer(false);
+            }
+        })();
+
+        return () => { active = false; };
+    }, [allowed, isScrapeDrivenOrder, scrapeDetail, selectedCustomer]);
 
     const refreshChatContext = useCallback(async (sessionId: string) => {
         try {
@@ -571,19 +882,21 @@ function ManualOrderContent() {
 	                return true;
 	            }, [canOverridePricing, cart, getDealUnitPrice, selectedCustomer, shippingMethodCode, shippingMethods.length, showSubmitPopup, user?.role]);
 		
-			    const addToCart = (product: ProductOption) => {
+			    const addToCart = (product: ProductOption, qtyOverride?: number) => {
 				        setCart(prev => {
 				            const lineId = `product:${product.id}`;
+                            const qtyToAddRaw = qtyOverride === undefined || qtyOverride === null ? 1 : Number(qtyOverride);
+                            const qtyToAdd = Number.isFinite(qtyToAddRaw) ? Math.max(1, Math.trunc(qtyToAddRaw)) : 1;
 				            const existing = prev.find(item => item.line_id === lineId);
 			            if (existing) {
-			                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + 1 } : item);
+			                return prev.map(item => item.line_id === lineId ? { ...item, qty: item.qty + qtyToAdd } : item);
 			            }
 			            // New picked product should appear on top (most recently added first).
 			            return [{
                             line_id: lineId,
                             product_id: product.id,
                             product,
-                            qty: 1,
+                            qty: qtyToAdd,
                             unit_price_override: null,
                             discount_pct_input: undefined,
                             unit_price_override_input: undefined,
@@ -595,6 +908,116 @@ function ManualOrderContent() {
 			        setProductSearch('');
 			        setProducts([]);
 			    };
+
+                const findScrapeItemById = (itemId: string): ScrapeItem | null => {
+                    const blocks = Array.isArray(scrapeDetail?.customer?.blocks) ? scrapeDetail!.customer.blocks : [];
+                    for (const block of blocks) {
+                        const items = Array.isArray(block?.items) ? block.items : [];
+                        for (const item of items) {
+                            if (item?.item_id === itemId) return item as ScrapeItem;
+                        }
+                    }
+                    return null;
+                };
+
+	                const resolveScrapeQty = (item: ScrapeItem): number | null => {
+	                    const rawInput = scrapeQtyInputByItemId[item.item_id];
+	                    if (rawInput !== undefined) {
+	                        const parsed = Number(rawInput);
+	                        if (!Number.isFinite(parsed)) return null;
+	                        const normalized = Math.trunc(parsed);
+	                        return normalized > 0 ? normalized : null;
+	                    }
+	                    if (item.qty !== null && Number.isFinite(Number(item.qty)) && Number(item.qty) > 0) {
+	                        return Math.trunc(Number(item.qty));
+	                    }
+	                    return null;
+	                };
+
+	                const activateScrapeItem = (item: ScrapeItem) => {
+	                    if (!isScrapeDrivenOrder) return;
+	                    if (ignoredScrapeItemById[item.item_id]) return;
+	                    const next = String(item.search_text || item.raw || '').trim();
+	                    if (!next) return;
+	                    setActiveScrapeItemId(item.item_id);
+	                    setProductSearch(next);
+	                    window.requestAnimationFrame(() => {
+	                        const el = productSearchInputRef.current;
+	                        if (!el) return;
+	                        try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { }
+	                        try { el.focus(); } catch { }
+	                    });
+	                };
+
+                const handlePickProduct = (product: ProductOption) => {
+                    if (!isScrapeDrivenOrder || !activeScrapeItemId) {
+                        addToCart(product);
+                        return;
+                    }
+
+                    const item = findScrapeItemById(activeScrapeItemId);
+                    if (!item) {
+                        addToCart(product);
+                        return;
+                    }
+                    if (ignoredScrapeItemById[item.item_id]) {
+                        addToCart(product);
+                        return;
+                    }
+
+                    const qty = resolveScrapeQty(item);
+                    if (!qty) {
+                        notifyAlert('Qty belum lengkap. Isi qty dulu sebelum memasukkan ke keranjang.');
+                        return;
+                    }
+
+                    addToCart(product, qty);
+                    setAddedScrapeItemById((prev) => ({ ...prev, [item.item_id]: true }));
+                    setActiveScrapeItemId(null);
+                };
+
+                const loadScrapeMedia = async (messageId: string) => {
+                    if (!isScrapeDrivenOrder) return;
+                    const id = String(messageId || '').trim();
+                    if (!id) return;
+                    if (scrapeMediaUrlByMessageId[id]) return;
+                    if (scrapeMediaLoadingByMessageId[id]) return;
+
+                    try {
+                        setScrapeMediaLoadingByMessageId((prev) => ({ ...prev, [id]: true }));
+                        const res = await api.whatsapp.scrapeGetMedia(scrapeSessionIdParam, id);
+                        const blob = res.data as Blob;
+                        const url = URL.createObjectURL(blob);
+                        setScrapeMediaUrlByMessageId((prev) => ({ ...prev, [id]: url }));
+                    } catch (e) {
+                        console.error('Failed to load WA media:', e);
+                        notifyAlert('Gagal memuat gambar WhatsApp.');
+                    } finally {
+                        setScrapeMediaLoadingByMessageId((prev) => ({ ...prev, [id]: false }));
+                    }
+                };
+
+                const selectScrapeCustomerCandidate = async (customerId: string) => {
+                    const id = String(customerId || '').trim();
+                    if (!id) return;
+                    try {
+                        setPrefillingCustomer(true);
+                        const res = await api.admin.customers.getById(id);
+                        const customer = res.data?.customer as CustomerOption | undefined;
+                        if (customer && customer.status === 'active') {
+                            setSelectedCustomer(customer);
+                            setCustomerSearch('');
+                            setCustomers([]);
+                            return;
+                        }
+                        notifyAlert('Customer tidak aktif. Order tidak bisa dibuat.');
+                    } catch (e) {
+                        console.error('Failed to select candidate customer:', e);
+                        notifyAlert('Gagal memilih customer dari kandidat.');
+                    } finally {
+                        setPrefillingCustomer(false);
+                    }
+                };
 
             const addPromoToCart = (promo: ClearancePromoOption, qtyToAdd = 1) => {
                 const promoId = String(promo?.id || '').trim();
@@ -725,12 +1148,14 @@ function ManualOrderContent() {
 
 			    const handleSubmit = () => {
                     if (submitting) return;
+                    if (isScrapeDrivenOrder && scrapeOrderCreated) return;
                     if (!validateBeforeSubmit()) return;
                     setSubmitConfirmOpen(true);
                 };
 
                 const submitOrder = async () => {
                     if (submitting) return;
+                    if (isScrapeDrivenOrder && scrapeOrderCreated) return;
                     if (!validateBeforeSubmit()) return;
                     setSubmitConfirmOpen(false);
                     showSubmitPopup('info', 'Memproses', 'Membuat pesanan...');
@@ -778,15 +1203,40 @@ function ManualOrderContent() {
 	                shippingName ? `Kirim: ${shippingName}` : null,
 	            ].filter(Boolean);
 
-	            showSubmitPopup(
-	                'success',
-	                headlineParts.length > 0 ? headlineParts.join(' • ') : 'Berhasil',
-	                detailParts.length > 0 ? detailParts.join(' • ') : 'Pesanan berhasil dibuat!',
-	                2200
-	            );
-		            window.setTimeout(() => {
-		                router.push('/admin/orders');
-		            }, 1700);
+		            showSubmitPopup(
+		                'success',
+		                headlineParts.length > 0 ? headlineParts.join(' • ') : 'Berhasil',
+		                detailParts.length > 0 ? detailParts.join(' • ') : 'Pesanan berhasil dibuat!',
+		                2200
+		            );
+		                    if (isScrapeDrivenOrder) {
+		                        if (orderId) {
+		                            const blocks = Array.isArray(scrapeDetail?.customer?.blocks) ? scrapeDetail!.customer.blocks : [];
+		                            const usedItems: ScrapeItem[] = [];
+		                            for (const b of blocks) {
+		                                const items = Array.isArray(b.items) ? b.items : [];
+		                                for (const it of items) {
+		                                    if (addedScrapeItemById[it.item_id]) usedItems.push(it);
+		                                }
+		                            }
+		                            const messageIds = Array.from(new Set(usedItems.map((it) => String(it.message_id || '').trim()).filter(Boolean)));
+		                            const itemKeys = usedItems.map(scrapeItemStableKey).filter(Boolean);
+		                            markWaScrapeCustomerOrdered({
+		                                scopeKey: scrapeOrderedScopeKey,
+		                                legacySessionId: scrapeSessionIdParam,
+		                                customerKey: scrapeCustomerKeyParam,
+		                                orderId,
+		                                messageIds,
+		                                itemKeys,
+		                            });
+		                            refreshScrapeOrderedMap();
+		                        }
+		                        setScrapeOrderCreated({ orderId: orderId || 'UNKNOWN', createdAtMs: Date.now() });
+	                        return;
+	                    }
+	                    window.setTimeout(() => {
+                        router.push('/admin/orders');
+                    }, 1700);
 		        } catch (error: unknown) {
 		            console.error(error);
 	            showSubmitPopup(
@@ -803,6 +1253,40 @@ function ManualOrderContent() {
 	
 		    return (
 		        <div className="p-6 space-y-6">
+                    {isScrapeDrivenOrder && scrapeOrderCreated ? (
+                        <div className="fixed inset-0 z-[60] bg-black/40 flex items-start justify-center p-4 overflow-y-auto">
+                            <div className="w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-xl p-5 space-y-3 mt-10">
+                                <div>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Order berhasil dibuat</p>
+                                    <h2 className="text-base font-black text-slate-900 mt-0.5">
+                                        Order #{scrapeOrderCreated.orderId}
+                                    </h2>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Halaman ini dikunci supaya tidak terjadi perubahan setelah submit.
+                                    </p>
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <Link
+                                        href={`/admin/chat/whatsapp/scraping-grup-order/sessions/${encodeURIComponent(scrapeSessionIdParam)}`}
+                                        className="inline-flex items-center justify-center gap-2 text-xs font-black uppercase tracking-wide px-4 py-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
+                                    >
+                                        Kembali ke Scrap Data
+                                    </Link>
+	                                    <Link
+	                                        href={`/admin/orders/detail/${encodeURIComponent(scrapeOrderCreated.orderId)}`}
+	                                        className="inline-flex items-center justify-center gap-2 text-xs font-black uppercase tracking-wide px-4 py-3 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200"
+	                                    >
+	                                        Lihat Order
+	                                    </Link>
+                                </div>
+
+                                <p className="text-[11px] text-slate-500">
+                                    Dibuat: {formatJakartaDateTime(scrapeOrderCreated.createdAtMs)}
+                                </p>
+                            </div>
+                        </div>
+                    ) : null}
                     {promoModalOpen && (
                         <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto">
                             <div className="w-full max-w-4xl bg-white rounded-3xl border border-slate-200 shadow-xl p-4 space-y-3 mt-10">
@@ -921,7 +1405,12 @@ function ManualOrderContent() {
                         </div>
                     )}
 	            <div className="flex items-center gap-4">
-	                <Link href="/admin/orders" className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
+	                <Link
+                        href={isScrapeDrivenOrder
+                            ? `/admin/chat/whatsapp/scraping-grup-order/sessions/${encodeURIComponent(scrapeSessionIdParam)}`
+                            : '/admin/orders'}
+                        className="p-2 hover:bg-slate-100 rounded-full text-slate-600"
+                    >
 	                    <ArrowLeft size={20} />
 	                </Link>
                 <div>
@@ -1130,6 +1619,359 @@ function ManualOrderContent() {
 
 		                            <div className="h-px bg-slate-200" />
 
+	                                    {isScrapeDrivenOrder ? (
+	                                        <>
+	                                            <div className="space-y-4">
+	                                                <div className="flex flex-wrap items-center justify-between gap-2">
+	                                                    <h2 className="font-bold text-slate-900 flex items-center gap-2">
+	                                                        <MessageSquare size={18} /> Hasil Scrape Grup
+	                                                    </h2>
+	                                                    <button
+	                                                        type="button"
+	                                                        onClick={() => {
+	                                                            const next = !scrapeRawChatExpanded;
+	                                                            setScrapeRawChatExpanded(next);
+	                                                            if (next && scrapeRawChatMessages.length === 0 && !scrapeRawChatLoading) {
+	                                                                void loadScrapeRawChat();
+	                                                            }
+	                                                        }}
+	                                                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"
+	                                                    >
+	                                                        {scrapeRawChatExpanded ? 'Tutup Chat Asli' : 'Expand Chat Asli'}
+	                                                    </button>
+	                                                </div>
+	
+	                                                {scrapeLoading ? (
+	                                                    <p className="text-sm text-slate-500">Memuat hasil scraping...</p>
+	                                                ) : scrapeError ? (
+                                                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                                                        {scrapeError}
+                                                    </div>
+	                                                ) : scrapeDetail ? (
+	                                                    <>
+	                                                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+	                                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+	                                                                {scrapeDetail.group?.name || 'WhatsApp Group'} • {scrapeDetail.range?.date_from} → {scrapeDetail.range?.date_to} ({scrapeDetail.range?.timezone || 'Asia/Jakarta'})
+	                                                            </p>
+	                                                            <div className="mt-2 flex flex-wrap items-center gap-2">
+	                                                                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+	                                                                    Order Terdeteksi:
+	                                                                </span>
+	                                                                {scrapeExistingOrders.length === 0 ? (
+	                                                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Belum ada</span>
+	                                                                ) : scrapeExistingOrders.length === 1 ? (
+	                                                                    <Link
+	                                                                        href={`/admin/orders/detail/${encodeURIComponent(scrapeExistingOrders[0].order_id)}`}
+	                                                                        className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-800 hover:bg-emerald-200"
+	                                                                        title={`Dibuat: ${formatJakartaDateTime(scrapeExistingOrders[0].created_at_ms)}`}
+	                                                                    >
+	                                                                        Order #{scrapeExistingOrders[0].order_id}
+	                                                                    </Link>
+	                                                                ) : (
+	                                                                    <>
+	                                                                        <select
+	                                                                            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-slate-700"
+	                                                                            value={scrapeSelectedExistingOrderId}
+	                                                                            onChange={(e) => setScrapeSelectedExistingOrderId(String(e.target.value || '').trim())}
+	                                                                        >
+	                                                                            {scrapeExistingOrders.map((o) => (
+	                                                                                <option key={o.order_id} value={o.order_id}>
+	                                                                                    {String(o.order_id).slice(-8).toUpperCase()} • {formatJakartaDateTime(o.created_at_ms)}
+	                                                                                </option>
+	                                                                            ))}
+	                                                                        </select>
+	                                                                        <Link
+	                                                                            href={`/admin/orders/detail/${encodeURIComponent(scrapeSelectedExistingOrderId || scrapeExistingOrders[0].order_id)}`}
+	                                                                            className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-800 hover:bg-emerald-200"
+	                                                                        >
+	                                                                            Buka
+	                                                                        </Link>
+	                                                                    </>
+	                                                                )}
+	                                                            </div>
+	                                                            {scrapeDetail.truncated ? (
+	                                                                <p className="mt-1 text-[11px] font-bold text-amber-700">
+	                                                                    Data mungkin terpotong (truncated). Coba scrape ulang dengan message limit lebih besar atau pecah rentang tanggal.
+	                                                                </p>
+	                                                            ) : null}
+	                                                        </div>
+
+	                                                        {scrapeRawChatExpanded ? (
+	                                                            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+	                                                                <div className="flex flex-wrap items-center justify-between gap-2">
+	                                                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+	                                                                        Chat Asli (Rentang Tanggal)
+	                                                                    </p>
+	                                                                    <p className="text-[10px] text-slate-400">
+	                                                                        {scrapeRawChatMessages.length} pesan
+	                                                                    </p>
+	                                                                </div>
+	                                                                <div className="mt-2">
+	                                                                    {scrapeRawChatLoading ? (
+	                                                                        <p className="text-sm text-slate-500">Memuat chat asli...</p>
+	                                                                    ) : scrapeRawChatError ? (
+	                                                                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+	                                                                            {scrapeRawChatError}
+	                                                                        </div>
+	                                                                    ) : scrapeRawChatMessages.length === 0 ? (
+	                                                                        <p className="text-sm text-slate-500">Tidak ada chat pada rentang ini.</p>
+	                                                                    ) : (
+	                                                                        <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+	                                                                            {scrapeRawChatMessages.map((m) => {
+	                                                                                const id = String(m.message_id || '').trim();
+	                                                                                if (!id) return null;
+	                                                                                const isMedia = !!m.has_media || String(m.type || '').toLowerCase() === 'image';
+	                                                                                const label = authorLabel(m.author);
+	                                                                                const groups = Array.isArray(m.scrape_groups) ? m.scrape_groups : [];
+	                                                                                const wantedKey = String(scrapeCustomerKeyParam || '').trim();
+	                                                                                const group = groups.find((g) => String(g.customer_key || '').trim() === wantedKey) || (groups.length > 0 ? groups[0] : null);
+	                                                                                const belongsToCustomer = !!group && String(group.customer_key || '').trim() === wantedKey;
+	                                                                                const groupLabel = group
+	                                                                                    ? `${String(group.customer_key || '').trim()} • ${group.block_id}${group.is_addon ? ' • addon' : ''}${group.kind === 'marker' ? ' • marker' : ''}`
+	                                                                                    : '';
+	                                                                                const relatedItems = belongsToCustomer ? (scrapeItemsByMessageId[id] || []) : [];
+	                                                                                const orderedCount = relatedItems.filter((it) => {
+	                                                                                    const stable = scrapeItemStableKey(it);
+	                                                                                    return processedFromExistingOrders.itemKeys.has(stable) || processedFromExistingOrders.messageIds.has(String(it.message_id || '').trim());
+	                                                                                }).length;
+	                                                                                const totalCount = relatedItems.length;
+	                                                                                const isFullyOrdered = totalCount > 0 && orderedCount === totalCount;
+	                                                                                const isPartiallyOrdered = totalCount > 0 && orderedCount > 0 && orderedCount < totalCount;
+	                                                                                return (
+	                                                                                    <div
+	                                                                                        key={id}
+	                                                                                        className={`rounded-2xl border p-3 ${belongsToCustomer
+	                                                                                            ? 'border-emerald-200 bg-emerald-50/70 border-l-4 border-l-emerald-500'
+	                                                                                            : 'border-slate-200 bg-white'
+	                                                                                            }`}
+	                                                                                    >
+	                                                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+	                                                                                            <div className="text-[10px] uppercase tracking-widest text-slate-500">
+	                                                                                                {formatJakartaTimestamp(m.timestamp)}{label ? ` • ${label}` : ''}{m.type ? ` • ${m.type}` : ''}
+	                                                                                            </div>
+	                                                                                            {group ? (
+	                                                                                                <span
+	                                                                                                    className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-widest ${belongsToCustomer
+	                                                                                                        ? 'bg-emerald-100 text-emerald-800'
+	                                                                                                        : 'bg-slate-100 text-slate-700'
+	                                                                                                        }`}
+	                                                                                                    title={groupLabel}
+	                                                                                                >
+	                                                                                                    {belongsToCustomer ? 'Customer Ini' : String(group.customer_key || '').trim()} • {group.block_id}{group.is_addon ? ' • addon' : ''}{group.kind === 'marker' ? ' • marker' : ''}
+	                                                                                                </span>
+	                                                                                            ) : null}
+	                                                                                            {belongsToCustomer && totalCount > 0 ? (
+	                                                                                                <span
+	                                                                                                    className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-widest ${
+	                                                                                                        isFullyOrdered
+	                                                                                                            ? 'bg-emerald-100 text-emerald-800'
+	                                                                                                            : isPartiallyOrdered
+	                                                                                                                ? 'bg-amber-100 text-amber-800'
+	                                                                                                                : 'bg-slate-100 text-slate-700'
+	                                                                                                    }`}
+	                                                                                                    title="Status item pada pesan ini berdasarkan order yang sudah dibuat dari hasil scrape."
+	                                                                                                >
+	                                                                                                    {isFullyOrdered ? 'Sudah Order' : isPartiallyOrdered ? 'Sebagian' : 'Belum'} • {orderedCount}/{totalCount}
+	                                                                                                </span>
+	                                                                                            ) : null}
+	                                                                                        </div>
+	
+	                                                                                        <div className="mt-2 text-sm text-slate-900 whitespace-pre-wrap break-words">
+	                                                                                            {isMedia ? (m.body ? `<image> ${m.body}` : '<image>') : (m.body || '')}
+	                                                                                        </div>
+
+	                                                                                        {isMedia ? (
+	                                                                                            <div className="mt-2 space-y-2">
+	                                                                                                {!scrapeMediaUrlByMessageId[id] ? (
+	                                                                                                    <button
+	                                                                                                        type="button"
+	                                                                                                        onClick={() => void loadScrapeMedia(id)}
+	                                                                                                        disabled={!!scrapeMediaLoadingByMessageId[id]}
+	                                                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-60"
+	                                                                                                    >
+	                                                                                                        {scrapeMediaLoadingByMessageId[id] ? 'Memuat...' : 'Muat Gambar'}
+	                                                                                                    </button>
+	                                                                                                ) : (
+	                                                                                                    // eslint-disable-next-line @next/next/no-img-element
+	                                                                                                    <img
+	                                                                                                        src={scrapeMediaUrlByMessageId[id]}
+	                                                                                                        alt="WhatsApp media"
+	                                                                                                        className="w-full max-h-64 object-contain rounded-xl border border-slate-200 bg-white"
+	                                                                                                    />
+	                                                                                                )}
+	                                                                                            </div>
+	                                                                                        ) : null}
+	                                                                                    </div>
+	                                                                                );
+	                                                                            })}
+	                                                                        </div>
+	                                                                    )}
+	                                                                </div>
+	                                                            </div>
+	                                                        ) : null}
+	
+	                                                        {Array.isArray(scrapeDetail.customer?.candidates) && scrapeDetail.customer.candidates.length > 1 ? (
+	                                                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+	                                                                <p className="text-xs font-black text-amber-900">Customer ambigu</p>
+                                                                <p className="text-[11px] text-amber-800 mt-0.5">Pilih customer yang benar sebelum menambahkan item ke keranjang.</p>
+                                                                <select
+                                                                    className="mt-2 w-full p-2 bg-white rounded-xl border border-amber-200 text-xs font-bold"
+                                                                    value={selectedCustomer?.id || ''}
+                                                                    onChange={(e) => {
+                                                                        const id = String(e.target.value || '').trim();
+                                                                        if (!id) return;
+                                                                        void selectScrapeCustomerCandidate(id);
+                                                                    }}
+                                                                >
+                                                                    <option value="" disabled>Pilih customer...</option>
+                                                                    {scrapeDetail.customer.candidates.map((c) => (
+                                                                        <option key={c.id} value={c.id}>
+                                                                            {c.name} {c.status !== 'active' ? `(status: ${c.status})` : ''}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                        ) : null}
+
+                                                        {String(scrapeDetail.customer?.match_status || '') === 'unmatched' ? (
+                                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                                                Customer dari chat belum ditemukan di database. Pilih customer manual di atas, lalu lanjut input item.
+                                                            </div>
+                                                        ) : null}
+
+                                                        <div className="max-h-96 overflow-y-auto space-y-3 pr-1">
+                                                            {Array.isArray(scrapeDetail.customer?.blocks) && scrapeDetail.customer.blocks.length > 0 ? (
+                                                                scrapeDetail.customer.blocks.map((block) => (
+                                                                    <div key={block.block_id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                                                                {block.is_addon ? 'Addon' : 'Utama'} • {block.block_id}
+                                                                            </p>
+                                                                            <p className="text-[10px] text-slate-400">
+                                                                                {new Date((Number(block.marker_timestamp || 0) * 1000)).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false })}
+                                                                            </p>
+                                                                        </div>
+
+                                                                        <div className="mt-2 space-y-2">
+                                                                            {Array.isArray(block.items) && block.items.length > 0 ? (
+	                                                                                block.items.map((item) => {
+	                                                                                    const ignored = !!ignoredScrapeItemById[item.item_id];
+	                                                                                    const added = !!addedScrapeItemById[item.item_id];
+	                                                                                    const active = activeScrapeItemId === item.item_id;
+	                                                                                    const stableKey = scrapeItemStableKey(item);
+	                                                                                    const alreadyOrdered =
+	                                                                                        processedFromExistingOrders.itemKeys.has(stableKey) ||
+	                                                                                        processedFromExistingOrders.messageIds.has(String(item.message_id || '').trim());
+	                                                                                    const orderedOrderId =
+	                                                                                        processedFromExistingOrders.itemOrderId[stableKey] ||
+	                                                                                        processedFromExistingOrders.messageOrderId[String(item.message_id || '').trim()] ||
+	                                                                                        '';
+	                                                                                    const qtyResolved = item.kind === 'text' ? resolveScrapeQty(item) : resolveScrapeQty(item);
+	                                                                                    const qtyValue = scrapeQtyInputByItemId[item.item_id] ?? (item.qty !== null ? String(item.qty) : '');
+	                                                                                    const displayText = item.kind === 'image'
+	                                                                                        ? (item.raw ? `<image> ${item.raw}` : '<image>')
+	                                                                                        : item.raw;
+	                                                                                    return (
+	                                                                                        <div
+	                                                                                            key={item.item_id}
+	                                                                                            onClick={() => activateScrapeItem(item)}
+	                                                                                            className={`rounded-xl border px-3 py-2 ${
+	                                                                                                ignored
+	                                                                                                    ? 'border-slate-200 bg-slate-50 opacity-60'
+	                                                                                                    : active
+	                                                                                                        ? 'border-emerald-300 bg-emerald-50'
+	                                                                                                        : 'border-slate-200 bg-white'
+	                                                                                            } ${ignored ? '' : 'cursor-pointer hover:border-emerald-200'}`}
+	                                                                                        >
+	                                                                                            <div className="flex items-start justify-between gap-2">
+		                                                                                                <div className="text-left flex-1">
+		                                                                                                    <p className="text-xs font-black text-slate-900 whitespace-pre-wrap">{displayText}</p>
+		                                                                                                    {alreadyOrdered && !added ? (
+		                                                                                                        <p className="mt-1 text-[10px] font-black text-slate-600 uppercase tracking-widest">
+		                                                                                                            Sudah dibuatkan {orderedOrderId ? `• Order #${orderedOrderId}` : ''}
+		                                                                                                        </p>
+		                                                                                                    ) : null}
+		                                                                                                    {added ? (
+		                                                                                                        <p className="mt-1 text-[10px] font-black text-emerald-700 uppercase tracking-widest">Sudah ditambahkan</p>
+		                                                                                                    ) : null}
+		                                                                                                </div>
+	
+	                                                                                                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+	                                                                                                    <input
+	                                                                                                        type="number"
+	                                                                                                        min={1}
+	                                                                                                        placeholder="Qty"
+                                                                                                        value={qtyValue}
+                                                                                                        onChange={(e) => {
+                                                                                                            setScrapeQtyInputByItemId((prev) => ({ ...prev, [item.item_id]: e.target.value }));
+                                                                                                        }}
+                                                                                                        className={`w-20 px-2 py-2 rounded-lg border text-xs font-black ${
+                                                                                                            qtyResolved ? 'border-slate-200 bg-slate-50' : 'border-rose-200 bg-rose-50'
+                                                                                                        }`}
+                                                                                                        disabled={ignored}
+                                                                                                    />
+                                                                                                    <button
+                                                                                                        type="button"
+                                                                                                        onClick={() => {
+                                                                                                            setIgnoredScrapeItemById((prev) => ({ ...prev, [item.item_id]: !prev[item.item_id] }));
+                                                                                                            if (activeScrapeItemId === item.item_id) {
+                                                                                                                setActiveScrapeItemId(null);
+                                                                                                            }
+                                                                                                        }}
+                                                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg bg-slate-100 text-slate-700"
+                                                                                                    >
+                                                                                                        {ignored ? 'Undo' : 'Ignore'}
+                                                                                                    </button>
+                                                                                                </div>
+                                                                                            </div>
+
+                                                                                            {item.kind === 'image' ? (
+                                                                                                <div className="mt-2">
+                                                                                                    {scrapeMediaUrlByMessageId[item.message_id] ? (
+                                                                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                                                                        <img
+                                                                                                            src={scrapeMediaUrlByMessageId[item.message_id]}
+                                                                                                            alt="WhatsApp media"
+                                                                                                            className="w-full max-h-64 object-contain rounded-xl border border-slate-200 bg-white"
+                                                                                                        />
+                                                                                                    ) : (
+	                                                                                                        <button
+	                                                                                                            type="button"
+	                                                                                                            onClick={(e) => {
+	                                                                                                                e.stopPropagation();
+	                                                                                                                void loadScrapeMedia(item.message_id);
+	                                                                                                            }}
+	                                                                                                            disabled={!!scrapeMediaLoadingByMessageId[item.message_id] || ignored}
+	                                                                                                            className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg bg-slate-900 text-white disabled:opacity-60"
+	                                                                                                        >
+	                                                                                                            {scrapeMediaLoadingByMessageId[item.message_id] ? 'Memuat...' : 'Muat Gambar'}
+	                                                                                                        </button>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            ) : null}
+                                                                                        </div>
+                                                                                    );
+                                                                                })
+                                                                            ) : (
+                                                                                <p className="text-xs text-slate-500">Tidak ada item di blok ini.</p>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                ))
+                                                            ) : (
+                                                                <p className="text-sm text-slate-500">Tidak ada blok order yang terdeteksi.</p>
+                                                            )}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <p className="text-sm text-slate-500">Tidak ada data scraping.</p>
+                                                )}
+                                            </div>
+
+                                            <div className="h-px bg-slate-200" />
+                                        </>
+                                    ) : null}
+
 		                            {/* Product Selection */}
 		                            <div className="space-y-4">
 		                                <h2 className="font-bold text-slate-900 flex items-center gap-2">
@@ -1137,32 +1979,48 @@ function ManualOrderContent() {
 		                                </h2>
 			                                <div className="relative">
 			                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-			                                    <input
-			                                        type="text"
-			                                        placeholder="Cari produk (nama/sku)..."
-		                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-		                                        value={productSearch}
-		                                        onChange={(e) => setProductSearch(e.target.value)}
+				                                    <input
+				                                        ref={productSearchInputRef}
+				                                        type="text"
+				                                        placeholder="Cari produk (nama/sku)..."
+			                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+			                                        value={productSearch}
+			                                        onChange={(e) => {
+                                                    setProductSearch(e.target.value);
+                                                    if (isScrapeDrivenOrder && activeScrapeItemId) {
+                                                        setActiveScrapeItemId(null);
+                                                    }
+                                                }}
 		                                        disabled={!selectedCustomer}
 		                                    />
 		                                    {products.length > 0 && (
 		                                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
-		                                            {products.map(p => (
-		                                                <div
-		                                                    key={p.id}
-		                                                    className="p-3 hover:bg-slate-50 cursor-pointer border-b last:border-0 flex justify-between items-center"
-		                                                    onClick={() => addToCart(p)}
-		                                                >
-		                                                    <div className="flex items-center gap-3">
-		                                                        {p.image_url && (
-		                                                            <Image src={p.image_url} alt={p.name || 'Produk'} width={40} height={40} className="rounded-lg object-cover" />
-			                                                        )}
-			                                                        <div>
-			                                                            <p className="font-bold text-slate-900">{p.name}</p>
-			                                                            <p className="text-xs text-slate-500">SKU: {p.sku || '-'}</p>
-			                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
-			                                                        </div>
-			                                                    </div>
+			                                            {products.map(p => (
+			                                                <div
+			                                                    key={p.id}
+			                                                    className="p-3 hover:bg-slate-50 cursor-pointer border-b last:border-0 flex justify-between items-center"
+			                                                    onClick={() => handlePickProduct(p)}
+			                                                >
+			                                                    <div className="flex items-center gap-3">
+			                                                        {(() => {
+			                                                            const src = normalizeProductImageUrl(p.image_url);
+			                                                            if (!src) return null;
+			                                                            return (
+			                                                                <Image
+			                                                                    src={src}
+			                                                                    alt={p.name || 'Produk'}
+			                                                                    width={40}
+			                                                                    height={40}
+			                                                                    className="rounded-lg object-cover"
+			                                                                />
+			                                                            );
+			                                                        })()}
+				                                                        <div>
+				                                                            <p className="font-bold text-slate-900">{p.name}</p>
+				                                                            <p className="text-xs text-slate-500">SKU: {p.sku || '-'}</p>
+				                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
+				                                                        </div>
+				                                                    </div>
 			                                                    <p className="font-bold text-blue-600">
 			                                                        {formatCurrency(getProductPrice(p))}
 		                                                    </p>
@@ -1189,7 +2047,7 @@ function ManualOrderContent() {
 			                                {selectedCustomer ? (
 			                                    <CustomerTopProductsCard
 			                                        customerId={selectedCustomer.id}
-			                                        onPick={addToCart}
+			                                        onPick={handlePickProduct}
 			                                    />
 		                                ) : null}
 		                            </div>

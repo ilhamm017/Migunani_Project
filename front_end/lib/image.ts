@@ -1,16 +1,22 @@
 export const normalizeProductImageUrl = (value?: string | null): string => {
-  const raw = String(value || '').trim();
+  const rawInput = String(value ?? '').trim();
+  if (!rawInput) return '';
+  if (rawInput === 'null' || rawInput === 'undefined') return '';
+  const raw = rawInput.replace(/\\/g, '/');
   if (!raw) return '';
-  if (raw.startsWith('/uploads/')) return raw;
+  if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+  if (raw.startsWith('/')) return raw;
+  if (raw.startsWith('uploads/')) return `/${raw}`;
 
   try {
     const parsed = new URL(raw);
     if (parsed.pathname.startsWith('/uploads/')) {
       return `${parsed.pathname}${parsed.search}${parsed.hash}`;
     }
+    return raw;
   } catch {
-    // Keep original value when URL parsing fails.
+    // non-absolute path -> ensure it becomes a valid URL for next/image
   }
 
-  return raw;
+  return `/${raw.replace(/^\/+/, '')}`;
 };

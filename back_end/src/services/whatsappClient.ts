@@ -10,6 +10,7 @@ const autoReconnectEnabled = process.env.WA_AUTO_RECONNECT !== 'false';
 const reconnectBaseDelayMs = Number(process.env.WA_RECONNECT_BASE_DELAY_MS || 5000);
 const reconnectMaxDelayMs = Number(process.env.WA_RECONNECT_MAX_DELAY_MS || 60000);
 const cleanProfileLocksBeforeInit = process.env.WA_CLEAN_PROFILE_LOCKS !== 'false';
+const persistStatusToDb = process.env.WA_PERSIST_STATUS_TO_DB !== 'false';
 
 const waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: process.env.WA_SESSION_PATH }),
@@ -286,6 +287,9 @@ waClient.on('ready', async () => {
     clearReconnectTimer();
 
     // Save info to DB
+    if (!persistStatusToDb) {
+        return;
+    }
     try {
         const info = waClient.info;
         await Setting.upsert({
@@ -340,6 +344,9 @@ waClient.on('disconnected', async (reason: string) => {
     }
 
     // Update DB
+    if (!persistStatusToDb) {
+        return;
+    }
     try {
         await Setting.upsert({
             key: 'whatsapp_session',

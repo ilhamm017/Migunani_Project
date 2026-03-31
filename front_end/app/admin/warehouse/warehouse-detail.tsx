@@ -1073,7 +1073,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                                 <td className="px-3 py-2 align-top">
                                                     {row.order_id ? (
                                                         <Link
-                                                            href={`/admin/orders/${row.order_id}`}
+                                                            href={`/admin/orders/detail/${encodeURIComponent(String(row.order_id))}`}
                                                             className="inline-flex items-center gap-1 font-semibold text-blue-700 hover:text-blue-900 hover:underline"
                                                         >
                                                             #{String(row.order_id).slice(0, 8)}
@@ -1189,7 +1189,7 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                                                             <p className="font-semibold truncate max-w-[180px]" title={customerName || undefined}>
                                                                 Customer: {customerName || '—'}
                                                             </p>
-                                                            <Link href={`/admin/orders/${orderId}`} className="text-[10px] text-blue-700 hover:text-blue-900 hover:underline inline-flex items-center gap-1">
+                                                            <Link href={`/admin/orders/detail/${encodeURIComponent(String(orderId))}`} className="text-[10px] text-blue-700 hover:text-blue-900 hover:underline inline-flex items-center gap-1">
                                                                 Order #{String(orderId).slice(0, 8)}
                                                                 <ExternalLink size={12} />
                                                             </Link>

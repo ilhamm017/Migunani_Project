@@ -972,6 +972,26 @@ export const api = {
             params: { _t: Date.now() },
             headers: { 'Cache-Control': 'no-cache' },
         }),
+        listGroups: () => apiClient.get('/whatsapp/groups', {
+            params: { _t: Date.now() },
+            headers: { 'Cache-Control': 'no-cache' },
+        }),
+        scrapeCreateSession: (payload: {
+            group_id: string;
+            date_from: string;
+            date_to: string;
+            timezone?: 'Asia/Jakarta' | string;
+            message_limit?: number;
+        }) => apiClient.post('/whatsapp/scrape/sessions', payload),
+        scrapeGetSession: (sessionId: string) => apiClient.get(`/whatsapp/scrape/sessions/${encodeURIComponent(sessionId)}`),
+        scrapeGetMessages: (sessionId: string) =>
+            apiClient.get(`/whatsapp/scrape/sessions/${encodeURIComponent(sessionId)}/messages`),
+        scrapeGetCustomer: (sessionId: string, customerKey: string) =>
+            apiClient.get(`/whatsapp/scrape/sessions/${encodeURIComponent(sessionId)}/customers/${encodeURIComponent(customerKey)}`),
+        scrapeGetMedia: (sessionId: string, messageId: string) =>
+            apiClient.get(`/whatsapp/scrape/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(messageId)}`, {
+                responseType: 'blob',
+            }),
         connect: (force = false) => apiClient.post('/whatsapp/connect', { force }),
         logout: () => apiClient.post('/whatsapp/logout'),
     },

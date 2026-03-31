@@ -61,6 +61,41 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     }
 };
 
+// Stateless auth that does not hit DB (use sparingly for endpoints that must stay responsive even if DB is slow).
+// It trusts the signed JWT payload, so user role/status changes won't take effect until token expiry.
+export const authenticateTokenStateless = (req: Request, res: Response, next: NextFunction) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
+
+    if (!token) {
+        return res.status(401).json({ message: 'Access token required' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, getJwtSecret()) as {
+            id?: string;
+            role?: string;
+            whatsapp_number?: string | null;
+        };
+
+        const userId = String(decoded?.id || '').trim();
+        const role = String(decoded?.role || '').trim();
+        if (!userId || !role) {
+            return res.status(401).json({ message: 'Invalid token payload' });
+        }
+
+        req.user = {
+            id: userId,
+            role,
+            whatsapp_number: typeof decoded.whatsapp_number === 'string' ? decoded.whatsapp_number : null
+        };
+
+        next();
+    } catch {
+        return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+};
+
 export const authorizeRoles = (...allowedRoles: string[]) => {
     return (req: Request, res: Response, next: NextFunction) => {
         if (!req.user) {

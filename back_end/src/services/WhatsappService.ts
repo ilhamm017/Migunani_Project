@@ -13,8 +13,18 @@ import {
 import { buildUnreadBadgePayloadsForThread } from './ChatBadgeService';
 
 const ATTACHMENT_FALLBACK_BODY = '[Lampiran]';
-const WA_REQUIRE_REGISTERED_CUSTOMER = String(process.env.WA_REQUIRE_REGISTERED_CUSTOMER || '').toLowerCase();
-const WA_REQUIRE_REGISTERED_CUSTOMER_ENABLED = ['1', 'true', 'yes', 'y', 'on'].includes(WA_REQUIRE_REGISTERED_CUSTOMER);
+const parseBooleanEnv = (value: unknown): boolean | null => {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return null;
+    if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+    return null;
+};
+
+// Default: only accept incoming WhatsApp messages from registered customers.
+// Set WA_REQUIRE_REGISTERED_CUSTOMER=false to allow unknown numbers (not recommended).
+const WA_REQUIRE_REGISTERED_CUSTOMER_ENABLED = parseBooleanEnv(process.env.WA_REQUIRE_REGISTERED_CUSTOMER) ?? true;
 const WA_UNREGISTERED_AUTO_REPLY = String(process.env.WA_UNREGISTERED_AUTO_REPLY || '').trim();
 
 const isCreatedViaEnumError = (error: unknown): boolean => {
@@ -142,29 +152,42 @@ const handleBotCommands = async (msg: WaMessage, session: ChatSession) => {
 
 export const handleIncomingMessage = async (msg: WaMessage) => {
     try {
-        const contact = await msg.getContact();
-        const chat = await msg.getChat();
-        const senderNumber = contact.number; // e.g. 628123456789
-        const normalizedSenderNumber = normalizeWhatsappNumber(senderNumber);
-        const isGroup = chat.isGroup;
+        const fromJid = typeof (msg as any)?.from === 'string' ? String((msg as any).from) : '';
+        const fromLower = fromJid.toLowerCase();
+        const isGroupJid = fromLower.includes('@g.us');
+        const isChannelJid = fromLower.includes('@newsletter');
+        const isBroadcastJid = fromLower === 'status@broadcast' || fromLower.includes('@broadcast');
 
-        if (isGroup) return; // Ignore groups for now
+        // Ignore groups / channels / broadcasts (we only handle 1:1 customer chats).
+        if (isGroupJid || isChannelJid || isBroadcastJid) return;
+
+        let normalizedSenderNumber = normalizeWhatsappNumber(fromJid);
+        if (!normalizedSenderNumber) {
+            try {
+                const contact = await msg.getContact();
+                normalizedSenderNumber = normalizeWhatsappNumber(contact?.number);
+            } catch (error) {
+                console.warn('[WA] unable to resolve contact for message:', error);
+                return;
+            }
+        }
+
         if (!normalizedSenderNumber) return;
 
-        console.log(`📩 Message from ${normalizedSenderNumber}: ${msg.body}`);
         const whatsappCandidates = getWhatsappLookupCandidates(normalizedSenderNumber);
 
         // 1. Find or Create User (Customer)
         // We need to match by whatsapp_number.
         // Note: whatsapp-web.js uses '628...' format. Our DB should store same.
 
-        const foundUser = await User.findOne({
-            where: { whatsapp_number: { [Op.in]: whatsappCandidates } },
+        const user = await User.findOne({
+            where: {
+                whatsapp_number: { [Op.in]: whatsappCandidates },
+                role: 'customer',
+                status: 'active',
+            },
             attributes: ['id', 'role', 'status', 'whatsapp_number']
         });
-        const user = foundUser?.role === 'customer' && foundUser.status === 'active'
-            ? foundUser
-            : null;
 
         if (WA_REQUIRE_REGISTERED_CUSTOMER_ENABLED && !user) {
             console.warn(`[WA] ignored incoming message from unregistered number=${normalizedSenderNumber}`);
@@ -177,6 +200,8 @@ export const handleIncomingMessage = async (msg: WaMessage) => {
             }
             return;
         }
+
+        console.log(`📩 Message from ${normalizedSenderNumber}: ${msg.body}`);
 
         // 2. Find or Create Chat Session (khusus kanal WhatsApp)
         let session: ChatSession | null = null;
