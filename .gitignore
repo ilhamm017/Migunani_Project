@@ -24,8 +24,11 @@ yarn-error.log*
 # Spreadsheets
 *.xlsx
 
-# Backups
-backups/
+# Backups (keep ignored by default, allow curated MySQL product dumps)
+backups/*
+!backups/mysql/
+backups/mysql/*
+!backups/mysql/products_*.sql
 
 # Windows Zone Identifier (download mark) sidecar files
 *:Zone.Identifier
