@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
     AdminOrderListResponse,
+    AdminOrderMonitoringResponse,
     DriverAssignedOrderRow,
     InvoiceDetailResponse,
     OrderDetailResponse,
@@ -467,24 +468,31 @@ export const api = {
             remove: (id: string) => apiClient.delete(`/admin/clearance-promos/${encodeURIComponent(id)}`),
         },
 	        orderManagement: {
-            getAll: (params?: {
-                page?: number;
-                limit?: number;
-                status?: string;
-                search?: string;
-                startDate?: string;
-                endDate?: string;
-                is_backorder?: string;
-                exclude_backorder?: string;
-                updatedAfter?: string;
-                include_collectible_total?: string;
-            }) =>
-                apiClient.get<AdminOrderListResponse>('/orders/admin/list', { params }),
-            getStats: () => apiClient.get('/orders/admin/stats'),
-            getCouriers: () => apiClient.get('/orders/admin/couriers'),
-	            updateStatus: (id: string, data: {
-	                status: string;
-	                reason?: string;
+	            getAll: (params?: {
+	                page?: number;
+	                limit?: number;
+	                status?: string;
+	                search?: string;
+	                startDate?: string;
+	                endDate?: string;
+	                is_backorder?: string;
+	                exclude_backorder?: string;
+	                updatedAfter?: string;
+	                include_collectible_total?: string;
+	            }) =>
+	                apiClient.get<AdminOrderListResponse>('/orders/admin/list', { params }),
+	            getMonitoring: (params?: {
+	                scope?: 'active' | 'all';
+	                startDate?: string;
+	                endDate?: string;
+	                limitTop?: number;
+	            }) =>
+	                apiClient.get<AdminOrderMonitoringResponse>('/orders/admin/monitoring', { params }),
+	            getStats: () => apiClient.get('/orders/admin/stats'),
+	            getCouriers: () => apiClient.get('/orders/admin/couriers'),
+		            updateStatus: (id: string, data: {
+		                status: string;
+		                reason?: string;
 	                courier_id?: string;
 	                issue_type?: 'shortage';
 	                issue_note?: string;

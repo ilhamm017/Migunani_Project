@@ -160,6 +160,41 @@ export type AdminOrderListResponse = {
   orders: AdminOrderListRow[];
 };
 
+export type AdminOrderMonitoringTopBackorderRow = {
+  order_id: string;
+  customer_name: string;
+  status: string;
+  createdAt: string;
+  qty_pending: number;
+};
+
+export type AdminOrderMonitoringTopCanceledRow = {
+  order_id: string;
+  customer_name: string;
+  status: string;
+  createdAt: string;
+  qty_canceled: number;
+};
+
+export type AdminOrderMonitoringResponse = {
+  scope: 'active' | 'all';
+  range: { startDate?: string; endDate?: string };
+  quantities: {
+    ordered_net: number;
+    allocated: number;
+    backorder_pending: number;
+    canceled: number;
+  };
+  orders: {
+    by_status: Record<string, number>;
+    total: number;
+  };
+  top: {
+    backorder_orders: AdminOrderMonitoringTopBackorderRow[];
+    canceled_orders: AdminOrderMonitoringTopCanceledRow[];
+  };
+};
+
 export type OrderItemSummaryRow = {
   order_item_id: string;
   ordered_qty_original: number;

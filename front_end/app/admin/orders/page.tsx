@@ -211,6 +211,12 @@ export default function AdminOrdersPage() {
           <p className="mb-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Order Command</p>
           <h1 className="text-xl font-black text-slate-900">Daftar Customer Order</h1>
         </div>
+        <Link
+          href="/admin/orders/monitoring"
+          className="px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+        >
+          Monitoring Qty
+        </Link>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[340px_1fr]">

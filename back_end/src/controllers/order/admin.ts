@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting, Account } from '../../models';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { resolveShippingMethodByCode } from '../ShippingMethodController';
 import waClient, { getStatus as getWaStatus } from '../../services/whatsappClient';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
@@ -1772,4 +1772,194 @@ export const getDashboardStats = asyncWrapper(async (req: Request, res: Response
     });
 
     res.json(stats);
+});
+
+export const getMonitoringSummary = asyncWrapper(async (req: Request, res: Response) => {
+    const scopeRaw = String(req.query.scope || 'active').trim().toLowerCase();
+    const scope: 'active' | 'all' = scopeRaw === 'all' ? 'all' : 'active';
+
+    const limitTopRaw = Number(req.query.limitTop || 20);
+    const limitTop = Math.max(1, Math.min(100, Number.isFinite(limitTopRaw) ? Math.trunc(limitTopRaw) : 20));
+
+    const startDateRaw = typeof req.query.startDate === 'string' ? req.query.startDate : '';
+    const endDateRaw = typeof req.query.endDate === 'string' ? req.query.endDate : '';
+
+    const createdAtRange: any = {};
+    if (startDateRaw) {
+        const start = new Date(startDateRaw);
+        if (!Number.isNaN(start.getTime())) {
+            start.setHours(0, 0, 0, 0);
+            createdAtRange[Op.gte] = start;
+        }
+    }
+    if (endDateRaw) {
+        const end = new Date(endDateRaw);
+        if (!Number.isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            createdAtRange[Op.lte] = end;
+        }
+    }
+
+    const orderWhere: any = {};
+    if (scope === 'active') {
+        orderWhere.status = { [Op.notIn]: ['completed', 'canceled', 'expired'] };
+    }
+    if (Object.keys(createdAtRange).length > 0) {
+        orderWhere.createdAt = createdAtRange;
+    }
+
+    const toNumber = (value: unknown): number => {
+        const n = Number(value || 0);
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    const statusRows = await Order.findAll({
+        attributes: [
+            'status',
+            [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+        ],
+        where: orderWhere,
+        group: ['status'],
+        raw: true
+    }) as unknown as { status: string, count: number }[];
+
+    const byStatus: Record<string, number> = {};
+    let orderTotal = 0;
+    statusRows.forEach((row) => {
+        const status = String((row as any)?.status || '').trim();
+        const count = toNumber((row as any)?.count);
+        if (!status) return;
+        byStatus[status] = count;
+        orderTotal += count;
+    });
+
+    const orderedRow = await OrderItem.findOne({
+        attributes: [[sequelize.fn('SUM', sequelize.col('OrderItem.qty')), 'sum_qty']],
+        include: [{ model: Order, attributes: [], required: true, where: orderWhere }],
+        raw: true
+    }) as unknown as { sum_qty?: unknown } | null;
+
+    const canceledRow = await OrderItem.findOne({
+        attributes: [
+            [sequelize.fn('SUM', sequelize.col('OrderItem.qty_canceled_manual')), 'sum_manual'],
+            [sequelize.fn('SUM', sequelize.col('OrderItem.qty_canceled_backorder')), 'sum_backorder'],
+        ],
+        include: [{ model: Order, attributes: [], required: true, where: orderWhere }],
+        raw: true
+    }) as unknown as { sum_manual?: unknown; sum_backorder?: unknown } | null;
+
+    const allocatedRow = await OrderAllocation.findOne({
+        attributes: [[sequelize.fn('SUM', sequelize.col('OrderAllocation.allocated_qty')), 'sum_allocated']],
+        include: [{ model: Order, attributes: [], required: true, where: orderWhere }],
+        raw: true
+    }) as unknown as { sum_allocated?: unknown } | null;
+
+    const backorderRow = await Backorder.findOne({
+        attributes: [[sequelize.fn('SUM', sequelize.col('Backorder.qty_pending')), 'sum_pending']],
+        where: {
+            qty_pending: { [Op.gt]: 0 },
+            status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+        },
+        include: [{
+            model: OrderItem,
+            attributes: [],
+            required: true,
+            include: [{ model: Order, attributes: [], required: true, where: orderWhere }]
+        }],
+        raw: true
+    }) as unknown as { sum_pending?: unknown } | null;
+
+    const range: { startDate?: string; endDate?: string } = {};
+    if (startDateRaw) range.startDate = startDateRaw;
+    if (endDateRaw) range.endDate = endDateRaw;
+
+    const sqlFilters: string[] = [];
+    const replacements: Record<string, unknown> = { limitTop };
+
+    if (scope === 'active') {
+        sqlFilters.push("o.status NOT IN ('completed','canceled','expired')");
+    }
+    if (createdAtRange[Op.gte]) {
+        sqlFilters.push('o.createdAt >= :startAt');
+        replacements.startAt = createdAtRange[Op.gte];
+    }
+    if (createdAtRange[Op.lte]) {
+        sqlFilters.push('o.createdAt <= :endAt');
+        replacements.endAt = createdAtRange[Op.lte];
+    }
+
+    const orderFilterSql = sqlFilters.length > 0 ? `AND ${sqlFilters.join(' AND ')}` : '';
+
+    const topBackorderOrders = await sequelize.query(
+        `
+        SELECT
+          o.id AS order_id,
+          COALESCE(NULLIF(o.customer_name, ''), c.name) AS customer_name,
+          o.status AS status,
+          o.createdAt AS createdAt,
+          SUM(b.qty_pending) AS qty_pending
+        FROM backorders b
+        JOIN order_items oi ON oi.id = b.order_item_id
+        JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN users c ON c.id = o.customer_id
+        WHERE b.qty_pending > 0
+          AND b.status NOT IN ('fulfilled', 'canceled')
+          ${orderFilterSql}
+        GROUP BY o.id, o.customer_name, c.name, o.status, o.createdAt
+        ORDER BY qty_pending DESC
+        LIMIT :limitTop
+        `,
+        { replacements, type: QueryTypes.SELECT }
+    ) as Array<{ order_id: string; customer_name: string; status: string; createdAt: string; qty_pending: unknown }>;
+
+    const topCanceledOrders = await sequelize.query(
+        `
+        SELECT
+          o.id AS order_id,
+          COALESCE(NULLIF(o.customer_name, ''), c.name) AS customer_name,
+          o.status AS status,
+          o.createdAt AS createdAt,
+          SUM(oi.qty_canceled_manual + oi.qty_canceled_backorder) AS qty_canceled
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN users c ON c.id = o.customer_id
+        WHERE (oi.qty_canceled_manual > 0 OR oi.qty_canceled_backorder > 0)
+          ${orderFilterSql}
+        GROUP BY o.id, o.customer_name, c.name, o.status, o.createdAt
+        ORDER BY qty_canceled DESC
+        LIMIT :limitTop
+        `,
+        { replacements, type: QueryTypes.SELECT }
+    ) as Array<{ order_id: string; customer_name: string; status: string; createdAt: string; qty_canceled: unknown }>;
+
+    res.json({
+        scope,
+        range,
+        quantities: {
+            ordered_net: toNumber((orderedRow as any)?.sum_qty),
+            allocated: toNumber((allocatedRow as any)?.sum_allocated),
+            backorder_pending: toNumber((backorderRow as any)?.sum_pending),
+            canceled: toNumber((canceledRow as any)?.sum_manual) + toNumber((canceledRow as any)?.sum_backorder),
+        },
+        orders: {
+            by_status: byStatus,
+            total: orderTotal
+        },
+        top: {
+            backorder_orders: (Array.isArray(topBackorderOrders) ? topBackorderOrders : []).map((row) => ({
+                order_id: String((row as any)?.order_id || ''),
+                customer_name: String((row as any)?.customer_name || ''),
+                status: String((row as any)?.status || ''),
+                createdAt: String((row as any)?.createdAt || ''),
+                qty_pending: toNumber((row as any)?.qty_pending),
+            })),
+            canceled_orders: (Array.isArray(topCanceledOrders) ? topCanceledOrders : []).map((row) => ({
+                order_id: String((row as any)?.order_id || ''),
+                customer_name: String((row as any)?.customer_name || ''),
+                status: String((row as any)?.status || ''),
+                createdAt: String((row as any)?.createdAt || ''),
+                qty_canceled: toNumber((row as any)?.qty_canceled),
+            })),
+        }
+    });
 });
