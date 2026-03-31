@@ -21,6 +21,7 @@ export default function AdminBottomNav() {
   const pathname = usePathname();
   const { isAuthenticated, user } = useAuthStore();
   const role = user?.role || 'guest';
+  const isPrintRoute = !!pathname?.includes('/print');
 
   const allowedAdminRoles = ['super_admin', 'admin_gudang', 'admin_finance', 'kasir'];
   const canAccessAdminNav = !!user && allowedAdminRoles.includes(user.role);
@@ -48,6 +49,11 @@ export default function AdminBottomNav() {
       Number(financeCardBadges.codSettlement || 0) +
       Number(financeCardBadges.refundRetur || 0)
   );
+
+  // Never show app chrome on dedicated print routes.
+  if (isPrintRoute) {
+    return null;
+  }
 
   if (!pathname?.startsWith('/admin') || !canAccessAdminNav) {
     return null;
@@ -79,7 +85,7 @@ export default function AdminBottomNav() {
   };
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 h-[var(--admin-bottom-nav-height,5rem)] bg-white/95 backdrop-blur-sm border-t border-slate-200 px-4 flex items-center justify-between z-50">
+    <nav className="fixed bottom-0 inset-x-0 h-[var(--admin-bottom-nav-height,5rem)] bg-white/95 backdrop-blur-sm border-t border-slate-200 px-4 flex items-center justify-between z-50 print:hidden">
       {filteredNavItems.map((item) => {
         const Icon = item.icon;
         const active = isActive(item.href);

@@ -162,6 +162,13 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+@media print {
+  body {
+    padding-bottom: 0 !important;
+    background: #ffffff !important;
+  }
+}
+
 /* Touch-friendly defaults + 3D clickable buttons (opt-in via .btn-3d) */
 :root {
   --btn-3d-raise: 7px;

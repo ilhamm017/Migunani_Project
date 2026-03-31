@@ -82,11 +82,12 @@ export default function PosSalePrintPage() {
   if (!allowed) return null;
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-4 print:p-0 print:space-y-0">
       <style>{`
         @media print {
           @page { size: ${RECEIPT_WIDTH_MM}mm auto; margin: 0; }
           html, body { background: #fff !important; }
+          body { margin: 0 !important; padding: 0 !important; }
           .receipt-wrap { max-width: none !important; width: ${RECEIPT_WIDTH_MM}mm !important; margin: 0 !important; }
           .receipt {
             border: 0 !important;
