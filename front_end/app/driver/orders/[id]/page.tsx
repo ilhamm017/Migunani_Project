@@ -24,6 +24,17 @@ type CodPaymentConfirmState = {
   step: 1 | 2;
 };
 
+type DeliveryReturLineRow = {
+  key: string;
+  orderId: string;
+  orderIndex: number;
+  productId: string;
+  name: string;
+  sku: string;
+  invoiceQty: number;
+  unitPrice: number;
+};
+
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const formatCurrency = (value: unknown) =>
   `Rp ${Number(value || 0).toLocaleString('id-ID')}`;
@@ -108,7 +119,7 @@ export default function DriverOrderDetailPage() {
   const [codPaymentConfirm, setCodPaymentConfirm] = useState<CodPaymentConfirmState | null>(null);
   const [completeMessage, setCompleteMessage] = useState('');
   const [isDeliveryReturOpen, setIsDeliveryReturOpen] = useState(false);
-  const [deliveryReturDraft, setDeliveryReturDraft] = useState<Record<string, { qty: string; order_id?: string }>>({});
+  const [deliveryReturDraft, setDeliveryReturDraft] = useState<Record<string, { checked: boolean; qty: string }>>({});
   const defaultRefusalReason = 'Retur saat pengiriman (tidak jadi beli)';
   const defaultDamageReason = 'Retur saat pengiriman (barang rusak)';
   const [deliveryReturType, setDeliveryReturType] = useState<'delivery_refusal' | 'delivery_damage'>('delivery_refusal');
@@ -404,7 +415,7 @@ export default function DriverOrderDetailPage() {
       });
     } else {
       groupedOrders.forEach((row) => {
-        const currentOrderId = String(row?.id || '').trim();
+        const currentOrderId = String((row as any)?.real_order_id || row?.id || '').trim();
         const items = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
         items.forEach((item: any) => {
           const key = String(item?.product_id || item?.Product?.sku || item?.Product?.name || item?.id || '').trim();
@@ -428,6 +439,115 @@ export default function DriverOrderDetailPage() {
       }))
       .sort((a, b) => b.qty - a.qty);
   }, [groupedOrders, invoiceDetail]);
+
+  const deliveryReturLineRows = useMemo<DeliveryReturLineRow[]>(() => {
+    const orderIndexById = new Map<string, number>();
+    groupedOrders.forEach((row, idx) => {
+      const oid = String((row as any)?.real_order_id || row?.id || '').trim();
+      if (oid) orderIndexById.set(oid, idx);
+    });
+
+    const byKey = new Map<string, DeliveryReturLineRow>();
+    const upsert = (row: Omit<DeliveryReturLineRow, 'invoiceQty'> & { invoiceQty: number }) => {
+      const qty = Math.max(0, Math.trunc(Number(row.invoiceQty || 0)));
+      if (!row.key || !row.orderId || !row.productId || qty <= 0) return;
+      const prev = byKey.get(row.key);
+      if (!prev) {
+        byKey.set(row.key, {
+          ...row,
+          invoiceQty: qty,
+        });
+        return;
+      }
+      prev.invoiceQty += qty;
+      byKey.set(row.key, prev);
+    };
+
+    const invoiceItems = getInvoiceItems(invoiceDetail);
+    if (invoiceItems.length > 0) {
+      invoiceItems.forEach((item: any) => {
+        const orderItem = item?.OrderItem || {};
+        const product = orderItem?.Product || item?.Product || {};
+        const orderId = String(orderItem?.order_id || item?.order_id || '').trim();
+        const productId = String(orderItem?.product_id || product?.id || '').trim();
+        const name = String(product?.name || 'Produk');
+        const sku = String(product?.sku || '').trim();
+        const qty = Number(item?.qty ?? item?.allocated_qty ?? item?.invoice_qty ?? 0);
+        const unitPriceRaw = item?.unit_price ?? orderItem?.price_at_purchase ?? 0;
+        const unitPrice = Number.isFinite(Number(unitPriceRaw)) ? Number(unitPriceRaw) : 0;
+        const orderIndex = Number(orderIndexById.get(orderId) ?? 9999);
+        const key = `${orderId}:${productId}:${unitPrice}`;
+        upsert({ key, orderId, orderIndex, productId, name, sku, unitPrice, invoiceQty: qty });
+      });
+    } else {
+      groupedOrders.forEach((row, idx) => {
+        const orderId = String((row as any)?.real_order_id || row?.id || '').trim();
+        const items = Array.isArray(row?.OrderItems) ? row.OrderItems : [];
+        items.forEach((item: any) => {
+          const product = item?.Product || {};
+          const productId = String(item?.product_id || product?.id || '').trim();
+          const name = String(product?.name || 'Produk');
+          const sku = String(product?.sku || '').trim();
+          const qty = Number(item?.qty || 0);
+          const unitPriceRaw = item?.price_at_purchase ?? 0;
+          const unitPrice = Number.isFinite(Number(unitPriceRaw)) ? Number(unitPriceRaw) : 0;
+          const orderIndex = idx;
+          const key = `${orderId}:${productId}:${unitPrice}`;
+          upsert({ key, orderId, orderIndex, productId, name, sku, unitPrice, invoiceQty: qty });
+        });
+      });
+    }
+
+    return Array.from(byKey.values()).sort((a, b) => {
+      if (a.orderIndex !== b.orderIndex) return a.orderIndex - b.orderIndex;
+      if (a.orderId !== b.orderId) return a.orderId.localeCompare(b.orderId);
+      if (a.name !== b.name) return a.name.localeCompare(b.name);
+      return a.unitPrice - b.unitPrice;
+    });
+  }, [groupedOrders, invoiceDetail]);
+
+  const deliveryReturPriceVariantsByProductId = useMemo(() => {
+    const map = new Map<string, number[]>();
+    deliveryReturLineRows.forEach((row) => {
+      const productId = String(row.productId || '').trim();
+      if (!productId) return;
+      const unitPrice = Number(row.unitPrice || 0);
+      const existing = map.get(productId) || [];
+      if (!existing.includes(unitPrice)) {
+        existing.push(unitPrice);
+        existing.sort((a, b) => a - b);
+        map.set(productId, existing);
+      }
+    });
+    return map;
+  }, [deliveryReturLineRows]);
+
+  const deliveryReturHasPriceVariants = useMemo(
+    () => Array.from(deliveryReturPriceVariantsByProductId.values()).some((variants) => variants.length > 1),
+    [deliveryReturPriceVariantsByProductId]
+  );
+
+  const deliveryReturOrderGroups = useMemo(() => {
+    const map = new Map<string, { orderId: string; orderIndex: number; lines: DeliveryReturLineRow[] }>();
+    deliveryReturLineRows.forEach((row) => {
+      const orderId = String(row.orderId || '').trim();
+      if (!orderId) return;
+      const prev = map.get(orderId) || { orderId, orderIndex: row.orderIndex, lines: [] as DeliveryReturLineRow[] };
+      prev.orderIndex = Math.min(prev.orderIndex ?? row.orderIndex, row.orderIndex);
+      prev.lines.push(row);
+      map.set(orderId, prev);
+    });
+    return Array.from(map.values())
+      .sort((a, b) => (a.orderIndex !== b.orderIndex ? a.orderIndex - b.orderIndex : a.orderId.localeCompare(b.orderId)))
+      .map((g) => ({
+        ...g,
+        lines: [...g.lines].sort((a, b) => {
+          if (a.name !== b.name) return a.name.localeCompare(b.name);
+          if (a.sku !== b.sku) return a.sku.localeCompare(b.sku);
+          return a.unitPrice - b.unitPrice;
+        }),
+      }));
+  }, [deliveryReturLineRows]);
   const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
   const deliveryNetTotal = Number(deliveryReturnSummary?.net_total || 0);
   const deliveryReturnTotal = Number(deliveryReturnSummary?.return_total || 0);
@@ -611,27 +731,23 @@ export default function DriverOrderDetailPage() {
   };
 
   const validateDeliveryReturDraft = () => {
-    const selected = invoiceItemRows
+    const selected = deliveryReturLineRows
       .map((row) => {
         const draft = deliveryReturDraft[row.key];
+        const checked = Boolean(draft?.checked);
         const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
-        return { row, draft, qty };
+        return { row, checked, qty };
       })
-      .filter((x) => Number.isFinite(x.qty) && x.qty > 0);
+      .filter((x) => x.checked);
 
-    if (selected.length === 0) {
-      return 'Isi minimal 1 item retur dengan qty > 0.';
-    }
+    if (selected.length === 0) return 'Checklist minimal 1 SKU yang diretur.';
 
-    for (const { row, draft, qty } of selected) {
-      if (qty > Number(row.qty || 0)) {
-        return `Qty retur melebihi qty invoice untuk ${row.name}.`;
+    for (const { row, qty } of selected) {
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return `Isi qty retur untuk ${row.name}.`;
       }
-      if (row.orderIds.length > 1) {
-        const orderId = typeof draft?.order_id === 'string' ? draft.order_id.trim() : '';
-        if (!orderId) {
-          return `Pilih order untuk item ${row.name} (produk ada di beberapa order).`;
-        }
+      if (qty > Number(row.invoiceQty || 0)) {
+        return `Qty retur melebihi qty invoice untuk ${row.name}.`;
       }
     }
 
@@ -652,25 +768,23 @@ export default function DriverOrderDetailPage() {
       setDeliveryReturMessage(validationError);
       return;
     }
-    const payloadItems = invoiceItemRows
+    const payloadItems = deliveryReturLineRows
       .map((row) => {
         const draft = deliveryReturDraft[row.key];
+        if (!draft?.checked) return null;
         const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
         if (!Number.isFinite(qty) || qty <= 0) return null;
-        const order_id = typeof draft?.order_id === 'string' && draft.order_id.trim()
-          ? draft.order_id.trim()
-          : undefined;
         return {
-          product_id: row.key,
+          product_id: row.productId,
+          order_id: row.orderId,
           qty,
-          ...(order_id ? { order_id } : {}),
           ...(deliveryReturReason.trim() ? { reason: deliveryReturReason.trim() } : {})
         };
       })
-      .filter(Boolean) as Array<{ product_id: string; qty: number; order_id?: string; reason?: string }>;
+      .filter(Boolean) as Array<{ product_id: string; qty: number; order_id: string; reason?: string }>;
 
     if (payloadItems.length === 0) {
-      setDeliveryReturMessage('Isi minimal 1 item retur dengan qty > 0.');
+      setDeliveryReturMessage('Checklist minimal 1 SKU yang diretur dan isi qty-nya.');
       return;
     }
 
@@ -943,62 +1057,153 @@ export default function DriverOrderDetailPage() {
                   />
                 </div>
 
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pilih SKU yang diretur</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeliveryReturDraft((prev) => {
+                          const next: Record<string, { checked: boolean; qty: string }> = { ...prev };
+                          deliveryReturLineRows.forEach((row) => {
+                            const current = next[row.key] || { checked: false, qty: '0' };
+                            const currentQty = Math.max(0, Math.trunc(Number(current.qty || 0)));
+                            const maxQty = Math.max(1, Math.trunc(Number(row.invoiceQty || 0)));
+                            next[row.key] = {
+                              checked: true,
+                              qty: String(Math.min(maxQty, currentQty > 0 ? currentQty : 1)),
+                            };
+                          });
+                          return next;
+                        });
+                      }}
+                      disabled={deliveryReturLoading || deliveryReturLineRows.length === 0}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase text-slate-700 disabled:opacity-60"
+                    >
+                      Checklist all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeliveryReturDraft((prev) => {
+                          const next: Record<string, { checked: boolean; qty: string }> = { ...prev };
+                          deliveryReturLineRows.forEach((row) => {
+                            next[row.key] = { checked: false, qty: '0' };
+                          });
+                          return next;
+                        });
+                      }}
+                      disabled={deliveryReturLoading || deliveryReturLineRows.length === 0}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase text-slate-700 disabled:opacity-60"
+                    >
+                      Uncheck all
+                    </button>
+                  </div>
+                </div>
+
+                {deliveryReturHasPriceVariants && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800">
+                    Ada SKU dengan <span className="font-black">harga berbeda</span> di order lain. Gunakan badge <span className="font-black">Harga A/B</span> agar tidak salah pilih saat retur.
+                  </div>
+                )}
+
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-3">
-                  {invoiceItemRows.map((row) => {
-                    const draft = deliveryReturDraft[row.key] || { qty: '0', order_id: row.orderIds.length === 1 ? row.orderIds[0] : '' };
-                    return (
-                      <div key={row.key} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-black text-slate-900">{row.name}</p>
-                            <p className="text-[10px] text-slate-500">Qty invoice: <span className="font-black">{row.qty}</span></p>
-                          </div>
-                          <div className="text-right">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty Retur</label>
-                            <input
-                              type="number"
-                              min="0"
-                              max={row.qty}
-                              value={draft.qty}
-                              onChange={(e) => {
-                                const nextQty = e.target.value;
-                                setDeliveryReturDraft((prev) => ({
-                                  ...prev,
-                                  [row.key]: { ...draft, qty: nextQty }
-                                }));
-                              }}
-                              className="mt-1 w-28 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-800"
-                            />
-                          </div>
+                  {deliveryReturOrderGroups.map((group) => (
+                    <div key={group.orderId} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Order ID</p>
+                          <p className="text-xs font-black text-slate-900 break-all">{group.orderId}</p>
                         </div>
-                        {row.orderIds.length > 1 && (
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Order</label>
-                            <select
-                              value={draft.order_id || ''}
-                              onChange={(e) => {
-                                const nextOrderId = e.target.value;
-                                setDeliveryReturDraft((prev) => ({
-                                  ...prev,
-                                  [row.key]: { ...draft, order_id: nextOrderId }
-                                }));
-                              }}
-                              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-800 bg-white"
-                            >
-                              <option value="">Pilih order...</option>
-                              {row.orderIds.map((oid) => (
-                                <option key={oid} value={oid}>
-                                  {oid}
-                                </option>
-                              ))}
-                            </select>
-                            <p className="text-[10px] text-slate-500">Produk ini ada di beberapa order. Wajib pilih order.</p>
-                          </div>
-                        )}
+                        <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black text-slate-700">
+                          {group.lines.length} SKU
+                        </span>
                       </div>
-                    );
-                  })}
-                  {invoiceItemRows.length === 0 && (
+
+                      <div className="space-y-2">
+                        {group.lines.map((line) => {
+                          const draft = deliveryReturDraft[line.key] || { checked: false, qty: '0' };
+                          const variants = deliveryReturPriceVariantsByProductId.get(line.productId) || [];
+                          const hasVariant = variants.length > 1;
+                          const variantIdx = variants.findIndex((v) => v === line.unitPrice);
+                          const variantLabel = variantIdx >= 0 ? String.fromCharCode(65 + variantIdx) : '?';
+                          const maxQty = Math.max(1, Math.trunc(Number(line.invoiceQty || 0)));
+
+                          return (
+                            <div
+                              key={line.key}
+                              className={`rounded-xl border px-3 py-2 flex items-start justify-between gap-3 ${draft.checked ? 'border-rose-200 bg-rose-50/40' : 'border-slate-200 bg-slate-50'}`}
+                            >
+                              <label className="flex items-start gap-3 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={draft.checked}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setDeliveryReturDraft((prev) => {
+                                      const current = prev[line.key] || { checked: false, qty: '0' };
+                                      const currentQty = Math.max(0, Math.trunc(Number(current.qty || 0)));
+                                      const nextQty = checked
+                                        ? String(Math.min(maxQty, currentQty > 0 ? currentQty : 1))
+                                        : '0';
+                                      return {
+                                        ...prev,
+                                        [line.key]: { checked, qty: nextQty },
+                                      };
+                                    });
+                                  }}
+                                  className="mt-1"
+                                />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-black text-slate-900 truncate">{line.name}</p>
+                                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold text-slate-600">
+                                    {line.sku && (
+                                      <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-mono text-slate-700">
+                                        {line.sku}
+                                      </span>
+                                    )}
+                                    {hasVariant && (
+                                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-black text-amber-800">
+                                        Harga {variantLabel}
+                                      </span>
+                                    )}
+                                    <span className="text-slate-700">@ {formatCurrency(line.unitPrice)}</span>
+                                    <span>
+                                      Qty invoice: <span className="font-black text-slate-800">{line.invoiceQty}</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              </label>
+
+                              <div className="text-right shrink-0">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Qty Retur</label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={maxQty}
+                                  value={draft.qty}
+                                  disabled={!draft.checked}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const parsed = Math.trunc(Number(raw));
+                                    const nextQty = raw === ''
+                                      ? ''
+                                      : String(Math.min(maxQty, Math.max(1, Number.isFinite(parsed) ? parsed : 1)));
+                                    setDeliveryReturDraft((prev) => ({
+                                      ...prev,
+                                      [line.key]: { checked: true, qty: nextQty }
+                                    }));
+                                  }}
+                                  className="mt-1 w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-800 disabled:opacity-50"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  {deliveryReturOrderGroups.length === 0 && (
                     <p className="text-xs font-semibold text-slate-500">Tidak ada item pada invoice ini.</p>
                   )}
                 </div>
@@ -1014,18 +1219,25 @@ export default function DriverOrderDetailPage() {
                 </div>
 
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
-                  {invoiceItemRows
+                  {deliveryReturLineRows
                     .map((row) => {
                       const draft = deliveryReturDraft[row.key];
+                      if (!draft?.checked) return null;
                       const qty = Math.max(0, Math.trunc(Number(draft?.qty || 0)));
                       if (!Number.isFinite(qty) || qty <= 0) return null;
-                      const orderId = typeof draft?.order_id === 'string' && draft.order_id.trim() ? draft.order_id.trim() : '';
+                      const variants = deliveryReturPriceVariantsByProductId.get(row.productId) || [];
+                      const hasVariant = variants.length > 1;
+                      const variantIdx = variants.findIndex((v) => v === row.unitPrice);
+                      const variantLabel = variantIdx >= 0 ? String.fromCharCode(65 + variantIdx) : '?';
                       return (
                         <div key={row.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-black text-slate-900">{row.name}</p>
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-900 truncate">{row.name}</p>
+                            <p className="text-[10px] text-slate-500 break-all">Order: {row.orderId}</p>
                             <p className="text-[10px] text-slate-500">
-                              {row.orderIds.length > 1 ? `Order: ${orderId || '(belum dipilih)'}` : `Order: ${row.orderIds[0] || '-'}`}
+                              {row.sku ? `SKU: ${row.sku} · ` : ''}
+                              @ {formatCurrency(row.unitPrice)}
+                              {hasVariant ? ` · Harga ${variantLabel}` : ''}
                             </p>
                           </div>
                           <span className="text-xs font-black text-rose-700">Qty {qty}</span>
@@ -1033,6 +1245,9 @@ export default function DriverOrderDetailPage() {
                       );
                     })
                     .filter(Boolean)}
+                  {deliveryReturLineRows.every((row) => !deliveryReturDraft[row.key]?.checked) && (
+                    <p className="text-xs font-semibold text-slate-500">Belum ada SKU retur yang dipilih.</p>
+                  )}
                 </div>
 
                 <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700">
@@ -1089,7 +1304,7 @@ export default function DriverOrderDetailPage() {
                   }
                   void submitDeliveryRetur();
                 }}
-                disabled={deliveryReturLoading || invoiceItemRows.length === 0 || hasExistingDeliveryRetur}
+                disabled={deliveryReturLoading || invoiceItemRows.length === 0 || deliveryReturLineRows.length === 0 || hasExistingDeliveryRetur}
                 className="py-3 rounded-xl bg-rose-600 text-white text-xs font-black uppercase disabled:opacity-60"
               >
                 {deliveryReturLoading
@@ -1438,17 +1653,14 @@ export default function DriverOrderDetailPage() {
                   setDeliveryReturAck(false);
                   setDeliveryReturType('delivery_refusal');
                   setDeliveryReturReason(defaultRefusalReason);
-                  const nextDraft: Record<string, { qty: string; order_id?: string }> = {};
-                  invoiceItemRows.forEach((row) => {
-                    nextDraft[row.key] = {
-                      qty: '0',
-                      order_id: row.orderIds.length === 1 ? row.orderIds[0] : '',
-                    };
+                  const nextDraft: Record<string, { checked: boolean; qty: string }> = {};
+                  deliveryReturLineRows.forEach((row) => {
+                    nextDraft[row.key] = { checked: false, qty: '0' };
                   });
                   setDeliveryReturDraft(nextDraft);
                   setIsDeliveryReturOpen(true);
                 }}
-                disabled={returLocked || hasExistingDeliveryRetur || invoiceItemRows.length === 0}
+                disabled={returLocked || hasExistingDeliveryRetur || invoiceItemRows.length === 0 || deliveryReturLineRows.length === 0}
                 className="inline-flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-black uppercase text-rose-700 disabled:opacity-60"
               >
                 <Undo2 size={14} />
