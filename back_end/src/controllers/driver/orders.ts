@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, DriverDebtAdjustment } from '../../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, DriverDebtAdjustment, ReturHandover, ReturHandoverItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
@@ -317,6 +317,41 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
 
             existingQtyByOrderProduct.set(key, existingQty + qty);
             createdReturs.push(retur.get({ plain: true }));
+        }
+
+        // Auto-generate handover ticket so driver doesn't need to create a separate "serah-terima" record.
+        // Admin will verify qty_received when the returned goods are physically handed over.
+        const invoiceId = String(invoice.id);
+        const existingHandover = await ReturHandover.findOne({
+            where: { invoice_id: invoiceId },
+            attributes: ['id', 'invoice_id', 'status'],
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const handover = existingHandover || await ReturHandover.create({
+            invoice_id: invoiceId,
+            driver_id: driverId,
+            status: 'submitted',
+            note: null
+        }, { transaction: t });
+
+        if (createdReturs.length > 0) {
+            const existingItems = await ReturHandoverItem.findAll({
+                where: { handover_id: Number((handover as any).id) },
+                attributes: ['retur_id'],
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            const existingReturIds = new Set<string>(existingItems.map((row: any) => String(row?.retur_id || '').trim()).filter(Boolean));
+            const toInsert = createdReturs
+                .map((r: any) => String(r?.id || '').trim())
+                .filter((rid: string) => rid && !existingReturIds.has(rid));
+            if (toInsert.length > 0) {
+                await ReturHandoverItem.bulkCreate(
+                    toInsert.map((rid: string) => ({ handover_id: Number((handover as any).id), retur_id: rid })),
+                    { transaction: t }
+                );
+            }
         }
 
         const invoiceNetTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });

@@ -128,12 +128,6 @@ export default function DriverOrderDetailPage() {
   const [deliveryReturMessage, setDeliveryReturMessage] = useState('');
   const [deliveryReturStep, setDeliveryReturStep] = useState<1 | 2>(1);
   const [deliveryReturAck, setDeliveryReturAck] = useState(false);
-  const [isReturHandoverOpen, setIsReturHandoverOpen] = useState(false);
-  const [returHandoverStep, setReturHandoverStep] = useState<1 | 2>(1);
-  const [returHandoverAck, setReturHandoverAck] = useState(false);
-  const [returHandoverLoading, setReturHandoverLoading] = useState(false);
-  const [returHandoverMessage, setReturHandoverMessage] = useState('');
-  const [returHandoverNote, setReturHandoverNote] = useState('');
 
   const loadOrder = useCallback(async () => {
     try {
@@ -556,7 +550,6 @@ export default function DriverOrderDetailPage() {
   const existingDeliveryReturs = Array.isArray((invoiceDetail as any)?.delivery_returs) ? ((invoiceDetail as any).delivery_returs as any[]) : [];
   const hasExistingDeliveryRetur = existingDeliveryReturs.length > 0;
   const handoverReadyReturs = existingDeliveryReturs.filter((r: any) => String(r?.status || '') === 'picked_up');
-  const canSubmitHandover = handoverReadyReturs.length > 0;
   const payableInvoiceTotal = useMemo(() => {
     const hasDeliveryNet = Boolean(deliveryReturnSummary && (deliveryReturnTotal > 0 || hasExistingDeliveryRetur));
     if (hasDeliveryNet && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0) return deliveryNetTotal;
@@ -592,7 +585,7 @@ export default function DriverOrderDetailPage() {
   const paymentMethodLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
   const missingProof = !proof;
   const missingCodPaymentRecord = isCod && !paymentRecorded && !isFullReturnNoCash;
-  const missingReturHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
+  const hasReturToHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
   const codStatusTitle = isFullReturnNoCash
     ? 'Retur penuh: tidak ada transaksi uang.'
     : paymentRecorded
@@ -820,45 +813,6 @@ export default function DriverOrderDetailPage() {
     }
   };
 
-  const submitReturHandover = async () => {
-    const invoiceIdToSubmit = String(resolvedInvoiceId || invoiceContext.invoiceId || '').trim();
-    if (!invoiceIdToSubmit) {
-      setReturHandoverMessage('Invoice belum ditemukan.');
-      return;
-    }
-    if (!canSubmitHandover) {
-      setReturHandoverMessage('Tidak ada retur delivery yang siap diserahkan (status picked_up).');
-      return;
-    }
-    try {
-      setReturHandoverLoading(true);
-      setReturHandoverMessage('');
-      await api.driver.submitReturHandover({
-        invoice_id: invoiceIdToSubmit,
-        note: returHandoverNote.trim() ? returHandoverNote.trim() : undefined
-      });
-
-      try {
-        const invoiceRes = await api.invoices.getById(invoiceIdToSubmit);
-        setInvoiceDetail(invoiceRes.data || null);
-      } catch (refreshError) {
-        console.error('Refresh invoice detail after retur handover failed:', refreshError);
-      }
-      await loadOrder();
-      setIsReturHandoverOpen(false);
-      setReturHandoverStep(1);
-      setReturHandoverAck(false);
-      setReturHandoverNote('');
-    } catch (error) {
-      const message = axios.isAxiosError(error)
-        ? String(error.response?.data?.message || error.message || 'Gagal serah-terima retur')
-        : 'Gagal serah-terima retur';
-      setReturHandoverMessage(message);
-    } finally {
-      setReturHandoverLoading(false);
-    }
-  };
-
   const handleConfirmCodPayment = async () => {
     if (!codPaymentConfirm) return;
     if (codPaymentConfirm.step === 1) {
@@ -981,15 +935,14 @@ export default function DriverOrderDetailPage() {
 
   const canComplete = !!proof
     && !loading
-    && (!isCod || paymentRecorded || isFullReturnNoCash)
-    && !missingReturHandover;
+    && (!isCod || paymentRecorded || isFullReturnNoCash);
   const customer = order?.Customer || {};
 
   return (
     <div className="p-6 space-y-5">
       {isDeliveryReturOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-600">
@@ -1107,7 +1060,7 @@ export default function DriverOrderDetailPage() {
                   </div>
                 )}
 
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 space-y-3">
                   {deliveryReturOrderGroups.map((group) => (
                     <div key={group.orderId} className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
                       <div className="flex items-start justify-between gap-3">
@@ -1218,7 +1171,7 @@ export default function DriverOrderDetailPage() {
                   </p>
                 </div>
 
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 space-y-2">
                   {deliveryReturLineRows
                     .map((row) => {
                       const draft = deliveryReturDraft[row.key];
@@ -1317,172 +1270,9 @@ export default function DriverOrderDetailPage() {
           </div>
         </div>
       )}
-      {isReturHandoverOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-700">
-                  Serah-Terima Retur Gudang
-                </p>
-                <h3 className="mt-2 text-lg font-black text-slate-900">
-                  {returHandoverStep === 1 ? 'Buat tiket penyerahan retur' : 'Verifikasi Handover (Final)'}
-                </h3>
-                <p className="mt-2 text-sm text-slate-600">
-                  Retur delivery yang sudah dicatat harus diserahkan kembali ke gudang dan diterima admin agar tidak miss.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (returHandoverLoading) return;
-                  setIsReturHandoverOpen(false);
-                }}
-                className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black uppercase text-slate-700"
-              >
-                Tutup
-              </button>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
-              Step <span className="font-black">{returHandoverStep}</span> / 2
-              {returHandoverStep === 2 && (
-                <span className="ml-2 text-violet-700 font-black">FINAL</span>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] text-violet-800 space-y-1">
-              <p>
-                Retur siap diserahkan: <span className="font-black">{handoverReadyReturs.length}</span>
-              </p>
-              <p>
-                Invoice: <span className="font-black">{invoiceDisplayLabel}</span>
-              </p>
-            </div>
-
-            {returHandoverStep === 1 ? (
-              <>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Catatan (Opsional)</label>
-                  <input
-                    value={returHandoverNote}
-                    onChange={(e) => setReturHandoverNote(e.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800"
-                    placeholder="Contoh: Diserahkan ke gudang sore hari"
-                  />
-                </div>
-
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
-                  {handoverReadyReturs.map((r: any) => (
-                    <div key={String(r?.id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-black text-slate-900 truncate">{String(r?.Product?.name || 'Produk')}</p>
-                        <p className="text-[10px] text-slate-500 truncate">
-                          Retur ID: {String(r?.id || '').slice(-8).toUpperCase()} · SKU: {String(r?.Product?.sku || '-')}
-                        </p>
-                      </div>
-                      <span className="text-xs font-black text-violet-700">Qty {Number(r?.qty || 0)}</span>
-                    </div>
-                  ))}
-                  {handoverReadyReturs.length === 0 && (
-                    <p className="text-xs font-semibold text-slate-500">Tidak ada retur dengan status picked_up.</p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] text-violet-900 space-y-1">
-                  <p className="font-black uppercase tracking-widest text-[10px] text-violet-700">Konfirmasi Final</p>
-                  <p>Setelah submit, semua retur di atas masuk status <span className="font-black">handed_to_warehouse</span> dan menunggu penerimaan admin gudang/kasir.</p>
-                </div>
-
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-72 overflow-y-auto space-y-2">
-                  {handoverReadyReturs.map((r: any) => (
-                    <div key={String(r?.id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-black text-slate-900 truncate">{String(r?.Product?.name || 'Produk')}</p>
-                        <p className="text-[10px] text-slate-500 truncate">
-                          Retur ID: {String(r?.id || '').slice(-8).toUpperCase()}
-                        </p>
-                      </div>
-                      <span className="text-xs font-black text-violet-700">Qty {Number(r?.qty || 0)}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={returHandoverAck}
-                    onChange={(e) => setReturHandoverAck(e.target.checked)}
-                    className="mt-0.5"
-                  />
-                  <span>Saya sudah cek ulang daftar retur dan yakin barang fisik benar-benar diserahkan ke gudang.</span>
-                </label>
-              </>
-            )}
-
-            {returHandoverMessage && (
-              <p className="text-xs font-bold text-violet-700">{returHandoverMessage}</p>
-            )}
-
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  if (returHandoverLoading) return;
-                  if (returHandoverStep === 2) {
-                    setReturHandoverStep(1);
-                    setReturHandoverAck(false);
-                    setReturHandoverMessage('');
-                    return;
-                  }
-                  setIsReturHandoverOpen(false);
-                }}
-                disabled={returHandoverLoading}
-                className="py-3 rounded-xl border border-slate-300 text-xs font-black uppercase text-slate-700"
-              >
-                {returHandoverStep === 2 ? 'Kembali' : 'Batal'}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (returHandoverStep === 1) {
-                    if (!invoiceContext.invoiceId) {
-                      setReturHandoverMessage('Invoice belum ditemukan.');
-                      return;
-                    }
-                    if (handoverReadyReturs.length === 0) {
-                      setReturHandoverMessage('Tidak ada retur delivery yang siap diserahkan (status picked_up).');
-                      return;
-                    }
-                    setReturHandoverStep(2);
-                    setReturHandoverAck(false);
-                    setReturHandoverMessage('');
-                    return;
-                  }
-                  if (!returHandoverAck) {
-                    setReturHandoverMessage('Centang konfirmasi sebelum submit serah-terima.');
-                    return;
-                  }
-                  void submitReturHandover();
-                }}
-                disabled={returHandoverLoading || handoverReadyReturs.length === 0}
-                className="py-3 rounded-xl bg-violet-700 text-white text-xs font-black uppercase disabled:opacity-60"
-              >
-                {returHandoverLoading
-                  ? 'Memproses...'
-                  : returHandoverStep === 1
-                    ? 'Lanjut Verifikasi'
-                    : 'Ya, Submit Handover'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {paymentMethodConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
             <div>
               <p className={`text-[10px] font-black uppercase tracking-[0.2em] ${paymentMethodConfirm.nextMethod === 'cod' ? 'text-emerald-600' : 'text-blue-600'}`}>
                 Verifikasi Metode Pembayaran
@@ -1530,8 +1320,8 @@ export default function DriverOrderDetailPage() {
         </div>
       )}
       {codPaymentConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600">
                 Verifikasi Penerimaan COD
@@ -1681,26 +1471,14 @@ export default function DriverOrderDetailPage() {
             </div>
           )}
           {hasExistingDeliveryRetur && (
-            <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Serah-Terima Gudang</p>
-                <p className="text-xs font-bold text-slate-700 mt-1 truncate">
-                  Retur siap diserahkan: <span className="font-black">{handoverReadyReturs.length}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setReturHandoverMessage('');
-                  setReturHandoverStep(1);
-                  setReturHandoverAck(false);
-                  setIsReturHandoverOpen(true);
-                }}
-                disabled={!canSubmitHandover || returHandoverLoading}
-                className="shrink-0 inline-flex items-center gap-2 rounded-2xl border border-violet-200 bg-white px-3 py-2 text-[10px] font-black uppercase text-violet-700 disabled:opacity-60"
-              >
-                Serahkan
-              </button>
+            <div className="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 space-y-1">
+              <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Serah-Terima Gudang</p>
+              <p className="text-xs font-bold text-slate-700">
+                Retur untuk diserahkan: <span className="font-black">{handoverReadyReturs.length}</span>
+              </p>
+              <p className="text-[10px] font-bold text-violet-800">
+                Driver cukup serahkan barang retur ke gudang. Admin akan verifikasi di sistem.
+              </p>
             </div>
           )}
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 max-h-64 overflow-y-auto space-y-2">
@@ -1871,8 +1649,8 @@ export default function DriverOrderDetailPage() {
         </div>
 
         {deliveryProofCameraOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4">
+          <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-white w-full max-w-lg rounded-[28px] p-5 shadow-2xl space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Kamera</p>
@@ -1968,12 +1746,17 @@ export default function DriverOrderDetailPage() {
             </div>
           )}
 
-          {(missingProof || missingCodPaymentRecord || missingReturHandover) && (
+          {(missingProof || missingCodPaymentRecord) && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600 space-y-1">
               <p className="uppercase text-[10px] tracking-widest text-slate-400">Belum Bisa Selesai</p>
               {missingCodPaymentRecord && <p>{codBlockingHint}</p>}
-              {missingReturHandover && <p>Retur delivery belum diserahkan ke gudang. Klik tombol Serahkan di kartu Serah-Terima Gudang.</p>}
               {missingProof && <p>Upload bukti foto pengiriman (bukan bukti pembayaran).</p>}
+            </div>
+          )}
+
+          {hasReturToHandover && (
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] font-bold text-violet-800">
+              Ingat: ada <span className="font-black">{handoverReadyReturs.length}</span> retur delivery. Serahkan barang retur ke gudang, admin akan verifikasi.
             </div>
           )}
 
@@ -2002,8 +1785,8 @@ export default function DriverOrderDetailPage() {
       </div>
 
       {isConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
             <div className="text-center space-y-2">
               <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Upload size={32} />
@@ -2047,8 +1830,8 @@ export default function DriverOrderDetailPage() {
       )}
 
       {isIssueOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white w-full max-w-md rounded-[28px] p-5 shadow-2xl space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
             <div>
               <h3 className="text-lg font-black text-slate-900">Laporan Kekurangan Barang</h3>
               <p className="text-xs text-slate-500 mt-1">Catatan wajib, foto bukti opsional.</p>

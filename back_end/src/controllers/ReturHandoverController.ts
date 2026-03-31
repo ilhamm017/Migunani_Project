@@ -6,6 +6,7 @@ import { CustomError } from '../utils/CustomError';
 import { ReturService } from '../services/ReturService';
 import { calculateDriverCodExposure } from '../utils/codExposure';
 import { findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
+import { emitReturStatusChanged } from '../utils/orderNotification';
 
 export const getReturHandovers = asyncWrapper(async (req: Request, res: Response) => {
     const status = typeof req.query?.status === 'string' ? req.query.status.trim().toLowerCase() : '';
@@ -93,6 +94,48 @@ export const receiveReturHandover = asyncWrapper(async (req: Request, res: Respo
         if (qtyReceivedByReturId.size !== expectedReturIds.size) {
             await t.rollback();
             throw new CustomError('qty_received wajib diisi untuk semua retur dalam handover', 400);
+        }
+
+        // Backward-compatible: if driver doesn't create "serah-terima" ticket, returs may still be in `picked_up`.
+        // Admin receiving the handover implies goods are physically handed over, so we move them to `handed_to_warehouse`
+        // before applying the normal verification flow (`handed_to_warehouse` -> `received` -> `completed`).
+        const expectedIds = Array.from(expectedReturIds);
+        const returRows = await Retur.findAll({
+            where: { id: { [Op.in]: expectedIds } },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const returById = new Map<string, any>();
+        returRows.forEach((row: any) => returById.set(String(row?.id || '').trim(), row));
+        for (const rid of expectedIds) {
+            if (!returById.has(String(rid))) {
+                await t.rollback();
+                throw new CustomError('Retur item tidak ditemukan', 404);
+            }
+        }
+
+        const actorRole = String(req.user?.role || '');
+        for (const row of returRows as any[]) {
+            const currentStatus = String(row?.status || '');
+            if (currentStatus === 'picked_up') {
+                await row.update({ status: 'handed_to_warehouse' }, { transaction: t });
+                await emitReturStatusChanged({
+                    retur_id: String(row.id),
+                    order_id: String(row.order_id),
+                    from_status: 'picked_up',
+                    to_status: 'handed_to_warehouse',
+                    courier_id: String(row.courier_id || ''),
+                    triggered_by_role: actorRole || 'admin_gudang',
+                    target_roles: ['driver', 'kasir', 'admin_gudang', 'admin_finance', 'customer', 'super_admin'],
+                    target_user_ids: row.courier_id ? [String(row.courier_id)] : []
+                }, {
+                    transaction: t,
+                    requestContext: 'admin_receive_retur_handover_auto_handover'
+                });
+            } else if (currentStatus !== 'handed_to_warehouse') {
+                await t.rollback();
+                throw new CustomError(`Status retur tidak valid untuk diterima gudang (${currentStatus}).`, 409);
+            }
         }
 
         const actor = { id: String(req.user!.id), role: String(req.user!.role) };
