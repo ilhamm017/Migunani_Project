@@ -149,6 +149,20 @@ Jalankan SQL ini untuk menambah:
 mysql -u root -p migunani_motor_db < back_end/sql/20260331_add_invoices_sales_channel_and_pos_sale_link.sql
 ```
 
+## Track POS underpay (hutang) in customer balance entries
+
+Jalankan SQL ini untuk menambah enum `entry_type` pada `customer_balance_entries` agar hutang POS ikut tampil di halaman Info Customer (Saldo Customer):
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260331_add_customer_balance_entries_pos_underpay_types.sql
+```
+
+Jika kamu sudah punya transaksi POS kurang bayar sebelum patch ini, jalankan backfill (one-shot) berikut agar hutang lama ikut muncul di Info Customer:
+
+```bash
+mysql -u root -p migunani_motor_db < back_end/sql/20260331_backfill_customer_balance_entries_pos_underpay.sql
+```
+
 ## Bootstrap FIFO inventory batches dari stok legacy (fix "Insufficient inventory batches")
 
 Jika kamu sudah punya stok di `products.stock_quantity` / `products.allocated_quantity`, tapi modul FIFO baru (tabel `product_cost_states` + `inventory_batches`) masih kosong, posting goods out bisa gagal dengan pesan:

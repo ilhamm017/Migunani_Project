@@ -4,6 +4,8 @@ import sequelize from '../config/database';
 export type CustomerBalanceEntryType =
     | 'payment_delta_non_cod'
     | 'cod_settlement_delta'
+    | 'pos_underpay'
+    | 'pos_underpay_refund'
     | 'credit_note_posted'
     | 'credit_note_refund_paid'
     | 'manual_payment'
@@ -68,6 +70,8 @@ CustomerBalanceEntry.init(
             type: DataTypes.ENUM(
                 'payment_delta_non_cod',
                 'cod_settlement_delta',
+                'pos_underpay',
+                'pos_underpay_refund',
                 'credit_note_posted',
                 'credit_note_refund_paid',
                 'manual_payment',
@@ -110,4 +114,3 @@ CustomerBalanceEntry.init(
 );
 
 export default CustomerBalanceEntry;
-

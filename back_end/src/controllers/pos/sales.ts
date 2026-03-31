@@ -4,6 +4,7 @@ import { Account, Category, ClearancePromo, CustomerProfile, InventoryBatch, Inv
 import { JournalService } from '../../services/JournalService';
 import { InventoryCostService } from '../../services/InventoryCostService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
+import { CustomerBalanceService } from '../../services/CustomerBalanceService';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
@@ -573,6 +574,24 @@ export const createPosSale = asyncWrapper(async (req: Request, res: Response) =>
             }, { transaction: t });
         }
 
+        // Track POS underpay as customer debt in customer_balance_entries (so it appears on Info Customer page).
+        if (isUnderpay && customer) {
+            const due = Math.max(0, round2(total - amountReceived));
+            if (due > 0) {
+                const receiptLabel = receiptNumber || String(sale.id).slice(-8);
+                await CustomerBalanceService.createEntry({
+                    customer_id: String((customer as any).id),
+                    amount: -due,
+                    entry_type: 'pos_underpay',
+                    reference_type: 'pos_sale',
+                    reference_id: String(sale.id),
+                    created_by: userId,
+                    note: `Hutang POS ${receiptLabel}: total=${total}, diterima=${amountReceived}.`,
+                    idempotency_key: `balance_pos_underpay_${sale.id}`,
+                }, { transaction: t });
+            }
+        }
+
         await t.commit();
 
         const responsePayload = {
@@ -823,6 +842,29 @@ export const refundPosSale = asyncWrapper(async (req: Request, res: Response) =>
             refunded_by: userId,
             refund_reason: reason
         }, { transaction: t });
+
+        // Reverse POS underpay debt entry (if any).
+        const changeAmount = round2((sale as any).change_amount);
+        const isUnderpay = changeAmount < 0;
+        const customerId = String((sale as any).customer_id || '').trim();
+        if (isUnderpay && customerId) {
+            const total = round2((sale as any).total);
+            const received = round2((sale as any).amount_received);
+            const due = Math.max(0, round2(total - received));
+            if (due > 0) {
+                const receiptLabel = receiptNumber || String(sale.id).slice(-8);
+                await CustomerBalanceService.createEntry({
+                    customer_id: customerId,
+                    amount: due,
+                    entry_type: 'pos_underpay_refund',
+                    reference_type: 'pos_sale_refund',
+                    reference_id: String(sale.id),
+                    created_by: userId,
+                    note: `Refund hutang POS ${receiptLabel}: total=${total}, diterima=${received}.`,
+                    idempotency_key: `balance_pos_underpay_refund_${sale.id}`,
+                }, { transaction: t });
+            }
+        }
 
         // Journal reversals (tracked on pos_sales)
         const journalErrors: string[] = [];
