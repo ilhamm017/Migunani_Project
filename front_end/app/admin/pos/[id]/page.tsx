@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import type { PosSaleRow } from '@/lib/apiTypes';
+import ConfirmPopup from '@/components/ui/ConfirmPopup';
 
 export default function PosSaleDetailPage() {
   const allowed = useRequireRoles(['super_admin', 'kasir']);
@@ -24,6 +25,8 @@ export default function PosSaleDetailPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [refunding, setRefunding] = useState(false);
+  const [refundPopupOpen, setRefundPopupOpen] = useState(false);
+  const [refundReason, setRefundReason] = useState('');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -58,15 +61,13 @@ export default function PosSaleDetailPage() {
 
   const handleRefund = async () => {
     if (!sale?.id) return;
-    const reason = window.prompt('Alasan refund (opsional):') || '';
-    const ok = window.confirm(`Refund transaksi ${receipt}? Ini akan mengembalikan stok.`);
-    if (!ok) return;
-
     try {
       setRefunding(true);
       setError('');
-      await api.admin.pos.refundSale(String(sale.id), { reason: reason.trim() || undefined });
+      await api.admin.pos.refundSale(String(sale.id), { reason: refundReason.trim() || undefined });
       await load();
+      setRefundPopupOpen(false);
+      setRefundReason('');
     } catch (e: unknown) {
       const message = typeof e === 'object' && e && 'response' in e
         ? String((e as any).response?.data?.message || '')
@@ -112,18 +113,53 @@ export default function PosSaleDetailPage() {
 	            <Printer size={14} />
 	            Print Struk
 	          </Link>
-	          <button
-	            type="button"
-	            onClick={handleRefund}
-	            disabled={refunding || status !== 'paid'}
-	            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dDanger}`}
-	            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa direfund' : ''}
-	          >
-	            <RotateCcw size={14} />
-	            {refunding ? 'Refunding...' : 'Refund'}
+          <button
+            type="button"
+            onClick={() => {
+              setRefundReason('');
+              setRefundPopupOpen(true);
+            }}
+            disabled={refunding || status !== 'paid'}
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wide ${btn3dDanger}`}
+            title={status !== 'paid' ? 'Hanya transaksi paid yang bisa direfund' : ''}
+          >
+            <RotateCcw size={14} />
+            {refunding ? 'Refunding...' : 'Refund'}
           </button>
         </div>
       </div>
+
+      <ConfirmPopup
+        open={refundPopupOpen}
+        variant="warning"
+        title={`Refund transaksi ${receipt}?`}
+        message="Refund akan mengembalikan stok dan membatalkan transaksi POS ini."
+        primaryLabel={refunding ? 'Memproses...' : 'Ya, Refund'}
+        secondaryLabel="Batal"
+        primaryDisabled={refunding}
+        secondaryDisabled={refunding}
+        onPrimary={() => void handleRefund()}
+        onSecondary={() => setRefundPopupOpen(false)}
+        onClose={() => {
+          if (refunding) return;
+          setRefundPopupOpen(false);
+        }}
+        body={(
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">
+              Alasan (opsional)
+            </label>
+            <textarea
+              value={refundReason}
+              onChange={(e) => setRefundReason(e.target.value)}
+              placeholder="Contoh: salah input qty / customer batal / dll."
+              rows={3}
+              className="w-full rounded-2xl border border-slate-200 bg-white/70 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+              disabled={refunding}
+            />
+          </div>
+        )}
+      />
 
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 flex items-start gap-2">
