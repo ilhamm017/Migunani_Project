@@ -3,12 +3,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell, User, Wallet, MapPin, Package, ChevronRight, RotateCcw, MessageCircle, ClipboardList, Truck, Search, HandCoins, Phone } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
+import { notifyFromAlertMessage, notifyOpen } from '@/lib/notify';
 import { useAuthStore } from '@/store/authStore';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
@@ -39,9 +38,6 @@ export default function DriverTaskPage() {
   const [returs, setReturs] = useState<any[]>([]);
   const [deliveryReturs, setDeliveryReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
-  const [batchLoading, setBatchLoading] = useState(false);
-  const batchProofInputRef = useRef<HTMLInputElement | null>(null);
-  const pendingBatchIdsRef = useRef<string[]>([]);
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
@@ -347,45 +343,6 @@ export default function DriverTaskPage() {
     filterDriverIds: user?.id ? [String(user.id)] : [],
   });
 
-  const startBatchComplete = useCallback((ids: string[]) => {
-    const cleaned = Array.from(new Set((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
-    if (cleaned.length === 0) {
-      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice yang bisa diproses.' });
-      return;
-    }
-    if (batchLoading) return;
-    if (!batchProofInputRef.current) return;
-    pendingBatchIdsRef.current = cleaned;
-    // Reset to allow selecting the same file twice.
-    batchProofInputRef.current.value = '';
-    batchProofInputRef.current.click();
-  }, [batchLoading]);
-
-  const handleBatchProofSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    event.target.value = '';
-
-    const ids = pendingBatchIdsRef.current;
-    pendingBatchIdsRef.current = [];
-
-    if (!file || ids.length === 0) return;
-
-    const confirmed = window.confirm(`Selesaikan pengiriman untuk ${ids.length} invoice?`);
-    if (!confirmed) return;
-
-    try {
-      setBatchLoading(true);
-      await api.driver.completeOrdersBatch(ids, { proof: file });
-      notifySuccess(`Pengiriman selesai untuk ${ids.length} invoice.`);
-      await load();
-    } catch (error: any) {
-      const message = String((error?.response?.data as any)?.message || error?.message || 'Gagal menyelesaikan pengiriman.');
-      notifyFromAlertMessage(message);
-    } finally {
-      setBatchLoading(false);
-    }
-  }, [load]);
-
   if (!allowed) return null;
 
   return (
@@ -508,20 +465,9 @@ export default function DriverTaskPage() {
 		      </div>
 
 	        <div className="flex items-center justify-between px-1">
-              <input
-                ref={batchProofInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={handleBatchProofSelected}
-              />
 	            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">
                 Misi Pengiriman ({activeDeliveryGroups.length} Customer • {activeInvoiceCards.length} Invoice)
               </h2>
-              {batchLoading && (
-                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Memproses...</span>
-              )}
 	          </div>
 
 	          <div className="grid grid-cols-1 gap-3">
@@ -602,14 +548,22 @@ export default function DriverTaskPage() {
                         Detail Customer <ChevronRight size={14} />
                       </Link>
                     )}
-                    <button
-                      type="button"
-                      disabled={batchLoading || deliveryIds.length === 0}
-                      onClick={() => startBatchComplete(deliveryIds)}
-                      className="flex-1 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase inline-flex items-center justify-center gap-1 disabled:opacity-60"
-                    >
-                      Kirim Semua Invoice ({deliveryIds.length})
-                    </button>
+                    {customerId ? (
+                      <Link
+                        href={`/driver/orders/${encodeURIComponent(customerId)}`}
+                        className="flex-1 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                      >
+                        Kirim Semua Invoice ({deliveryIds.length})
+                      </Link>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        className="flex-1 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase inline-flex items-center justify-center gap-1 opacity-60"
+                      >
+                        Kirim Semua Invoice ({deliveryIds.length})
+                      </button>
+                    )}
                   </div>
 	              </div>
 	            );

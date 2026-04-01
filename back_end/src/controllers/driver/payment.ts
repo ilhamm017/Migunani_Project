@@ -3,7 +3,7 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders, findInvoicesByOrderId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findInvoicesByOrderId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderIdsByInvoiceIds, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
@@ -234,6 +234,274 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 throw new CustomError('Terjadi konflik transaksi saat catat pembayaran. Silakan coba lagi.', 409);
             }
             console.error('[driver.recordPayment] unexpected error', error);
+            throw new CustomError('Gagal mencatat pembayaran.', 500);
+        }
+    }
+
+    throw new CustomError('Gagal mencatat pembayaran.', 500);
+});
+
+export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Response) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    const driverId = String(req.user?.id || '').trim();
+    const rawIds = (req.body as any)?.invoice_ids ?? (req.body as any)?.invoiceIds ?? (req.body as any)?.ids;
+    const invoiceIds = Array.from(new Set(
+        (Array.isArray(rawIds) ? rawIds : [])
+            .map((v: any) => String(v || '').trim())
+            .filter(Boolean)
+    ));
+
+    if (!driverId) {
+        throw new CustomError('Driver tidak valid.', 401);
+    }
+    if (invoiceIds.length === 0) {
+        throw new CustomError('invoice_ids wajib diisi (minimal 1).', 400);
+    }
+    if (invoiceIds.length > 30) {
+        throw new CustomError('Terlalu banyak invoice dalam sekali pembayaran (maksimal 30).', 400);
+    }
+
+    const idempotencyScope = `driver_record_payment_batch:${driverId}:${invoiceIds.sort().join('|')}`;
+    if (idempotencyKey) {
+        const decision = await beginIdempotentRequest(idempotencyKey, idempotencyScope);
+        if (decision.action === 'replay') {
+            return res.status(Number(decision.statusCode || 200)).json(decision.payload);
+        }
+        if (decision.action === 'conflict') {
+            throw new CustomError('Permintaan pembayaran duplikat sedang diproses', 409);
+        }
+    }
+
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const t = await sequelize.transaction();
+        try {
+            const rawAmount = (req.body as any)?.amount_received ?? (req.body as any)?.amount;
+
+            const orderIdsByInvoiceId = await findOrderIdsByInvoiceIds(invoiceIds, { transaction: t });
+            const relatedOrderIds = Array.from(new Set(
+                Array.from(orderIdsByInvoiceId.values()).flat().map((v) => String(v || '').trim()).filter(Boolean)
+            ));
+            if (relatedOrderIds.length === 0) {
+                await t.rollback();
+                throw new CustomError('Invoice tidak ditemukan atau tidak memiliki order terkait.', 404);
+            }
+
+            const relatedOrders = await Order.findAll({
+                where: { id: { [Op.in]: relatedOrderIds } },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            if (relatedOrders.length === 0) {
+                await t.rollback();
+                throw new CustomError('Order terkait tidak ditemukan.', 404);
+            }
+
+            const mismatch = relatedOrders.some((row: any) => {
+                const courierId = String(row?.courier_id || '').trim();
+                if (!courierId) return false;
+                return courierId !== driverId;
+            });
+            if (mismatch) {
+                await t.rollback();
+                throw new CustomError('Sebagian invoice bukan tugas Anda.', 403);
+            }
+
+            const allInvoices: Invoice[] = [];
+            for (const order of relatedOrders as any[]) {
+                const invoices = await findInvoicesByOrderId(String(order.id), { transaction: t });
+                invoices.forEach((inv) => allInvoices.push(inv));
+            }
+            const uniqueInvoiceById = new Map<string, Invoice>();
+            allInvoices.forEach((inv: any) => {
+                const id = String(inv?.id || '').trim();
+                if (!id) return;
+                uniqueInvoiceById.set(id, inv);
+            });
+            const uniqueInvoices = Array.from(uniqueInvoiceById.values());
+
+            const unpaidCodInvoices = uniqueInvoices.filter((inv: any) => {
+                const paymentMethod = String(inv.payment_method || '').trim().toLowerCase();
+                const paymentStatus = String(inv.payment_status || '').trim().toLowerCase();
+                return paymentMethod === 'cod' && ['unpaid', 'draft'].includes(paymentStatus);
+            });
+
+            if (unpaidCodInvoices.length === 0) {
+                const hasPending = uniqueInvoices.some((inv: any) => String(inv.payment_method || '').toLowerCase() === 'cod' && String(inv.payment_status || '').toLowerCase() === 'cod_pending');
+                await t.rollback();
+                throw new CustomError(hasPending ? 'Pembayaran COD sudah dicatat sebelumnya.' : 'Tidak ada invoice COD yang perlu dibayar.', hasPending ? 409 : 400);
+            }
+
+            const netTotalsByInvoiceId = new Map<string, number>();
+            let totalToPay = 0;
+            for (const inv of unpaidCodInvoices as any[]) {
+                const invId = String(inv?.id || '').trim();
+                if (!invId) continue;
+                const computed = await computeInvoiceNetTotals(invId, { transaction: t });
+                const net = Number(computed?.net_total || 0);
+                netTotalsByInvoiceId.set(invId, net);
+                totalToPay += net;
+            }
+            totalToPay = Math.round(totalToPay * 100) / 100;
+
+            const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
+                ? totalToPay
+                : parseMoneyInput(rawAmount);
+
+            if (parsedAmount === null || !Number.isFinite(parsedAmount) || parsedAmount < 0) {
+                await t.rollback();
+                throw new CustomError('Jumlah pembayaran tidak valid.', 400);
+            }
+
+            const amountReceived = parsedAmount;
+            if (Math.abs(amountReceived - totalToPay) > 0.01) {
+                await t.rollback();
+                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD setelah retur (${totalToPay.toLocaleString()}).`, 400);
+            }
+
+            let totalDelta = 0;
+            for (const invoice of unpaidCodInvoices as any[]) {
+                const invoiceId = String(invoice?.id || '').trim();
+                const invoiceAmount = Number(netTotalsByInvoiceId.get(invoiceId) || 0);
+
+                const existingCollection = await CodCollection.findOne({
+                    where: { invoice_id: invoiceId, driver_id: driverId, status: 'collected' },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
+                const delta = invoiceAmount - previousAmount;
+                totalDelta += delta;
+
+                if (existingCollection) {
+                    await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
+                } else {
+                    await CodCollection.create({
+                        invoice_id: invoiceId,
+                        driver_id: driverId,
+                        amount: invoiceAmount,
+                        status: 'collected'
+                    }, { transaction: t });
+                }
+
+                await invoice.update({
+                    payment_status: 'cod_pending',
+                    amount_paid: invoiceAmount,
+                    courier_id: driverId
+                }, { transaction: t });
+            }
+
+            if (totalDelta !== 0) {
+                const driver = await User.findByPk(driverId, { transaction: t, lock: t.LOCK.UPDATE });
+                if (!driver) {
+                    await t.rollback();
+                    throw new CustomError('Driver tidak ditemukan.', 404);
+                }
+                const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
+                await driver.update({ debt: exposure.exposure }, { transaction: t });
+            }
+
+            const relatedPaidOrderIds = Array.from(new Set(
+                (await Promise.all(unpaidCodInvoices.map((inv: any) => findOrderIdsByInvoiceId(String(inv.id), { transaction: t }))))
+                    .flat()
+                    .map((v: any) => String(v || '').trim())
+                    .filter(Boolean)
+            ));
+
+            const paidOrders = relatedPaidOrderIds.length > 0
+                ? await Order.findAll({
+                    where: { id: { [Op.in]: relatedPaidOrderIds } },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                })
+                : [];
+
+            const previousStatusByOrderId: Record<string, string> = {};
+            paidOrders.forEach((row: any) => {
+                previousStatusByOrderId[String(row.id)] = String(row.status || '');
+            });
+
+            const deliveredOrderIds = paidOrders
+                .filter((row: any) => String(row.status || '') === 'delivered')
+                .map((row: any) => String(row.id));
+            for (const orderId of deliveredOrderIds) {
+                const previousStatus = String(previousStatusByOrderId[orderId] || '').toLowerCase();
+                if (!isOrderTransitionAllowed(previousStatus, 'completed')) {
+                    await t.rollback();
+                    throw new CustomError(`Transisi status tidak diizinkan: '${previousStatus}' -> 'completed'`, 409);
+                }
+            }
+            if (deliveredOrderIds.length > 0) {
+                await Order.update(
+                    { status: 'completed' },
+                    { where: { id: { [Op.in]: deliveredOrderIds } }, transaction: t }
+                );
+            }
+
+            await emitAdminRefreshBadges({
+                transaction: t,
+                requestContext: 'driver_record_payment_batch_refresh_badges'
+            });
+
+            for (const orderId of deliveredOrderIds) {
+                const prevStatus = previousStatusByOrderId[orderId] || '';
+                if (prevStatus === 'completed') continue;
+                const mainInvoice = unpaidCodInvoices[0];
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: orderId,
+                    invoice_id: mainInvoice?.id ? String(mainInvoice.id) : null,
+                    from_status: prevStatus || null,
+                    to_status: 'completed',
+                    actor_user_id: driverId,
+                    actor_role: String(req.user?.role || 'driver'),
+                    reason: 'driver_record_payment_batch',
+                });
+                await emitOrderStatusChanged({
+                    order_id: orderId,
+                    from_status: prevStatus || null,
+                    to_status: 'completed',
+                    source: '',
+                    payment_method: String(mainInvoice?.payment_method || 'cod'),
+                    courier_id: driverId,
+                    triggered_by_role: String(req.user?.role || 'driver'),
+                    target_roles: ['admin_finance', 'customer', 'driver'],
+                    target_user_ids: [driverId],
+                }, {
+                    transaction: t,
+                    requestContext: 'driver_record_payment_batch_status_changed'
+                });
+            }
+
+            await t.commit();
+
+            const responsePayload = {
+                message: 'Pembayaran COD berhasil dicatat.',
+                invoice_ids: unpaidCodInvoices.map((inv: any) => inv.id),
+                amount_received: amountReceived
+            };
+            if (idempotencyKey) {
+                await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
+            }
+            return res.json(responsePayload);
+        } catch (error) {
+            try { await t.rollback(); } catch { }
+
+            if (isDeadlockError(error) && attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, 75 * attempt));
+                continue;
+            }
+
+            if (idempotencyKey) {
+                await clearIdempotentRequest(idempotencyKey, idempotencyScope);
+            }
+            if (error instanceof CustomError) {
+                throw error;
+            }
+            if (isDeadlockError(error)) {
+                throw new CustomError('Terjadi konflik transaksi saat catat pembayaran. Silakan coba lagi.', 409);
+            }
+            console.error('[driver.recordPaymentBatch] unexpected error', error);
             throw new CustomError('Gagal mencatat pembayaran.', 500);
         }
     }

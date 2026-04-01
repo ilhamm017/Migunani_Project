@@ -968,6 +968,8 @@ export const api = {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
         },
+        recordPaymentBatch: (payload: { invoice_ids: string[]; amount_received?: number }) =>
+            apiClient.post('/driver/orders/payment-batch', payload),
         reportIssue: (
             orderId: string,
             payload: string | { note: string; checklist_snapshot?: string; evidence?: File | null }

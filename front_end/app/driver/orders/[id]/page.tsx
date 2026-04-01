@@ -36,6 +36,7 @@ export default function DriverCustomerOrdersPage() {
 
   const [loading, setLoading] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
   const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
 
@@ -149,6 +150,13 @@ export default function DriverCustomerOrdersPage() {
         const totalFromSnapshot = Number(invoiceDetail?.total || 0);
         const totalFromOrders = bucket.orders.map((row) => getOrderInvoicePayload(row).total).find((v) => Number.isFinite(v) && v > 0);
         const total = Number.isFinite(totalFromSnapshot) && totalFromSnapshot > 0 ? totalFromSnapshot : Number(totalFromOrders || 0);
+        const paymentMethod = String((invoiceDetail as any)?.payment_method || (bucket.orders[0] as any)?.Invoice?.payment_method || (bucket.orders[0] as any)?.payment_method || '').trim().toLowerCase();
+        const paymentStatus = String((invoiceDetail as any)?.payment_status || (bucket.orders[0] as any)?.Invoice?.payment_status || (bucket.orders[0] as any)?.payment_status || '').trim().toLowerCase();
+        const deliveryReturnSummary = (invoiceDetail as any)?.delivery_return_summary || null;
+        const netTotalFromDeliveryReturn = Number(deliveryReturnSummary?.net_total || 0);
+        const netTotalEstimate = Number.isFinite(netTotalFromDeliveryReturn) && netTotalFromDeliveryReturn >= 0
+          ? netTotalFromDeliveryReturn
+          : total;
         const statusValues = Array.from(new Set(bucket.orders.map((o) => String(o?.status || '').trim()).filter(Boolean)));
         const statusLabel = statusValues.length <= 1 ? (statusValues[0] || '-') : `${statusValues.length} status`;
         const activeOrderCount = bucket.orders.filter((o) => !isDoneOrderStatus((o as any)?.status)).length;
@@ -156,6 +164,9 @@ export default function DriverCustomerOrdersPage() {
           invoiceId: bucket.invoiceId,
           invoiceNumber: number,
           total,
+          netTotalEstimate,
+          paymentMethod,
+          paymentStatus,
           statusLabel,
           orderCount: bucket.orders.length,
           activeOrderCount,
@@ -168,6 +179,19 @@ export default function DriverCustomerOrdersPage() {
   const overallTotal = useMemo(
     () => invoiceCards.reduce((sum, row) => sum + Number(row.total || 0), 0),
     [invoiceCards]
+  );
+
+  const codInvoiceCards = useMemo(
+    () => invoiceCards.filter((row: any) => row.paymentMethod === 'cod' && ['unpaid', 'draft'].includes(String(row.paymentStatus || '').toLowerCase())),
+    [invoiceCards]
+  );
+  const codInvoiceIds = useMemo(
+    () => codInvoiceCards.map((row: any) => normalizeId(row.invoiceId)).filter(Boolean),
+    [codInvoiceCards]
+  );
+  const codTotalEstimate = useMemo(
+    () => codInvoiceCards.reduce((sum: number, row: any) => sum + Number(row.netTotalEstimate || 0), 0),
+    [codInvoiceCards]
   );
 
   const mergedItems = useMemo(() => {
@@ -238,6 +262,27 @@ export default function DriverCustomerOrdersPage() {
     }
   }, [router]);
 
+  const recordCodPaymentOnce = useCallback(async () => {
+    if (paymentLoading) return;
+    if (codInvoiceIds.length === 0) {
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice COD yang perlu dicatat.' });
+      return;
+    }
+    const confirmed = window.confirm(`Catat pembayaran COD untuk ${codInvoiceIds.length} invoice customer ini?`);
+    if (!confirmed) return;
+
+    try {
+      setPaymentLoading(true);
+      await api.driver.recordPaymentBatch({ invoice_ids: codInvoiceIds });
+      notifySuccess(`Pembayaran COD berhasil dicatat untuk ${codInvoiceIds.length} invoice.`);
+      await load();
+    } catch (error: any) {
+      notifyFromAlertMessage(String((error?.response?.data as any)?.message || error?.message || 'Gagal mencatat pembayaran COD.'));
+    } finally {
+      setPaymentLoading(false);
+    }
+  }, [codInvoiceIds, load, paymentLoading]);
+
   if (!allowed) return null;
 
   return (
@@ -272,19 +317,37 @@ export default function DriverCustomerOrdersPage() {
           <span className="text-xs font-medium">{customerMeta.whatsapp}</span>
         </div>
 
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-slate-700">
-            <Wallet size={14} className="opacity-40" />
-            <span className="text-xs font-black">Total: Rp {overallTotal.toLocaleString('id-ID')}</span>
+        <div className="pt-3 border-t border-slate-100 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-slate-700">
+              <Wallet size={14} className="opacity-40" />
+              <span className="text-xs font-black">Total: Rp {overallTotal.toLocaleString('id-ID')}</span>
+            </div>
+            {codInvoiceIds.length > 0 && (
+              <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                COD {codInvoiceIds.length} invoice • Rp {Math.round(codTotalEstimate).toLocaleString('id-ID')}
+              </span>
+            )}
           </div>
-          <button
-            type="button"
-            disabled={batchLoading || invoiceCards.length === 0}
-            onClick={startBatchComplete}
-            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-          >
-            {batchLoading ? 'Memproses...' : `Selesaikan ${invoiceCards.length} Invoice`}
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={paymentLoading || codInvoiceIds.length === 0}
+              onClick={recordCodPaymentOnce}
+              className="flex-1 px-4 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+            >
+              {paymentLoading ? 'Memproses COD...' : `Catat COD (${codInvoiceIds.length})`}
+            </button>
+            <button
+              type="button"
+              disabled={batchLoading || invoiceCards.length === 0}
+              onClick={startBatchComplete}
+              className="flex-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+            >
+              {batchLoading ? 'Memproses...' : `Selesaikan ${invoiceCards.length} Invoice`}
+            </button>
+          </div>
         </div>
       </div>
 
