@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { ArrowLeft, ChevronRight, MapPin, Package, Phone, User, Wallet, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, MapPin, Package, Phone, User, Wallet, X, Minus, Plus } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
@@ -28,6 +28,15 @@ const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
   return [];
 };
 
+type ShortageDraftRow = {
+  key: string;
+  product_id: string | null;
+  sku: string;
+  name: string;
+  invoiceQty: number;
+  missingQty: number;
+};
+
 export default function DriverCustomerOrdersPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang'], '/driver');
   const router = useRouter();
@@ -42,7 +51,13 @@ export default function DriverCustomerOrdersPage() {
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [activeInvoiceId, setActiveInvoiceId] = useState<string>('');
   const [activeInvoiceLoading, setActiveInvoiceLoading] = useState(false);
-  const [issueNote, setIssueNote] = useState('');
+  const [shortageModal, setShortageModal] = useState<{
+    invoiceId: string;
+    invoiceNumber: string | null;
+    rows: ShortageDraftRow[];
+    saving: boolean;
+    error: string;
+  } | null>(null);
   const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
 
@@ -106,7 +121,6 @@ export default function DriverCustomerOrdersPage() {
   const openInvoiceModal = useCallback((invoiceIdRaw: string) => {
     const invoiceId = normalizeId(invoiceIdRaw);
     if (!invoiceId) return;
-    setIssueNote('');
     setActiveInvoiceId(invoiceId);
     if (customerId) {
       router.replace(`/driver/orders/${encodeURIComponent(customerId)}?invoice=${encodeURIComponent(invoiceId)}`);
@@ -114,7 +128,6 @@ export default function DriverCustomerOrdersPage() {
   }, [customerId, router]);
 
   const closeInvoiceModal = useCallback(() => {
-    setIssueNote('');
     if (customerId) {
       router.replace(`/driver/orders/${encodeURIComponent(customerId)}`);
       return;
@@ -123,7 +136,6 @@ export default function DriverCustomerOrdersPage() {
   }, [customerId, router]);
 
   const clearSelectedInvoice = useCallback(() => {
-    setIssueNote('');
     setActiveInvoiceId('');
     if (customerId) {
       router.replace(`/driver/orders/${encodeURIComponent(customerId)}`);
@@ -454,27 +466,116 @@ export default function DriverCustomerOrdersPage() {
     }
   }, [clearSelectedInvoice, load]);
 
-  const submitIssue = useCallback(async () => {
+  const openShortageModal = useCallback(() => {
     const invoiceId = normalizeId(activeInvoiceId);
-    const note = String(issueNote || '').trim();
     if (!invoiceId) return;
-    if (!note) {
-      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Catatan issue wajib diisi.' });
+    const invoiceDetail = invoiceDetailsById[invoiceId] || null;
+    const invoiceItems = getInvoiceItems(invoiceDetail);
+    if (!invoiceItems || invoiceItems.length === 0) {
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Item invoice tidak tersedia untuk dipilih.' });
       return;
     }
-    const confirmed = window.confirm('Kirim laporan issue untuk invoice ini?');
+
+    const buckets = new Map<string, ShortageDraftRow>();
+    invoiceItems.forEach((item: any, idx: number) => {
+      const orderItem = item?.OrderItem || {};
+      const product = orderItem?.Product || {};
+      const productId = normalizeId(orderItem?.product_id) || '';
+      const sku = String(product?.sku || '').trim() || '-';
+      const name = String(product?.name || 'Produk');
+      const qty = Math.max(0, Math.trunc(Number(item?.qty ?? item?.allocated_qty ?? 0)));
+      if (!qty) return;
+      const key = productId || `${sku}:${name}:${idx}`;
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.invoiceQty += qty;
+        buckets.set(key, existing);
+        return;
+      }
+      buckets.set(key, {
+        key,
+        product_id: productId || null,
+        sku,
+        name,
+        invoiceQty: qty,
+        missingQty: 0,
+      });
+    });
+
+    const rows = Array.from(buckets.values()).sort((a, b) => b.invoiceQty - a.invoiceQty);
+    const invoiceNumber = String((invoiceDetail as any)?.invoice_number || '').trim() || null;
+    setShortageModal({
+      invoiceId,
+      invoiceNumber,
+      rows,
+      saving: false,
+      error: '',
+    });
+  }, [activeInvoiceId, invoiceDetailsById]);
+
+  const submitShortageReport = useCallback(async () => {
+    if (!shortageModal) return;
+    if (shortageModal.saving) return;
+    const invoiceId = normalizeId(shortageModal.invoiceId);
+    if (!invoiceId) return;
+
+    const selected = shortageModal.rows
+      .map((row) => ({ ...row, missingQty: Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(row.missingQty || 0)))) }))
+      .filter((row) => row.missingQty > 0);
+
+    if (selected.length === 0) {
+      setShortageModal((prev) => prev ? { ...prev, error: 'Pilih minimal 1 item yang kurang.' } : prev);
+      return;
+    }
+
+    const noteLines = selected.map((row) => {
+      const skuLabel = row.sku && row.sku !== '-' ? `(${row.sku}) ` : '';
+      return `- ${skuLabel}${row.name} x${row.missingQty}`;
+    });
+    const note = `Barang kurang:\n${noteLines.join('\n')}`;
+
+    const shortageItemsPayload = selected.map((row) => ({
+      product_id: row.product_id,
+      sku: row.sku,
+      name: row.name,
+      missing_qty: row.missingQty,
+    }));
+
+    const checklistSnapshot = JSON.stringify({
+      invoice_id: invoiceId,
+      invoice_number: shortageModal.invoiceNumber,
+      items: shortageModal.rows.map((row) => ({
+        product_id: row.product_id,
+        sku: row.sku,
+        name: row.name,
+        invoice_qty: row.invoiceQty,
+        missing_qty: Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(row.missingQty || 0)))),
+      }))
+    });
+
+    const confirmed = window.confirm(`Kirim laporan barang kurang untuk ${selected.length} item?`);
     if (!confirmed) return;
+
     try {
+      setShortageModal((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
       setActiveInvoiceLoading(true);
-      await api.driver.reportIssue(invoiceId, note);
-      notifySuccess('Issue berhasil dikirim.');
-      setIssueNote('');
+      await api.driver.reportIssue(invoiceId, {
+        note,
+        checklist_snapshot: checklistSnapshot,
+        shortage_items: JSON.stringify(shortageItemsPayload),
+      });
+      notifySuccess('Laporan barang kurang berhasil dikirim.');
+      setShortageModal(null);
+      await load();
+      clearSelectedInvoice();
     } catch (error: any) {
-      notifyFromAlertMessage(String((error?.response?.data as any)?.message || error?.message || 'Gagal mengirim issue.'));
+      const message = String((error?.response?.data as any)?.message || error?.message || 'Gagal mengirim laporan barang kurang.');
+      setShortageModal((prev) => prev ? { ...prev, saving: false, error: message } : prev);
+      notifyFromAlertMessage(message);
     } finally {
       setActiveInvoiceLoading(false);
     }
-  }, [activeInvoiceId, issueNote]);
+  }, [clearSelectedInvoice, load, shortageModal]);
 
   if (!allowed) return null;
 
@@ -689,21 +790,17 @@ export default function DriverCustomerOrdersPage() {
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Laporan Barang Kurang</p>
-              <textarea
-                value={issueNote}
-                onChange={(event) => setIssueNote(event.target.value)}
-                placeholder="Contoh: Barang kurang 1 pcs (SKU ...), customer minta dikirim susulan."
-                className="w-full min-h-[90px] rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 outline-none focus:bg-white focus:border-rose-300"
-                disabled={activeInvoiceLoading}
-              />
               <button
                 type="button"
                 disabled={activeInvoiceLoading}
-                onClick={submitIssue}
+                onClick={openShortageModal}
                 className="w-full px-3 py-2 rounded-xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
               >
-                Kirim Laporan Issue
+                Pilih Barang Kurang
               </button>
+              <p className="text-[11px] font-semibold text-slate-500">
+                Pilih item yang kurang dari daftar barang invoice agar admin mudah tindak lanjut.
+              </p>
             </div>
           </div>
         </div>
@@ -796,6 +893,133 @@ export default function DriverCustomerOrdersPage() {
                       </div>
                     );
                   })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shortageModal && (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/60"
+            aria-label="Tutup popup"
+            onClick={() => shortageModal.saving ? undefined : setShortageModal(null)}
+          />
+          <div className="absolute inset-x-0 top-6 mx-auto w-[min(720px,calc(100%-2rem))]">
+            <div className="bg-white rounded-[28px] shadow-2xl border border-slate-200 overflow-hidden">
+              <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Laporan Barang Kurang</p>
+                  <p className="text-lg font-black text-slate-900 truncate">
+                    {shortageModal.invoiceNumber ? `Invoice ${shortageModal.invoiceNumber}` : `Invoice ${shortageModal.invoiceId}`}
+                  </p>
+                  <p className="text-[11px] font-bold text-slate-500 mt-1">
+                    Pilih item yang kurang, lalu kirim.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => shortageModal.saving ? undefined : setShortageModal(null)}
+                  disabled={shortageModal.saving}
+                  className="h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700 disabled:opacity-60"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-3 max-h-[70vh] overflow-auto">
+                {shortageModal.error ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-700">
+                    {shortageModal.error}
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  {shortageModal.rows.map((row) => {
+                    const missing = Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(row.missingQty || 0))));
+                    return (
+                      <div key={row.key} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-black text-slate-900 truncate">{row.name}</p>
+                            <p className="text-[10px] text-slate-500">SKU {row.sku}</p>
+                            <p className="text-[11px] text-slate-600 mt-1">
+                              Qty invoice <span className="font-black">{row.invoiceQty}</span>
+                            </p>
+                          </div>
+                          <div className="min-w-[180px] text-right space-y-1">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Qty kurang</p>
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setShortageModal((prev) => prev ? {
+                                  ...prev,
+                                  rows: prev.rows.map((r) => r.key === row.key ? { ...r, missingQty: Math.max(0, missing - 1) } : r),
+                                } : prev)}
+                                disabled={shortageModal.saving || missing <= 0}
+                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-700 disabled:opacity-50"
+                                aria-label="Kurangi qty kurang"
+                              >
+                                <Minus size={14} />
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={row.invoiceQty}
+                                value={missing}
+                                disabled={shortageModal.saving}
+                                onChange={(e) => {
+                                  const next = Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(e.target.value || 0))));
+                                  setShortageModal((prev) => prev ? {
+                                    ...prev,
+                                    rows: prev.rows.map((r) => r.key === row.key ? { ...r, missingQty: next } : r),
+                                    error: '',
+                                  } : prev);
+                                }}
+                                className="w-16 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-black text-slate-900 text-right outline-none focus:bg-white focus:border-rose-300"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShortageModal((prev) => prev ? {
+                                  ...prev,
+                                  rows: prev.rows.map((r) => r.key === row.key ? { ...r, missingQty: Math.min(row.invoiceQty, missing + 1) } : r),
+                                } : prev)}
+                                disabled={shortageModal.saving || missing >= row.invoiceQty}
+                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-700 disabled:opacity-50"
+                                aria-label="Tambah qty kurang"
+                              >
+                                <Plus size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 bg-white px-5 py-4">
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => shortageModal.saving ? undefined : setShortageModal(null)}
+                    disabled={shortageModal.saving}
+                    className="btn-3d rounded-xl border border-slate-200 px-4 py-2 text-[11px] font-bold text-slate-600 disabled:opacity-50"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void submitShortageReport()}
+                    disabled={shortageModal.saving}
+                    className="btn-3d rounded-xl bg-rose-600 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                  >
+                    {shortageModal.saving ? 'Mengirim...' : 'Kirim Laporan'}
+                  </button>
                 </div>
               </div>
             </div>

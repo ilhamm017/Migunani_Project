@@ -970,24 +970,27 @@ export const api = {
         },
         recordPaymentBatch: (payload: { invoice_ids: string[]; amount_received?: number }) =>
             apiClient.post('/driver/orders/payment-batch', payload),
-        reportIssue: (
-            orderId: string,
-            payload: string | { note: string; checklist_snapshot?: string; evidence?: File | null }
-        ) => {
-            if (typeof payload === 'string') {
-                return apiClient.post(`/driver/orders/${orderId}/issue`, { note: payload });
-            }
-
-            const formData = new FormData();
-            formData.append('note', payload.note);
-            if (payload.checklist_snapshot) {
-                formData.append('checklist_snapshot', payload.checklist_snapshot);
-            }
-            if (payload.evidence) {
-                formData.append('evidence', payload.evidence);
-            }
-            return apiClient.post(`/driver/orders/${orderId}/issue`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+	        reportIssue: (
+	            orderId: string,
+	            payload: string | { note: string; checklist_snapshot?: string; shortage_items?: string; evidence?: File | null }
+	        ) => {
+	            if (typeof payload === 'string') {
+	                return apiClient.post(`/driver/orders/${orderId}/issue`, { note: payload });
+	            }
+	
+	            const formData = new FormData();
+	            formData.append('note', payload.note);
+	            if (payload.checklist_snapshot) {
+	                formData.append('checklist_snapshot', payload.checklist_snapshot);
+	            }
+	            if (payload.shortage_items) {
+	                formData.append('shortage_items', payload.shortage_items);
+	            }
+	            if (payload.evidence) {
+	                formData.append('evidence', payload.evidence);
+	            }
+	            return apiClient.post(`/driver/orders/${orderId}/issue`, formData, {
+	                headers: { 'Content-Type': 'multipart/form-data' },
             });
         },
         updatePaymentMethod: (orderId: string, payment_method: 'cod' | 'transfer_manual') =>

@@ -22,10 +22,40 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
         const checklistSnapshotRaw = typeof req.body?.checklist_snapshot === 'string'
             ? req.body.checklist_snapshot.trim()
             : '';
+        const shortageItemsRaw = typeof req.body?.shortage_items === 'string'
+            ? req.body.shortage_items.trim()
+            : '';
         const userId = req.user!.id;
         const evidence = req.file;
 
-        if (noteRaw.length < 5) {
+        const parseJsonArray = (raw: string): any[] => {
+            if (!raw) return [];
+            try {
+                const parsed = JSON.parse(raw);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch {
+                return [];
+            }
+        };
+        const shortageItemsParsed = parseJsonArray(shortageItemsRaw)
+            .slice(0, 50)
+            .map((row: any) => {
+                const productId = typeof row?.product_id === 'string' ? row.product_id.trim() : '';
+                const sku = typeof row?.sku === 'string' ? row.sku.trim() : '';
+                const name = typeof row?.name === 'string' ? row.name.trim() : '';
+                const qty = Math.trunc(Number(row?.missing_qty ?? row?.qty ?? 0));
+                const missingQty = Number.isFinite(qty) ? Math.max(0, qty) : 0;
+                if (!missingQty) return null;
+                return {
+                    product_id: productId || null,
+                    sku: sku || null,
+                    name: name || null,
+                    missing_qty: missingQty
+                };
+            })
+            .filter(Boolean) as Array<{ product_id: string | null; sku: string | null; name: string | null; missing_qty: number }>;
+
+        if (noteRaw.length < 5 && shortageItemsParsed.length === 0) {
             await safeRollback();
             throw new CustomError('Catatan laporan wajib diisi minimal 5 karakter.', 400);
         }
@@ -45,7 +75,12 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             throw new CustomError('Laporan kekurangan hanya bisa dibuat pada order yang masih aktif dikirim.', 409);
         }
 
-        let finalNote = noteRaw;
+        let finalNote = noteRaw.length >= 5 ? noteRaw : 'Barang kurang.';
+        if (shortageItemsParsed.length > 0) {
+            const payload = JSON.stringify(shortageItemsParsed);
+            const normalizedPayload = payload.length > 1800 ? `${payload.slice(0, 1800)}...` : payload;
+            finalNote = `${finalNote}\n\n[SHORTAGE_ITEMS] ${normalizedPayload}`;
+        }
         if (checklistSnapshotRaw) {
             let normalizedSnapshot = checklistSnapshotRaw;
             try {
@@ -57,14 +92,14 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             if (normalizedSnapshot.length > 1800) {
                 normalizedSnapshot = `${normalizedSnapshot.slice(0, 1800)}...`;
             }
-            finalNote = `${noteRaw}\n\n[CHECKLIST_SNAPSHOT] ${normalizedSnapshot}`;
+            finalNote = `${finalNote}\n\n[CHECKLIST_SNAPSHOT] ${normalizedSnapshot}`;
         }
 
         const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         const previousStatus = String(order.status || '');
         const existingIssue = await OrderIssue.findOne({
             where: {
-                order_id: String(id),
+                order_id: String(order.id),
                 issue_type: 'shortage',
                 status: 'open'
             },
@@ -82,7 +117,7 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             }, { transaction: t });
         } else {
             await OrderIssue.create({
-                order_id: String(id),
+                order_id: String(order.id),
                 issue_type: 'shortage',
                 status: 'open',
                 note: finalNote,
