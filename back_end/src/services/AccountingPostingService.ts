@@ -7,6 +7,33 @@ import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
 import { CustomError } from '../utils/CustomError';
 
 const n = (v: unknown) => Number(v || 0);
+const round2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const toSnapshot = (raw: unknown): Record<string, unknown> | null => {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw as Record<string, unknown>;
+    if (typeof raw !== 'string') return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
+const computeEmbeddedDiscountTotal = (items: any[]): number => {
+    if (!Array.isArray(items)) return 0;
+    return round2(items.reduce((acc, item) => {
+        const qty = Math.max(0, Math.trunc(n(item?.qty)));
+        const price = n(item?.price_at_purchase);
+        const snapshot = toSnapshot(item?.pricing_snapshot);
+        const basePriceRaw = snapshot ? snapshot['base_price'] : null;
+        const basePrice = Number(basePriceRaw);
+        const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : price;
+        const embedded = Math.max(0, round2(Math.max(0, safeBase - price) * qty));
+        return acc + embedded;
+    }, 0));
+};
 
 const getAccount = async (code: string, t: Transaction) => Account.findOne({ where: { code }, transaction: t });
 
@@ -191,13 +218,18 @@ export class AccountingPostingService {
             }
         }
 
+        // NOTE:
+        // - `price_at_purchase` already reflects tier/category/promo pricing (embedded discounts).
+        // - `order.discount_amount` includes embedded discounts + possible voucher-style discounts.
+        // - Only voucher-style discounts should reduce revenue below sum(price_at_purchase * qty).
         const revenueDpp = hasInvoiceItemScope
-            ? Math.max(0, n((invoice as any).subtotal) - n((invoice as any).discount_amount) + n((invoice as any).shipping_fee_total))
+            ? Math.max(0, n((invoice as any).subtotal))
             : (() => {
-                const orderSubtotal = orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0);
-                const orderDiscount = n(order.discount_amount);
+                const orderSubtotal = round2(orderItems.reduce((sum, item) => sum + (n(item.price_at_purchase) * n(item.qty)), 0));
+                const embeddedDiscount = computeEmbeddedDiscountTotal(orderItems as any[]);
+                const externalDiscount = Math.max(0, round2(n(order.discount_amount) - embeddedDiscount));
                 const orderShipping = n(order.shipping_fee);
-                return Math.max(0, orderSubtotal - orderDiscount + orderShipping);
+                return Math.max(0, round2(orderSubtotal - externalDiscount + orderShipping));
             })();
         const outputVat = n(invoice.tax_mode_snapshot === 'pkp' ? invoice.tax_amount : 0) * (n(invoice.total) > 0 ? (revenueDpp / n(invoice.total)) : 0);
 

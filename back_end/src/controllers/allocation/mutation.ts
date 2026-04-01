@@ -14,6 +14,30 @@ const BACKORDER_FILL_GRACE_MS = 24 * 60 * 60 * 1000;
 
 const safeLower = (v: unknown) => String(v || '').trim().toLowerCase();
 
+const round2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const toSnapshot = (raw: unknown): Record<string, unknown> | null => {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw as Record<string, unknown>;
+    if (typeof raw !== 'string') return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
+const embeddedDiscountForQty = (orderItem: any, qtyRaw: unknown): number => {
+    const qty = Math.max(0, Math.trunc(Number(qtyRaw || 0)));
+    if (qty <= 0) return 0;
+    const unitPrice = Number(orderItem?.price_at_purchase || 0);
+    const snapshot = toSnapshot(orderItem?.pricing_snapshot);
+    const basePrice = snapshot ? Number(snapshot['base_price']) : Number.NaN;
+    const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : unitPrice;
+    return round2(Math.max(0, safeBase - unitPrice) * qty);
+};
+
 const isInvoiceShipmentPassedWarehouse = (shipmentStatusRaw: unknown): boolean => {
     const shipmentStatus = safeLower(shipmentStatusRaw);
     return shipmentStatus === 'shipped' || shipmentStatus === 'delivered' || shipmentStatus === 'canceled';
@@ -701,9 +725,13 @@ export const cancelBackorder = asyncWrapper(async (req: Request, res: Response) 
 
         const shippingFee = Number(order.shipping_fee || 0);
         const currentDiscount = Number(order.discount_amount || 0);
+        const embeddedOriginalDiscount = round2(itemBreakdown.reduce((sum, row) => sum + embeddedDiscountForQty(row.oi, row.ordered_qty), 0));
+        const embeddedRemainingDiscount = round2(itemBreakdown.reduce((sum, row) => sum + embeddedDiscountForQty(row.oi, row.allocated_qty), 0));
+        const externalDiscount = Math.max(0, round2(currentDiscount - embeddedOriginalDiscount));
         const discountRatio = originalSubtotal > 0 ? Math.min(1, Math.max(0, remainingSubtotal / originalSubtotal)) : 0;
-        const nextDiscount = Math.round(currentDiscount * discountRatio * 100) / 100;
-        const nextTotal = Math.max(0, Math.round((remainingSubtotal + shippingFee - nextDiscount) * 100) / 100);
+        const externalDiscountNext = round2(externalDiscount * discountRatio);
+        const nextDiscount = round2(embeddedRemainingDiscount + externalDiscountNext);
+        const nextTotal = Math.max(0, round2(remainingSubtotal + shippingFee - externalDiscountNext));
 
         const [orderWithInvoice] = await attachInvoicesToOrders([order], { transaction: t });
         const attachedInvoice = orderWithInvoice?.Invoice || null;
@@ -979,9 +1007,17 @@ export const cancelBackorderItems = asyncWrapper(async (req: Request, res: Respo
 
         const shippingFee = Number(order.shipping_fee || 0);
         const currentDiscount = Number(order.discount_amount || 0);
+        const embeddedOriginalDiscount = round2(itemBreakdown.reduce((sum, row) => sum + embeddedDiscountForQty(row.oi, row.ordered_qty), 0));
+        const embeddedRemainingDiscount = round2(itemBreakdown.reduce((sum, row) => {
+            const shouldCancel = targetProductIds.has(String(row.product_id || '')) && row.shortage_qty > 0;
+            const qty = shouldCancel ? row.allocated_qty : row.ordered_qty;
+            return sum + embeddedDiscountForQty(row.oi, qty);
+        }, 0));
+        const externalDiscount = Math.max(0, round2(currentDiscount - embeddedOriginalDiscount));
         const discountRatio = originalSubtotal > 0 ? Math.min(1, Math.max(0, remainingSubtotal / originalSubtotal)) : 0;
-        const nextDiscount = Math.round(currentDiscount * discountRatio * 100) / 100;
-        const nextTotal = Math.max(0, Math.round((remainingSubtotal + shippingFee - nextDiscount) * 100) / 100);
+        const externalDiscountNext = round2(externalDiscount * discountRatio);
+        const nextDiscount = round2(embeddedRemainingDiscount + externalDiscountNext);
+        const nextTotal = Math.max(0, round2(remainingSubtotal + shippingFee - externalDiscountNext));
 
         const [orderWithInvoice] = await attachInvoicesToOrders([order], { transaction: t });
         const attachedInvoice = orderWithInvoice?.Invoice || null;

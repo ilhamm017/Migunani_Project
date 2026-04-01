@@ -253,9 +253,9 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
         let shippingFeeTotal = 0;
         const ordersWithoutInvoiceLines: string[] = [];
 
-        for (const order of orders as any[]) {
-            const orderItems = Array.isArray(order.OrderItems) ? order.OrderItems : [];
-            const allocations = Array.isArray(order.Allocations) ? order.Allocations : [];
+	        for (const order of orders as any[]) {
+	            const orderItems = Array.isArray(order.OrderItems) ? order.OrderItems : [];
+	            const allocations = Array.isArray(order.Allocations) ? order.Allocations : [];
             const allocatedByProduct = new Map<string, number>();
             allocations.forEach((allocation: any) => {
                 const key = String(allocation?.product_id || '');
@@ -271,14 +271,21 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
                 list.push(item);
                 orderItemsByProduct.set(key, list);
             });
+	
+	            let orderInvoiceSubtotal = 0;
+	            let orderSubtotalFull = 0;
+	            let orderEmbeddedDiscountFull = 0;
+	            orderItems.forEach((item: any) => {
+	                const qty = Number(item.qty || 0);
+	                const price = Number(item.price_at_purchase || 0);
+	                orderSubtotalFull += Math.round(price * qty * 100) / 100;
 
-            let orderInvoiceSubtotal = 0;
-            let orderSubtotalFull = 0;
-            orderItems.forEach((item: any) => {
-                const qty = Number(item.qty || 0);
-                const price = Number(item.price_at_purchase || 0);
-                orderSubtotalFull += Math.round(price * qty * 100) / 100;
-            });
+	                const snapshot = item?.pricing_snapshot && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : null;
+	                const basePrice = snapshot ? Number((snapshot as any).base_price) : Number.NaN;
+	                const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : price;
+	                const embedded = Math.max(0, Math.round((Math.max(0, safeBase - price) * qty) * 100) / 100);
+	                orderEmbeddedDiscountFull += embedded;
+	            });
 
             orderItemsByProduct.forEach((itemsForProduct, productId) => {
                 let remainingAlloc = Number(allocatedByProduct.get(productId) || 0);
@@ -321,12 +328,17 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
                 continue;
             }
 
-            const ratio = orderSubtotalFull > 0 ? (orderInvoiceSubtotal / orderSubtotalFull) : 0;
-            const orderDiscount = Number(order.discount_amount || 0) * ratio;
-            const orderShipping = Number(order.shipping_fee || 0) * ratio;
-            discountTotal += Math.round(orderDiscount * 100) / 100;
-            shippingFeeTotal += Math.round(orderShipping * 100) / 100;
-        }
+	            const ratio = orderSubtotalFull > 0 ? (orderInvoiceSubtotal / orderSubtotalFull) : 0;
+	            const orderDiscountRaw = Number(order.discount_amount || 0);
+	            // `order.discount_amount` includes embedded discount (already reflected in `price_at_purchase`)
+	            // plus possible voucher-style discount (applied on top of line prices). Only the latter
+	            // should reduce invoice totals.
+	            const externalDiscount = Math.max(0, Math.round((orderDiscountRaw - orderEmbeddedDiscountFull) * 100) / 100);
+	            const orderDiscount = externalDiscount * ratio;
+	            const orderShipping = Number(order.shipping_fee || 0) * ratio;
+	            discountTotal += Math.round(orderDiscount * 100) / 100;
+	            shippingFeeTotal += Math.round(orderShipping * 100) / 100;
+	        }
 
         if (ordersWithoutInvoiceLines.length > 0) {
             await t.rollback();
@@ -629,8 +641,9 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
             invoicedQtyByOrderItemId.set(key, prev + Number(item.qty || 0));
         });
 
-        const availabilityByOrderItemId = new Map<string, number>();
-        const orderFullSubtotalById = new Map<string, number>();
+	        const availabilityByOrderItemId = new Map<string, number>();
+	        const orderFullSubtotalById = new Map<string, number>();
+	        const orderEmbeddedDiscountById = new Map<string, number>();
 
         for (const order of orders as any[]) {
             const orderItemsList = Array.isArray(order.OrderItems) ? order.OrderItems : [];
@@ -643,20 +656,28 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
                 allocatedByProduct.set(key, Number(allocatedByProduct.get(key) || 0) + Number(allocation?.allocated_qty || 0));
             });
 
-            const orderItemsByProduct = new Map<string, any[]>();
-            let orderSubtotalFull = 0;
-            orderItemsList.forEach((item: any) => {
-                const qty = Number(item.qty || 0);
-                const price = Number(item.price_at_purchase || 0);
-                orderSubtotalFull += Math.round(price * qty * 100) / 100;
+	            const orderItemsByProduct = new Map<string, any[]>();
+	            let orderSubtotalFull = 0;
+	            let orderEmbeddedDiscountFull = 0;
+	            orderItemsList.forEach((item: any) => {
+	                const qty = Number(item.qty || 0);
+	                const price = Number(item.price_at_purchase || 0);
+	                orderSubtotalFull += Math.round(price * qty * 100) / 100;
 
-                const key = String(item?.product_id || '');
-                if (!key) return;
-                const list = orderItemsByProduct.get(key) || [];
+	                const snapshot = item?.pricing_snapshot && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : null;
+	                const basePrice = snapshot ? Number((snapshot as any).base_price) : Number.NaN;
+	                const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : price;
+	                const embedded = Math.max(0, Math.round((Math.max(0, safeBase - price) * qty) * 100) / 100);
+	                orderEmbeddedDiscountFull += embedded;
+	
+	                const key = String(item?.product_id || '');
+	                if (!key) return;
+	                const list = orderItemsByProduct.get(key) || [];
                 list.push(item);
                 orderItemsByProduct.set(key, list);
-            });
-            orderFullSubtotalById.set(String(order.id), orderSubtotalFull);
+	            });
+	            orderFullSubtotalById.set(String(order.id), orderSubtotalFull);
+	            orderEmbeddedDiscountById.set(String(order.id), orderEmbeddedDiscountFull);
 
             orderItemsByProduct.forEach((itemsForProduct, productId) => {
                 let remainingAlloc = Number(allocatedByProduct.get(productId) || 0);
@@ -723,17 +744,20 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('Tidak ada item teralokasi untuk diterbitkan invoice.', 400);
         }
 
-        for (const order of orders as any[]) {
-            const orderId = String(order.id || '');
-            const selectedSubtotal = Number(orderSelectedSubtotalById.get(orderId) || 0);
-            if (selectedSubtotal <= 0) continue;
-            const orderSubtotalFull = Number(orderFullSubtotalById.get(orderId) || 0);
-            const ratio = orderSubtotalFull > 0 ? (selectedSubtotal / orderSubtotalFull) : 0;
-            const orderDiscount = Number(order.discount_amount || 0) * ratio;
-            const orderShipping = Number(order.shipping_fee || 0) * ratio;
-            discountTotal += Math.round(orderDiscount * 100) / 100;
-            shippingFeeTotal += Math.round(orderShipping * 100) / 100;
-        }
+	        for (const order of orders as any[]) {
+	            const orderId = String(order.id || '');
+	            const selectedSubtotal = Number(orderSelectedSubtotalById.get(orderId) || 0);
+	            if (selectedSubtotal <= 0) continue;
+	            const orderSubtotalFull = Number(orderFullSubtotalById.get(orderId) || 0);
+	            const ratio = orderSubtotalFull > 0 ? (selectedSubtotal / orderSubtotalFull) : 0;
+	            const orderDiscountRaw = Number(order.discount_amount || 0);
+	            const embeddedDiscountFull = Number(orderEmbeddedDiscountById.get(orderId) || 0);
+	            const externalDiscount = Math.max(0, Math.round((orderDiscountRaw - embeddedDiscountFull) * 100) / 100);
+	            const orderDiscount = externalDiscount * ratio;
+	            const orderShipping = Number(order.shipping_fee || 0) * ratio;
+	            discountTotal += Math.round(orderDiscount * 100) / 100;
+	            shippingFeeTotal += Math.round(orderShipping * 100) / 100;
+	        }
 
         discountTotal = Math.min(discountTotal, itemsSubtotal);
         const subtotalBase = Math.max(0, Math.round((itemsSubtotal - discountTotal + shippingFeeTotal) * 100) / 100);

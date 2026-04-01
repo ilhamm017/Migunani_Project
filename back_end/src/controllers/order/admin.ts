@@ -946,11 +946,31 @@ export const cancelOrderItems = asyncWrapper(async (req: Request, res: Response)
             }, { transaction: t });
         }
 
-        const shippingFee = Number(order.shipping_fee || 0);
-        const currentDiscount = Number(order.discount_amount || 0);
-        const ratio = beforeSubtotal > 0 ? Math.min(1, Math.max(0, afterSubtotal / beforeSubtotal)) : 0;
-        const nextDiscount = toCents2(Math.max(0, currentDiscount * ratio));
-        const nextTotal = toCents2(Math.max(0, afterSubtotal + shippingFee - nextDiscount));
+	        const shippingFee = Number(order.shipping_fee || 0);
+	        const currentDiscount = Number(order.discount_amount || 0);
+	        const ratio = beforeSubtotal > 0 ? Math.min(1, Math.max(0, afterSubtotal / beforeSubtotal)) : 0;
+	        const embeddedBeforeDiscount = toCents2(orderItems.reduce((sum: number, row: any) => {
+	            const id = String(row?.id || '').trim();
+	            const qty = Math.max(0, Math.trunc(Number(beforeQtyByOrderItemId[id] || 0)));
+	            const unitPrice = Number(row?.price_at_purchase || 0);
+	            const snap = toObjectOrEmpty(row?.pricing_snapshot);
+	            const basePrice = Number(snap?.base_price);
+	            const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : unitPrice;
+	            return sum + Math.max(0, toCents2(Math.max(0, safeBase - unitPrice) * qty));
+	        }, 0));
+	        const embeddedAfterDiscount = toCents2(orderItems.reduce((sum: number, row: any) => {
+	            const id = String(row?.id || '').trim();
+	            const qty = Math.max(0, Math.trunc(Number(afterQtyByOrderItemId[id] || 0)));
+	            const unitPrice = Number(row?.price_at_purchase || 0);
+	            const snap = toObjectOrEmpty(row?.pricing_snapshot);
+	            const basePrice = Number(snap?.base_price);
+	            const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : unitPrice;
+	            return sum + Math.max(0, toCents2(Math.max(0, safeBase - unitPrice) * qty));
+	        }, 0));
+	        const externalDiscount = Math.max(0, toCents2(currentDiscount - embeddedBeforeDiscount));
+	        const externalDiscountNext = toCents2(Math.max(0, externalDiscount * ratio));
+	        const nextDiscount = toCents2(Math.max(0, embeddedAfterDiscount + externalDiscountNext));
+	        const nextTotal = toCents2(Math.max(0, afterSubtotal + shippingFee - externalDiscountNext));
 
         const prevStatus = String(order.status || '');
         let nextStatus = prevStatus;

@@ -62,7 +62,14 @@ type InvoiceDetail = {
     reason?: string | null;
     Product?: { name?: string | null; sku?: string | null; unit?: string | null } | null;
   }>;
-  delivery_return_summary?: { net_total?: number; return_total?: number } | null;
+  delivery_return_summary?: {
+    net_total?: number;
+    return_total?: number;
+    new_items_subtotal?: number;
+    new_discount_amount?: number;
+    shipping_fee_total?: number;
+    tax_amount?: number;
+  } | null;
 };
 
 const paymentMethodLabel = (method?: string) => {
@@ -108,9 +115,10 @@ export default function CustomerInvoiceDetailPage() {
   const [loading, setLoading] = useState(true);
   const deliverySummary = detail?.delivery_return_summary || null;
   const deliveryReturs = Array.isArray(detail?.delivery_returs) ? (detail?.delivery_returs || []) : [];
-  const deliveryReturnTotal = Number(deliverySummary?.return_total || 0);
-  const deliveryNetTotal = Number(deliverySummary?.net_total);
-  const payableTotal = deliverySummary && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0
+  const hasDeliveryRetur = deliveryReturs.length > 0;
+  const deliveryReturnTotal = hasDeliveryRetur ? Number(deliverySummary?.return_total || 0) : 0;
+  const deliveryNetTotal = hasDeliveryRetur ? Number(deliverySummary?.net_total) : Number.NaN;
+  const payableTotal = hasDeliveryRetur && Number.isFinite(deliveryNetTotal) && deliveryNetTotal >= 0
     ? deliveryNetTotal
     : Number(detail?.total || 0);
 
@@ -125,15 +133,22 @@ export default function CustomerInvoiceDetailPage() {
       if (!silent) setLoading(true);
       const res = await api.invoices.getById(String(invoiceId));
       const invoice = res.data || {};
-      const deliveryReturnSummary = (invoice as any)?.delivery_return_summary || null;
-      const deliveryReturs = Array.isArray((invoice as any)?.delivery_returs) ? (invoice as any).delivery_returs : [];
+      const deliveryReturnSummaryRaw = invoice['delivery_return_summary'];
+      const deliveryReturnSummary = deliveryReturnSummaryRaw && typeof deliveryReturnSummaryRaw === 'object'
+        ? (deliveryReturnSummaryRaw as InvoiceDetail['delivery_return_summary'])
+        : null;
+      const deliveryRetursRaw = invoice['delivery_returs'];
+      const deliveryReturs = Array.isArray(deliveryRetursRaw)
+        ? (deliveryRetursRaw as NonNullable<InvoiceDetail['delivery_returs']>)
+        : [];
+      const amountPaidRaw = invoice['amount_paid'];
       setDetail({
         id: String(invoice?.id || invoiceId),
         invoice_number: String(invoice?.invoice_number || invoiceId),
         payment_status: String(invoice?.payment_status || ''),
         payment_method: String(invoice?.payment_method || ''),
         payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
-        amount_paid: Number((invoice as any)?.amount_paid ?? 0),
+        amount_paid: Number(amountPaidRaw ?? 0),
         subtotal: Number(invoice?.subtotal || 0),
         discount_amount: Number(invoice?.discount_amount || 0),
         shipping_fee_total: Number(invoice?.shipping_fee_total || 0),
@@ -168,6 +183,53 @@ export default function CustomerInvoiceDetailPage() {
   const items = useMemo(() => {
     return Array.isArray(detail?.InvoiceItems) ? detail?.InvoiceItems || [] : [];
   }, [detail]);
+
+  const itemsSubtotal = useMemo(() => {
+    if (items.length === 0) return Number.NaN;
+    return items.reduce((sum, item) => {
+      const qty = Number(item.invoice_qty ?? item.qty ?? 0);
+      const unitPrice = Number(item.unit_price ?? 0);
+      const lineTotal = Number(item.line_total);
+      const line = Number.isFinite(lineTotal) ? lineTotal : unitPrice * qty;
+      return sum + (Number.isFinite(line) ? line : 0);
+    }, 0);
+  }, [items]);
+
+  const displaySubtotal = useMemo(() => {
+    if (hasDeliveryRetur) {
+      const computed = Number(deliverySummary?.new_items_subtotal);
+      return Number.isFinite(computed) ? computed : 0;
+    }
+    if (Number.isFinite(itemsSubtotal)) return Number(itemsSubtotal);
+    const subtotalBase = Number(detail?.subtotal || 0);
+    const discount = Number(detail?.discount_amount || 0);
+    const shipping = Number(detail?.shipping_fee_total || 0);
+    return Math.max(0, subtotalBase + discount - shipping);
+  }, [deliverySummary?.new_items_subtotal, detail?.discount_amount, detail?.shipping_fee_total, detail?.subtotal, hasDeliveryRetur, itemsSubtotal]);
+
+  const displayDiscount = useMemo(() => {
+    if (hasDeliveryRetur) {
+      const computed = Number(deliverySummary?.new_discount_amount);
+      return Number.isFinite(computed) ? computed : Number(detail?.discount_amount || 0);
+    }
+    return Number(detail?.discount_amount || 0);
+  }, [deliverySummary?.new_discount_amount, detail?.discount_amount, hasDeliveryRetur]);
+
+  const displayShipping = useMemo(() => {
+    if (hasDeliveryRetur) {
+      const computed = Number(deliverySummary?.shipping_fee_total);
+      return Number.isFinite(computed) ? computed : Number(detail?.shipping_fee_total || 0);
+    }
+    return Number(detail?.shipping_fee_total || 0);
+  }, [deliverySummary?.shipping_fee_total, detail?.shipping_fee_total, hasDeliveryRetur]);
+
+  const displayTax = useMemo(() => {
+    if (hasDeliveryRetur) {
+      const computed = Number(deliverySummary?.tax_amount);
+      return Number.isFinite(computed) ? computed : Number(detail?.tax_amount || 0);
+    }
+    return Number(detail?.tax_amount || 0);
+  }, [deliverySummary?.tax_amount, detail?.tax_amount, hasDeliveryRetur]);
 
   const orderIds = useMemo(() => {
     const ids = new Set<string>();
@@ -475,21 +537,21 @@ export default function CustomerInvoiceDetailPage() {
                   <div className="rounded-2xl bg-slate-900 text-white p-4">
                     <div className="flex items-center justify-between text-xs">
                       <span>Subtotal</span>
-                      <span>{formatCurrency(Number(detail.subtotal || 0))}</span>
+                      <span>{formatCurrency(Number(displaySubtotal || 0))}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs mt-2">
                       <span>Diskon</span>
-                      <span>-{formatCurrency(Number(detail.discount_amount || 0))}</span>
+                      <span>-{formatCurrency(Number(displayDiscount || 0))}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs mt-2">
                       <span>Ongkir</span>
-                      <span>{formatCurrency(Number(detail.shipping_fee_total || 0))}</span>
+                      <span>{formatCurrency(Number(displayShipping || 0))}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs mt-2">
                       <span>Pajak</span>
-                      <span>{formatCurrency(Number(detail.tax_amount || 0))}</span>
+                      <span>{formatCurrency(Number(displayTax || 0))}</span>
                     </div>
-                    {deliverySummary && deliveryReturnTotal > 0 && (
+                    {hasDeliveryRetur && deliveryReturnTotal > 0 && (
                       <div className="flex items-center justify-between text-xs mt-2 text-rose-200">
                         <span>Potongan Retur</span>
                         <span>-{formatCurrency(deliveryReturnTotal)}</span>
@@ -606,21 +668,21 @@ export default function CustomerInvoiceDetailPage() {
               <div className="text-[11px] space-y-1">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatCurrency(Number(detail.subtotal || 0))}</span>
+                  <span>{formatCurrency(Number(displaySubtotal || 0))}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Diskon</span>
-                  <span>-{formatCurrency(Number(detail.discount_amount || 0))}</span>
+                  <span>-{formatCurrency(Number(displayDiscount || 0))}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Ongkir</span>
-                  <span>{formatCurrency(Number(detail.shipping_fee_total || 0))}</span>
+                  <span>{formatCurrency(Number(displayShipping || 0))}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Pajak</span>
-                  <span>{formatCurrency(Number(detail.tax_amount || 0))}</span>
+                  <span>{formatCurrency(Number(displayTax || 0))}</span>
                 </div>
-                {deliverySummary && deliveryReturnTotal > 0 && (
+                {hasDeliveryRetur && deliveryReturnTotal > 0 && (
                   <div className="flex items-center justify-between">
                     <span>Potongan Retur</span>
                     <span>-{formatCurrency(deliveryReturnTotal)}</span>

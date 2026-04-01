@@ -17,6 +17,9 @@ back_end/.wwebjs_cache
 back_end/.wwebjs_auth_test
 back_end/testing
 
+# Codex local metadata
+.codex
+
 # Logs
 *.log
 npm-debug.log*
