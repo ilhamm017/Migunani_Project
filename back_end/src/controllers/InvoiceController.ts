@@ -1208,14 +1208,25 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
         if (relatedOrders.length === 0) {
             throw new CustomError('Invoice tidak memiliki order terkait.', 404);
         }
+
+        // Allow customers to upload transfer proof even if delivery is already completed.
+        // In that case, we should NOT move order status backwards to waiting_admin_verification.
+        const finalOrderStatuses = new Set(['delivered', 'completed', 'partially_fulfilled', 'canceled', 'cancelled']);
+        const orderIdsToMarkWaitingVerification: string[] = [];
         for (const row of relatedOrders as any[]) {
             const currentStatus = String(row?.status || '').trim().toLowerCase();
+            const orderId = String(row?.id || '').trim();
+            if (!orderId) continue;
+            if (finalOrderStatuses.has(currentStatus)) {
+                continue;
+            }
             if (!isOrderTransitionAllowed(currentStatus, 'waiting_admin_verification')) {
                 throw new CustomError(
-                    `Order ${String(row?.id || '')} tidak bisa masuk status waiting_admin_verification dari status '${currentStatus}'.`,
+                    `Order ${orderId} tidak bisa masuk status waiting_admin_verification dari status '${currentStatus}'.`,
                     409
                 );
             }
+            orderIdsToMarkWaitingVerification.push(orderId);
         }
         for (const order of relatedOrders as any[]) {
             const orderPaymentMethod = String(order?.payment_method || '').trim().toLowerCase();
@@ -1240,14 +1251,16 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
             verified_at: null,
         }, { transaction: t });
 
-        await Order.update(
-            { status: 'waiting_admin_verification' },
-            { where: { id: { [Op.in]: relatedOrderIds } }, transaction: t }
-        );
+        if (orderIdsToMarkWaitingVerification.length > 0) {
+            await Order.update(
+                { status: 'waiting_admin_verification' },
+                { where: { id: { [Op.in]: orderIdsToMarkWaitingVerification } }, transaction: t }
+            );
+        }
 
         for (const orderId of relatedOrderIds) {
             const previousStatus = previousStatuses.get(String(orderId)) || '';
-            if (previousStatus !== 'waiting_admin_verification') {
+            if (orderIdsToMarkWaitingVerification.includes(String(orderId)) && previousStatus !== 'waiting_admin_verification') {
                 await recordOrderStatusChanged({
                     transaction: t,
                     order_id: String(orderId),

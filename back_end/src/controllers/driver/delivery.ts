@@ -28,6 +28,11 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
             throw new CustomError('Order atau invoice tidak ditemukan atau tidak ditugaskan ke driver ini.', 404);
         }
 
+        const invoiceShipmentStatus = String(invoice.shipment_status || '').trim().toLowerCase();
+        if (invoiceShipmentStatus === 'delivered' || Boolean((invoice as any).delivered_at || invoice.delivered_at)) {
+            throw new CustomError('Invoice ini sudah selesai dikirim.', 409);
+        }
+
         const paymentMethod = String(invoice.payment_method || '').toLowerCase();
         const paymentStatus = String(invoice.payment_status || '').toLowerCase();
         const computedTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
@@ -45,7 +50,15 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
         }
         const affectedOrderIds: string[] = [];
 
-        for (const order of contextOrders) {
+        const openOrders = contextOrders.filter((order: any) => {
+            const current = String(order?.status || '').trim().toLowerCase();
+            return !FINAL_ORDER_STATUSES.has(current);
+        });
+        if (openOrders.length === 0) {
+            throw new CustomError('Semua order pada invoice ini sudah selesai diproses.', 409);
+        }
+
+        for (const order of openOrders) {
             const previousOrderStatus = String(order.status || '');
             const orderItems = await OrderItem.findAll({
                 where: { order_id: String(order.id) },

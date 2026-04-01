@@ -35,6 +35,82 @@ export const getAssignedReturs = asyncWrapper(async (req: Request, res: Response
     }
 });
 
+export const getAssignedDeliveryReturs = asyncWrapper(async (req: Request, res: Response) => {
+    try {
+        const userId = req.user!.id;
+        const returs = await Retur.findAll({
+            where: {
+                courier_id: userId,
+                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
+                // Driver is physically carrying these goods and must return them to the warehouse.
+                status: 'picked_up'
+            },
+            include: [
+                { model: Product, attributes: ['name', 'sku'] },
+                { model: Order, attributes: ['id', 'status'] }
+            ],
+            order: [['updatedAt', 'DESC']]
+        });
+
+        const plainReturs = (returs as any[]).map((row: any) => row?.get ? row.get({ plain: true }) : row);
+        const orderIds = Array.from(new Set(
+            plainReturs.map((row: any) => String(row?.order_id || row?.Order?.id || '').trim()).filter(Boolean)
+        ));
+
+        const invoiceByOrderId = new Map<string, { id: string; invoice_number: string; created_at_ms: number }>();
+        if (orderIds.length > 0) {
+            const orderItems = await OrderItem.findAll({
+                where: { order_id: { [Op.in]: orderIds } },
+                attributes: ['id', 'order_id']
+            });
+            const orderItemIds = (orderItems as any[]).map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+            const orderItemToOrderId = new Map<string, string>();
+            (orderItems as any[]).forEach((row: any) => {
+                const orderItemId = String(row?.id || '').trim();
+                const orderId = String(row?.order_id || '').trim();
+                if (orderItemId && orderId) orderItemToOrderId.set(orderItemId, orderId);
+            });
+
+            if (orderItemIds.length > 0) {
+                const invoiceItems = await InvoiceItem.findAll({
+                    where: { order_item_id: { [Op.in]: orderItemIds } },
+                    attributes: ['order_item_id'],
+                    include: [{ model: Invoice, attributes: ['id', 'invoice_number', 'createdAt'] }]
+                });
+
+                (invoiceItems as any[]).forEach((row: any) => {
+                    const orderItemId = String(row?.order_item_id || '').trim();
+                    const orderId = orderItemToOrderId.get(orderItemId) || '';
+                    const inv = row?.Invoice;
+                    const invId = String(inv?.id || '').trim();
+                    if (!orderId || !invId) return;
+                    const invNumber = String(inv?.invoice_number || '').trim();
+                    const createdAtMs = Date.parse(String(inv?.createdAt || ''));
+                    const createdAtSafe = Number.isFinite(createdAtMs) ? createdAtMs : 0;
+                    const prev = invoiceByOrderId.get(orderId);
+                    if (!prev || createdAtSafe >= prev.created_at_ms) {
+                        invoiceByOrderId.set(orderId, { id: invId, invoice_number: invNumber, created_at_ms: createdAtSafe });
+                    }
+                });
+            }
+        }
+
+        res.json(
+            plainReturs.map((row: any) => {
+                const orderId = String(row?.order_id || row?.Order?.id || '').trim();
+                const invoice = orderId ? invoiceByOrderId.get(orderId) : undefined;
+                return {
+                    ...row,
+                    invoice_id: invoice?.id || null,
+                    invoice_number: invoice?.invoice_number || null,
+                };
+            })
+        );
+    } catch (error) {
+        throw new CustomError('Error fetching assigned delivery returns', 500);
+    }
+});
+
 export const getAssignedReturDetail = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id;

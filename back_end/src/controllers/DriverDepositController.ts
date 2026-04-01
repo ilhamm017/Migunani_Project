@@ -22,7 +22,7 @@ import { CustomError } from '../utils/CustomError';
 import { computeInvoiceNetTotalsBulk } from '../utils/invoiceNetTotals';
 import { calculateDriverCodExposure } from '../utils/codExposure';
 import { isOrderTransitionAllowed } from '../utils/orderTransitions';
-import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../utils/orderNotification';
+import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged, emitReturStatusChanged } from '../utils/orderNotification';
 import { JournalService } from '../services/JournalService';
 import { ReturService } from '../services/ReturService';
 import { bulkUpdateReturHandoversSafe, findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
@@ -594,6 +594,50 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     throw new CustomError('qty_received wajib diisi untuk semua retur dalam handover', 400);
                 }
 
+                // Backward-compatible:
+                // Auto-generated handovers for "retur saat pengiriman" may still have retur status = `picked_up`.
+                // Receiving the handover implies goods are physically handed over to warehouse, so normalize status
+                // to `handed_to_warehouse` before using ReturService flow (`handed_to_warehouse` -> `received` -> `completed`).
+                const expectedIds = Array.from(expectedReturIds);
+                const returRows = await Retur.findAll({
+                    where: { id: { [Op.in]: expectedIds } },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+                const returById = new Map<string, any>();
+                (returRows as any[]).forEach((row: any) => {
+                    const rid = String(row?.id || '').trim();
+                    if (rid) returById.set(rid, row);
+                });
+                for (const rid of expectedIds) {
+                    if (!returById.has(String(rid))) {
+                        await t.rollback();
+                        throw new CustomError('Retur item tidak ditemukan', 404);
+                    }
+                }
+                for (const row of returRows as any[]) {
+                    const currentStatus = String(row?.status || '');
+                    if (currentStatus === 'picked_up') {
+                        await row.update({ status: 'handed_to_warehouse' }, { transaction: t });
+                        await emitReturStatusChanged({
+                            retur_id: String(row.id),
+                            order_id: String(row.order_id),
+                            from_status: 'picked_up',
+                            to_status: 'handed_to_warehouse',
+                            courier_id: String(row.courier_id || driverId),
+                            triggered_by_role: actor.role || 'kasir',
+                            target_roles: ['driver', 'kasir', 'admin_gudang', 'admin_finance', 'customer', 'super_admin'],
+                            target_user_ids: row.courier_id ? [String(row.courier_id)] : [driverId],
+                        }, {
+                            transaction: t,
+                            requestContext: 'cashier_confirm_driver_deposit_auto_handover'
+                        } as any);
+                    } else if (currentStatus !== 'handed_to_warehouse') {
+                        await t.rollback();
+                        throw new CustomError(`Status retur tidak valid untuk diterima gudang (${currentStatus}).`, 409);
+                    }
+                }
+
                 for (const returId of expectedReturIds) {
                     const qtyReceived = receivedByReturId.get(returId) || 0;
                     await ReturService.updateReturStatus(returId, {
@@ -980,6 +1024,32 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
     } catch (error) {
         try { await t.rollback(); } catch { }
         if (error instanceof CustomError) throw error;
+
+        const err: any = error;
+        const message = String(err?.message || '');
+        const sqlMessage = String(err?.original?.sqlMessage || err?.parent?.sqlMessage || '');
+        const sqlCode = String(err?.original?.code || err?.parent?.code || err?.code || '');
+
+        // ReturService currently throws generic Errors for transition validation.
+        if (message.startsWith('Transisi status tidak diizinkan')) {
+            throw new CustomError(message, 409);
+        }
+        if (message.includes('Status retur') || message.includes('Retur request') || message.includes('courier_id')) {
+            throw new CustomError(message, 400);
+        }
+
+        // Surface common schema mismatch issues to help operators fix DB migrations.
+        const schemaMismatch =
+            sqlMessage.includes('Unknown column')
+            || sqlMessage.includes('doesn\'t exist')
+            || sqlMessage.includes('Data truncated')
+            || sqlMessage.includes('Incorrect enum value');
+        if (schemaMismatch) {
+            const detail = sqlMessage || `${sqlCode}` || message;
+            throw new CustomError(`Gagal memproses setoran driver. Detail DB: ${detail}`, 409);
+        }
+
+        console.error('[confirmDriverDeposit] unexpected error:', err);
         throw new CustomError('Gagal memproses setoran driver', 500);
     }
 });

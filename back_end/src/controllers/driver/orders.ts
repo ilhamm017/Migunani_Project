@@ -38,16 +38,25 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
         if (startDate || endDate) {
             const dateFilter: any = {};
             if (startDate) {
-                const start = new Date(String(startDate));
+                const startRaw = String(startDate);
+                const start = new Date(startRaw);
                 if (!Number.isNaN(start.getTime())) {
-                    start.setHours(0, 0, 0, 0);
+                    // Backward-compatible:
+                    // - If the client sends a date-only string (YYYY-MM-DD), treat it as a whole-day filter.
+                    // - If the client sends an ISO string with time, treat it as an exact instant (timezone-safe).
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(startRaw.trim())) {
+                        start.setHours(0, 0, 0, 0);
+                    }
                     dateFilter[Op.gte] = start;
                 }
             }
             if (endDate) {
-                const end = new Date(String(endDate));
+                const endRaw = String(endDate);
+                const end = new Date(endRaw);
                 if (!Number.isNaN(end.getTime())) {
-                    end.setHours(23, 59, 59, 999);
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(endRaw.trim())) {
+                        end.setHours(23, 59, 59, 999);
+                    }
                     dateFilter[Op.lte] = end;
                 }
             }

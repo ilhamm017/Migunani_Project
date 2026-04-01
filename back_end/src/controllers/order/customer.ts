@@ -47,7 +47,7 @@ export const getMyOrders = asyncWrapper(async (req: Request, res: Response) => {
             'updatedAt'
         ],
         include: [
-            { model: Retur, attributes: ['id', 'status'] },
+            { model: Retur, attributes: ['id', 'status', 'retur_type', 'qty'] },
             { model: OrderItem, attributes: ['qty', 'ordered_qty_original', 'qty_canceled_backorder', 'qty_canceled_manual'] },
             { model: OrderAllocation, as: 'Allocations', attributes: ['allocated_qty', 'status'] }
         ],

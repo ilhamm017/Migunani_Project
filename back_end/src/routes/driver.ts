@@ -33,6 +33,7 @@ router.patch('/orders/:id/payment-method', authorizeRoles('driver'), DriverContr
 router.post('/orders/:id/issue', authorizeRoles('driver'), issueEvidenceUploadMiddleware, DriverController.reportIssue);
 router.get('/wallet', authorizeRoles('driver', 'admin_finance', 'super_admin'), DriverController.getDriverWallet);
 router.get('/retur', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturs);
+router.get('/retur/delivery', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedDeliveryReturs);
 router.get('/retur/:id', authorizeRoles('driver', 'super_admin'), DriverController.getAssignedReturDetail);
 router.patch('/retur/:id/status', authorizeRoles('driver'), DriverController.updateAssignedReturStatus);
 router.post('/retur/handovers', authorizeRoles('driver'), DriverController.createReturHandover);
