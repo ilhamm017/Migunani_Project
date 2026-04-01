@@ -64,6 +64,8 @@ services:
           echo "[seed] Marker exists, skip reseed.";
           exit 0;
         fi
+        node dist/scripts/seed_accounts.js
+        node dist/scripts/seed_staff.js
         node dist/scripts/seed_sales_report_diskon.js
         touch /seed_state/seed.done
     volumes:
