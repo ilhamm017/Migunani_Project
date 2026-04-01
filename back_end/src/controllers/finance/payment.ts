@@ -385,22 +385,51 @@ export const voidPayment = asyncWrapper(async (req: Request, res: Response) => {
             }
         }
 
-        // REVERSE SALES JOURNAL
-        const paymentAccCode = invoice.payment_method === 'transfer_manual' ? '1102' : '1101';
+        // REVERSE SALES JOURNAL (mirror verifyPayment settlement)
+        const paymentMethod = String(invoice.payment_method || '').trim().toLowerCase();
+        const paymentAccCode = paymentMethod === 'transfer_manual' ? '1102' : '1101';
         const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
+        const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
         const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+        const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
+        const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
+
+        const paidAmount = Math.max(0, Math.round(Number((invoice as any).amount_paid || 0) * 100) / 100);
+        const receivedAmount = Number.isFinite(Number((invoice as any).amount_received))
+            ? Math.max(0, Math.round(Number((invoice as any).amount_received || 0) * 100) / 100)
+            : paidAmount;
+        const delta = Math.round((receivedAmount - paidAmount) * 100) / 100;
+        const vat = Math.max(0, Math.round(Number((invoice as any).tax_amount || 0) * 100) / 100);
+        const dpp = Math.max(0, Math.round((paidAmount - vat) * 100) / 100);
 
         if (paymentAcc && revenueAcc) {
-            await JournalService.createEntry({
-                description: `[VOID/REVERSAL] Penjualan Invoice #${invoice.invoice_number}`,
-                reference_type: 'order_reversal',
-                reference_id: invoice.id.toString(),
-                created_by: userId,
-                lines: [
-                    { account_id: paymentAcc.id, debit: 0, credit: Number(invoice.amount_paid) }, // Credit Cash
-                    { account_id: revenueAcc.id, debit: Number(invoice.amount_paid), credit: 0 }  // Debit Revenue
-                ]
-            }, t);
+            const lines: any[] = [];
+            if (receivedAmount > 0) {
+                lines.push({ account_id: paymentAcc.id, debit: 0, credit: receivedAmount });
+            }
+            if (delta < 0 && arAcc) {
+                lines.push({ account_id: arAcc.id, debit: 0, credit: Math.abs(delta) });
+            }
+            if (dpp > 0) {
+                lines.push({ account_id: revenueAcc.id, debit: dpp, credit: 0 });
+            }
+            if (vat > 0 && ppnOutputAcc) {
+                lines.push({ account_id: ppnOutputAcc.id, debit: vat, credit: 0 });
+            }
+            if (delta > 0 && customerSaldoAcc) {
+                lines.push({ account_id: customerSaldoAcc.id, debit: delta, credit: 0 });
+            }
+
+            if (lines.length >= 2) {
+                await JournalService.createEntry({
+                    description: `[VOID/REVERSAL] Settlement Pembayaran Invoice #${invoice.invoice_number}`,
+                    reference_type: 'order_reversal',
+                    reference_id: invoice.id.toString(),
+                    created_by: userId,
+                    idempotency_key: `void_payment_settlement_${invoice.id}`,
+                    lines
+                }, t);
+            }
         }
 
         // REVERSE COGS JOURNAL
@@ -425,6 +454,7 @@ export const voidPayment = asyncWrapper(async (req: Request, res: Response) => {
                     reference_type: 'order_reversal',
                     reference_id: invoice.id.toString(),
                     created_by: userId,
+                    idempotency_key: `void_payment_cogs_${invoice.id}`,
                     lines: [
                         { account_id: hppAcc.id, debit: 0, credit: totalCost }, // Credit HPP (Reduce Expense)
                         { account_id: inventoryAcc.id, debit: totalCost, credit: 0 } // Debit Inventory (Increase Asset)
@@ -437,9 +467,28 @@ export const voidPayment = asyncWrapper(async (req: Request, res: Response) => {
         await invoice.update({
             payment_status: 'unpaid',
             amount_paid: 0,
+            amount_received: null,
+            change_amount: 0,
             verified_at: null,
             verified_by: null
         }, { transaction: t });
+
+        // 2b. Reverse customer balance delta entry (if any)
+        if (Math.abs(delta) > 0.001) {
+            const customerIds = Array.from(new Set((orders as any[]).map((o) => String(o?.customer_id || '').trim()).filter(Boolean)));
+            if (customerIds.length === 1) {
+                await CustomerBalanceService.createEntry({
+                    customer_id: customerIds[0]!,
+                    amount: Math.round((-delta) * 100) / 100,
+                    entry_type: 'payment_void_delta_non_cod',
+                    reference_type: 'invoice',
+                    reference_id: String(invoice.id),
+                    created_by: userId,
+                    note: `Void pembayaran invoice ${invoice.invoice_number}: reversing delta received=${receivedAmount}, collectible=${paidAmount}.`,
+                    idempotency_key: `balance_void_invoice_delta_${invoice.id}`,
+                }, { transaction: t });
+            }
+        }
 
         // 3. Reset Order Status
         const previousOrderStatusById: Record<string, string> = {};
