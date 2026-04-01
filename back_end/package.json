@@ -23,6 +23,7 @@
     "test:notification-softfail": "ts-node src/scripts/regression_notification_softfail.ts",
     "test:boundary-read": "ts-node src/scripts/regression_boundary_read.ts",
     "test:catalog-stock-sort": "ts-node src/scripts/regression_catalog_search_stock_sort.ts",
+    "test:invoice-partial-retur-scope": "ts-node src/scripts/regression_invoice_partial_retur_scope.ts",
     "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
     "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts",
     "wa:export-groups": "ts-node src/scripts/export_wa_groups.ts",

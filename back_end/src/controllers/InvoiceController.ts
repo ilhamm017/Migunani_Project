@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
-import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, User, Order, Retur, DeliveryHandover, DeliveryHandoverItem, sequelize } from '../models';
+import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, User, Order, Retur, DeliveryHandover, DeliveryHandoverItem, ReturHandover, ReturHandoverItem, sequelize } from '../models';
 import { Op, QueryTypes } from 'sequelize';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
@@ -342,6 +342,19 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
                 status: { [Op.ne]: 'rejected' }
             },
             include: [
+                {
+                    model: ReturHandoverItem,
+                    as: 'HandoverItem',
+                    required: true,
+                    attributes: [],
+                    include: [{
+                        model: ReturHandover,
+                        as: 'Handover',
+                        required: true,
+                        attributes: [],
+                        where: { invoice_id: invoiceId }
+                    }]
+                },
                 { model: Product, attributes: ['id', 'name', 'sku', 'unit'] },
                 { model: User, as: 'Courier', attributes: ['id', 'name', 'whatsapp_number'], required: false }
             ],

@@ -47,65 +47,39 @@ export const getAssignedDeliveryReturs = asyncWrapper(async (req: Request, res: 
             },
             include: [
                 { model: Product, attributes: ['name', 'sku'] },
-                { model: Order, attributes: ['id', 'status'] }
+                { model: Order, attributes: ['id', 'status'] },
+                {
+                    model: ReturHandoverItem,
+                    as: 'HandoverItem',
+                    required: false,
+                    attributes: [],
+                    include: [{
+                        model: ReturHandover,
+                        as: 'Handover',
+                        required: false,
+                        attributes: ['invoice_id'],
+                        include: [{
+                            model: Invoice,
+                            as: 'Invoice',
+                            required: false,
+                            attributes: ['id', 'invoice_number']
+                        }]
+                    }]
+                }
             ],
             order: [['updatedAt', 'DESC']]
         });
 
         const plainReturs = (returs as any[]).map((row: any) => row?.get ? row.get({ plain: true }) : row);
-        const orderIds = Array.from(new Set(
-            plainReturs.map((row: any) => String(row?.order_id || row?.Order?.id || '').trim()).filter(Boolean)
-        ));
-
-        const invoiceByOrderId = new Map<string, { id: string; invoice_number: string; created_at_ms: number }>();
-        if (orderIds.length > 0) {
-            const orderItems = await OrderItem.findAll({
-                where: { order_id: { [Op.in]: orderIds } },
-                attributes: ['id', 'order_id']
-            });
-            const orderItemIds = (orderItems as any[]).map((row: any) => String(row?.id || '').trim()).filter(Boolean);
-            const orderItemToOrderId = new Map<string, string>();
-            (orderItems as any[]).forEach((row: any) => {
-                const orderItemId = String(row?.id || '').trim();
-                const orderId = String(row?.order_id || '').trim();
-                if (orderItemId && orderId) orderItemToOrderId.set(orderItemId, orderId);
-            });
-
-            if (orderItemIds.length > 0) {
-                const invoiceItems = await InvoiceItem.findAll({
-                    where: { order_item_id: { [Op.in]: orderItemIds } },
-                    attributes: ['order_item_id'],
-                    include: [{ model: Invoice, attributes: ['id', 'invoice_number', 'createdAt'] }]
-                });
-
-                (invoiceItems as any[]).forEach((row: any) => {
-                    const orderItemId = String(row?.order_item_id || '').trim();
-                    const orderId = orderItemToOrderId.get(orderItemId) || '';
-                    const inv = row?.Invoice;
-                    const invId = String(inv?.id || '').trim();
-                    if (!orderId || !invId) return;
-                    const invNumber = String(inv?.invoice_number || '').trim();
-                    const createdAtMs = Date.parse(String(inv?.createdAt || ''));
-                    const createdAtSafe = Number.isFinite(createdAtMs) ? createdAtMs : 0;
-                    const prev = invoiceByOrderId.get(orderId);
-                    if (!prev || createdAtSafe >= prev.created_at_ms) {
-                        invoiceByOrderId.set(orderId, { id: invId, invoice_number: invNumber, created_at_ms: createdAtSafe });
-                    }
-                });
-            }
-        }
-
-        res.json(
-            plainReturs.map((row: any) => {
-                const orderId = String(row?.order_id || row?.Order?.id || '').trim();
-                const invoice = orderId ? invoiceByOrderId.get(orderId) : undefined;
-                return {
-                    ...row,
-                    invoice_id: invoice?.id || null,
-                    invoice_number: invoice?.invoice_number || null,
-                };
-            })
-        );
+        res.json(plainReturs.map((row: any) => {
+            const handover = row?.HandoverItem?.Handover || null;
+            const inv = handover?.Invoice || null;
+            return {
+                ...row,
+                invoice_id: inv?.id || handover?.invoice_id || null,
+                invoice_number: inv?.invoice_number || null,
+            };
+        }));
     } catch (error) {
         throw new CustomError('Error fetching assigned delivery returns', 500);
     }

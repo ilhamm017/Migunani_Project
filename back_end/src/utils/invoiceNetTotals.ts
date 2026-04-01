@@ -1,5 +1,5 @@
 import { Op, Transaction } from 'sequelize';
-import { Invoice, InvoiceItem, OrderItem, Retur } from '../models';
+import { Invoice, InvoiceItem, OrderItem, Retur, ReturHandover, ReturHandoverItem } from '../models';
 
 const round2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -75,6 +75,10 @@ export const computeInvoiceNetTotals = async (
             .filter(Boolean)
     ));
 
+    // IMPORTANT:
+    // "Retur saat pengiriman" must only affect the invoice where the retur happened.
+    // Do NOT aggregate returs by order_id only, because one order_item can be split across multiple invoices
+    // (partial fulfilment/backorder). Without invoice scoping, the same retur would be applied again on later invoices.
     const returs = orderIds.length > 0
         ? await Retur.findAll({
             where: {
@@ -83,6 +87,19 @@ export const computeInvoiceNetTotals = async (
                 status: { [Op.ne]: 'rejected' }
             },
             attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status', 'retur_type'],
+            include: [{
+                model: ReturHandoverItem,
+                as: 'HandoverItem',
+                required: true,
+                attributes: [],
+                include: [{
+                    model: ReturHandover,
+                    as: 'Handover',
+                    required: true,
+                    attributes: [],
+                    where: { invoice_id: String(invoice.id) }
+                }]
+            }],
             transaction: options?.transaction
         })
         : [];
@@ -239,31 +256,52 @@ export const computeInvoiceNetTotalsBulk = async (
     });
 
     const uniqueOrderIds = Array.from(new Set(orderIds));
-    const returs = uniqueOrderIds.length > 0
-        ? await Retur.findAll({
-            where: {
-                order_id: { [Op.in]: uniqueOrderIds },
-                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
-                status: { [Op.ne]: 'rejected' }
-            },
-            attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status', 'retur_type'],
+    const handoverItems = normalizedIds.length > 0
+        ? await ReturHandoverItem.findAll({
+            attributes: ['id'],
+            include: [
+                {
+                    model: ReturHandover,
+                    as: 'Handover',
+                    required: true,
+                    attributes: ['invoice_id'],
+                    where: { invoice_id: { [Op.in]: normalizedIds } },
+                },
+                {
+                    model: Retur,
+                    as: 'Retur',
+                    required: true,
+                    attributes: ['id', 'order_id', 'product_id', 'qty', 'qty_received', 'status', 'retur_type'],
+                    where: {
+                        ...(uniqueOrderIds.length > 0 ? { order_id: { [Op.in]: uniqueOrderIds } } : {}),
+                        retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
+                        status: { [Op.ne]: 'rejected' }
+                    }
+                }
+            ],
             transaction: options?.transaction
         })
         : [];
 
-    const effectiveReturnByOrderProduct = new Map<string, number>();
-    returs.forEach((retur: any) => {
+    const effectiveReturnByInvoiceOrderProduct = new Map<string, Map<string, number>>();
+    handoverItems.forEach((row: any) => {
+        const invoiceId = String(row?.Handover?.invoice_id || '').trim();
+        const retur = row?.Retur;
         const orderId = String(retur?.order_id || '').trim();
         const productId = String(retur?.product_id || '').trim();
-        if (!orderId || !productId) return;
+        if (!invoiceId || !orderId || !productId) return;
         const key = `${orderId}:${productId}`;
         const eff = normalizeEffectiveReturQty(retur);
-        effectiveReturnByOrderProduct.set(key, Number(effectiveReturnByOrderProduct.get(key) || 0) + eff);
+        if (eff <= 0) return;
+        const byKey = effectiveReturnByInvoiceOrderProduct.get(invoiceId) || new Map<string, number>();
+        byKey.set(key, Number(byKey.get(key) || 0) + eff);
+        effectiveReturnByInvoiceOrderProduct.set(invoiceId, byKey);
     });
 
     for (const invoiceId of normalizedIds) {
         const plainInvoice = invoiceById.get(invoiceId);
         const items = itemsByInvoiceId.get(invoiceId) || [];
+        const effectiveReturnByOrderProduct = effectiveReturnByInvoiceOrderProduct.get(invoiceId) || new Map<string, number>();
 
         const perOrderItemReturnedQty: PerOrderItemReturnedQty = {};
         const itemsByOrderProduct = new Map<string, any[]>();

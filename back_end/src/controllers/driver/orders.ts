@@ -157,13 +157,15 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
 
         const orderIds = orders.map((o: any) => String(o.id)).filter(Boolean);
 
-        const existingDeliveryRetur = await Retur.findOne({
-            where: {
-                order_id: { [Op.in]: orderIds },
-                retur_type: { [Op.in]: ['delivery_refusal', 'delivery_damage'] },
-                status: { [Op.ne]: 'rejected' }
-            },
+        const existingDeliveryRetur = await ReturHandoverItem.findOne({
             attributes: ['id'],
+            include: [{
+                model: ReturHandover,
+                as: 'Handover',
+                required: true,
+                attributes: ['invoice_id'],
+                where: { invoice_id: String(invoice.id) }
+            }],
             transaction: t,
             lock: t.LOCK.UPDATE
         });
@@ -209,6 +211,19 @@ export const createDeliveryReturTicket = asyncWrapper(async (req: Request, res: 
                 status: { [Op.ne]: 'rejected' }
             },
             attributes: ['order_id', 'product_id', 'qty', 'status', 'qty_received'],
+            include: [{
+                model: ReturHandoverItem,
+                as: 'HandoverItem',
+                required: true,
+                attributes: [],
+                include: [{
+                    model: ReturHandover,
+                    as: 'Handover',
+                    required: true,
+                    attributes: [],
+                    where: { invoice_id: String(invoice.id) }
+                }]
+            }],
             transaction: t,
             lock: t.LOCK.UPDATE
         });
