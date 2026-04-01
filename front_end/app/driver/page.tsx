@@ -230,9 +230,17 @@ export default function DriverTaskPage() {
   );
 
   const remainingDeliveryCount = activeDeliveryCards.length;
-  const remainingPickupCount = canMonitorReturTasks
-    ? returs.filter((r) => !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())).length
-    : 0;
+  const activePickupReturs = useMemo(() => {
+    if (!canMonitorReturTasks) return [];
+    return returs.filter((r) =>
+      !['handed_to_warehouse', 'approved', 'rejected'].includes(String(r?.status || '').toLowerCase())
+    );
+  }, [canMonitorReturTasks, returs]);
+  const remainingPickupCount = activePickupReturs.length;
+  const remainingPickupItemCount = useMemo(
+    () => activePickupReturs.reduce((sum, row) => sum + Number(row?.qty || 0), 0),
+    [activePickupReturs]
+  );
   const remainingTaskCount = remainingDeliveryCount + remainingPickupCount;
   const latestDriverEvent = latestEvents[0];
   const latestDriverStatusLabel = useMemo(
@@ -291,7 +299,7 @@ export default function DriverTaskPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Wallet Card */}
         <div className="bg-slate-900 rounded-[32px] p-6 text-white shadow-xl shadow-slate-200 relative overflow-hidden">
           <div className="relative z-10">
@@ -321,6 +329,29 @@ export default function DriverTaskPage() {
             </div>
           </div>
           <ClipboardList size={100} className="absolute -right-6 -bottom-6 text-slate-200" />
+        </div>
+
+        {/* Retur Info Card */}
+        <div className="bg-amber-50 rounded-[32px] p-6 border border-amber-200 shadow-sm relative overflow-hidden">
+          <div className="relative z-10">
+            <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-1">Barang Harus Diretur</p>
+            <h3 className="text-3xl font-black text-amber-700">{remainingPickupCount}</h3>
+            <p className="text-[11px] font-bold text-amber-800 mt-3">
+              {remainingPickupCount > 0
+                ? `Total ${remainingPickupItemCount} item menunggu proses retur.`
+                : 'Tidak ada barang retur yang perlu diproses.'}
+            </p>
+            {canMonitorReturTasks && remainingPickupCount > 0 && (
+              <a
+                href="#pickup-retur"
+                className="btn-3d mt-4 inline-flex items-center justify-center gap-2 rounded-2xl bg-amber-600 text-white px-4 py-3 text-[10px] font-black uppercase tracking-widest"
+              >
+                Di Sini
+                <ChevronRight size={14} />
+              </a>
+            )}
+          </div>
+          <RotateCcw size={100} className="absolute -right-6 -bottom-6 text-amber-200" />
         </div>
       </div>
 
@@ -439,7 +470,7 @@ export default function DriverTaskPage() {
       </div>
 
       {canMonitorReturTasks && (
-        <div className="space-y-4">
+        <div id="pickup-retur" className="space-y-4">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-xs font-black text-amber-500 uppercase tracking-widest flex items-center gap-2">
               <RotateCcw size={14} /> Misi Penjemputan Retur (Customer Request) ({returs.length})

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Camera, MessageCircle, Send, Upload, Coins, CreditCard, Undo2 } from 'lucide-react';
+import { ArrowLeft, Camera, MessageCircle, Send, Coins, CreditCard, Undo2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import axios from 'axios';
@@ -103,7 +103,6 @@ export default function DriverOrderDetailPage() {
   const deliveryProofVideoRef = useRef<HTMLVideoElement | null>(null);
   const deliveryProofStreamRef = useRef<MediaStream | null>(null);
   const [loading, setLoading] = useState(false);
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isIssueOpen, setIsIssueOpen] = useState(false);
   const [issueNote, setIssueNote] = useState('');
   const [issuePhoto, setIssuePhoto] = useState<File | null>(null);
@@ -573,6 +572,7 @@ export default function DriverOrderDetailPage() {
     && deliveryOldItemsSubtotal > 0.01
     && Number.isFinite(deliveryNewItemsSubtotal)
     && deliveryNewItemsSubtotal <= 0.01;
+  const proofRequired = !isAllItemsReturned;
   const isFullReturnNoCash = isAllItemsReturned
     && hasExistingDeliveryRetur
     && (
@@ -583,7 +583,7 @@ export default function DriverOrderDetailPage() {
   const paymentAmountValue = paymentAmount.trim() ? Number(paymentAmount) : undefined;
   const paymentAmountValid = paymentAmountValue === undefined || Number.isFinite(paymentAmountValue);
   const paymentMethodLocked = ['paid', 'cod_pending'].includes(String(invoiceContext.invoicePaymentStatus || ''));
-  const missingProof = !proof;
+  const missingProof = proofRequired && !proof;
   const missingCodPaymentRecord = isCod && !paymentRecorded && !isFullReturnNoCash;
   const hasReturToHandover = hasExistingDeliveryRetur && handoverReadyReturs.length > 0;
   const codStatusTitle = isFullReturnNoCash
@@ -609,7 +609,7 @@ export default function DriverOrderDetailPage() {
   const codCompletionHint = isFullReturnNoCash
     ? 'Retur penuh: tidak ada transaksi uang. Pastikan retur sudah diajukan lalu serahkan barang ke Admin/Kasir.'
     : paymentRecorded
-      ? 'Status COD invoice ini sudah tercatat. Lanjutkan konfirmasi selesai setelah bukti foto pengiriman lengkap.'
+      ? 'Status COD invoice ini sudah tercatat. Selesaikan pengiriman setelah bukti foto pengiriman lengkap.'
       : 'Invoice COD ini masih belum tercatat. Konfirmasi penerimaan COD terlebih dahulu sebelum selesai.';
   const codBlockingHint = (paymentRecorded || isFullReturnNoCash)
     ? ''
@@ -650,11 +650,10 @@ export default function DriverOrderDetailPage() {
       } else {
         setCompleteMessage(`Pengiriman selesai untuk ${targetIds.length} order.`);
       }
-      setIsConfirmOpen(false);
       router.push('/driver');
     } catch (error) {
       console.error('Complete delivery failed:', error);
-      setCompleteMessage('Gagal konfirmasi pengiriman.');
+      setCompleteMessage('Gagal menyelesaikan pengiriman.');
     } finally {
       setLoading(false);
     }
@@ -933,9 +932,9 @@ export default function DriverOrderDetailPage() {
     }
   };
 
-  const canComplete = !!proof
-    && !loading
-    && (!isCod || paymentRecorded || isFullReturnNoCash);
+  const canComplete = !loading
+    && (!isCod || paymentRecorded || isFullReturnNoCash)
+    && (!proofRequired || !!proof);
   const customer = order?.Customer || {};
 
   return (
@@ -1379,13 +1378,24 @@ export default function DriverOrderDetailPage() {
       </button>
 
       <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm space-y-6">
-        <div>
-          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Tugas Pengiriman Invoice</p>
-          <h1 className="text-2xl font-black text-slate-900 leading-none">Invoice {invoiceDisplayLabel}</h1>
-          <p className="text-xs text-slate-500 mt-2">
-            {invoiceContext.orderCount} order digabung untuk 1 pengiriman
-            {groupedOrderIds.length > 0 ? ` (${groupedOrderIds.map((id) => `#${id.slice(-6)}`).join(', ')})` : ''}.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Tugas Pengiriman Invoice</p>
+            <h1 className="text-2xl font-black text-slate-900 leading-none">Invoice {invoiceDisplayLabel}</h1>
+            <p className="text-xs text-slate-500 mt-2">
+              {invoiceContext.orderCount} order digabung untuk 1 pengiriman
+              {groupedOrderIds.length > 0 ? ` (${groupedOrderIds.map((id) => `#${id.slice(-6)}`).join(', ')})` : ''}.
+            </p>
+          </div>
+          {customer.id ? (
+            <Link
+              href={`/driver/chat?userId=${encodeURIComponent(String(customer.id))}&phone=${encodeURIComponent(String(customer.whatsapp_number || ''))}`}
+              className="btn-3d shrink-0 rounded-2xl bg-slate-900 text-white px-4 py-3 text-[10px] font-black uppercase inline-flex items-center gap-2"
+            >
+              <MessageCircle size={14} />
+              Hubungi Customer
+            </Link>
+          ) : null}
         </div>
 
         {issueSubmitted && (
@@ -1617,20 +1627,29 @@ export default function DriverOrderDetailPage() {
 
         <div className="space-y-3">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
-            Bukti Foto (Wajib jika Selesai)
+            Bukti Foto Pengiriman
           </label>
+          <p className="text-[10px] font-bold text-slate-500 pl-1">
+            {proofRequired
+              ? 'Wajib untuk menyelesaikan pengiriman.'
+              : 'Opsional karena seluruh barang diretur.'}
+          </p>
           <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 p-6 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-black text-slate-900">Bukti Pengiriman</p>
                 <p className="text-[11px] text-slate-600 mt-1">
-                  {proof ? `Tersimpan: ${proof.name}` : 'Belum ada foto. Ambil foto dengan kamera.'}
+                  {proof
+                    ? `Tersimpan: ${proof.name}`
+                    : proofRequired
+                      ? 'Belum ada foto. Ambil foto dengan kamera.'
+                      : 'Belum ada foto (opsional).'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setDeliveryProofCameraOpen(true)}
-                className="shrink-0 rounded-2xl bg-emerald-600 text-white px-4 py-3 text-[11px] font-black uppercase inline-flex items-center gap-2"
+                className="btn-3d shrink-0 rounded-2xl bg-emerald-600 text-white px-4 py-3 text-[11px] font-black uppercase inline-flex items-center gap-2"
               >
                 <Camera size={16} />
                 Ambil Foto
@@ -1645,6 +1664,18 @@ export default function DriverOrderDetailPage() {
                 Hapus Foto
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => void complete()}
+              disabled={!canComplete}
+              className="btn-3d w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase disabled:opacity-50"
+            >
+              {loading
+                ? 'Memproses...'
+                : missingProof
+                  ? 'Ambil Bukti Foto Dulu'
+                  : 'Selesaikan Pengiriman'}
+            </button>
           </div>
         </div>
 
@@ -1656,7 +1687,9 @@ export default function DriverOrderDetailPage() {
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600">Kamera</p>
                   <h3 className="mt-2 text-lg font-black text-slate-900">Ambil bukti pengiriman</h3>
                   <p className="mt-2 text-sm text-slate-600">
-                    Foto ini wajib untuk menyelesaikan pengiriman.
+                    {proofRequired
+                      ? 'Foto ini wajib untuk menyelesaikan pengiriman.'
+                      : 'Foto ini opsional karena seluruh barang diretur.'}
                   </p>
                 </div>
                 <button
@@ -1718,19 +1751,9 @@ export default function DriverOrderDetailPage() {
         )}
 
         <div className="grid grid-cols-1 gap-3 pt-2">
-          {customer.id ? (
-            <Link
-              href={`/driver/chat?userId=${encodeURIComponent(String(customer.id))}&phone=${encodeURIComponent(String(customer.whatsapp_number || ''))}`}
-              className="w-full py-4 bg-slate-900 text-white rounded-[24px] font-black text-xs uppercase inline-flex items-center justify-center gap-2"
-            >
-              <MessageCircle size={16} />
-              Hubungi Customer (Chat App)
-            </Link>
-          ) : null}
-
           {isFullReturnNoCash ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-700">
-              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Serahkan barang retur ke Admin/Kasir lalu lanjutkan konfirmasi selesai setelah bukti foto lengkap.
+              Retur semua barang: transaksi dengan customer selesai (ongkir hangus). Serahkan barang retur ke Admin/Kasir. Bukti foto pengiriman tidak wajib.
             </div>
           ) : isCod && !paymentRecorded ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
@@ -1767,14 +1790,6 @@ export default function DriverOrderDetailPage() {
           )}
 
           <button
-            onClick={() => setIsConfirmOpen(true)}
-            disabled={!canComplete}
-            className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-black text-sm uppercase shadow-xl shadow-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 disabled:shadow-none"
-          >
-            {loading ? 'Processing...' : 'Konfirmasi Selesai'}
-          </button>
-
-          <button
             onClick={() => setIsIssueOpen(true)}
             disabled={loading}
             className="w-full py-4 bg-white border-2 border-slate-200 text-rose-600 rounded-[24px] font-black text-xs uppercase hover:bg-rose-50 hover:border-rose-200 transition-all"
@@ -1783,51 +1798,6 @@ export default function DriverOrderDetailPage() {
           </button>
         </div>
       </div>
-
-      {isConfirmOpen && (
-        <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4 max-h-[calc(100svh-2rem)] overflow-y-auto">
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Upload size={32} />
-              </div>
-              <h3 className="text-lg font-black text-slate-900">Konfirmasi Serah Terima</h3>
-              <p className="text-sm text-slate-500 leading-relaxed">
-                Pastikan barang sudah diterima dengan baik oleh customer dan foto bukti sudah sesuai.
-              </p>
-            </div>
-
-            {isCod && (
-              <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-center space-y-1">
-                <p className="text-xs font-bold text-orange-600 uppercase tracking-wide">Tagihan COD</p>
-                <p className="text-2xl font-black text-slate-900">
-                  Rp {Number(payableInvoiceTotal || 0).toLocaleString('id-ID')}
-                </p>
-                <p className="text-[10px] text-orange-700 font-medium">
-                  Terima uang tunai dari customer bila invoice COD ini belum lunas, lalu lanjutkan setoran ke finance sesuai proses.
-                </p>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                onClick={() => setIsConfirmOpen(false)}
-                className="py-3 px-4 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors"
-                disabled={loading}
-              >
-                Batal
-              </button>
-              <button
-                onClick={complete}
-                disabled={loading}
-                className="py-3 px-4 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
-              >
-                {loading ? 'Memproses...' : 'Ya, Selesai'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {isIssueOpen && (
         <div className="fixed inset-0 z-[99999] flex items-start justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">

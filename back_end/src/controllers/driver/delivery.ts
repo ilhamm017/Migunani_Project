@@ -33,6 +33,16 @@ export const completeDelivery = asyncWrapper(async (req: Request, res: Response)
         const computedTotals = await computeInvoiceNetTotals(String(invoice.id), { transaction: t });
         const computedNetTotal = Number(computedTotals?.net_total || 0);
         const isZeroDue = Number.isFinite(computedNetTotal) && computedNetTotal <= 0.01;
+        const oldItemsSubtotal = Number(computedTotals?.old_items_subtotal ?? Number.NaN);
+        const newItemsSubtotal = Number(computedTotals?.new_items_subtotal ?? Number.NaN);
+        const isFullReturnAllItems =
+            Number.isFinite(oldItemsSubtotal)
+            && oldItemsSubtotal > 0.01
+            && Number.isFinite(newItemsSubtotal)
+            && newItemsSubtotal <= 0.01;
+        if (!file && !isFullReturnAllItems) {
+            throw new CustomError('Bukti foto pengiriman wajib diupload sebelum menyelesaikan pengiriman.', 400);
+        }
         const affectedOrderIds: string[] = [];
 
         for (const order of contextOrders) {
