@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { sequelize } from '../models';
-import { seedCustomersFromData } from '../seeders/seedCustomersFromData';
 import { seedCustomersFromExcel } from '../seeders/seedCustomersFromExcel';
 
 const pickExistingPath = (candidates: Array<string | undefined | null>): string | null => {
@@ -16,16 +15,22 @@ const pickExistingPath = (candidates: Array<string | undefined | null>): string 
 async function run() {
     const excelArg = process.argv[2];
     const envExcelPath = process.env.SEED_CUSTOMERS_EXCEL_PATH;
-    const source = String(process.env.SEED_CUSTOMERS_SOURCE || 'data').trim().toLowerCase();
+    const source = String(process.env.SEED_CUSTOMERS_SOURCE || 'excel').trim().toLowerCase();
     const defaultExcelPath = '../Pelanggan.xlsx';
+
+    if (source !== 'excel') {
+        console.error('❌ Customer seed source "data" sudah dihapus (tidak relevan).');
+        console.error('   Gunakan source "excel" (default) dan berikan path Excel.');
+        process.exit(1);
+    }
 
     const resolvedExcelPath = pickExistingPath([
         excelArg,
         envExcelPath,
-        source === 'excel' ? defaultExcelPath : null,
+        defaultExcelPath,
         excelArg ? path.resolve(process.cwd(), excelArg) : null,
         envExcelPath ? path.resolve(process.cwd(), envExcelPath) : null,
-        source === 'excel' ? path.resolve(process.cwd(), defaultExcelPath) : null,
+        path.resolve(process.cwd(), defaultExcelPath),
     ]);
 
     const chunkSize = process.env.SEED_CUSTOMERS_CHUNK_SIZE
@@ -35,40 +40,31 @@ async function run() {
     try {
         await sequelize.authenticate();
 
-        if (source === 'excel') {
-            if (!resolvedExcelPath) {
-                console.error('❌ Excel file not found.');
-                console.error('   Provide a path arg, or set SEED_CUSTOMERS_EXCEL_PATH.');
-                process.exit(1);
-            }
-
-            console.log('👤 Importing customers from Excel (no table drop)...');
-            console.log(`   - Excel: ${resolvedExcelPath}`);
-
-            const result = await seedCustomersFromExcel({
-                excelPath: resolvedExcelPath,
-                chunkSize: Number.isFinite(chunkSize as number) ? (chunkSize as number) : undefined,
-            });
-
-            console.log('✅ Customer import completed:');
-            console.log(`   - Worksheet: ${result.worksheetName}`);
-            console.log(`   - Total rows: ${result.totalRows}`);
-            console.log(`   - Parsed: ${result.parsed}`);
-            console.log(`   - Inserted: ${result.inserted}`);
-            console.log(`   - Deduped: ${result.deduped}`);
-            console.log(`   - Skipped existing: ${result.skippedExisting}`);
-            console.log(`   - Skipped existing (non-customer): ${result.skippedExistingNonCustomer}`);
-            console.log(`   - Skipped(no name): ${result.skippedNoName}`);
-            console.log(`   - Invalid phones blanked: ${result.invalidPhonesBlanked}`);
-            console.log(`   - Invalid emails blanked: ${result.invalidEmailsBlanked}`);
-        } else {
-            console.log('👤 Importing customers from embedded seeder data (no table drop)...');
-            const result = await seedCustomersFromData();
-            console.log('✅ Customer import completed:');
-            console.log(`   - Source: ${result.source}`);
-            console.log(`   - Parsed: ${result.parsed}`);
-            console.log(`   - Inserted: ${result.inserted}`);
+        if (!resolvedExcelPath) {
+            console.error('❌ Excel file not found.');
+            console.error('   Provide a path arg, or set SEED_CUSTOMERS_EXCEL_PATH.');
+            process.exit(1);
         }
+
+        console.log('👤 Importing customers from Excel (no table drop)...');
+        console.log(`   - Excel: ${resolvedExcelPath}`);
+
+        const result = await seedCustomersFromExcel({
+            excelPath: resolvedExcelPath,
+            chunkSize: Number.isFinite(chunkSize as number) ? (chunkSize as number) : undefined,
+        });
+
+        console.log('✅ Customer import completed:');
+        console.log(`   - Worksheet: ${result.worksheetName}`);
+        console.log(`   - Total rows: ${result.totalRows}`);
+        console.log(`   - Parsed: ${result.parsed}`);
+        console.log(`   - Inserted: ${result.inserted}`);
+        console.log(`   - Deduped: ${result.deduped}`);
+        console.log(`   - Skipped existing: ${result.skippedExisting}`);
+        console.log(`   - Skipped existing (non-customer): ${result.skippedExistingNonCustomer}`);
+        console.log(`   - Skipped(no name): ${result.skippedNoName}`);
+        console.log(`   - Invalid phones blanked: ${result.invalidPhonesBlanked}`);
+        console.log(`   - Invalid emails blanked: ${result.invalidEmailsBlanked}`);
 
         process.exit(0);
     } catch (error) {
