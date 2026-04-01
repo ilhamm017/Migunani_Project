@@ -14,6 +14,8 @@ type ProductOption = {
   stock_quantity?: number | string;
   price?: number | string;
   base_price?: number | string;
+  category_id?: number | string;
+  Category?: { id: number; name?: string } | null;
   varian_harga?: unknown;
   unit?: string;
   status?: string;
@@ -182,4 +184,3 @@ export default function CustomerTopProductsCard({
     </div>
   );
 }
-

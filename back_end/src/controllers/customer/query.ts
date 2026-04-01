@@ -839,7 +839,7 @@ export const getCustomerTopProducts = asyncWrapper(async (req: Request, res: Res
                     id: { [Op.in]: candidateIds },
                     ...(includeInactive ? {} : { status: 'active' }),
                 } as any,
-                attributes: ['id', 'sku', 'name', 'image_url', 'stock_quantity', 'price', 'base_price', 'varian_harga', 'unit', 'status'],
+                attributes: ['id', 'sku', 'name', 'image_url', 'stock_quantity', 'price', 'base_price', 'varian_harga', 'unit', 'status', 'category_id'],
             })
             : [];
 
