@@ -526,16 +526,29 @@ export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Respon
         }
         const nextMethod = rawMethod as 'cod' | 'transfer_manual';
 
-        const order = await findOrderByIdOrInvoiceId(String(id), userId, { transaction: t });
-        if (!order) {
+        const invoiceById = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE });
+        const order = invoiceById
+            ? null
+            : await findOrderByIdOrInvoiceId(String(id), userId, { transaction: t });
+        if (!invoiceById && !order) {
             await safeRollback();
             throw new CustomError('Order atau invoice tidak ditemukan atau tidak ditugaskan ke driver ini.', 404);
         }
 
-        const invoice = await findLatestInvoiceByOrderId(String(order.id), { transaction: t });
+        const invoice = invoiceById
+            ? invoiceById
+            : await findLatestInvoiceByOrderId(String((order as any).id), { transaction: t });
         if (!invoice) {
             await safeRollback();
             throw new CustomError('Invoice tidak ditemukan.', 400);
+        }
+
+        if (invoiceById) {
+            const courierId = String((invoice as any).courier_id || '').trim();
+            if (!courierId || courierId !== String(userId)) {
+                await safeRollback();
+                throw new CustomError('Order atau invoice tidak ditemukan atau tidak ditugaskan ke driver ini.', 404);
+            }
         }
 
         if (invoice.payment_status === 'paid') {
@@ -549,8 +562,8 @@ export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Respon
         }
 
         const relatedOrderIds = await findOrderIdsByInvoiceId(String(invoice.id), { transaction: t });
-        if (invoice.order_id) {
-            relatedOrderIds.push(String(invoice.order_id));
+        if ((invoice as any).order_id) {
+            relatedOrderIds.push(String((invoice as any).order_id));
         }
         const uniqueOrderIds = Array.from(new Set(relatedOrderIds.filter(Boolean)));
         if (uniqueOrderIds.length > 0) {
