@@ -489,6 +489,13 @@ export const api = {
 	                limitTop?: number;
 	            }) =>
 	                apiClient.get<AdminOrderMonitoringResponse>('/orders/admin/monitoring', { params }),
+	            exportMonitoringXlsx: (params?: {
+	                scope?: 'active' | 'all';
+	                startDate?: string;
+	                endDate?: string;
+	                limit?: number;
+	            }) =>
+	                apiClient.get(`/orders/admin/monitoring/export-xlsx`, { params, responseType: 'blob' }),
 	            getMonitoringSku: (params?: {
 	                scope?: 'active' | 'all';
 	                startDate?: string;

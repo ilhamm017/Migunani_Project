@@ -20,6 +20,7 @@ router.post('/:id/proof', authenticateToken, uploadPaymentProofMiddleware, Order
 // Admin Routes
 router.get('/admin/stats', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getDashboardStats);
 router.get('/admin/monitoring', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getMonitoringSummary);
+router.get('/admin/monitoring/export-xlsx', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.exportMonitoringXlsx);
 router.get('/admin/monitoring/sku', authenticateToken, authorizeRoles('super_admin'), OrderController.getMonitoringSkuSummary);
 router.get('/admin/list', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getAllOrders);
 router.get('/admin/couriers', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'checker_gudang', 'admin_finance', 'kasir'), OrderController.getDeliveryEmployees);

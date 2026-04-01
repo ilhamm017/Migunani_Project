@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, RefreshCw } from 'lucide-react';
+import { BarChart3, Download, RefreshCw } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import type { AdminOrderMonitoringResponse } from '@/lib/apiTypes';
@@ -23,6 +23,7 @@ export default function AdminOrdersMonitoringPage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [data, setData] = useState<AdminOrderMonitoringResponse | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>('');
 
@@ -66,6 +67,39 @@ export default function AdminOrdersMonitoringPage() {
     if (dateRangeError) return;
     void load({ silent: true });
   }, [allowed, dateRangeError, load]);
+
+  const onExportXlsx = useCallback(async () => {
+    if (!allowed) return;
+    if (dateRangeError) return;
+    setExporting(true);
+    try {
+      const res = await api.admin.orderManagement.exportMonitoringXlsx({
+        scope,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+      const contentDisposition = String(res.headers?.['content-disposition'] || '');
+      const filenameMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
+      const fallbackName = `laporan-monitoring-order-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const filename = filenameMatch?.[1] || fallbackName;
+
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      console.error('Failed to export monitoring XLSX', error);
+    } finally {
+      setExporting(false);
+    }
+  }, [allowed, dateRangeError, endDate, scope, startDate]);
 
   useRealtimeRefresh({
     enabled: allowed,
@@ -120,6 +154,15 @@ export default function AdminOrdersMonitoringPage() {
           >
             <RefreshCw size={14} />
             Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => void onExportXlsx()}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-xs font-black text-indigo-700 hover:bg-indigo-100"
+            disabled={exporting || !!dateRangeError}
+          >
+            <Download size={14} />
+            {exporting ? 'Export...' : 'Ekstrak XLSX'}
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import ExcelJS from 'exceljs';
 import { Order, OrderIssue, OrderItem, Product, Invoice, InvoiceItem, Cart, CartItem, User, sequelize, OrderAllocation, CustomerProfile, Retur, Backorder, Category, Setting, Account } from '../../models';
 import { Op, QueryTypes } from 'sequelize';
 import { resolveShippingMethodByCode } from '../ShippingMethodController';
@@ -2157,4 +2158,281 @@ export const getMonitoringSkuSummary = asyncWrapper(async (req: Request, res: Re
             };
         }),
     });
+});
+
+export const exportMonitoringXlsx = asyncWrapper(async (req: Request, res: Response) => {
+    const scopeRaw = String(req.query.scope || 'active').trim().toLowerCase();
+    const scope: 'active' | 'all' = scopeRaw === 'all' ? 'all' : 'active';
+
+    const startDateRaw = typeof req.query.startDate === 'string' ? req.query.startDate.trim() : '';
+    const endDateRaw = typeof req.query.endDate === 'string' ? req.query.endDate.trim() : '';
+
+    const limitRaw = Number(req.query.limit || 2000);
+    const limit = Math.max(1, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 2000));
+
+    const startParsed = startDateRaw ? new Date(startDateRaw) : null;
+    const endParsed = endDateRaw ? new Date(endDateRaw) : null;
+    if (startParsed && !Number.isFinite(startParsed.getTime())) {
+        throw new CustomError('StartDate tidak valid', 400);
+    }
+    if (endParsed && !Number.isFinite(endParsed.getTime())) {
+        throw new CustomError('EndDate tidak valid', 400);
+    }
+    if (startParsed && endParsed && startParsed.getTime() > endParsed.getTime()) {
+        throw new CustomError('StartDate tidak boleh lebih besar dari EndDate', 400);
+    }
+
+    const createdAtRange: any = {};
+    if (startParsed) {
+        startParsed.setHours(0, 0, 0, 0);
+        createdAtRange[Op.gte] = startParsed;
+    }
+    if (endParsed) {
+        endParsed.setHours(23, 59, 59, 999);
+        createdAtRange[Op.lte] = endParsed;
+    }
+
+    const orderWhere: any = {};
+    if (scope === 'active') {
+        orderWhere.status = { [Op.notIn]: ['completed', 'canceled', 'expired'] };
+    }
+    if (Object.keys(createdAtRange).length > 0) {
+        orderWhere.createdAt = createdAtRange;
+    }
+
+    const orders = await Order.findAll({
+        where: orderWhere,
+        include: [
+            { model: User, as: 'Customer', attributes: ['id', 'name'] },
+            { model: User, as: 'Courier', attributes: ['id', 'name'] },
+            {
+                model: OrderItem,
+                attributes: ['id', 'product_id', 'qty', 'price_at_purchase', 'cost_at_purchase'],
+                include: [{ model: Product, attributes: ['id', 'sku', 'name'] }]
+            }
+        ],
+        order: [['createdAt', 'ASC'], ['id', 'ASC']],
+        limit
+    });
+
+    const plainOrders = orders.map((row) => row.get({ plain: true }) as any);
+    const rowsWithInvoices = await attachInvoicesToOrders(plainOrders);
+
+    const n = (value: unknown): number => {
+        const parsed = Number(value || 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const round2 = (value: number): number => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+    const formatDateDdMmYyyy = (value: unknown): string => {
+        const d = value instanceof Date ? value : (value ? new Date(String(value)) : null);
+        if (!d || !Number.isFinite(d.getTime())) return '';
+        const pad = (x: number) => String(x).padStart(2, '0');
+        return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+    };
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Migunani Admin';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Laporan Monitoring');
+    sheet.views = [{ state: 'frozen', ySplit: 6 }];
+
+    sheet.columns = [
+        { key: 'invoice', width: 18 }, // A
+        { key: 'tanggal', width: 12 }, // B
+        { key: 'pelanggan', width: 24 }, // C
+        { key: 'sales', width: 14 }, // D
+        { key: 'keterangan', width: 18 }, // E
+        { key: 'tgl_bayar', width: 12 }, // F
+        { key: 'pembayaran', width: 16 }, // G
+        { key: 'kurir', width: 16 }, // H
+        { key: 'total_qty', width: 10 }, // I
+        { key: 'diskon', width: 12 }, // J
+        { key: 'modal', width: 12 }, // K
+        { key: 'laba', width: 12 }, // L
+        { key: 'pct', width: 8 }, // M
+        { key: 'barang', width: 42 }, // N
+        { key: 'modal_item', width: 12 }, // O
+        { key: 'harga_item', width: 12 }, // P
+        { key: 'qty_item', width: 8 }, // Q
+        { key: 'diskon_item', width: 12 }, // R
+        { key: 'subtotal_item', width: 14 }, // S
+        { key: 'ket_item', width: 18 }, // T
+    ];
+
+    sheet.mergeCells('A1:T1');
+    sheet.getCell('A1').value = 'MIGUNANI MOTOR';
+    sheet.getCell('A1').font = { bold: true, size: 14 };
+    sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+
+    sheet.mergeCells('A2:T2');
+    sheet.getCell('A2').value = 'LAPORAN MONITORING ORDER';
+    sheet.getCell('A2').font = { bold: true, size: 12 };
+    sheet.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const startLabel = startDateRaw || '-';
+    const endLabel = endDateRaw || '-';
+    sheet.mergeCells('A3:T3');
+    sheet.getCell('A3').value = `${startLabel} s/d ${endLabel}`;
+    sheet.getCell('A3').alignment = { horizontal: 'center', vertical: 'middle' };
+
+    sheet.mergeCells('A4:T4');
+    sheet.getCell('A4').value = `Scope: ${scope === 'all' ? 'Semua Order' : 'Order Aktif'}`;
+    sheet.getCell('A4').alignment = { horizontal: 'center', vertical: 'middle' };
+
+    sheet.getRow(5).values = [];
+
+    const headerRowIndex = 6;
+    const summaryHeaders = [
+        'INVOICE',
+        'TANGGAL',
+        'PELANGGAN',
+        'SALES',
+        'KETERANGAN',
+        'TGL BAYAR',
+        'PEMBAYARAN',
+        'KURIR',
+        'TOTAL QTY',
+        'DISKON',
+        'MODAL',
+        'LABA',
+        '%',
+    ];
+
+    summaryHeaders.forEach((label, idx) => {
+        const cell = sheet.getCell(headerRowIndex, 1 + idx);
+        cell.value = label;
+        cell.font = { bold: true };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+
+    sheet.mergeCells(headerRowIndex, 14, headerRowIndex, 20);
+    const detailTitleCell = sheet.getCell(headerRowIndex, 14);
+    detailTitleCell.value = 'RINCIAN BARANG';
+    detailTitleCell.font = { bold: true };
+    detailTitleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const applyMoneyFmt = (col: number) => {
+        sheet.getColumn(col).numFmt = '#,##0';
+        sheet.getColumn(col).alignment = { horizontal: 'right' };
+    };
+    const applyIntFmt = (col: number) => {
+        sheet.getColumn(col).numFmt = '0';
+        sheet.getColumn(col).alignment = { horizontal: 'right' };
+    };
+
+    applyIntFmt(9); // TOTAL QTY
+    applyMoneyFmt(10); // DISKON
+    applyMoneyFmt(11); // MODAL
+    applyMoneyFmt(12); // LABA
+
+    sheet.getColumn(13).numFmt = '0.0';
+    sheet.getColumn(13).alignment = { horizontal: 'right' };
+
+    applyMoneyFmt(15); // MODAL item
+    applyMoneyFmt(16); // HARGA item
+    applyIntFmt(17); // QTY item
+    applyMoneyFmt(18); // DISKON item
+    applyMoneyFmt(19); // SUBTOTAL item
+
+    const detailHeaders = ['BARANG', 'MODAL', 'HARGA', 'QTY', 'DISKON', 'SUBTOTAL', 'KETERANGAN'];
+
+    let rowIndex = headerRowIndex + 1;
+    for (const order of rowsWithInvoices as any[]) {
+        const invoiceNumber = String(order?.Invoice?.invoice_number || order?.id || '').trim();
+        const orderDate = formatDateDdMmYyyy(order?.createdAt);
+        const customerName = String(order?.customer_name || order?.Customer?.name || '').trim();
+        const courierName = String(order?.Courier?.name || '').trim();
+        const paymentMethod = String(order?.Invoice?.payment_method || order?.payment_method || '').trim();
+        const paidAt = formatDateDdMmYyyy(order?.Invoice?.verified_at || '');
+        const statusLabel = String(order?.status || '').trim();
+
+        const items = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+        const normalizedItems = items
+            .map((item: any) => ({
+                sku: String(item?.Product?.sku || '').trim(),
+                name: String(item?.Product?.name || '').trim(),
+                qty: Math.max(0, Math.trunc(n(item?.qty))),
+                unit_price: round2(n(item?.price_at_purchase)),
+                unit_cost: round2(n(item?.cost_at_purchase)),
+            }))
+            .filter((it: any) => it.qty > 0);
+
+        const totalQty = normalizedItems.reduce((sum: number, it: any) => sum + it.qty, 0);
+        const orderDiscount = Math.max(0, round2(n(order?.discount_amount)));
+
+        const grossByLine = normalizedItems.map((it: any) => round2(it.unit_price * it.qty));
+        const totalGross = round2(grossByLine.reduce((sum: number, v: number) => sum + v, 0));
+
+        const allocatedDiscounts: number[] = normalizedItems.map(() => 0);
+        if (orderDiscount > 0 && totalGross > 0 && normalizedItems.length > 0) {
+            let allocated = 0;
+            for (let i = 0; i < normalizedItems.length; i++) {
+                if (i === normalizedItems.length - 1) {
+                    allocatedDiscounts[i] = round2(orderDiscount - allocated);
+                } else {
+                    const ratio = grossByLine[i] / totalGross;
+                    const share = round2(orderDiscount * ratio);
+                    allocatedDiscounts[i] = share;
+                    allocated = round2(allocated + share);
+                }
+            }
+        }
+
+        const totalModal = round2(normalizedItems.reduce((sum: number, it: any) => sum + (it.unit_cost * it.qty), 0));
+        const totalRevenue = round2(totalGross - orderDiscount);
+        const totalLaba = round2(totalRevenue - totalModal);
+        const labaPct = totalRevenue > 0 ? (totalLaba / totalRevenue) * 100 : 0;
+
+        const summaryRow = sheet.getRow(rowIndex);
+        summaryRow.getCell(1).value = invoiceNumber;
+        summaryRow.getCell(2).value = orderDate;
+        summaryRow.getCell(3).value = customerName;
+        summaryRow.getCell(4).value = '';
+        summaryRow.getCell(5).value = statusLabel;
+        summaryRow.getCell(6).value = paidAt;
+        summaryRow.getCell(7).value = paymentMethod;
+        summaryRow.getCell(8).value = courierName;
+        summaryRow.getCell(9).value = totalQty;
+        summaryRow.getCell(10).value = orderDiscount;
+        summaryRow.getCell(11).value = totalModal;
+        summaryRow.getCell(12).value = totalLaba;
+        summaryRow.getCell(13).value = round2(labaPct);
+
+        for (let i = 0; i < detailHeaders.length; i++) {
+            summaryRow.getCell(14 + i).value = detailHeaders[i];
+        }
+
+        rowIndex += 1;
+
+        normalizedItems.forEach((it: any, idx: number) => {
+            const lineDiscount = round2(Math.max(0, allocatedDiscounts[idx] || 0));
+            const gross = round2(it.unit_price * it.qty);
+            const subtotal = round2(gross - lineDiscount);
+
+            const detailRow = sheet.getRow(rowIndex);
+            const label = [it.sku, it.name].filter(Boolean).join(' ').trim() || '-';
+            detailRow.getCell(14).value = label;
+            detailRow.getCell(15).value = it.unit_cost;
+            detailRow.getCell(16).value = it.unit_price;
+            detailRow.getCell(17).value = it.qty;
+            detailRow.getCell(18).value = lineDiscount;
+            detailRow.getCell(19).value = subtotal;
+            detailRow.getCell(20).value = '';
+            rowIndex += 1;
+        });
+    }
+
+    const timestamp = new Date();
+    const pad = (v: number) => String(v).padStart(2, '0');
+    const fileSuffix = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}`;
+    const fileName = `laporan-monitoring-order-${fileSuffix}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
 });
