@@ -6,6 +6,8 @@ import {
   CreditNote,
   CreditNoteLine,
   Backorder,
+  DeliveryHandover,
+  DeliveryHandoverItem,
   DriverDebtAdjustment,
   Invoice,
   InvoiceItem,
@@ -132,6 +134,20 @@ async function main() {
   });
   const invoiceIds = invoices.map((i: any) => String(i.id)).filter(Boolean);
 
+  const deliveryHandovers = invoiceIds.length > 0
+    ? await DeliveryHandover.findAll({ where: { invoice_id: { [Op.in]: invoiceIds } }, attributes: ['id'], logging: false })
+    : [];
+  const deliveryHandoverIds = deliveryHandovers.map((h: any) => String(h.id)).filter(Boolean);
+
+  const deliveryHandoverItems = deliveryHandoverIds.length > 0
+    ? await DeliveryHandoverItem.findAll({
+      where: { handover_id: { [Op.in]: deliveryHandoverIds } },
+      attributes: ['id'],
+      logging: false,
+    })
+    : [];
+  const deliveryHandoverItemIds = deliveryHandoverItems.map((row: any) => String(row.id)).filter(Boolean);
+
   const creditNotes = invoiceIds.length > 0
     ? await CreditNote.findAll({ where: { invoice_id: { [Op.in]: invoiceIds } }, attributes: ['id'], logging: false })
     : [];
@@ -225,7 +241,11 @@ async function main() {
     await countByIn(CodCollection, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'cod_collections');
     await countByIn(ReturHandover, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'retur_handovers');
     await countByIn(CreditNote, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'credit_notes');
+    await countByIn(DeliveryHandover, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'delivery_handovers');
     await countByIn(Invoice, { id: { [Op.in]: invoiceIds } }, summary, 'invoices');
+  }
+  if (deliveryHandoverItemIds.length > 0) {
+    await countByIn(DeliveryHandoverItem, { id: { [Op.in]: deliveryHandoverItemIds } }, summary, 'delivery_handover_items');
   }
   if (creditNoteIds.length > 0) {
     await countByIn(CreditNoteLine, { credit_note_id: { [Op.in]: creditNoteIds } }, summary, 'credit_note_lines');
@@ -270,6 +290,12 @@ async function main() {
     }
 
     // Invoice-linked children
+    if (deliveryHandoverItemIds.length > 0) {
+      await destroyByIn(DeliveryHandoverItem, { [Op.or]: whereInBatches('id', deliveryHandoverItemIds) }, summary, 'delivery_handover_items_deleted', tx);
+    }
+    if (deliveryHandoverIds.length > 0) {
+      await destroyByIn(DeliveryHandover, { [Op.or]: whereInBatches('id', deliveryHandoverIds) }, summary, 'delivery_handovers_deleted', tx);
+    }
     if (handoverItemIds.length > 0) {
       await destroyByIn(ReturHandoverItem, { [Op.or]: whereInBatches('id', handoverItemIds) }, summary, 'retur_handover_items_deleted', tx);
     }
