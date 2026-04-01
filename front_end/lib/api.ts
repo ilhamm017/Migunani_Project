@@ -933,6 +933,16 @@ export const api = {
     driver: {
         getOrders: (params?: { status?: string; startDate?: string; endDate?: string }) =>
             apiClient.get<DriverAssignedOrderRow[]>('/driver/orders', { params }),
+        completeOrdersBatch: (ids: string[], payload?: { proof?: File | null }) => {
+            const formData = new FormData();
+            formData.append('ids', JSON.stringify((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
+            if (payload?.proof) {
+                formData.append('proof', payload.proof);
+            }
+            return apiClient.post('/driver/orders/complete-batch', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+        },
         completeOrder: (orderId: string, formData: FormData) =>
             apiClient.post(`/driver/orders/${orderId}/complete`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },

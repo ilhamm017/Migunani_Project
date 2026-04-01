@@ -3,11 +3,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import { Bell, User, Wallet, MapPin, Package, ChevronRight, RotateCcw, MessageCircle, ClipboardList, Truck, Search, HandCoins, Phone } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { notifyOpen } from '@/lib/notify';
+import { notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
 import { useAuthStore } from '@/store/authStore';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
@@ -38,6 +39,11 @@ export default function DriverTaskPage() {
   const [returs, setReturs] = useState<any[]>([]);
   const [deliveryReturs, setDeliveryReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
+  const [selectedDeliveryIds, setSelectedDeliveryIds] = useState<Record<string, boolean>>({});
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [pendingBatchIds, setPendingBatchIds] = useState<string[]>([]);
+  const batchProofInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingBatchIdsRef = useRef<string[]>([]);
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
@@ -91,7 +97,7 @@ export default function DriverTaskPage() {
     };
   }, [allowed, orders]);
 
-  const deliveryCards = useMemo(() => {
+  const invoiceCards = useMemo(() => {
     const buckets = orders.reduce((acc, order) => {
       const orderId = String(order?.id || '').trim();
       if (!orderId) return acc;
@@ -132,6 +138,7 @@ export default function DriverTaskPage() {
         const invoiceDetail = bucket.invoiceId ? invoiceDetailsById[bucket.invoiceId] : null;
 
         const customer = primaryOrder?.Customer || {};
+        const customerId = normalizeInvoiceRef((customer as any)?.id);
         const profile = customer.CustomerProfile || {};
         const addresses = Array.isArray(profile.saved_addresses) ? profile.saved_addresses : [];
         const addressObj = addresses.find((a: any) => a?.isPrimary) || addresses[0];
@@ -185,11 +192,13 @@ export default function DriverTaskPage() {
         return {
           groupKey: bucket.groupKey,
           targetId,
+          deliveryId: targetId,
           invoiceId: bucket.invoiceId,
           invoiceLabel,
           orders: sortedOrders,
           primaryOrder,
           primaryOrderId,
+          customerId,
           customerName: String((primaryOrder as any)?.customer_name || customer?.name || 'Customer Umum'),
           address,
           whatsapp,
@@ -208,10 +217,10 @@ export default function DriverTaskPage() {
       });
   }, [invoiceDetailsById, orders]);
 
-  const filteredDeliveryCards = useMemo(() => {
+  const filteredInvoiceCards = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    if (!keyword) return deliveryCards;
-    return deliveryCards.filter((card) => {
+    if (!keyword) return invoiceCards;
+    return invoiceCards.filter((card) => {
       const orderIds = card.orders.map((order) => String(order?.id || '').toLowerCase());
       const itemNames = card.mergedItems.map((item) => String((item as any)?.name || '').toLowerCase());
       return [
@@ -223,14 +232,60 @@ export default function DriverTaskPage() {
         ...itemNames,
       ].some((value) => String(value || '').toLowerCase().includes(keyword));
     });
-  }, [deliveryCards, search]);
+  }, [invoiceCards, search]);
 
-  const activeDeliveryCards = useMemo(
-    () => filteredDeliveryCards.filter((card) => card.activeOrderCount > 0),
-    [filteredDeliveryCards]
+  const activeInvoiceCards = useMemo(
+    () => filteredInvoiceCards.filter((card) => card.activeOrderCount > 0),
+    [filteredInvoiceCards]
   );
 
-  const remainingDeliveryCount = activeDeliveryCards.length;
+  const activeDeliveryGroups = useMemo(() => {
+    const groups = activeInvoiceCards.reduce((acc, card) => {
+      const customerId = String((card as any).customerId || '').trim();
+      const whatsapp = String(card.whatsapp || '').trim();
+      const customerName = String(card.customerName || '').trim();
+      const addressKey = String(card.address || '').trim().toLowerCase();
+      const baseKey = customerId
+        ? `cid:${customerId}`
+        : whatsapp && whatsapp !== '-'
+          ? `wa:${whatsapp}`
+          : `name:${customerName.toLowerCase() || 'unknown'}`;
+      const groupKey = `${baseKey}|addr:${addressKey || '-'}`;
+
+      const bucket = acc.get(groupKey) || {
+        groupKey,
+        customerName: customerName || 'Customer Umum',
+        address: String(card.address || 'Alamat tidak tersedia'),
+        whatsapp: whatsapp || '-',
+        invoiceCards: [] as typeof activeInvoiceCards,
+        totalAmount: 0,
+        latestTs: 0,
+      };
+      bucket.invoiceCards.push(card);
+      bucket.totalAmount += Number(card.totalAmount || 0);
+      const ts = Date.parse(String(card.primaryOrder?.updatedAt || card.primaryOrder?.createdAt || ''));
+      const val = Number.isFinite(ts) ? ts : 0;
+      bucket.latestTs = Math.max(bucket.latestTs, val);
+      acc.set(groupKey, bucket);
+      return acc;
+    }, new Map<string, { groupKey: string; customerName: string; address: string; whatsapp: string; invoiceCards: typeof activeInvoiceCards; totalAmount: number; latestTs: number }>());
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        invoiceCards: [...group.invoiceCards].sort((a, b) => {
+          const aTs = Date.parse(String(a.primaryOrder?.updatedAt || a.primaryOrder?.createdAt || ''));
+          const bTs = Date.parse(String(b.primaryOrder?.updatedAt || b.primaryOrder?.createdAt || ''));
+          const aVal = Number.isFinite(aTs) ? aTs : 0;
+          const bVal = Number.isFinite(bTs) ? bTs : 0;
+          return bVal - aVal;
+        }),
+      }))
+      .sort((a, b) => b.latestTs - a.latestTs);
+  }, [activeInvoiceCards]);
+
+  const remainingDeliveryCustomerCount = activeDeliveryGroups.length;
+  const remainingDeliveryInvoiceCount = activeInvoiceCards.length;
   const activePickupReturs = useMemo(() => {
     if (!canMonitorReturTasks) return [];
     return returs.filter((r) =>
@@ -247,7 +302,7 @@ export default function DriverTaskPage() {
     () => activeDeliveryReturs.reduce((sum, row) => sum + Number(row?.qty || 0), 0),
     [activeDeliveryReturs]
   );
-  const remainingTaskCount = remainingDeliveryCount + remainingPickupCount + remainingDeliveryReturCount;
+  const remainingTaskCount = remainingDeliveryCustomerCount + remainingPickupCount + remainingDeliveryReturCount;
   const latestDriverEvent = latestEvents[0];
   const latestDriverStatusLabel = useMemo(
     () => (latestDriverEvent ? formatOrderStatusLabel(latestDriverEvent.to_status) : '-'),
@@ -295,6 +350,77 @@ export default function DriverTaskPage() {
     filterDriverIds: user?.id ? [String(user.id)] : [],
   });
 
+  const toggleSelectedDeliveryId = useCallback((id: string, checked?: boolean) => {
+    const key = String(id || '').trim();
+    if (!key) return;
+    setSelectedDeliveryIds((prev) => {
+      const next = { ...prev };
+      const current = Boolean(next[key]);
+      next[key] = checked === undefined ? !current : Boolean(checked);
+      return next;
+    });
+  }, []);
+
+  const setSelectedDeliveryIdsBulk = useCallback((ids: string[], checked: boolean) => {
+    const cleaned = Array.from(new Set((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
+    if (cleaned.length === 0) return;
+    setSelectedDeliveryIds((prev) => {
+      const next = { ...prev };
+      cleaned.forEach((id) => {
+        next[id] = checked;
+      });
+      return next;
+    });
+  }, []);
+
+  const startBatchComplete = useCallback((ids: string[]) => {
+    const cleaned = Array.from(new Set((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
+    if (cleaned.length === 0) {
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Pilih minimal 1 invoice.' });
+      return;
+    }
+    if (batchLoading) return;
+    if (!batchProofInputRef.current) return;
+    pendingBatchIdsRef.current = cleaned;
+    setPendingBatchIds(cleaned);
+    // Reset to allow selecting the same file twice.
+    batchProofInputRef.current.value = '';
+    batchProofInputRef.current.click();
+  }, [batchLoading]);
+
+  const handleBatchProofSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+
+    const ids = pendingBatchIdsRef.current;
+    pendingBatchIdsRef.current = [];
+    setPendingBatchIds([]);
+
+    if (!file || ids.length === 0) return;
+
+    const confirmed = window.confirm(`Selesaikan pengiriman untuk ${ids.length} invoice?`);
+    if (!confirmed) return;
+
+    try {
+      setBatchLoading(true);
+      await api.driver.completeOrdersBatch(ids, { proof: file });
+      setSelectedDeliveryIds((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+      notifySuccess(`Pengiriman selesai untuk ${ids.length} invoice.`);
+      await load();
+    } catch (error: any) {
+      const message = String((error?.response?.data as any)?.message || error?.message || 'Gagal menyelesaikan pengiriman.');
+      notifyFromAlertMessage(message);
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [load]);
+
   if (!allowed) return null;
 
   return (
@@ -327,7 +453,7 @@ export default function DriverTaskPage() {
             <h3 className="text-3xl font-black text-slate-900">{remainingTaskCount}</h3>
             <div className="mt-3 space-y-1">
               <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
-                <Truck size={13} className="text-emerald-600" /> Pengiriman: {remainingDeliveryCount}
+                <Truck size={13} className="text-emerald-600" /> Pengiriman (Customer): {remainingDeliveryCustomerCount} <span className="text-slate-400 font-black">•</span> Invoice: {remainingDeliveryInvoiceCount}
               </p>
               {canMonitorReturTasks && (
                 <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
@@ -403,25 +529,38 @@ export default function DriverTaskPage() {
           <label htmlFor="driver-search" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
             Cari Tugas Pengiriman
           </label>
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              id="driver-search"
-              type="text"
+	          <div className="relative">
+	            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+	            <input
+	              id="driver-search"
+	              type="text"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Cari invoice, customer, alamat, order ID, atau barang"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white"
-            />
-	        </div>
-	      </div>
+	              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white"
+	            />
+		        </div>
+		      </div>
 
 	        <div className="flex items-center justify-between px-1">
-	            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Misi Pengiriman ({activeDeliveryCards.length} Invoice)</h2>
+              <input
+                ref={batchProofInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleBatchProofSelected}
+              />
+	            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                Misi Pengiriman ({activeDeliveryGroups.length} Customer • {activeInvoiceCards.length} Invoice)
+              </h2>
+              {batchLoading && (
+                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Memproses...</span>
+              )}
 	          </div>
 
 	          <div className="grid grid-cols-1 gap-3">
-	          {activeDeliveryCards.length === 0 && (
+	          {activeDeliveryGroups.length === 0 && (
 	            <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
 	              <Package size={40} className="mx-auto text-slate-200 mb-3" />
 	              <p className="text-sm font-bold text-slate-400 italic">
@@ -429,57 +568,104 @@ export default function DriverTaskPage() {
 	              </p>
 	            </div>
 	          )}
-	          {activeDeliveryCards.map((card) => {
+	          {activeDeliveryGroups.map((group) => {
+              const deliveryIds = group.invoiceCards.map((row: any) => String(row?.deliveryId || '').trim()).filter(Boolean);
+              const selectedIds = deliveryIds.filter((id) => Boolean(selectedDeliveryIds[id]));
+              const selectedCount = selectedIds.length;
+              const whatsapp = String(group.whatsapp || '-');
+
 	            return (
 	              <div
-	                key={card.groupKey}
+	                key={group.groupKey}
 	                className="group bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm hover:shadow-lg hover:border-emerald-200 transition-all"
 	              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Invoice</p>
-                    <p className="text-base font-black text-slate-900 leading-none">{card.invoiceLabel}</p>
-                    <p className="text-[10px] text-slate-500">
-                      {card.orders.length} order
-                      {card.orders.length > 1 ? ` (${card.orders.map((row) => `#${String(row?.id || '').slice(-6)}`).join(', ')})` : ''}
-                    </p>
-                  </div>
-                  <div className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black uppercase">
-                    {card.statusLabel}
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-slate-50 space-y-2.5">
-                  {/* Customer Name */}
-                  <div className="flex items-center gap-2 text-slate-600">
-                    <User size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-[11px] font-bold line-clamp-1">{card.customerName}</span>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Customer</p>
+                      <p className="text-base font-black text-slate-900 leading-none">{group.customerName}</p>
+                      <p className="text-[10px] text-slate-500">{group.invoiceCards.length} invoice</p>
+                    </div>
+                    <div className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-black uppercase">
+                      Total Rp {Number(group.totalAmount || 0).toLocaleString('id-ID')}
+                    </div>
                   </div>
 
-                  {/* Address */}
-                  <div className="flex items-start gap-2 text-slate-600">
-                    <MapPin size={14} className="min-w-[14px] mt-0.5 opacity-40" />
-                    <span className="text-[11px] font-medium leading-snug line-clamp-2">{card.address}</span>
+                  <div className="mt-3 pt-3 border-t border-slate-50 space-y-2.5">
+                    <div className="flex items-start gap-2 text-slate-600">
+                      <MapPin size={14} className="min-w-[14px] mt-0.5 opacity-40" />
+                      <span className="text-[11px] font-medium leading-snug line-clamp-2">{group.address}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-600">
+                      <Phone size={14} className="min-w-[14px] opacity-40" />
+                      <span className="text-[11px] font-bold">{whatsapp}</span>
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-2 text-slate-600">
-                    <Wallet size={14} className="min-w-[14px] opacity-40" />
-                    <span className="text-[11px] font-bold">Total {card.totalAmount.toLocaleString('id-ID')}</span>
+                  <div className="mt-3 pt-3 border-t border-slate-50 space-y-2">
+                    {group.invoiceCards.map((card: any) => {
+                      const deliveryId = String(card?.deliveryId || '').trim();
+                      const checked = Boolean(deliveryId && selectedDeliveryIds[deliveryId]);
+                      return (
+                        <div
+                          key={card.groupKey}
+                          className="flex items-center justify-between gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2"
+                        >
+                          <label className="flex items-center gap-2 flex-1 min-w-0">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-emerald-600"
+                              checked={checked}
+                              disabled={!deliveryId || batchLoading}
+                              onChange={(event) => toggleSelectedDeliveryId(deliveryId, event.target.checked)}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-black text-slate-900 truncate">{card.invoiceLabel}</p>
+                              <p className="text-[10px] text-slate-500 truncate">
+                                {card.orders.length} order • Rp {Number(card.totalAmount || 0).toLocaleString('id-ID')} • {card.statusLabel}
+                              </p>
+                            </div>
+                          </label>
+                          <Link
+                            href={`/driver/orders/${card.deliveryId}`}
+                            className="shrink-0 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                          >
+                            Detail <ChevronRight size={14} />
+                          </Link>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
 
-                <div className="mt-3">
-                  <Link
-                    href={`/driver/orders/${card.targetId}`}
-                    className="w-full py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
-                  >
-                    Detail Invoice <ChevronRight size={14} />
-                  </Link>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={batchLoading || deliveryIds.length === 0}
+                      onClick={() => setSelectedDeliveryIdsBulk(deliveryIds, true)}
+                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      Pilih Semua
+                    </button>
+                    <button
+                      type="button"
+                      disabled={batchLoading || deliveryIds.length === 0}
+                      onClick={() => setSelectedDeliveryIdsBulk(deliveryIds, false)}
+                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      Bersihkan
+                    </button>
+                    <button
+                      type="button"
+                      disabled={batchLoading || selectedCount === 0}
+                      onClick={() => startBatchComplete(selectedIds)}
+                      className="flex-1 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase inline-flex items-center justify-center gap-1 disabled:opacity-60"
+                    >
+                      Kirim Dipilih ({selectedCount})
+                    </button>
+                  </div>
+	              </div>
+	            );
+	          })}
+	        </div>
       </div>
 
       {canMonitorReturTasks && (

@@ -26,6 +26,7 @@ const router = Router();
 router.use(authenticateToken);
 
 router.get('/orders', authorizeRoles('driver', 'admin_gudang', 'super_admin'), DriverController.getAssignedOrders);
+router.post('/orders/complete-batch', authorizeRoles('driver'), completeDeliveryUploadMiddleware, DriverController.completeDeliveryBatch);
 router.post('/orders/:id/complete', authorizeRoles('driver'), completeDeliveryUploadMiddleware, DriverController.completeDelivery);
 router.post('/orders/:id/retur', authorizeRoles('driver'), DriverController.createDeliveryReturTicket);
 router.post('/orders/:id/payment', authorizeRoles('driver'), recordPaymentUploadMiddleware, DriverController.recordPayment);
