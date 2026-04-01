@@ -190,11 +190,17 @@ export default function DriverCustomerOrdersPage() {
     const paymentMethod = String((activeInvoiceDetail as any)?.payment_method || '').trim().toLowerCase();
     const paymentStatus = String((activeInvoiceDetail as any)?.payment_status || '').trim().toLowerCase();
     const shipmentStatus = String((activeInvoiceDetail as any)?.shipment_status || '').trim().toLowerCase();
+    const paymentMethodLockReason = paymentStatus === 'paid'
+      ? 'Invoice sudah lunas.'
+      : paymentStatus === 'cod_pending'
+        ? 'COD sudah dicatat (pending setor).'
+        : '';
     return {
       paymentMethod,
       paymentStatus,
       shipmentStatus,
-      canUpdatePaymentMethod: paymentStatus !== 'paid',
+      canUpdatePaymentMethod: paymentStatus !== 'paid' && paymentStatus !== 'cod_pending',
+      paymentMethodLockReason,
       canRecordCod: paymentMethod === 'cod' && ['unpaid', 'draft'].includes(paymentStatus),
       isDelivered: shipmentStatus === 'delivered' || Boolean((activeInvoiceDetail as any)?.delivered_at || (activeInvoiceDetail as any)?.deliveredAt),
     };
@@ -217,11 +223,12 @@ export default function DriverCustomerOrdersPage() {
           console.error('Failed to load invoice detail for modal:', error);
         }
       } finally {
-        if (!cancelled) setActiveInvoiceLoading(false);
+        setActiveInvoiceLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      setActiveInvoiceLoading(false);
     };
   }, [activeInvoiceId, allowed, invoiceDetailsById]);
 
@@ -765,6 +772,11 @@ export default function DriverCustomerOrdersPage() {
                   Transfer
                 </button>
               </div>
+              {activeInvoiceMeta.paymentMethodLockReason ? (
+                <p className="text-[11px] font-semibold text-slate-500">
+                  Metode pembayaran dikunci: <span className="font-black">{activeInvoiceMeta.paymentMethodLockReason}</span>
+                </p>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
