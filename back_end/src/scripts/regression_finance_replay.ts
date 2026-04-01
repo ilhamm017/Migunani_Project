@@ -17,8 +17,8 @@ const credentials: Record<RoleKey, { email: string; password: string }> = {
   admin_gudang: { email: 'gudang@migunani.com', password: 'gudang123' },
   admin_finance: { email: 'finance@migunani.com', password: 'finance123' },
   kasir: { email: 'kasir@migunani.com', password: 'kasir123' },
-  driver: { email: 'driver1@migunani.com', password: 'driver123' },
-  customer: { email: 'customer1@migunani.com', password: 'customer123' },
+  driver: { email: 'driver@migunani.com', password: 'driver123' },
+  customer: { email: 'customer@migunani.com', password: 'customer123' },
 };
 
 const tinyPngBuffer = Buffer.from(
@@ -319,8 +319,17 @@ async function getFirstSupplierId(token: string) {
       ? response.data
       : [];
   const match = rows[0];
-  assert(match?.id, 'No seeded supplier found');
-  return Number(match.id);
+  if (match?.id) return Number(match.id);
+
+  const createRes = await requestJson(token, 'POST', '/admin/suppliers', {
+    name: `Regression Supplier ${Date.now()}`,
+    contact: 'regression',
+    address: 'regression'
+  });
+  assertStatus(createRes.status, 201, 'create supplier');
+  const createdId = Number((createRes.data as any)?.id);
+  assert(Number.isFinite(createdId) && createdId > 0, 'Supplier create did not return id');
+  return createdId;
 }
 
 async function getExpenseLabels(financeToken: string) {
