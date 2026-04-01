@@ -64,6 +64,13 @@ const completeSingleDeliveryInternal = async (
         && oldItemsSubtotal > 0.01
         && Number.isFinite(newItemsSubtotal)
         && newItemsSubtotal <= 0.01;
+
+    if (paymentMethod === 'cod' && !isZeroDue && ['unpaid', 'draft'].includes(paymentStatus)) {
+        throw new CustomError(
+            'Pembayaran COD wajib dicatat (terima uang) sebelum menyelesaikan pengiriman.',
+            409
+        );
+    }
     if (!params.file && !isFullReturnAllItems) {
         throw new CustomError('Bukti foto pengiriman wajib diupload sebelum menyelesaikan pengiriman.', 400);
     }

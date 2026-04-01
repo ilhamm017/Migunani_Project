@@ -63,8 +63,6 @@ export default function DriverCustomerOrdersPage() {
 
   const proofInputRef = useRef<HTMLInputElement | null>(null);
   const pendingInvoiceIdsRef = useRef<string[]>([]);
-  const singleProofInputRef = useRef<HTMLInputElement | null>(null);
-  const pendingSingleInvoiceIdRef = useRef<string>('');
 
   const load = useCallback(async () => {
     if (!allowed) return;
@@ -357,12 +355,20 @@ export default function DriverCustomerOrdersPage() {
       notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice yang bisa diproses.' });
       return;
     }
+    if (codInvoiceIds.length > 0) {
+      notifyOpen({
+        variant: 'warning',
+        title: 'Perhatian',
+        message: `Metode COD dipilih. Catat COD dulu sebesar Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')} sebelum menyelesaikan pengiriman.`,
+      });
+      return;
+    }
     if (batchLoading) return;
     if (!proofInputRef.current) return;
     pendingInvoiceIdsRef.current = ids;
     proofInputRef.current.value = '';
     proofInputRef.current.click();
-  }, [batchLoading, invoiceCards]);
+  }, [batchLoading, codInvoiceIds.length, codTotalEstimate, invoiceCards]);
 
   const handleProofSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -441,37 +447,6 @@ export default function DriverCustomerOrdersPage() {
       setActiveInvoiceLoading(false);
     }
   }, [activeInvoiceId]);
-
-  const startSingleCompleteDelivery = useCallback(() => {
-    const invoiceId = normalizeId(activeInvoiceId);
-    if (!invoiceId) return;
-    if (!singleProofInputRef.current) return;
-    pendingSingleInvoiceIdRef.current = invoiceId;
-    singleProofInputRef.current.value = '';
-    singleProofInputRef.current.click();
-  }, [activeInvoiceId]);
-
-  const handleSingleProofSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    event.target.value = '';
-    const invoiceId = normalizeId(pendingSingleInvoiceIdRef.current);
-    pendingSingleInvoiceIdRef.current = '';
-    if (!file || !invoiceId) return;
-
-    try {
-      setActiveInvoiceLoading(true);
-      const form = new FormData();
-      form.append('proof', file);
-      await api.driver.completeOrder(invoiceId, form);
-      notifySuccess('Pengiriman invoice selesai.');
-      await load();
-      clearSelectedInvoice();
-    } catch (error: any) {
-      notifyFromAlertMessage(String((error?.response?.data as any)?.message || error?.message || 'Gagal menyelesaikan pengiriman.'));
-    } finally {
-      setActiveInvoiceLoading(false);
-    }
-  }, [clearSelectedInvoice, load]);
 
   const openShortageModal = useCallback(() => {
     const invoiceId = normalizeId(activeInvoiceId);
@@ -589,7 +564,6 @@ export default function DriverCustomerOrdersPage() {
   return (
     <div className="p-6 space-y-6 pb-24">
       <input ref={proofInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleProofSelected} />
-      <input ref={singleProofInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleSingleProofSelected} />
 
       <div className="flex items-center gap-3">
         <button
@@ -633,39 +607,6 @@ export default function DriverCustomerOrdersPage() {
           </div>
         </div>
       </div>
-
-      {invoiceCards.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-[24px] p-5 shadow-sm space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aksi Customer</p>
-              <p className="text-xs font-semibold text-slate-600 mt-1">
-                Pembayaran COD dicatat <span className="font-black">sekali</span> untuk seluruh invoice COD, lalu pengiriman diselesaikan untuk semua invoice dengan 1 foto bukti.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={paymentLoading || codInvoiceIds.length === 0}
-                onClick={recordCodPaymentOnce}
-                className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-              >
-                {paymentLoading
-                  ? 'COD...'
-                  : `Catat COD • Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`}
-              </button>
-              <button
-                type="button"
-                disabled={batchLoading || invoiceCards.length === 0}
-                onClick={startBatchComplete}
-                className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-              >
-                {batchLoading ? 'Proses...' : `Selesaikan (${invoiceCards.length})`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
@@ -779,12 +720,32 @@ export default function DriverCustomerOrdersPage() {
               ) : null}
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran Customer</p>
-              <p className="text-[11px] font-semibold text-slate-500">
-                Pembayaran COD dicatat sekali untuk seluruh invoice COD customer ini melalui tombol <span className="font-black">Catat COD</span> di bagian Aksi Customer.
-              </p>
-            </div>
+            {activeInvoiceMeta.paymentMethod === 'cod' ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran COD</p>
+                <p className="text-[11px] font-semibold text-slate-600">
+                  Catat penerimaan uang COD untuk seluruh invoice COD customer ini: <span className="font-black">Rp {Math.round(codTotalEstimate).toLocaleString('id-ID')}</span>
+                </p>
+                <button
+                  type="button"
+                  disabled={paymentLoading || codInvoiceIds.length === 0}
+                  onClick={recordCodPaymentOnce}
+                  className="w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                >
+                  {paymentLoading ? 'COD...' : `Catat COD • Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`}
+                </button>
+                {codInvoiceIds.length === 0 ? (
+                  <p className="text-[11px] font-semibold text-slate-500">Tidak ada invoice COD yang perlu dicatat.</p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran Customer</p>
+                <p className="text-[11px] font-semibold text-slate-500">
+                  Jika pembayaran bukan COD, lanjutkan proses pengiriman.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -792,12 +753,17 @@ export default function DriverCustomerOrdersPage() {
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bukti Foto Pengiriman</p>
               <button
                 type="button"
-                disabled={activeInvoiceLoading || activeInvoiceMeta.isDelivered}
-                onClick={startSingleCompleteDelivery}
+                disabled={activeInvoiceLoading || batchLoading || invoiceCards.length === 0 || codInvoiceIds.length > 0}
+                onClick={startBatchComplete}
                 className="w-full px-3 py-3 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
               >
-                {activeInvoiceMeta.isDelivered ? 'Pengiriman Sudah Selesai' : 'Upload Foto & Selesaikan Pengiriman'}
+                {batchLoading ? 'Proses...' : 'Upload Foto & Selesaikan Pengiriman'}
               </button>
+              {codInvoiceIds.length > 0 ? (
+                <p className="text-[11px] font-semibold text-amber-700">
+                  COD belum dicatat. Terima uang dan klik <span className="font-black">Catat COD</span> dulu.
+                </p>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
