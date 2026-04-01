@@ -1325,16 +1325,29 @@ export default function AdminOrdersWorkspace({
 
 	      const invoiceObj = (detail as any)?.Invoice || (detail as any)?.invoice || null;
 	      const invoiceId = String(invoiceObj?.id || (detail as any)?.invoice_id || '').trim() || null;
-	      const invoiceNumber = String(invoiceObj?.invoice_number || invoiceObj?.invoiceNumber || (detail as any)?.invoice_number || '').trim() || null;
-	      const orderStatus = String((detail as any)?.status || '').trim();
-	      const goodsOutPostedAtRaw = (detail as any)?.goods_out_posted_at;
-	      const goodsOutPostedAt = goodsOutPostedAtRaw ? String(goodsOutPostedAtRaw) : null;
+		      const invoiceNumber = String(invoiceObj?.invoice_number || invoiceObj?.invoiceNumber || (detail as any)?.invoice_number || '').trim() || null;
+		      const orderStatus = String((detail as any)?.status || '').trim();
+		      const orderStatusLower = orderStatus.trim().toLowerCase();
+		      const goodsOutPostedAtRaw = (detail as any)?.goods_out_posted_at;
+		      const goodsOutPostedAt = goodsOutPostedAtRaw ? String(goodsOutPostedAtRaw) : null;
 
-		      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
-		      if (orderItems.length === 0) {
-		        notifyAlert('Order belum memiliki item.');
+		      const hasAnyAllocation = Array.isArray((detail as any)?.Allocations)
+		        ? (detail as any).Allocations.some((row: any) => Number(row?.allocated_qty || 0) > 0)
+		        : false;
+		      const hasAnyBackorder = Array.isArray((detail as any)?.Backorders)
+		        ? (detail as any).Backorders.some((row: any) => Number(row?.qty_pending || 0) > 0 && !['fulfilled', 'canceled'].includes(String(row?.status || '').trim().toLowerCase()))
+		        : false;
+
+		      if (orderStatusLower !== 'pending' || hasAnyAllocation || hasAnyBackorder) {
+		        notifyAlert('Harga nego hanya bisa dipakai sebelum order diproses alokasi/backorder (status pending).');
 		        return;
 		      }
+
+			      const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
+			      if (orderItems.length === 0) {
+			        notifyAlert('Order belum memiliki item.');
+			        return;
+			      }
 
       const overrideReasonByItemId = new Map<string, string>();
 
@@ -2861,34 +2874,13 @@ export default function AdminOrdersWorkspace({
 	              : 'border-amber-200'
 	          }`
 	        : 'mt-3 space-y-2';
-	    const pricingStatusLower = String(model.rawOrderStatus || '').trim().toLowerCase();
-	    const pricingAllowedStatuses = [
-	      'pending',
-	      'waiting_invoice',
-	      'allocated',
-	      'hold',
-	      'partially_fulfilled',
-	      'debt_pending',
-	      'waiting_payment',
-	      'processing',
-	      'checked',
-	      'ready_to_ship',
-	    ];
-	    const pricingStatusOk = pricingAllowedStatuses.includes(pricingStatusLower);
-	    const pricingHasInvoiceRef = Boolean(model.invoiceId || model.invoiceNumber);
-	    const pricingEnabled = Boolean(canEditPricing) && pricingStatusOk;
-	    const pricingHelperText = !canEditPricing
-	      ? ''
-	      : !pricingStatusOk
-	        ? `Harga nego/layer modal tidak bisa dibuka pada status '${pricingStatusLower || '-'}'.`
-	        : pricingHasInvoiceRef
-	          ? 'Invoice sudah terbit: perubahan berlaku untuk invoice tambahan (invoice lama tidak berubah).'
-	          : '';
-	    const showPricingEditorButton = variant === 'panel' && Boolean(canEditPricing);
-	    const availability = availabilityByOrderId[model.orderId] || {};
-	    const invoiceableQty = Object.values(availability).reduce((sum, row) => sum + Number((row as any)?.maxInvoice || 0), 0);
-	    const invoiceableAmount = Number(invoiceableAmountByOrderId[model.orderId] || 0);
-	    const canIssueAdditionalInvoice = variant === 'panel' && canIssueInvoice && invoiceableQty > 0;
+		    // Nego hanya boleh dipakai sebelum order diproses alokasi/backorder.
+		    // Backorder editor selalu muncul setelah proses alokasi/backorder terjadi, jadi tombol nego disembunyikan di sini.
+		    const showPricingEditorButton = false;
+		    const availability = availabilityByOrderId[model.orderId] || {};
+		    const invoiceableQty = Object.values(availability).reduce((sum, row) => sum + Number((row as any)?.maxInvoice || 0), 0);
+		    const invoiceableAmount = Number(invoiceableAmountByOrderId[model.orderId] || 0);
+		    const canIssueAdditionalInvoice = variant === 'panel' && canIssueInvoice && invoiceableQty > 0;
 
     return (
       <div className={wrapperClassName}>
@@ -2906,26 +2898,9 @@ export default function AdminOrdersWorkspace({
               <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700">
                 {model.items.length} item backorder
               </span>
-              {showPricingEditorButton && (
-                <>
-	                  <button
-	                    type="button"
-	                    onClick={() => pricingEnabled ? void openPricingEditor(model.orderId) : undefined}
-	                    disabled={!pricingEnabled}
-	                    className="btn-3d inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-	                  >
-	                    Harga Nego
-	                  </button>
-	                  {pricingHelperText ? (
-	                    <p className="max-w-[240px] text-right text-[10px] text-slate-500">
-	                      {pricingHelperText}
-	                    </p>
-	                  ) : null}
-	                </>
-	              )}
-            </div>
-          </div>
-        )}
+	            </div>
+	          </div>
+	        )}
 
         <div className={variant === 'panel' ? 'mt-3 space-y-2' : 'space-y-2'}>
           <div className="border border-amber-100 rounded-2xl p-3 bg-amber-50/60 space-y-2">
@@ -5662,29 +5637,20 @@ export default function AdminOrdersWorkspace({
 	                                  {warehouseActionLabel}
 	                                </Link>
 		                              )}
-		                              {canEditPricing
-                                    && !isReportOnlySection
-		                                && [
-		                                  'pending',
-		                                  'waiting_invoice',
-		                                  'allocated',
-		                                  'hold',
-		                                  'partially_fulfilled',
-		                                  'debt_pending',
-		                                  'waiting_payment',
-		                                  'processing',
-		                                  'checked',
-		                                  'ready_to_ship',
-		                                ].includes(String(rawOrderStatus || '').trim().toLowerCase())
-		                                && (
-		                                  <button
-		                                    type="button"
-		                                    onClick={() => void openPricingEditor(String(order.id))}
-	                                    className="btn-3d mt-1 inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
-	                                  >
-	                                    Harga Nego
-	                                  </button>
-	                                )}
+			                              {canEditPricing &&
+			                                !isReportOnlySection &&
+			                                detail &&
+			                                !isBackorder &&
+			                                totals.allocQty <= 0 &&
+			                                String(rawOrderStatus || '').trim().toLowerCase() === 'pending' && (
+			                                  <button
+			                                    type="button"
+			                                    onClick={() => void openPricingEditor(String(order.id))}
+			                                    className="btn-3d mt-1 inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
+			                                  >
+			                                    Harga Nego
+			                                  </button>
+			                                )}
 	                              {!canOpenWarehouseAction && canAssignDriverWarehouse && orderStatus === 'ready_to_ship' && invoiceGroupCount > 1 && (
 	                                <p className="mt-1 text-[10px] text-amber-600">
 	                                  Invoice gabungan ({invoiceGroupCount} order), proses dari invoice (ref order #{invoicePrimaryOrderDisplayId}).

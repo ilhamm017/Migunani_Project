@@ -1376,18 +1376,45 @@ export const updateOrderPricing = asyncWrapper(async (req: Request, res: Respons
             throw new CustomError('Layer modal (preferred_unit_cost) tidak valid', 400);
         }
 
-        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
-        if (!order) {
-            await t.rollback();
-            throw new CustomError('Order tidak ditemukan', 404);
-        }
+	        const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+	        if (!order) {
+	            await t.rollback();
+	            throw new CustomError('Order tidak ditemukan', 404);
+	        }
 
-        const currentStatus = String(order.status || '').trim().toLowerCase();
-        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'shipped', 'delivered', 'completed']);
-        if (IMMUTABLE_STATUSES.has(currentStatus)) {
-            await t.rollback();
-            throw new CustomError(`Harga nego tidak bisa diubah pada status '${currentStatus}'.`, 409);
-        }
+	        const currentStatus = String(order.status || '').trim().toLowerCase();
+	        if (currentStatus !== 'pending') {
+	            await t.rollback();
+	            throw new CustomError(`Harga nego hanya bisa diubah saat order masih baru (status 'pending'). Status saat ini '${currentStatus}'.`, 409);
+	        }
+	
+	        const hasAnyAllocationBeforeNego = await OrderAllocation.findOne({
+	            where: { order_id: orderId, allocated_qty: { [Op.gt]: 0 } },
+	            attributes: ['id'],
+	            transaction: t,
+	            lock: t.LOCK.SHARE
+	        });
+	        if (hasAnyAllocationBeforeNego) {
+	            await t.rollback();
+	            throw new CustomError('Harga nego tidak bisa diubah setelah order diproses alokasi/backorder.', 409);
+	        }
+	
+	        const hasAnyBackorderBeforeNego = await Backorder.findOne({
+	            include: [{ model: OrderItem, required: true, attributes: [], where: { order_id: orderId } }],
+	            attributes: ['id'],
+	            transaction: t,
+	            lock: t.LOCK.SHARE
+	        });
+	        if (hasAnyBackorderBeforeNego) {
+	            await t.rollback();
+	            throw new CustomError('Harga nego tidak bisa diubah setelah order diproses alokasi/backorder.', 409);
+	        }
+
+	        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'shipped', 'delivered', 'completed']);
+	        if (IMMUTABLE_STATUSES.has(currentStatus)) {
+	            await t.rollback();
+	            throw new CustomError(`Harga nego tidak bisa diubah pada status '${currentStatus}'.`, 409);
+	        }
         if ((order as any).goods_out_posted_at) {
             await t.rollback();
             throw new CustomError('Harga nego tidak bisa diubah karena goods-out sudah diposting.', 409);
@@ -1647,16 +1674,42 @@ export const updateOrderCostLayerPreference = asyncWrapper(async (req: Request, 
             throw new CustomError('Layer modal tidak bisa diubah karena goods-out sudah diposting.', 409);
         }
 
-        const currentStatus = String(order.status || '').trim().toLowerCase();
-        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'completed', 'delivered', 'shipped']);
-        if (IMMUTABLE_STATUSES.has(currentStatus)) {
-            await t.rollback();
-            throw new CustomError(`Layer modal tidak bisa diubah pada status '${currentStatus}'.`, 409);
-        }
+	        const currentStatus = String(order.status || '').trim().toLowerCase();
+	        if (currentStatus !== 'pending') {
+	            await t.rollback();
+	            throw new CustomError(`Layer modal hanya bisa diubah saat order masih baru (status 'pending'). Status saat ini '${currentStatus}'.`, 409);
+	        }
+	        const IMMUTABLE_STATUSES = new Set(['canceled', 'expired', 'completed', 'delivered', 'shipped']);
+	        if (IMMUTABLE_STATUSES.has(currentStatus)) {
+	            await t.rollback();
+	            throw new CustomError(`Layer modal tidak bisa diubah pada status '${currentStatus}'.`, 409);
+	        }
+	
+	        const hasAnyAllocationBeforeNego = await OrderAllocation.findOne({
+	            where: { order_id: orderId, allocated_qty: { [Op.gt]: 0 } },
+	            attributes: ['id'],
+	            transaction: t,
+	            lock: t.LOCK.SHARE
+	        });
+	        if (hasAnyAllocationBeforeNego) {
+	            await t.rollback();
+	            throw new CustomError('Layer modal tidak bisa diubah setelah order diproses alokasi/backorder.', 409);
+	        }
+	
+	        const hasAnyBackorderBeforeNego = await Backorder.findOne({
+	            include: [{ model: OrderItem, required: true, attributes: [], where: { order_id: orderId } }],
+	            attributes: ['id'],
+	            transaction: t,
+	            lock: t.LOCK.SHARE
+	        });
+	        if (hasAnyBackorderBeforeNego) {
+	            await t.rollback();
+	            throw new CustomError('Layer modal tidak bisa diubah setelah order diproses alokasi/backorder.', 409);
+	        }
 
-        const orderItemIds: string[] = Array.from(
-            new Set(requestedItems.map((row: any) => String(row.order_item_id || '').trim()).filter(Boolean))
-        );
+	        const orderItemIds: string[] = Array.from(
+	            new Set(requestedItems.map((row: any) => String(row.order_item_id || '').trim()).filter(Boolean))
+	        );
         const orderItems = await OrderItem.findAll({
             where: { id: { [Op.in]: orderItemIds }, order_id: orderId },
             transaction: t,
