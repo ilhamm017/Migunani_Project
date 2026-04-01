@@ -185,24 +185,54 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             transaction: t,
             lock: t.LOCK.UPDATE
         });
-        const orderedByProduct = new Map<string, number>();
+        const orderItemIdsForValidation = (orderItemsForValidation as any[])
+            .map((row: any) => String(row?.id || '').trim())
+            .filter(Boolean);
+        const priorInvoiceItemsForValidation = orderItemIdsForValidation.length > 0
+            ? await InvoiceItem.findAll({
+                where: { order_item_id: { [Op.in]: orderItemIdsForValidation } },
+                attributes: ['order_item_id', 'qty'],
+                transaction: t,
+                lock: t.LOCK.SHARE
+            })
+            : [];
+        const invoicedQtyByOrderItemIdForValidation = new Map<string, number>();
+        priorInvoiceItemsForValidation.forEach((item: any) => {
+            const key = String(item?.order_item_id || '').trim();
+            if (!key) return;
+            const prev = Number(invoicedQtyByOrderItemIdForValidation.get(key) || 0);
+            invoicedQtyByOrderItemIdForValidation.set(key, prev + Math.max(0, Number(item?.qty || 0)));
+        });
+
+        const totalOrderedByProduct = new Map<string, number>();
+        const remainingDemandByProduct = new Map<string, number>();
         for (const row of orderItemsForValidation as any[]) {
-            const productId = String(row?.product_id || '');
+            const productId = String(row?.product_id || '').trim();
             if (!productId) continue;
-            const prev = Number(orderedByProduct.get(productId) || 0);
-            orderedByProduct.set(productId, prev + Number(row?.qty || 0));
+            const orderedOriginal = Math.max(0, Math.trunc(Number(row?.ordered_qty_original ?? row?.qty ?? 0)));
+            const canceledBackorder = Math.max(0, Math.trunc(Number(row?.qty_canceled_backorder || 0)));
+            const canceledManual = Math.max(0, Math.trunc(Number(row?.qty_canceled_manual || 0)));
+            const invoiced = Math.max(0, Math.trunc(Number(invoicedQtyByOrderItemIdForValidation.get(String(row?.id || '')) || 0)));
+            const remaining = Math.max(0, orderedOriginal - canceledBackorder - canceledManual - invoiced);
+
+            totalOrderedByProduct.set(productId, Number(totalOrderedByProduct.get(productId) || 0) + orderedOriginal);
+            remainingDemandByProduct.set(productId, Number(remainingDemandByProduct.get(productId) || 0) + remaining);
         }
 
         for (const productId of requestedProductIds) {
-            const orderedQty = Number(orderedByProduct.get(productId) || 0);
+            const orderedQty = Number(totalOrderedByProduct.get(productId) || 0);
             const requestedQty = Number(requestedQtyByProduct.get(productId) || 0);
             if (orderedQty <= 0) {
                 await t.rollback();
                 throw new CustomError(`Produk ${productId} tidak ada pada order ini`, 400);
             }
-            if (requestedQty > orderedQty) {
+            const remainingQty = Number(remainingDemandByProduct.get(productId) || 0);
+            if (requestedQty > remainingQty) {
                 await t.rollback();
-                throw new CustomError(`Qty alokasi untuk produk ${productId} melebihi qty order (${requestedQty}/${orderedQty})`, 400);
+                throw new CustomError(
+                    `Qty alokasi untuk produk ${productId} melebihi qty sisa (requested ${requestedQty}, remaining ${remainingQty}, ordered ${orderedQty}).`,
+                    409
+                );
             }
         }
 
