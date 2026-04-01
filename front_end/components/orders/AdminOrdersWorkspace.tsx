@@ -2497,36 +2497,26 @@ export default function AdminOrdersWorkspace({
       const allocationDraft = allocationDrafts[orderId] || {};
       const detail = orderDetails[orderId];
       const orderItems = Array.isArray((detail as any)?.OrderItems) ? (detail as any).OrderItems : [];
-      const itemSummaries = Array.isArray((detail as any)?.item_summaries) ? (detail as any).item_summaries : [];
 
-      // Safety: for backorder top-up we should only consider *remaining demand*,
-      // not the original ordered qty. Use item_summaries to subtract already invoiced qty
-      // so autofill won't suggest the full original qty again after partial invoicing/delivery.
-      const productIdByOrderItemId = new Map<string, string>();
+      // Backorder top-up should consider the remaining *unallocated* shortage (ordered - allocated),
+      // not subtracting already invoiced qty. Allocations are cumulative and invoice issuance uses
+      // (allocated - already_invoiced) as the available qty.
+      const allocatableDemandByProductId = new Map<string, number>();
       orderItems.forEach((item: any) => {
-        const itemId = String(item?.id || '').trim();
         const productId = String(item?.product_id || '').trim();
-        if (itemId && productId) productIdByOrderItemId.set(itemId, productId);
-      });
-      const remainingBackorderByProductId = new Map<string, number>();
-      itemSummaries.forEach((row: any) => {
-        const orderItemId = String(row?.order_item_id || '').trim();
-        const productId = productIdByOrderItemId.get(orderItemId) || '';
         if (!productId) return;
-        const ordered = Math.max(0, Math.trunc(Number(row?.ordered_qty_original || 0)));
-        const invoiced = Math.max(0, Math.trunc(Number(row?.invoiced_qty_total || 0)));
-        const canceledBackorder = Math.max(0, Math.trunc(Number(row?.backorder_canceled_qty || 0)));
-        const canceledManual = Math.max(0, Math.trunc(Number(row?.manual_canceled_qty || 0)));
-        const remaining = Math.max(0, ordered - invoiced - canceledBackorder - canceledManual);
-        if (remaining <= 0) return;
-        remainingBackorderByProductId.set(productId, Number(remainingBackorderByProductId.get(productId) || 0) + remaining);
+        const orderedOriginal = Math.max(0, Math.trunc(Number(item?.ordered_qty_original ?? item?.qty ?? 0)));
+        const canceledBackorder = Math.max(0, Math.trunc(Number(item?.qty_canceled_backorder || 0)));
+        const canceledManual = Math.max(0, Math.trunc(Number(item?.qty_canceled_manual || 0)));
+        const demand = Math.max(0, orderedOriginal - canceledBackorder - canceledManual);
+        allocatableDemandByProductId.set(productId, Number(allocatableDemandByProductId.get(productId) || 0) + demand);
       });
       const backorderEditorItems = groupedItems
         .map((item) => {
           const productId = String(item?.product_id || '');
           if (!productId) return null;
-          const orderedQty = remainingBackorderByProductId.size > 0
-            ? Number(remainingBackorderByProductId.get(productId) || 0)
+          const orderedQty = allocatableDemandByProductId.size > 0
+            ? Number(allocatableDemandByProductId.get(productId) || 0)
             : Number(item?.qty || 0);
           if (orderedQty <= 0) return null;
           const allocatedQty = Number(

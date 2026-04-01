@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { sequelize, Invoice, InvoiceItem, Order, OrderItem, DeliveryHandover, DeliveryHandoverItem, OrderIssue, Product } from '../models';
+import { sequelize, Invoice, InvoiceItem, Order, OrderItem, Backorder, DeliveryHandover, DeliveryHandoverItem, OrderIssue, Product } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
@@ -393,18 +393,41 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
         }) as any[];
         if (orders.length === 0) throw new CustomError('Order terkait invoice tidak ditemukan.', 409);
 
+        const activeBackorders = await Backorder.findAll({
+            include: [{
+                model: OrderItem,
+                required: true,
+                attributes: ['order_id'],
+                where: { order_id: { [Op.in]: relatedOrderIds } }
+            }],
+            where: {
+                qty_pending: { [Op.gt]: 0 },
+                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+            },
+            attributes: ['id'],
+            transaction: t,
+            lock: t.LOCK.SHARE
+        }) as any[];
+        const orderIdsWithActiveBackorder = new Set<string>();
+        activeBackorders.forEach((row: any) => {
+            const orderId = String(row?.OrderItem?.order_id || '').trim();
+            if (orderId) orderIdsWithActiveBackorder.add(orderId);
+        });
+
         for (const order of orders) {
             const prevStatus = String(order.status || '');
-            if (!isOrderTransitionAllowed(prevStatus, 'shipped')) {
-                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> 'shipped'`, 409);
+            const hasActiveBackorder = orderIdsWithActiveBackorder.has(String(order.id));
+            const nextOrderStatus = hasActiveBackorder ? 'partially_fulfilled' : 'shipped';
+            if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
+                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
             }
-            await order.update({ status: 'shipped', courier_id: courierId }, { transaction: t });
+            await order.update({ status: nextOrderStatus as any, courier_id: courierId }, { transaction: t });
             await recordOrderStatusChanged({
                 transaction: t,
                 order_id: String(order.id),
                 invoice_id: invoiceId,
                 from_status: prevStatus,
-                to_status: 'shipped',
+                to_status: nextOrderStatus,
                 actor_user_id: actorId,
                 actor_role: actorRole,
                 reason: 'delivery_handover_handed_over',
@@ -413,7 +436,7 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
             await emitOrderStatusChanged({
                 order_id: String(order.id),
                 from_status: prevStatus,
-                to_status: 'shipped',
+                to_status: nextOrderStatus,
                 source: String(order.source || ''),
                 payment_method: String(invoice.payment_method || ''),
                 courier_id: courierId,
