@@ -857,10 +857,81 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             const previousStatusByOrderId: Record<string, string> = {};
             orders.forEach((o: any) => { previousStatusByOrderId[String(o.id)] = String(o.status || ''); });
 
+            // IMPORTANT:
+            // An order may have multiple invoices (split/backorder continuation). COD settlement for invoice(s) A
+            // must NOT force the whole order to `completed` if there is another invoice (B) still not delivered.
+            // Also, if the current order status already reflects a newer invoice stage (e.g. `ready_to_ship`),
+            // settlement should not override it to `completed`.
+            const orderIdsForInvoiceScope = orders.map((o: any) => String(o.id)).filter(Boolean);
+            const orderHasOpenOtherInvoice = new Set<string>();
+            if (orderIdsForInvoiceScope.length > 0) {
+                const linkRows = await InvoiceItem.findAll({
+                    attributes: ['invoice_id'],
+                    include: [{
+                        model: OrderItem,
+                        required: true,
+                        attributes: ['order_id'],
+                        where: { order_id: { [Op.in]: orderIdsForInvoiceScope } },
+                    }],
+                    transaction: t,
+                    lock: t.LOCK.SHARE
+                });
+
+                const invoiceIdsByOrderId = new Map<string, Set<string>>();
+                const otherInvoiceIds: string[] = [];
+                linkRows.forEach((row: any) => {
+                    const invId = String(row?.invoice_id || '').trim();
+                    const orderId = String(row?.OrderItem?.order_id || '').trim();
+                    if (!invId || !orderId) return;
+                    if (invoiceIds.includes(invId)) return; // exclude settled invoices
+                    if (!invoiceIdsByOrderId.has(orderId)) invoiceIdsByOrderId.set(orderId, new Set());
+                    if (!invoiceIdsByOrderId.get(orderId)!.has(invId)) {
+                        invoiceIdsByOrderId.get(orderId)!.add(invId);
+                        otherInvoiceIds.push(invId);
+                    }
+                });
+
+                const uniqueOtherInvoiceIds = Array.from(new Set(otherInvoiceIds));
+                if (uniqueOtherInvoiceIds.length > 0) {
+                    const otherInvoices = await Invoice.findAll({
+                        where: { id: { [Op.in]: uniqueOtherInvoiceIds } },
+                        attributes: ['id', 'shipment_status'],
+                        transaction: t,
+                        lock: t.LOCK.SHARE
+                    });
+                    const openOtherInvoiceIdSet = new Set<string>();
+                    otherInvoices.forEach((inv: any) => {
+                        const status = String(inv?.shipment_status || '').trim().toLowerCase();
+                        // Treat missing/unknown shipment_status as open.
+                        const isClosed = status === 'delivered' || status === 'canceled';
+                        if (!isClosed) openOtherInvoiceIdSet.add(String(inv.id));
+                    });
+
+                    invoiceIdsByOrderId.forEach((invSet, orderId) => {
+                        for (const invId of invSet) {
+                            if (openOtherInvoiceIdSet.has(invId)) {
+                                orderHasOpenOtherInvoice.add(orderId);
+                                break;
+                            }
+                        }
+                    });
+                }
+            }
+
             const finalizedOrderResults: Array<{ orderId: string; previousStatus: string; nextStatus: 'completed' | 'partially_fulfilled' }> = [];
             for (const order of orders as any[]) {
                 const orderId = String(order.id);
                 const prevStatus = String(order.status || '').trim().toLowerCase();
+                if (!orderId) continue;
+                // Only finalize orders that are already in a "delivery finished" bucket.
+                // If the status already reflects a newer invoice stage (e.g. ready_to_ship for a backorder invoice),
+                // do not override it here.
+                if (!['delivered', 'partially_fulfilled'].includes(prevStatus)) {
+                    continue;
+                }
+                if (orderHasOpenOtherInvoice.has(orderId)) {
+                    continue;
+                }
 
                 const orderItems = await OrderItem.findAll({
                     where: { order_id: orderId },

@@ -552,9 +552,67 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             const targetOrderMap = new Map<string, any>();
             targetOrders.forEach((row: any) => targetOrderMap.set(String(row.id), row));
 
+            // If the order has another invoice that is still not delivered, do not complete the order.
+            // (Split/backorder continuation can create multiple invoices for the same order.)
+            const orderHasOpenOtherInvoice = new Set<string>();
+            if (targetOrderIds.length > 0) {
+                const linkRows = await InvoiceItem.findAll({
+                    attributes: ['invoice_id'],
+                    include: [{
+                        model: OrderItem,
+                        required: true,
+                        attributes: ['order_id'],
+                        where: { order_id: { [Op.in]: targetOrderIds } },
+                    }],
+                    transaction: t,
+                    lock: t.LOCK.SHARE
+                });
+
+                const invoiceIdsByOrderId = new Map<string, Set<string>>();
+                const otherInvoiceIds: string[] = [];
+                linkRows.forEach((row: any) => {
+                    const invId = String(row?.invoice_id || '').trim();
+                    const orderId = String(row?.OrderItem?.order_id || '').trim();
+                    if (!invId || !orderId) return;
+                    if (invoiceIds.includes(invId)) return; // exclude settled invoices
+                    if (!invoiceIdsByOrderId.has(orderId)) invoiceIdsByOrderId.set(orderId, new Set());
+                    if (!invoiceIdsByOrderId.get(orderId)!.has(invId)) {
+                        invoiceIdsByOrderId.get(orderId)!.add(invId);
+                        otherInvoiceIds.push(invId);
+                    }
+                });
+
+                const uniqueOtherInvoiceIds = Array.from(new Set(otherInvoiceIds));
+                if (uniqueOtherInvoiceIds.length > 0) {
+                    const otherInvoices = await Invoice.findAll({
+                        where: { id: { [Op.in]: uniqueOtherInvoiceIds } },
+                        attributes: ['id', 'shipment_status'],
+                        transaction: t,
+                        lock: t.LOCK.SHARE
+                    });
+                    const openOtherInvoiceIdSet = new Set<string>();
+                    otherInvoices.forEach((inv: any) => {
+                        const status = String(inv?.shipment_status || '').trim().toLowerCase();
+                        const isClosed = status === 'delivered' || status === 'canceled';
+                        if (!isClosed) openOtherInvoiceIdSet.add(String(inv.id));
+                    });
+
+                    invoiceIdsByOrderId.forEach((invSet, orderId) => {
+                        for (const invId of invSet) {
+                            if (openOtherInvoiceIdSet.has(invId)) {
+                                orderHasOpenOtherInvoice.add(orderId);
+                                break;
+                            }
+                        }
+                    });
+                }
+            }
+
             for (const orderId of targetOrderIds) {
                 const currentStatus = String(previousOrderStatusById[orderId] || targetOrderMap.get(orderId)?.status || '').toLowerCase();
                 if (!currentStatus) continue;
+                if (!['delivered', 'partially_fulfilled'].includes(currentStatus)) continue;
+                if (orderHasOpenOtherInvoice.has(orderId)) continue;
 
                 const orderItems = await OrderItem.findAll({
                     where: { order_id: orderId },
