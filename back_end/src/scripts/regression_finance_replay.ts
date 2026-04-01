@@ -233,12 +233,35 @@ async function uploadPaymentProof(customerToken: string, orderId: string) {
   assertStatus(response.status, 200, `upload payment proof ${orderId}`);
 }
 
+async function recordCodPayment(driverToken: string, orderId: string) {
+  const form = new FormData();
+  form.append('proof', new Blob([tinyPngBuffer], { type: 'image/png' }), 'cod-proof.png');
+  const response = await requestFormData(driverToken, 'POST', `/driver/orders/${orderId}/payment`, form);
+  assertStatus(response.status, 200, `record COD payment ${orderId}`);
+}
+
 async function shipOrder(adminGudangToken: string, orderId: string, driverId: string) {
   const response = await requestJson(adminGudangToken, 'PATCH', `/orders/admin/${orderId}/status`, {
     status: 'shipped',
     courier_id: driverId
   });
   assertStatus(response.status, 200, `ship order ${orderId}`);
+}
+
+async function shipInvoiceViaHandover(superAdminToken: string, adminGudangToken: string, invoiceId: string, driverId: string) {
+  const assign = await requestJson(adminGudangToken, 'PATCH', `/invoices/${invoiceId}/assign-driver`, { courier_id: driverId });
+  assertStatus(assign.status, 200, `assign driver invoice ${invoiceId}`);
+
+  const form = new FormData();
+  form.append('invoice_id', invoiceId);
+  form.append('result', 'pass');
+  const check = await requestFormData(superAdminToken, 'POST', '/admin/delivery-handovers/check', form);
+  assertStatus(check.status, 200, `delivery handover check ${invoiceId}`);
+  const handoverId = String((check.data as any)?.handover_id || '');
+  assert(handoverId, `Missing handover_id for invoice ${invoiceId}`);
+
+  const handover = await requestJson(superAdminToken, 'POST', `/admin/delivery-handovers/${handoverId}/handover`, {});
+  assertStatus(handover.status, 200, `delivery handover to driver ${invoiceId}`);
 }
 
 async function completeDelivery(driverToken: string, orderId: string) {
@@ -363,11 +386,18 @@ async function createCreditNote(financeToken: string, invoiceId: string, amount:
   return creditNoteId;
 }
 
-async function createPurchaseOrderForSupplier(kasirToken: string, supplierId: number, totalCost: number) {
-  const response = await requestJson(kasirToken, 'POST', '/admin/inventory/po', {
+async function createPurchaseOrderForSupplier(actorToken: string, supplierId: number, productId: string, totalCost: number) {
+  const response = await requestJson(actorToken, 'POST', '/admin/inventory/po', {
     supplier_id: supplierId,
     total_cost: totalCost,
-    items: []
+    items: [
+      {
+        product_id: productId,
+        qty: 1,
+        unit_cost: totalCost,
+        cost_note: 'Regression purchase order cost'
+      }
+    ]
   });
   assertStatus(response.status, 201, `create PO supplier=${supplierId}`);
   const purchaseOrderId = String((response.data as any)?.id || '');
@@ -533,6 +563,7 @@ async function runCodReplay(
   financeToken: string,
   kasirToken: string,
   adminGudangToken: string,
+  superAdminToken: string,
   driverToken: string,
   driverId: string,
   customerToken: string,
@@ -547,8 +578,9 @@ async function runCodReplay(
   const invoiceTotal = Number(invoice?.total || 0);
   assert(invoiceTotal > 0, `Invalid COD invoice total for ${invoiceId}`);
 
-  await shipOrder(adminGudangToken, orderId, driverId);
+  await shipInvoiceViaHandover(superAdminToken, adminGudangToken, invoiceId, driverId);
   await completeDelivery(driverToken, orderId);
+  await recordCodPayment(driverToken, orderId);
 
   const before = 0;
   const startedAt = new Date();
@@ -586,6 +618,7 @@ async function runCodReplay(
 async function runMultiOrderDeliveryConsistency(
   kasirToken: string,
   adminGudangToken: string,
+  superAdminToken: string,
   driverToken: string,
   driverId: string,
   customerToken: string,
@@ -601,8 +634,7 @@ async function runMultiOrderDeliveryConsistency(
 
   const invoiceId = await issueInvoiceBatch(kasirToken, [orderIdA, orderIdB]);
 
-  await shipOrder(adminGudangToken, orderIdA, driverId);
-  await shipOrder(adminGudangToken, orderIdB, driverId);
+  await shipInvoiceViaHandover(superAdminToken, adminGudangToken, invoiceId, driverId);
 
   await completeDelivery(driverToken, invoiceId);
 
@@ -630,6 +662,7 @@ async function runReturRefundReplay(
   financeToken: string,
   kasirToken: string,
   adminGudangToken: string,
+  superAdminToken: string,
   driverToken: string,
   driverId: string,
   customerToken: string,
@@ -639,12 +672,12 @@ async function runReturRefundReplay(
   console.log('\n## Retur refund replay');
   const orderId = await checkoutSingleItem(customerToken, productId, 'transfer_manual', shippingCode);
   await allocateFullOrder(kasirToken, orderId);
-  await issueInvoice(kasirToken, orderId);
+  const invoiceId = await issueInvoice(kasirToken, orderId);
   await uploadPaymentProof(customerToken, orderId);
 
   const approve = await requestJson(financeToken, 'PATCH', `/admin/finance/orders/${orderId}/verify`, { action: 'approve' });
   assertStatus(approve.status, 200, 'verify payment before retur');
-  await shipOrder(adminGudangToken, orderId, driverId);
+  await shipInvoiceViaHandover(superAdminToken, adminGudangToken, invoiceId, driverId);
   await completeDelivery(driverToken, orderId);
 
   const detail = await getOrderDetail(customerToken, orderId);
@@ -774,10 +807,10 @@ async function runVoidInvoiceReplay(
   console.log(`PASS void invoice=${invoiceId} journals ${before}->${afterFirst}->${afterSecond}`);
 }
 
-async function runSupplierInvoicePaymentReplay(financeToken: string, kasirToken: string) {
+async function runSupplierInvoicePaymentReplay(financeToken: string, superAdminToken: string, productId: string) {
   console.log('\n## Supplier invoice pay replay');
-  const supplierId = await getFirstSupplierId(kasirToken);
-  const purchaseOrderId = await createPurchaseOrderForSupplier(kasirToken, supplierId, 9000);
+  const supplierId = await getFirstSupplierId(superAdminToken);
+  const purchaseOrderId = await createPurchaseOrderForSupplier(superAdminToken, supplierId, productId, 9000);
   const supplierInvoiceId = await createSupplierInvoice(financeToken, purchaseOrderId, 9000);
   const paymentAccountId = await getFirstAccountIdByCode(financeToken, '1101');
 
@@ -929,6 +962,7 @@ async function main() {
     sessions.admin_finance.token,
     sessions.kasir.token,
     sessions.admin_gudang.token,
+    sessions.super_admin.token,
     sessions.driver.token,
     sessions.driver.userId,
     sessions.customer.token,
@@ -940,6 +974,7 @@ async function main() {
   await runMultiOrderDeliveryConsistency(
     sessions.kasir.token,
     sessions.admin_gudang.token,
+    sessions.super_admin.token,
     sessions.driver.token,
     sessions.driver.userId,
     sessions.customer.token,
@@ -952,6 +987,7 @@ async function main() {
     sessions.admin_finance.token,
     sessions.kasir.token,
     sessions.admin_gudang.token,
+    sessions.super_admin.token,
     sessions.driver.token,
     sessions.driver.userId,
     sessions.customer.token,
@@ -984,7 +1020,8 @@ async function main() {
 
   await runSupplierInvoicePaymentReplay(
     sessions.admin_finance.token,
-    sessions.kasir.token
+    sessions.super_admin.token,
+    productId
   );
 
   console.log('\nFinance replay regression passed');

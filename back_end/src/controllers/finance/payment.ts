@@ -158,17 +158,17 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
                 if (lines.length >= 2) {
                     await JournalService.createEntry({
                         description: `Settlement Pembayaran Invoice #${invoice.invoice_number}${isCashStore ? ' (Cash Store)' : ''}`,
-                        reference_type: 'invoice_payment_settlement',
+                        reference_type: 'payment_verify',
                         reference_id: String(invoice.id),
                         created_by: verifierId,
-                        idempotency_key: `invoice_payment_settlement_${invoice.id}`,
+                        idempotency_key: `payment_verify_${invoice.id}`,
                         lines
                     }, t);
                 }
             }
 
+            const toReadyToShipIds: string[] = [];
             const toCompletedIds: string[] = [];
-            const toPartiallyFulfilledIds: string[] = [];
             for (const order of orders as any[]) {
                 const orderId = String(order.id || '');
                 const currentStatus = String(order.status || '').toLowerCase();
@@ -177,38 +177,55 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
                     nextStatusByOrderId[orderId] = currentStatus;
                     continue;
                 }
-                const orderItems = await OrderItem.findAll({
-                    where: { order_id: orderId },
-                    attributes: ['id'],
-                    transaction: t,
-                    lock: t.LOCK.UPDATE
-                });
-                const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
-                const openBackorderCount = orderItemIds.length > 0
-                    ? await Backorder.count({
-                        where: {
-                            order_item_id: { [Op.in]: orderItemIds },
-                            qty_pending: { [Op.gt]: 0 },
-                            status: { [Op.notIn]: ['fulfilled', 'canceled'] }
-                        },
-                        transaction: t
-                    })
-                    : 0;
-                const nextStatus = openBackorderCount > 0 ? 'partially_fulfilled' : 'completed';
-                if (!isOrderTransitionAllowed(currentStatus, nextStatus)) {
-                    throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> '${nextStatus}'`, 409);
+
+                // Finance payment verification should not skip warehouse fulfillment flow.
+                // - If order is waiting for finance verification, move it back to ready_to_ship.
+                // - If order is already delivered, finance approval can close it (completed).
+                if (currentStatus === 'waiting_admin_verification') {
+                    if (!isOrderTransitionAllowed(currentStatus, 'ready_to_ship')) {
+                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'ready_to_ship'`, 409);
+                    }
+                    toReadyToShipIds.push(orderId);
+                    nextStatusByOrderId[orderId] = 'ready_to_ship';
+                    continue;
                 }
-                if (nextStatus === 'completed') {
+
+                if (currentStatus === 'delivered') {
+                    const orderItems = await OrderItem.findAll({
+                        where: { order_id: orderId },
+                        attributes: ['id'],
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    });
+                    const orderItemIds = orderItems.map((row: any) => String(row.id)).filter(Boolean);
+                    const openBackorderCount = orderItemIds.length > 0
+                        ? await Backorder.count({
+                            where: {
+                                order_item_id: { [Op.in]: orderItemIds },
+                                qty_pending: { [Op.gt]: 0 },
+                                status: { [Op.notIn]: ['fulfilled', 'canceled'] }
+                            },
+                            transaction: t
+                        })
+                        : 0;
+                    if (openBackorderCount > 0) {
+                        nextStatusByOrderId[orderId] = currentStatus;
+                        continue;
+                    }
+                    if (!isOrderTransitionAllowed(currentStatus, 'completed')) {
+                        throw new CustomError(`Transisi status tidak diizinkan: '${currentStatus}' -> 'completed'`, 409);
+                    }
                     toCompletedIds.push(orderId);
-                } else {
-                    toPartiallyFulfilledIds.push(orderId);
+                    nextStatusByOrderId[orderId] = 'completed';
+                    continue;
                 }
-                nextStatusByOrderId[orderId] = nextStatus;
+
+                nextStatusByOrderId[orderId] = currentStatus;
             }
-            if (toPartiallyFulfilledIds.length > 0) {
+            if (toReadyToShipIds.length > 0) {
                 await Order.update(
-                    { status: 'partially_fulfilled' },
-                    { where: { id: { [Op.in]: toPartiallyFulfilledIds } }, transaction: t }
+                    { status: 'ready_to_ship' },
+                    { where: { id: { [Op.in]: toReadyToShipIds } }, transaction: t }
                 );
             }
             if (toCompletedIds.length > 0) {
