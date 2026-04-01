@@ -1,4 +1,5 @@
 import { Client, LocalAuth } from 'whatsapp-web.js';
+import { execFile } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { Setting } from '../models';
@@ -11,6 +12,7 @@ const reconnectBaseDelayMs = Number(process.env.WA_RECONNECT_BASE_DELAY_MS || 50
 const reconnectMaxDelayMs = Number(process.env.WA_RECONNECT_MAX_DELAY_MS || 60000);
 const cleanProfileLocksBeforeInit = process.env.WA_CLEAN_PROFILE_LOCKS !== 'false';
 const persistStatusToDb = process.env.WA_PERSIST_STATUS_TO_DB !== 'false';
+const dumpBrowserIo = String(process.env.WA_DUMPIO || '').trim().toLowerCase() === 'true';
 
 const waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: process.env.WA_SESSION_PATH }),
@@ -18,12 +20,22 @@ const waClient = new Client({
         headless: true,
         protocolTimeout,
         executablePath: chromeExecutablePath || undefined,
+        dumpio: dumpBrowserIo,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--no-zygote',
-            '--no-first-run'
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--disable-default-apps',
+            '--mute-audio'
         ]
     }
 });
@@ -125,7 +137,8 @@ const getSessionDir = () => {
 
 const removeFileIfExists = async (filePath: string) => {
     try {
-        await fs.access(filePath);
+        // Use lstat so broken symlinks (Chromium singleton artifacts) still count as existing.
+        await fs.lstat(filePath);
     } catch {
         return false;
     }
@@ -136,6 +149,141 @@ const removeFileIfExists = async (filePath: string) => {
     } catch {
         return false;
     }
+};
+
+const tryKillPid = (pid: number, reason: string) => {
+    if (!Number.isFinite(pid) || pid <= 1) return false;
+    try {
+        process.kill(pid, 'SIGKILL');
+        console.warn(`[WA] killed pid=${pid} (${reason})`);
+        return true;
+    } catch (error) {
+        console.warn(`[WA] failed to kill pid=${pid} (${reason}):`, error);
+        return false;
+    }
+};
+
+const extractPidFromMessage = (message: string): number | null => {
+    const text = String(message || '');
+    const patterns = [
+        /\bChromium process\s*\((\d+)\)\b/i,
+        /\bprocess\s*\((\d+)\)\b/i,
+        /\bpid\s*[:=]\s*(\d+)\b/i,
+    ];
+    for (const re of patterns) {
+        const m = text.match(re);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (Number.isFinite(pid) && pid > 1) return pid;
+    }
+    return null;
+};
+
+const readPidFromSingletonCookie = async (cookiePath: string): Promise<number | null> => {
+    try {
+        const buf = await fs.readFile(cookiePath);
+        // Best-effort: chromium's SingletonCookie often starts with "<pid> <hostname> ..."
+        const head = buf.subarray(0, 128).toString('utf8');
+        const m = head.match(/^\s*(\d+)\s+/);
+        if (!m) return null;
+        const pid = Number(m[1]);
+        return Number.isFinite(pid) && pid > 1 ? pid : null;
+    } catch {
+        return null;
+    }
+};
+
+const execFileText = async (file: string, args: string[]) => {
+    return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+        execFile(file, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+            if (error) return reject(error);
+            resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+        });
+    });
+};
+
+const listChromiumPidsByUserDataRoot = async (rootDir: string): Promise<number[]> => {
+    const root = path.resolve(rootDir);
+    try {
+        const { stdout } = await execFileText('ps', ['-eo', 'pid=,args=']);
+        const pids: number[] = [];
+        for (const line of stdout.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const m = trimmed.match(/^(\d+)\s+(.*)$/);
+            if (!m) continue;
+            const pid = Number(m[1]);
+            const args = m[2] || '';
+            if (!Number.isFinite(pid) || pid <= 1) continue;
+            if (!/chrom(e|ium)/i.test(args)) continue;
+
+            const ud = args.match(/--user-data-dir(?:=|\s+)([^\s]+)/);
+            if (!ud) continue;
+            const userDataDir = ud[1];
+            if (!userDataDir) continue;
+
+            const resolved = path.resolve(userDataDir);
+            if (resolved === root || resolved.startsWith(root + path.sep)) {
+                pids.push(pid);
+            }
+        }
+        return Array.from(new Set(pids));
+    } catch {
+        return [];
+    }
+};
+
+const killChromiumUsingUserDataRoot = async (rootDir: string, reason: string) => {
+    const pids = await listChromiumPidsByUserDataRoot(rootDir);
+    if (pids.length === 0) return 0;
+    let killed = 0;
+    for (const pid of pids) {
+        if (tryKillPid(pid, reason)) killed += 1;
+    }
+    return killed;
+};
+
+const scanAndClearSingletonArtifacts = async (rootDir: string, maxDepth = 4) => {
+    const lockFileNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    const removedPaths: string[] = [];
+
+    const walk = async (dir: string, depth: number) => {
+        if (depth > maxDepth) return;
+        let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+        try {
+            entries = await fs.readdir(dir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+
+        // If this directory looks like a Chromium user data dir, try to kill lock holder via SingletonCookie.
+        const cookiePath = path.join(dir, 'SingletonCookie');
+        const cookiePid = await readPidFromSingletonCookie(cookiePath);
+        if (cookiePid) {
+            tryKillPid(cookiePid, 'singleton_cookie_scan');
+        }
+
+        for (const lockFileName of lockFileNames) {
+            const target = path.join(dir, lockFileName);
+            const removed = await removeFileIfExists(target);
+            if (removed) removedPaths.push(target);
+        }
+
+        // Also remove DevToolsActivePort left by crashed/aborted launches.
+        const devToolsPort = path.join(dir, 'DevToolsActivePort');
+        const removedPort = await removeFileIfExists(devToolsPort);
+        if (removedPort) removedPaths.push(devToolsPort);
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            // Avoid wandering too far; only walk within session-ish trees.
+            if (!entry.name.startsWith('session')) continue;
+            await walk(path.join(dir, entry.name), depth + 1);
+        }
+    };
+
+    await walk(rootDir, 0);
+    return removedPaths;
 };
 
 const clearChromiumProfileLocks = async () => {
@@ -150,18 +298,19 @@ const clearChromiumProfileLocks = async () => {
         return;
     }
 
-    const lockFileNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
     const removedPaths: string[] = [];
 
-    for (const entry of entries) {
-        if (!entry.isDirectory() || !entry.name.startsWith('session-')) continue;
+    // Backward-compatible: LocalAuth can create "session", "session-<id>", etc.
+    // We scan `sessionDir` and session* children to clear Chromium singleton artifacts.
+    const scanRemoved = await scanAndClearSingletonArtifacts(sessionDir, 5);
+    removedPaths.push(...scanRemoved);
 
-        const profilePath = path.join(sessionDir, entry.name);
-        for (const lockFileName of lockFileNames) {
-            const target = path.join(profilePath, lockFileName);
-            const removed = await removeFileIfExists(target);
-            if (removed) removedPaths.push(target);
-        }
+    // Also scan direct children (in case userDataDir is deeper than expected).
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (!entry.name.startsWith('session')) continue;
+        const scanChildRemoved = await scanAndClearSingletonArtifacts(path.join(sessionDir, entry.name), 5);
+        removedPaths.push(...scanChildRemoved);
     }
 
     if (removedPaths.length > 0) {
@@ -215,14 +364,46 @@ export const startWhatsappClient = async (options: { force?: boolean } = {}) => 
         .then(() => {
             console.log('[WA] initialize() resolved');
         })
-        .catch((error) => {
+        .catch(async (error) => {
             if (runId !== initializeRunId) {
                 return;
             }
 
             clientStatus = 'ERROR';
-            lastInitializeError = error instanceof Error ? error.message : String(error);
+            const err = error as any;
+            const message = error instanceof Error ? error.message : String(error);
+            const stack = error instanceof Error ? error.stack : '';
+            lastInitializeError = [message, stack].filter(Boolean).join('\n');
             console.error('WhatsApp initialize error:', error);
+
+            // If Chromium says profile is in use, it usually means an orphan Chromium process is still alive.
+            const pid = extractPidFromMessage(message);
+            if (pid) {
+                tryKillPid(pid, 'chromium_profile_in_use');
+            }
+            if (/profile appears to be in use/i.test(message) || /process_singleton_posix\.cc/i.test(message)) {
+                const killed = await killChromiumUsingUserDataRoot(getSessionDir(), 'chromium_profile_in_use_scan');
+                if (killed > 0) {
+                    console.warn(`[WA] killed ${killed} chromium process(es) holding WA profile`);
+                }
+                await clearChromiumProfileLocks();
+            }
+
+            if (persistStatusToDb) {
+                try {
+                    await Setting.upsert({
+                        key: 'whatsapp_session',
+                        value: {
+                            status: 'ERROR',
+                            error: lastInitializeError,
+                            updatedAt: new Date()
+                        },
+                        description: 'WhatsApp Connection Status'
+                    });
+                } catch (persistError) {
+                    console.error('[WA] failed to persist error status:', persistError);
+                }
+            }
             scheduleAutoReconnect('initialize_error');
         })
         .finally(() => {
