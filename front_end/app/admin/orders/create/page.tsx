@@ -2067,9 +2067,14 @@ function ManualOrderContent() {
 				                                                            <p className="text-xs text-slate-500">Stok: {p.stock_quantity}</p>
 				                                                        </div>
 				                                                    </div>
-			                                                    <p className="font-bold text-blue-600">
-			                                                        {formatCurrency(getProductPrice(p))}
-		                                                    </p>
+			                                                    <div className="text-right">
+			                                                        <p className="font-bold text-blue-600">
+			                                                            {formatCurrency(getProductPrice(p))}
+			                                                        </p>
+			                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+			                                                            DB {formatCurrency(getProductRegularUnitPrice(p))}
+			                                                        </p>
+		                                                    </div>
 		                                                </div>
 		                                            ))}
 		                                        </div>
@@ -2340,6 +2345,7 @@ function ManualOrderContent() {
 	                                                            Qty {Number(item.qty || 0)}
 	                                                            {' • '}
 	                                                            Unit {formatCurrency(dealUnit)}
+	                                                            {` • DB ${formatCurrency(pricingMeta.basePrice)}`}
 	                                                            {canOverridePricing && !isPromoLine ? ` • Normal ${formatCurrency(normalUnit)}` : ''}
 	                                                        </p>
 
@@ -2353,6 +2359,9 @@ function ManualOrderContent() {
 
 		                                                        {canOverridePricing && !isPromoLine ? (
 		                                                            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 space-y-2">
+		                                                                <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+		                                                                    Pricelist (DB): <span className="text-slate-800">{formatCurrency(pricingMeta.basePrice)}</span>
+		                                                                </p>
 		                                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_128px] sm:items-center">
 		                                                                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 sm:col-span-1">
 		                                                                        Harga deal

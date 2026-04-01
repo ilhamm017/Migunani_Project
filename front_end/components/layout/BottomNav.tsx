@@ -4,9 +4,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ShoppingBag, ShoppingCart, Package, MessageSquare, FileText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { canUseChatUnreadByRole, useChatUnreadCount } from '@/lib/useChatUnreadCount';
+import { api } from '@/lib/api';
+import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 type NavItem = {
     label: string;
@@ -34,6 +37,40 @@ export default function BottomNav() {
         enabled: !!isCustomerRoute && isAuthenticated && isCustomerRole && canUseChatUnreadByRole(role),
         userId: user?.id
     });
+    const [transferInvoiceDueCount, setTransferInvoiceDueCount] = useState(0);
+
+    const loadTransferInvoiceDueCount = useCallback(async (opts?: { silent?: boolean }) => {
+        if (!isAuthenticated || !isCustomerRole || !isCustomerRoute) {
+            if (!opts?.silent) setTransferInvoiceDueCount(0);
+            return;
+        }
+        try {
+            const res = await api.invoices.getMy({
+                page: 1,
+                limit: 1,
+                stage: 'active',
+                payment_method: 'transfer_manual',
+                payment_status: 'unpaid',
+                has_proof: 'false',
+            });
+            const next = Number(res.data?.total || 0);
+            setTransferInvoiceDueCount(Number.isFinite(next) ? next : 0);
+        } catch (error) {
+            console.error('Failed to load transfer invoice due count:', error);
+            if (!opts?.silent) setTransferInvoiceDueCount(0);
+        }
+    }, [isAuthenticated, isCustomerRole, isCustomerRoute]);
+
+    useEffect(() => {
+        void loadTransferInvoiceDueCount({ silent: false });
+    }, [loadTransferInvoiceDueCount]);
+
+    useRealtimeRefresh({
+        enabled: !!isCustomerRoute && isAuthenticated && isCustomerRole,
+        onRefresh: () => loadTransferInvoiceDueCount({ silent: true }),
+        domains: ['order', 'admin'],
+        pollIntervalMs: 20000,
+    });
 
     // Show customer bottom nav on customer-facing routes.
     if (!isCustomerRoute || isPrintRoute) {
@@ -47,6 +84,7 @@ export default function BottomNav() {
                 const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
                 const isCart = item.href === '/cart';
                 const isChat = item.href === '/chat';
+                const isInvoice = item.href === '/invoices';
                 const sharedClassName = `flex flex-col items-center gap-1 flex-1 transition-colors ${isActive ? 'text-emerald-700' : 'text-slate-500 hover:text-slate-700'}`;
 
                 return (
@@ -60,6 +98,11 @@ export default function BottomNav() {
                             {isCart && totalItems > 0 && (
                                 <span className="absolute -top-2 -right-3 bg-emerald-600 text-white text-[8px] font-black rounded-full w-4 h-4 flex items-center justify-center">
                                     {totalItems > 9 ? '9+' : totalItems}
+                                </span>
+                            )}
+                            {isInvoice && transferInvoiceDueCount > 0 && (
+                                <span className="absolute -top-2 -right-3 bg-rose-600 text-white text-[8px] font-black rounded-full min-w-[16px] h-4 px-1 inline-flex items-center justify-center leading-none">
+                                    {transferInvoiceDueCount > 99 ? '99+' : transferInvoiceDueCount > 9 ? '9+' : transferInvoiceDueCount}
                                 </span>
                             )}
                             {isChat && unreadCount > 0 && (

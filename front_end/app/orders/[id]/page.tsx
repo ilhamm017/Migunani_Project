@@ -158,6 +158,92 @@ export default function OrderDetailPage() {
     return { icon: Clock3, label: 'Status Pesanan', className: 'text-slate-700 bg-slate-100' };
   }, [order?.status, order?.item_summaries]);
 
+  const returSummary = useMemo(() => {
+    const returs = Array.isArray((order as any)?.Returs) ? ((order as any).Returs as any[]) : [];
+    const deliveryReturs = Array.isArray((order as any)?.delivery_returs) ? ((order as any).delivery_returs as any[]) : returs.filter((r: any) =>
+      ['delivery_refusal', 'delivery_damage'].includes(String(r?.retur_type || '').toLowerCase())
+      && String(r?.status || '').toLowerCase() !== 'rejected'
+    );
+    const pickupReturs = returs.filter((r: any) => String(r?.retur_type || '').toLowerCase() === 'customer_request');
+
+    const summary = (order as any)?.delivery_return_summary || null;
+    const oldSubtotal = Number(summary?.old_items_subtotal ?? Number.NaN);
+    const newSubtotal = Number(summary?.new_items_subtotal ?? Number.NaN);
+    const isFullDeliveryReturn =
+      deliveryReturs.length > 0
+      && Number.isFinite(oldSubtotal)
+      && oldSubtotal > 0.01
+      && Number.isFinite(newSubtotal)
+      && newSubtotal <= 0.01;
+
+    const hasDamage = deliveryReturs.some((r: any) => String(r?.retur_type || '').toLowerCase() === 'delivery_damage');
+    const hasRefusal = deliveryReturs.some((r: any) => String(r?.retur_type || '').toLowerCase() === 'delivery_refusal');
+    const kindLabel = hasDamage && hasRefusal
+      ? 'Campuran (rusak + tidak jadi beli)'
+      : hasDamage
+        ? 'Rusak'
+        : hasRefusal
+          ? 'Tidak jadi beli'
+          : 'Retur saat pengiriman';
+
+    const scopeLabel = isFullDeliveryReturn ? 'Retur penuh (semua barang)' : 'Retur sebagian';
+
+    const normalizeStatus = (raw: unknown): string => {
+      const v = String(raw || '').trim().toLowerCase();
+      if (!v) return '-';
+      const map: Record<string, string> = {
+        pending: 'Menunggu review',
+        approved: 'Disetujui',
+        rejected: 'Ditolak',
+        pickup_assigned: 'Menunggu pickup',
+        picked_up: 'Sudah diambil',
+        handed_to_warehouse: 'Diserahkan ke gudang',
+        received: 'Diterima gudang',
+        completed: 'Selesai',
+      };
+      return map[v] || v;
+    };
+
+    const deliveryStatusLabel = deliveryReturs.length > 0
+      ? (() => {
+        const statuses = Array.from(new Set(deliveryReturs.map((r: any) => String(r?.status || '').toLowerCase()).filter(Boolean)));
+        if (statuses.length === 0) return '-';
+        if (statuses.every((s) => s === 'completed')) return 'Selesai';
+        if (statuses.some((s) => s === 'rejected')) return 'Sebagian ditolak';
+        if (statuses.some((s) => s === 'handed_to_warehouse')) return 'Menunggu verifikasi gudang';
+        if (statuses.some((s) => s === 'picked_up')) return 'Dibawa driver (menunggu diserahkan)';
+        return statuses.map(normalizeStatus).join(', ');
+      })()
+      : '';
+
+    const pickupStatusLabel = pickupReturs.length > 0
+      ? (() => {
+        const statuses = Array.from(new Set(pickupReturs.map((r: any) => String(r?.status || '').toLowerCase()).filter(Boolean)));
+        if (statuses.length === 0) return '-';
+        if (statuses.every((s) => s === 'completed')) return 'Selesai';
+        if (statuses.some((s) => s === 'pickup_assigned')) return 'Menunggu pickup driver';
+        if (statuses.some((s) => s === 'picked_up')) return 'Sudah dipickup driver';
+        if (statuses.some((s) => s === 'handed_to_warehouse')) return 'Sudah diserahkan ke gudang';
+        return statuses.map(normalizeStatus).join(', ');
+      })()
+      : '';
+
+    return {
+      hasAny: returs.length > 0 || deliveryReturs.length > 0,
+      delivery: deliveryReturs.length > 0 ? {
+        count: deliveryReturs.length,
+        isFull: isFullDeliveryReturn,
+        scopeLabel,
+        kindLabel,
+        statusLabel: deliveryStatusLabel,
+      } : null,
+      pickup: pickupReturs.length > 0 ? {
+        count: pickupReturs.length,
+        statusLabel: pickupStatusLabel,
+      } : null,
+    };
+  }, [order]);
+
   // --- Missing Item Logic ---
   const [showMissingModal, setShowMissingModal] = useState(false);
   const [missingItems, setMissingItems] = useState<{ product_id: string; qty_missing: number; max_qty: number; name: string }[]>([]);
@@ -461,33 +547,39 @@ export default function OrderDetailPage() {
           </div>
         )}
 
-        {Array.isArray(order.Returs) && order.Returs.length > 0 && (
+        {returSummary.hasAny && (
           <div className="bg-amber-50 border border-amber-100 rounded-[24px] p-5 space-y-3">
             <div className="flex items-center gap-2">
               <RotateCcw size={16} className="text-amber-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-amber-700">Informasi Retur</h3>
+              <h3 className="text-xs font-black uppercase tracking-widest text-amber-700">Keterangan Retur</h3>
             </div>
-            {order.Returs.map((retur: any, idx: number) => (
-              <div key={String(retur?.id || idx)} className="bg-white/50 rounded-xl p-3 border border-amber-200">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-[11px] font-black text-slate-800">
-                      Retur {Number(retur?.qty || 0)} unit
-                    </p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Diajukan: {formatDateTime(retur.createdAt)}</p>
-                  </div>
-                  <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full border ${retur.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                    retur.status === 'rejected' ? 'bg-rose-50 text-rose-700 border-rose-100' :
-                      'bg-amber-100 text-amber-700 border-amber-200'
-                    }`}>
-                    {retur.status}
-                  </span>
-                </div>
-                {retur.admin_response && (
-                  <p className="text-[10px] text-amber-700 mt-2 italic font-medium">{retur.admin_response}</p>
-                )}
+
+            {returSummary.delivery && (
+              <div className="bg-white/60 rounded-2xl p-4 border border-amber-200 space-y-1">
+                <p className="text-[10px] font-black text-rose-700 uppercase tracking-widest">Retur Saat Pengiriman</p>
+                <p className="text-xs font-black text-slate-800">
+                  {returSummary.delivery.scopeLabel} · {returSummary.delivery.kindLabel}
+                </p>
+                <p className="text-[11px] font-bold text-slate-600">
+                  Status: {returSummary.delivery.statusLabel}
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  Ini adalah retur yang dibuat langsung saat driver mengantarkan barang (bukan permintaan pickup dari customer).
+                </p>
               </div>
-            ))}
+            )}
+
+            {returSummary.pickup && (
+              <div className="bg-white/60 rounded-2xl p-4 border border-amber-200 space-y-1">
+                <p className="text-[10px] font-black text-violet-700 uppercase tracking-widest">Retur Pickup (Permintaan Customer)</p>
+                <p className="text-xs font-black text-slate-800">Jumlah tiket: {returSummary.pickup.count}</p>
+                <p className="text-[11px] font-bold text-slate-600">Status: {returSummary.pickup.statusLabel}</p>
+                <p className="text-[10px] text-slate-500">
+                  Ini adalah retur yang diajukan customer dan menunggu penjemputan driver.
+                </p>
+              </div>
+            )}
+
             <Link href="/retur" className="block text-center py-2 bg-amber-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-700 transition-colors">
               Lihat Detail & Lacak Semua Retur
             </Link>

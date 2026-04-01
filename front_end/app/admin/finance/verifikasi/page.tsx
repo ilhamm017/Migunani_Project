@@ -81,7 +81,7 @@ export default function FinanceVerifyPage() {
     const silent = Boolean(opts?.silent);
     try {
       if (!silent) setLoading(true);
-      const status = 'waiting_admin_verification,delivered,completed,canceled';
+      const status = 'waiting_admin_verification,delivered,completed,partially_fulfilled,canceled';
       const firstPage = await api.admin.orderManagement.getAll({
         page: 1,
         limit: 100,
@@ -157,7 +157,14 @@ export default function FinanceVerifyPage() {
   // Client-side filtering for tabs
   const tabOrders = useMemo(() => {
       const filtered = orders.filter(o => {
-        if (activeTab === 'verify') return o.status === 'waiting_admin_verification' && o.Invoice?.payment_method === 'transfer_manual';
+        if (activeTab === 'verify') {
+          const method = String(o.Invoice?.payment_method || '').toLowerCase();
+          const status = String(o.Invoice?.payment_status || '').toLowerCase();
+          const hasProof = Boolean(String(o.Invoice?.payment_proof_url || '').trim());
+          // Customer can upload proof even after delivery is completed; order status may stay delivered/completed.
+          // Verification queue should be based on invoice proof, not strictly on order status.
+          return method === 'transfer_manual' && hasProof && status !== 'paid';
+        }
         if (activeTab === 'completed') {
           return o.status === 'completed' || (o.Invoice?.payment_status === 'paid' && o.status !== 'cancelled');
         }

@@ -975,6 +975,7 @@ export const api = {
             apiClient.patch(`/driver/orders/${orderId}/payment-method`, { payment_method }),
         getWallet: () => apiClient.get('/driver/wallet'),
         getReturs: () => apiClient.get('/driver/retur'),
+        getDeliveryReturs: () => apiClient.get('/driver/retur/delivery'),
         getReturById: (returId: string) => apiClient.get(`/driver/retur/${returId}`),
         updateReturStatus: (returId: string, status: 'picked_up' | 'handed_to_warehouse') =>
             apiClient.patch(`/driver/retur/${returId}/status`, { status }),

@@ -90,17 +90,22 @@ export default function DriverHistoryPage() {
     const load = async () => {
       try {
         setLoading(true);
-        const params: { status: string; startDate?: string; endDate?: string } = { status: 'delivered,completed' };
+        const params: { status: string; startDate?: string; endDate?: string } = { status: 'delivered,completed,partially_fulfilled' };
 
         const now = new Date();
         if (filter === 'today') {
-          params.startDate = now.toISOString();
-          params.endDate = now.toISOString();
+          const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+          const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+          params.startDate = start.toISOString();
+          params.endDate = end.toISOString();
         } else if (filter === 'week') {
-          const weekAgo = new Date();
+          const weekAgo = new Date(now);
           weekAgo.setDate(weekAgo.getDate() - 7);
+          weekAgo.setHours(0, 0, 0, 0);
+          const end = new Date(now);
+          end.setHours(23, 59, 59, 999);
           params.startDate = weekAgo.toISOString();
-          params.endDate = now.toISOString();
+          params.endDate = end.toISOString();
         }
 
         const res = await api.driver.getOrders(params);

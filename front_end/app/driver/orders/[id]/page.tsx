@@ -39,7 +39,7 @@ const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const formatCurrency = (value: unknown) =>
   `Rp ${Number(value || 0).toLocaleString('id-ID')}`;
 const isOrderDoneStatus = (raw: unknown) =>
-  ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
+  ['delivered', 'completed', 'partially_fulfilled', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
@@ -932,6 +932,11 @@ export default function DriverOrderDetailPage() {
     }
   };
 
+  const completionLocked = useMemo(() => {
+    if (groupedOrders.length === 0) return true;
+    return groupedOrders.every((row) => isOrderDoneStatus(row?.status));
+  }, [groupedOrders]);
+
   const canComplete = !loading
     && (!isCod || paymentRecorded || isFullReturnNoCash)
     && (!proofRequired || !!proof);
@@ -1630,9 +1635,11 @@ export default function DriverOrderDetailPage() {
             Bukti Foto Pengiriman
           </label>
           <p className="text-[10px] font-bold text-slate-500 pl-1">
-            {proofRequired
-              ? 'Wajib untuk menyelesaikan pengiriman.'
-              : 'Opsional karena seluruh barang diretur.'}
+            {completionLocked
+              ? 'Pengiriman sudah selesai untuk invoice ini.'
+              : proofRequired
+                ? 'Wajib untuk menyelesaikan pengiriman.'
+                : 'Opsional karena seluruh barang diretur.'}
           </p>
           <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 p-6 space-y-3">
             <div className="flex items-start justify-between gap-3">
@@ -1641,7 +1648,9 @@ export default function DriverOrderDetailPage() {
                 <p className="text-[11px] text-slate-600 mt-1">
                   {proof
                     ? `Tersimpan: ${proof.name}`
-                    : proofRequired
+                    : completionLocked
+                      ? 'Bukti upload dinonaktifkan karena invoice sudah selesai.'
+                      : proofRequired
                       ? 'Belum ada foto. Ambil foto dengan kamera.'
                       : 'Belum ada foto (opsional).'}
                 </p>
@@ -1649,6 +1658,7 @@ export default function DriverOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => setDeliveryProofCameraOpen(true)}
+                disabled={completionLocked}
                 className="btn-3d shrink-0 rounded-2xl bg-emerald-600 text-white px-4 py-3 text-[11px] font-black uppercase inline-flex items-center gap-2"
               >
                 <Camera size={16} />
@@ -1659,6 +1669,7 @@ export default function DriverOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => setProof(null)}
+                disabled={completionLocked}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase text-slate-700"
               >
                 Hapus Foto
@@ -1667,12 +1678,14 @@ export default function DriverOrderDetailPage() {
             <button
               type="button"
               onClick={() => void complete()}
-              disabled={!canComplete}
+              disabled={completionLocked || !canComplete}
               className="btn-3d w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase disabled:opacity-50"
             >
               {loading
                 ? 'Memproses...'
-                : missingProof
+                : completionLocked
+                  ? 'Pengiriman Sudah Selesai'
+                  : missingProof
                   ? 'Ambil Bukti Foto Dulu'
                   : 'Selesaikan Pengiriman'}
             </button>

@@ -52,7 +52,13 @@ type OrderSummary = {
     shipped_qty?: number;
     canceled_qty?: number;
     parent_order_id?: string | null;
-    Returs?: Array<unknown>;
+    Returs?: Array<{
+        id?: string;
+        status?: string;
+        retur_type?: string;
+        qty?: number;
+        [key: string]: unknown;
+    }>;
 };
 
 const getStatusLabel = (status: string, order?: OrderSummary) => {
@@ -304,6 +310,10 @@ export default function OrdersPage() {
                 ) : (
                     paginatedOrders.map((order) => {
                         const displayStatus = deriveDisplayStatus(order);
+                        const returs = Array.isArray(order.Returs) ? order.Returs : [];
+                        const hasAnyRetur = returs.length > 0;
+                        const hasPickupRetur = returs.some((r) => String(r?.retur_type || '').toLowerCase() === 'customer_request');
+                        const hasDeliveryRetur = returs.some((r) => ['delivery_refusal', 'delivery_damage'].includes(String(r?.retur_type || '').toLowerCase()));
                         return (
                         <div key={order.id} className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden p-6 space-y-5">
                             {/* Top Row */}
@@ -318,7 +328,13 @@ export default function OrdersPage() {
                                         {order.parent_order_id && (
                                             <span className="inline-block bg-indigo-50 text-indigo-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">Backorder</span>
                                         )}
-                                        {order.Returs && order.Returs.length > 0 && (
+                                        {hasPickupRetur && (
+                                            <span className="inline-block bg-violet-50 text-violet-700 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">Retur Pickup</span>
+                                        )}
+                                        {hasDeliveryRetur && (
+                                            <span className="inline-block bg-rose-50 text-rose-700 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">Retur Saat Kirim</span>
+                                        )}
+                                        {hasAnyRetur && !hasPickupRetur && !hasDeliveryRetur && (
                                             <span className="inline-block bg-amber-50 text-amber-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-lg">Retur</span>
                                         )}
                                     </div>

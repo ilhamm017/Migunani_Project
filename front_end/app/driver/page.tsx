@@ -15,7 +15,7 @@ import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
-const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
+const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'partially_fulfilled', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
   const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
   return {
@@ -36,6 +36,7 @@ export default function DriverTaskPage() {
   const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
   const [returs, setReturs] = useState<any[]>([]);
+  const [deliveryReturs, setDeliveryReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
@@ -237,11 +238,16 @@ export default function DriverTaskPage() {
     );
   }, [canMonitorReturTasks, returs]);
   const remainingPickupCount = activePickupReturs.length;
-  const remainingPickupItemCount = useMemo(
-    () => activePickupReturs.reduce((sum, row) => sum + Number(row?.qty || 0), 0),
-    [activePickupReturs]
+  const activeDeliveryReturs = useMemo(() => {
+    if (!canMonitorReturTasks) return [];
+    return deliveryReturs.filter((r) => String(r?.status || '').toLowerCase() === 'picked_up');
+  }, [canMonitorReturTasks, deliveryReturs]);
+  const remainingDeliveryReturCount = activeDeliveryReturs.length;
+  const remainingDeliveryReturItemCount = useMemo(
+    () => activeDeliveryReturs.reduce((sum, row) => sum + Number(row?.qty || 0), 0),
+    [activeDeliveryReturs]
   );
-  const remainingTaskCount = remainingDeliveryCount + remainingPickupCount;
+  const remainingTaskCount = remainingDeliveryCount + remainingPickupCount + remainingDeliveryReturCount;
   const latestDriverEvent = latestEvents[0];
   const latestDriverStatusLabel = useMemo(
     () => (latestDriverEvent ? formatOrderStatusLabel(latestDriverEvent.to_status) : '-'),
@@ -250,14 +256,16 @@ export default function DriverTaskPage() {
 
   const load = useCallback(async () => {
     try {
-      const [ordersRes, walletRes, retursRes] = await Promise.all([
+      const [ordersRes, walletRes, retursRes, deliveryRetursRes] = await Promise.all([
         api.driver.getOrders({ status: 'shipped' }),
         api.driver.getWallet(),
-        canMonitorReturTasks ? api.driver.getReturs() : Promise.resolve({ data: [] })
+        canMonitorReturTasks ? api.driver.getReturs() : Promise.resolve({ data: [] }),
+        canMonitorReturTasks ? api.driver.getDeliveryReturs() : Promise.resolve({ data: [] })
       ]);
       setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : []);
       setWallet(walletRes.data);
       setReturs(Array.isArray(retursRes.data) ? retursRes.data : []);
+      setDeliveryReturs(Array.isArray(deliveryRetursRes.data) ? deliveryRetursRes.data : []);
     } catch (error) {
       console.error('Failed to load driver data:', error);
     }
@@ -326,6 +334,11 @@ export default function DriverTaskPage() {
                   <RotateCcw size={13} className="text-amber-600" /> Pickup Retur: {remainingPickupCount}
                 </p>
               )}
+              {canMonitorReturTasks && (
+                <p className="text-[11px] font-bold text-slate-600 inline-flex items-center gap-1.5">
+                  <RotateCcw size={13} className="text-rose-600" /> Retur Delivery: {remainingDeliveryReturCount}
+                </p>
+              )}
             </div>
           </div>
           <ClipboardList size={100} className="absolute -right-6 -bottom-6 text-slate-200" />
@@ -335,15 +348,15 @@ export default function DriverTaskPage() {
         <div className="bg-amber-50 rounded-[32px] p-6 border border-amber-200 shadow-sm relative overflow-hidden">
           <div className="relative z-10">
             <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-1">Barang Harus Diretur</p>
-            <h3 className="text-3xl font-black text-amber-700">{remainingPickupCount}</h3>
+            <h3 className="text-3xl font-black text-amber-700">{remainingDeliveryReturCount}</h3>
             <p className="text-[11px] font-bold text-amber-800 mt-3">
-              {remainingPickupCount > 0
-                ? `Total ${remainingPickupItemCount} item menunggu proses retur.`
-                : 'Tidak ada barang retur yang perlu diproses.'}
+              {remainingDeliveryReturCount > 0
+                ? `Total ${remainingDeliveryReturItemCount} item retur delivery perlu diserahkan ke gudang.`
+                : 'Tidak ada barang retur delivery yang perlu diserahkan.'}
             </p>
-            {canMonitorReturTasks && remainingPickupCount > 0 && (
+            {canMonitorReturTasks && remainingDeliveryReturCount > 0 && (
               <a
-                href="#pickup-retur"
+                href="#delivery-retur"
                 className="btn-3d mt-4 inline-flex items-center justify-center gap-2 rounded-2xl bg-amber-600 text-white px-4 py-3 text-[10px] font-black uppercase tracking-widest"
               >
                 Di Sini
@@ -541,6 +554,80 @@ export default function DriverTaskPage() {
                       <MessageCircle size={12} /> Buka Detail Tugas
                     </span>
                     <span className="flex items-center gap-1 italic opacity-60">Status: {r.status}</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {canMonitorReturTasks && (
+        <div id="delivery-retur" className="space-y-4">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-xs font-black text-rose-600 uppercase tracking-widest flex items-center gap-2">
+              <RotateCcw size={14} className="text-rose-600" /> Retur Delivery (Bawa ke Gudang) ({activeDeliveryReturs.length})
+            </h2>
+          </div>
+          <p className="text-[11px] font-bold text-slate-500 px-1">
+            Barang yang sudah dibawa driver karena retur saat pengiriman. Serahkan fisik barang ke gudang, admin akan verifikasi.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3">
+            {activeDeliveryReturs.length === 0 && (
+              <div className="bg-white border border-slate-100 rounded-3xl p-10 text-center shadow-sm">
+                <RotateCcw size={40} className="mx-auto text-slate-200 mb-3" />
+                <p className="text-sm font-bold text-slate-400 italic">Tidak ada retur delivery.</p>
+              </div>
+            )}
+            {activeDeliveryReturs.map((r) => {
+              const productName = String(r?.Product?.name || 'Produk').trim();
+              const qty = Number(r?.qty || 0);
+              const orderId = String(r?.order_id || r?.Order?.id || '').trim();
+              const invoiceId = String(r?.invoice_id || '').trim();
+              const invoiceNumber = String(r?.invoice_number || '').trim();
+              const returType = String(r?.retur_type || '').trim();
+              const typeLabel = returType === 'delivery_damage' ? 'Rusak' : 'Tidak Jadi';
+              const href = invoiceId
+                ? `/driver/orders/${invoiceId}`
+                : orderId
+                  ? `/driver/orders/${orderId}`
+                  : '/driver';
+
+              return (
+                <Link
+                  key={String(r?.id || `${orderId}-${productName}`)}
+                  href={href}
+                  className="group block bg-white border-2 border-rose-100 rounded-[28px] p-5 shadow-sm hover:shadow-xl hover:border-rose-300 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black text-rose-600 uppercase tracking-tighter">RETUR Delivery ({typeLabel})</p>
+                      <p className="text-lg font-black text-slate-900 leading-none">{productName}</p>
+                    </div>
+                    <div className="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-[10px] font-black uppercase flex items-center gap-1">
+                      <Package size={10} /> Qty {qty}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-slate-50 space-y-2">
+                    {invoiceNumber && (
+                      <p className="text-xs font-black text-slate-700">Invoice: {invoiceNumber}</p>
+                    )}
+                    {!invoiceNumber && invoiceId && (
+                      <p className="text-xs font-black text-slate-700">Invoice: INV-{invoiceId.slice(-8).toUpperCase()}</p>
+                    )}
+                    {!invoiceId && orderId && (
+                      <p className="text-xs font-black text-slate-700">Order: #{orderId.slice(-8).toUpperCase()}</p>
+                    )}
+                    <p className="text-[10px] font-bold text-slate-500">Status: {String(r?.status || '-')}</p>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between text-rose-600 font-black text-[10px] uppercase tracking-widest">
+                    <span className="flex items-center gap-1 bg-slate-900 text-white px-3 py-2 rounded-xl">
+                      <MessageCircle size={12} /> Buka Detail Invoice
+                    </span>
+                    <span className="flex items-center gap-1 italic opacity-60">Klik untuk lihat rincian</span>
                   </div>
                 </Link>
               );
