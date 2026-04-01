@@ -516,7 +516,11 @@ export default function DriverTaskPage() {
                   <div className="mt-3 pt-3 border-t border-slate-50 space-y-2">
                     {group.invoiceCards.map((card: any) => {
                       const deliveryId = String(card?.deliveryId || '').trim();
-                      const invoiceHref = deliveryId ? `/driver/invoices/${encodeURIComponent(deliveryId)}` : '#';
+                      const invoiceHref = deliveryId
+                        ? customerId
+                          ? `/driver/orders/${encodeURIComponent(customerId)}?invoice=${encodeURIComponent(deliveryId)}`
+                          : `/driver/orders/${encodeURIComponent(deliveryId)}`
+                        : '#';
                       return (
                         <div
                           key={card.groupKey}
@@ -678,9 +682,9 @@ export default function DriverTaskPage() {
               const returType = String(r?.retur_type || '').trim();
               const typeLabel = returType === 'delivery_damage' ? 'Rusak' : 'Tidak Jadi';
               const href = invoiceId
-                ? `/driver/invoices/${invoiceId}`
+                ? `/driver/orders/${invoiceId}`
                 : orderId
-                  ? `/driver/invoices/${orderId}`
+                  ? `/driver/orders/${orderId}`
                   : '/driver';
 
               return (

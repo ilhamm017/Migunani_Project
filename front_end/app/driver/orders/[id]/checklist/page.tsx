@@ -12,7 +12,7 @@ export default function DriverOrderChecklistPage() {
 
   useEffect(() => {
     if (!allowed) return;
-    router.replace(`/driver/invoices/${encodeURIComponent(id)}`);
+    router.replace(`/driver/orders/${encodeURIComponent(id)}`);
   }, [allowed, id, router]);
 
   if (!allowed) return null;
