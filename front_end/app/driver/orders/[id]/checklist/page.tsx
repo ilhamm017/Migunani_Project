@@ -14,7 +14,7 @@ export default function DriverOrderChecklistPage() {
   useEffect(() => {
     if (!allowed) return;
     const t = window.setTimeout(() => {
-      router.replace(`/driver/orders/${encodeURIComponent(id)}`);
+      router.replace(`/driver/invoices/${encodeURIComponent(id)}`);
     }, 1200);
     return () => window.clearTimeout(t);
   }, [allowed, id, router]);
@@ -31,7 +31,7 @@ export default function DriverOrderChecklistPage() {
         </p>
         <div className="mt-4">
           <Link
-            href={`/driver/orders/${encodeURIComponent(id)}`}
+            href={`/driver/invoices/${encodeURIComponent(id)}`}
             className="rounded-xl bg-slate-900 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white"
           >
             Kembali ke Detail
@@ -41,4 +41,3 @@ export default function DriverOrderChecklistPage() {
     </div>
   );
 }
-

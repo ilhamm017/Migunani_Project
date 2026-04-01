@@ -39,9 +39,7 @@ export default function DriverTaskPage() {
   const [returs, setReturs] = useState<any[]>([]);
   const [deliveryReturs, setDeliveryReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
-  const [selectedDeliveryIds, setSelectedDeliveryIds] = useState<Record<string, boolean>>({});
   const [batchLoading, setBatchLoading] = useState(false);
-  const [pendingBatchIds, setPendingBatchIds] = useState<string[]>([]);
   const batchProofInputRef = useRef<HTMLInputElement | null>(null);
   const pendingBatchIdsRef = useRef<string[]>([]);
   const { user } = useAuthStore();
@@ -244,16 +242,15 @@ export default function DriverTaskPage() {
       const customerId = String((card as any).customerId || '').trim();
       const whatsapp = String(card.whatsapp || '').trim();
       const customerName = String(card.customerName || '').trim();
-      const addressKey = String(card.address || '').trim().toLowerCase();
-      const baseKey = customerId
+      const groupKey = customerId
         ? `cid:${customerId}`
         : whatsapp && whatsapp !== '-'
           ? `wa:${whatsapp}`
           : `name:${customerName.toLowerCase() || 'unknown'}`;
-      const groupKey = `${baseKey}|addr:${addressKey || '-'}`;
 
       const bucket = acc.get(groupKey) || {
         groupKey,
+        customerId,
         customerName: customerName || 'Customer Umum',
         address: String(card.address || 'Alamat tidak tersedia'),
         whatsapp: whatsapp || '-',
@@ -268,7 +265,7 @@ export default function DriverTaskPage() {
       bucket.latestTs = Math.max(bucket.latestTs, val);
       acc.set(groupKey, bucket);
       return acc;
-    }, new Map<string, { groupKey: string; customerName: string; address: string; whatsapp: string; invoiceCards: typeof activeInvoiceCards; totalAmount: number; latestTs: number }>());
+    }, new Map<string, { groupKey: string; customerId: string; customerName: string; address: string; whatsapp: string; invoiceCards: typeof activeInvoiceCards; totalAmount: number; latestTs: number }>());
 
     return Array.from(groups.values())
       .map((group) => ({
@@ -350,39 +347,15 @@ export default function DriverTaskPage() {
     filterDriverIds: user?.id ? [String(user.id)] : [],
   });
 
-  const toggleSelectedDeliveryId = useCallback((id: string, checked?: boolean) => {
-    const key = String(id || '').trim();
-    if (!key) return;
-    setSelectedDeliveryIds((prev) => {
-      const next = { ...prev };
-      const current = Boolean(next[key]);
-      next[key] = checked === undefined ? !current : Boolean(checked);
-      return next;
-    });
-  }, []);
-
-  const setSelectedDeliveryIdsBulk = useCallback((ids: string[], checked: boolean) => {
-    const cleaned = Array.from(new Set((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
-    if (cleaned.length === 0) return;
-    setSelectedDeliveryIds((prev) => {
-      const next = { ...prev };
-      cleaned.forEach((id) => {
-        next[id] = checked;
-      });
-      return next;
-    });
-  }, []);
-
   const startBatchComplete = useCallback((ids: string[]) => {
     const cleaned = Array.from(new Set((ids || []).map((v) => String(v || '').trim()).filter(Boolean)));
     if (cleaned.length === 0) {
-      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Pilih minimal 1 invoice.' });
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice yang bisa diproses.' });
       return;
     }
     if (batchLoading) return;
     if (!batchProofInputRef.current) return;
     pendingBatchIdsRef.current = cleaned;
-    setPendingBatchIds(cleaned);
     // Reset to allow selecting the same file twice.
     batchProofInputRef.current.value = '';
     batchProofInputRef.current.click();
@@ -394,7 +367,6 @@ export default function DriverTaskPage() {
 
     const ids = pendingBatchIdsRef.current;
     pendingBatchIdsRef.current = [];
-    setPendingBatchIds([]);
 
     if (!file || ids.length === 0) return;
 
@@ -404,13 +376,6 @@ export default function DriverTaskPage() {
     try {
       setBatchLoading(true);
       await api.driver.completeOrdersBatch(ids, { proof: file });
-      setSelectedDeliveryIds((prev) => {
-        const next = { ...prev };
-        ids.forEach((id) => {
-          delete next[id];
-        });
-        return next;
-      });
       notifySuccess(`Pengiriman selesai untuk ${ids.length} invoice.`);
       await load();
     } catch (error: any) {
@@ -569,9 +534,10 @@ export default function DriverTaskPage() {
 	            </div>
 	          )}
 	          {activeDeliveryGroups.map((group) => {
-              const deliveryIds = group.invoiceCards.map((row: any) => String(row?.deliveryId || '').trim()).filter(Boolean);
-              const selectedIds = deliveryIds.filter((id) => Boolean(selectedDeliveryIds[id]));
-              const selectedCount = selectedIds.length;
+              const deliveryIds = group.invoiceCards
+                .map((row: any) => String(row?.invoiceId || row?.deliveryId || '').trim())
+                .filter(Boolean);
+              const customerId = String((group as any)?.customerId || '').trim();
               const whatsapp = String(group.whatsapp || '-');
 
 	            return (
@@ -604,32 +570,23 @@ export default function DriverTaskPage() {
                   <div className="mt-3 pt-3 border-t border-slate-50 space-y-2">
                     {group.invoiceCards.map((card: any) => {
                       const deliveryId = String(card?.deliveryId || '').trim();
-                      const checked = Boolean(deliveryId && selectedDeliveryIds[deliveryId]);
+                      const invoiceHref = deliveryId ? `/driver/invoices/${encodeURIComponent(deliveryId)}` : '#';
                       return (
                         <div
                           key={card.groupKey}
                           className="flex items-center justify-between gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2"
                         >
-                          <label className="flex items-center gap-2 flex-1 min-w-0">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-emerald-600"
-                              checked={checked}
-                              disabled={!deliveryId || batchLoading}
-                              onChange={(event) => toggleSelectedDeliveryId(deliveryId, event.target.checked)}
-                            />
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-black text-slate-900 truncate">{card.invoiceLabel}</p>
-                              <p className="text-[10px] text-slate-500 truncate">
-                                {card.orders.length} order • Rp {Number(card.totalAmount || 0).toLocaleString('id-ID')} • {card.statusLabel}
-                              </p>
-                            </div>
-                          </label>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-black text-slate-900 truncate">{card.invoiceLabel}</p>
+                            <p className="text-[10px] text-slate-500 truncate">
+                              {card.orders.length} order • Rp {Number(card.totalAmount || 0).toLocaleString('id-ID')} • {card.statusLabel}
+                            </p>
+                          </div>
                           <Link
-                            href={`/driver/orders/${card.deliveryId}`}
+                            href={invoiceHref}
                             className="shrink-0 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
                           >
-                            Detail <ChevronRight size={14} />
+                            Detail Invoice <ChevronRight size={14} />
                           </Link>
                         </div>
                       );
@@ -637,29 +594,21 @@ export default function DriverTaskPage() {
                   </div>
 
                   <div className="mt-3 flex items-center gap-2">
+                    {customerId && (
+                      <Link
+                        href={`/driver/orders/${encodeURIComponent(customerId)}`}
+                        className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60 inline-flex items-center gap-1"
+                      >
+                        Detail Customer <ChevronRight size={14} />
+                      </Link>
+                    )}
                     <button
                       type="button"
                       disabled={batchLoading || deliveryIds.length === 0}
-                      onClick={() => setSelectedDeliveryIdsBulk(deliveryIds, true)}
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      Pilih Semua
-                    </button>
-                    <button
-                      type="button"
-                      disabled={batchLoading || deliveryIds.length === 0}
-                      onClick={() => setSelectedDeliveryIdsBulk(deliveryIds, false)}
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      Bersihkan
-                    </button>
-                    <button
-                      type="button"
-                      disabled={batchLoading || selectedCount === 0}
-                      onClick={() => startBatchComplete(selectedIds)}
+                      onClick={() => startBatchComplete(deliveryIds)}
                       className="flex-1 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase inline-flex items-center justify-center gap-1 disabled:opacity-60"
                     >
-                      Kirim Dipilih ({selectedCount})
+                      Kirim Semua Invoice ({deliveryIds.length})
                     </button>
                   </div>
 	              </div>
@@ -775,9 +724,9 @@ export default function DriverTaskPage() {
               const returType = String(r?.retur_type || '').trim();
               const typeLabel = returType === 'delivery_damage' ? 'Rusak' : 'Tidak Jadi';
               const href = invoiceId
-                ? `/driver/orders/${invoiceId}`
+                ? `/driver/invoices/${invoiceId}`
                 : orderId
-                  ? `/driver/orders/${orderId}`
+                  ? `/driver/invoices/${orderId}`
                   : '/driver';
 
               return (

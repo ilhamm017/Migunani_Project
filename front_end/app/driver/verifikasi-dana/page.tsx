@@ -185,7 +185,7 @@ export default function DriverVerifikasiDanaPage() {
               return (
                 <Link
                   key={card.key}
-                  href={`/driver/orders/${card.key}`}
+                  href={`/driver/invoices/${card.key}`}
                   className="group block bg-white border-2 border-amber-100 rounded-[24px] p-4 shadow-sm hover:shadow-lg hover:border-amber-300 transition-all"
                 >
                   <div className="flex items-start justify-between gap-3">
