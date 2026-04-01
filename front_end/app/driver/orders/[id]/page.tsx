@@ -34,6 +34,8 @@ export default function DriverCustomerOrdersPage() {
   const searchParams = useSearchParams();
   const params = useParams<{ id: string }>();
   const customerId = normalizeId(params?.id);
+  const modalInvoiceParam = normalizeId(searchParams?.get('invoice'));
+  const isInvoiceModalOpen = Boolean(modalInvoiceParam);
 
   const [loading, setLoading] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
@@ -113,17 +115,27 @@ export default function DriverCustomerOrdersPage() {
 
   const closeInvoiceModal = useCallback(() => {
     setIssueNote('');
+    if (customerId) {
+      router.replace(`/driver/orders/${encodeURIComponent(customerId)}`);
+      return;
+    }
+    router.replace('/driver');
+  }, [customerId, router]);
+
+  const clearSelectedInvoice = useCallback(() => {
+    setIssueNote('');
     setActiveInvoiceId('');
     if (customerId) {
       router.replace(`/driver/orders/${encodeURIComponent(customerId)}`);
+      return;
     }
+    router.replace('/driver');
   }, [customerId, router]);
 
   useEffect(() => {
-    const invoiceParam = normalizeId(searchParams?.get('invoice'));
-    if (!invoiceParam) return;
-    setActiveInvoiceId(invoiceParam);
-  }, [searchParams]);
+    if (!modalInvoiceParam) return;
+    setActiveInvoiceId(modalInvoiceParam);
+  }, [modalInvoiceParam]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -259,6 +271,15 @@ export default function DriverCustomerOrdersPage() {
       })
       .sort((a, b) => b.invoiceId.localeCompare(a.invoiceId));
   }, [customerOrders, invoiceDetailsById]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    if (activeInvoiceId) return;
+    if (invoiceCards.length !== 1) return;
+    const onlyInvoiceId = normalizeId((invoiceCards as any)[0]?.invoiceId);
+    if (!onlyInvoiceId) return;
+    setActiveInvoiceId(onlyInvoiceId);
+  }, [activeInvoiceId, allowed, invoiceCards]);
 
   const overallTotal = useMemo(
     () => invoiceCards.reduce((sum, row) => sum + Number(row.total || 0), 0),
@@ -424,13 +445,13 @@ export default function DriverCustomerOrdersPage() {
       await api.driver.completeOrder(invoiceId, form);
       notifySuccess('Pengiriman invoice selesai.');
       await load();
-      closeInvoiceModal();
+      clearSelectedInvoice();
     } catch (error: any) {
       notifyFromAlertMessage(String((error?.response?.data as any)?.message || error?.message || 'Gagal menyelesaikan pengiriman.'));
     } finally {
       setActiveInvoiceLoading(false);
     }
-  }, [closeInvoiceModal, load]);
+  }, [clearSelectedInvoice, load]);
 
   const submitIssue = useCallback(async () => {
     const invoiceId = normalizeId(activeInvoiceId);
@@ -501,27 +522,39 @@ export default function DriverCustomerOrdersPage() {
               </span>
             )}
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={paymentLoading || codInvoiceIds.length === 0}
-              onClick={recordCodPaymentOnce}
-              className="flex-1 px-4 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-            >
-              {paymentLoading ? 'Memproses COD...' : `Catat COD (${codInvoiceIds.length})`}
-            </button>
-            <button
-              type="button"
-              disabled={batchLoading || invoiceCards.length === 0}
-              onClick={startBatchComplete}
-              className="flex-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-            >
-              {batchLoading ? 'Memproses...' : `Selesaikan ${invoiceCards.length} Invoice`}
-            </button>
-          </div>
         </div>
       </div>
+
+      {(invoiceCards.length > 1 || codInvoiceIds.length > 1) && (
+        <div className="bg-white border border-slate-200 rounded-[24px] p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aksi Customer</p>
+              <p className="text-xs font-semibold text-slate-600 mt-1">
+                Pembayaran COD bisa dicatat <span className="font-black">sekali</span> untuk seluruh invoice COD, lalu pengiriman bisa diselesaikan untuk semua invoice dengan 1 foto bukti.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={paymentLoading || codInvoiceIds.length === 0}
+                onClick={recordCodPaymentOnce}
+                className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+              >
+                {paymentLoading ? 'COD...' : `Catat COD (${codInvoiceIds.length})`}
+              </button>
+              <button
+                type="button"
+                disabled={batchLoading || invoiceCards.length === 0}
+                onClick={startBatchComplete}
+                className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+              >
+                {batchLoading ? 'Proses...' : `Selesaikan (${invoiceCards.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
@@ -569,6 +602,110 @@ export default function DriverCustomerOrdersPage() {
         </div>
       </div>
 
+      {activeInvoiceId && (
+        <div className="bg-white border border-slate-200 rounded-[24px] p-5 shadow-sm space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aksi Invoice Terpilih</p>
+              <p className="text-lg font-black text-slate-900 truncate">
+                {String((activeInvoiceDetail as any)?.invoice_number || '').trim()
+                  || `INV-${String(activeInvoiceId).slice(-8).toUpperCase()}`}
+              </p>
+              <p className="text-[11px] font-bold text-slate-500 mt-1">
+                Status bayar: {String((activeInvoiceDetail as any)?.payment_status || '-')} • Metode: {String((activeInvoiceDetail as any)?.payment_method || '-')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                clearSelectedInvoice();
+              }}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50"
+            >
+              Reset Pilihan
+            </button>
+          </div>
+
+          {activeInvoiceLoading && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
+              Memuat / memproses...
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Opsi Pembayaran</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
+                  onClick={() => updateInvoicePaymentMethod('cod')}
+                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                >
+                  COD
+                </button>
+                <button
+                  type="button"
+                  disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
+                  onClick={() => updateInvoicePaymentMethod('transfer_manual')}
+                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Transfer
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran Customer</p>
+              <button
+                type="button"
+                disabled={activeInvoiceLoading || !activeInvoiceMeta.canRecordCod}
+                onClick={recordSingleCodPayment}
+                className="w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+              >
+                Catat COD Invoice Ini
+              </button>
+              <p className="text-[11px] font-semibold text-slate-500">
+                Jika invoice COD masih unpaid/draft, catat penerimaan uang customer di sini.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bukti Foto Pengiriman</p>
+              <button
+                type="button"
+                disabled={activeInvoiceLoading || activeInvoiceMeta.isDelivered}
+                onClick={startSingleCompleteDelivery}
+                className="w-full px-3 py-3 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+              >
+                {activeInvoiceMeta.isDelivered ? 'Pengiriman Sudah Selesai' : 'Upload Foto & Selesaikan Pengiriman'}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Laporan Barang Kurang</p>
+              <textarea
+                value={issueNote}
+                onChange={(event) => setIssueNote(event.target.value)}
+                placeholder="Contoh: Barang kurang 1 pcs (SKU ...), customer minta dikirim susulan."
+                className="w-full min-h-[90px] rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 outline-none focus:bg-white focus:border-rose-300"
+                disabled={activeInvoiceLoading}
+              />
+              <button
+                type="button"
+                disabled={activeInvoiceLoading}
+                onClick={submitIssue}
+                className="w-full px-3 py-2 rounded-xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+              >
+                Kirim Laporan Issue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
           <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">Rincian Barang (Gabungan)</h2>
@@ -593,7 +730,7 @@ export default function DriverCustomerOrdersPage() {
         </div>
       </div>
 
-      {activeInvoiceId && (
+      {isInvoiceModalOpen && activeInvoiceId && (
         <div className="fixed inset-0 z-50">
           <button
             type="button"
@@ -629,82 +766,6 @@ export default function DriverCustomerOrdersPage() {
                     Memuat / memproses...
                   </div>
                 )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Opsi Pembayaran</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
-                        onClick={() => updateInvoicePaymentMethod('cod')}
-                        className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        COD
-                      </button>
-                      <button
-                        type="button"
-                        disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
-                        onClick={() => updateInvoicePaymentMethod('transfer_manual')}
-                        className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        Transfer
-                      </button>
-                    </div>
-                    <p className="text-[11px] font-semibold text-slate-500">
-                      Ubah metode pembayaran untuk invoice ini (jika masih diperbolehkan).
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran Customer</p>
-                    <button
-                      type="button"
-                      disabled={activeInvoiceLoading || !activeInvoiceMeta.canRecordCod}
-                      onClick={recordSingleCodPayment}
-                      className="w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-                    >
-                      Catat COD Invoice Ini
-                    </button>
-                    <p className="text-[11px] font-semibold text-slate-500">
-                      Gunakan ini hanya jika invoice COD masih belum tercatat (unpaid/draft).
-                    </p>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bukti Foto Pengiriman</p>
-                  <button
-                    type="button"
-                    disabled={activeInvoiceLoading || activeInvoiceMeta.isDelivered}
-                    onClick={startSingleCompleteDelivery}
-                    className="w-full px-3 py-3 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-                  >
-                    {activeInvoiceMeta.isDelivered ? 'Pengiriman Sudah Selesai' : 'Upload Foto & Selesaikan Pengiriman'}
-                  </button>
-                  <p className="text-[11px] font-semibold text-slate-500">
-                    Upload 1 foto bukti untuk invoice ini, lalu sistem menandai pengiriman selesai.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Laporan Barang Kurang</p>
-                  <textarea
-                    value={issueNote}
-                    onChange={(event) => setIssueNote(event.target.value)}
-                    placeholder="Contoh: Barang kurang 1 pcs (SKU ...), customer minta dikirim susulan."
-                    className="w-full min-h-[90px] rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 outline-none focus:bg-white focus:border-rose-300"
-                    disabled={activeInvoiceLoading}
-                  />
-                  <button
-                    type="button"
-                    disabled={activeInvoiceLoading}
-                    onClick={submitIssue}
-                    className="w-full px-3 py-2 rounded-xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-                  >
-                    Kirim Laporan Issue
-                  </button>
-                </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rincian Barang</p>
