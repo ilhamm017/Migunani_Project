@@ -373,7 +373,8 @@ export default function DriverCustomerOrdersPage() {
       notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice COD yang perlu dicatat.' });
       return;
     }
-    const confirmed = window.confirm(`Catat pembayaran COD untuk ${codInvoiceIds.length} invoice customer ini?`);
+    const totalLabel = `Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`;
+    const confirmed = window.confirm(`Catat pembayaran COD untuk ${codInvoiceIds.length} invoice (total ${totalLabel})?`);
     if (!confirmed) return;
 
     try {
@@ -386,7 +387,7 @@ export default function DriverCustomerOrdersPage() {
     } finally {
       setPaymentLoading(false);
     }
-  }, [codInvoiceIds, load, paymentLoading]);
+  }, [codInvoiceIds, codTotalEstimate, load, paymentLoading]);
 
   const updateInvoicePaymentMethod = useCallback(async (nextMethod: 'cod' | 'transfer_manual') => {
     const invoiceId = normalizeId(activeInvoiceId);
@@ -525,13 +526,13 @@ export default function DriverCustomerOrdersPage() {
         </div>
       </div>
 
-      {(invoiceCards.length > 1 || codInvoiceIds.length > 1) && (
+      {invoiceCards.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-[24px] p-5 shadow-sm space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aksi Customer</p>
               <p className="text-xs font-semibold text-slate-600 mt-1">
-                Pembayaran COD bisa dicatat <span className="font-black">sekali</span> untuk seluruh invoice COD, lalu pengiriman bisa diselesaikan untuk semua invoice dengan 1 foto bukti.
+                Pembayaran COD dicatat <span className="font-black">sekali</span> untuk seluruh invoice COD, lalu pengiriman diselesaikan untuk semua invoice dengan 1 foto bukti.
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -541,7 +542,9 @@ export default function DriverCustomerOrdersPage() {
                 onClick={recordCodPaymentOnce}
                 className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
               >
-                {paymentLoading ? 'COD...' : `Catat COD (${codInvoiceIds.length})`}
+                {paymentLoading
+                  ? 'COD...'
+                  : `Catat COD • Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`}
               </button>
               <button
                 type="button"
@@ -571,21 +574,29 @@ export default function DriverCustomerOrdersPage() {
               </p>
             </div>
           ) : (
-            invoiceCards.map((card) => (
-              <div key={card.invoiceId} className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Invoice</p>
-                    <p className="text-base font-black text-slate-900 leading-none truncate">{card.invoiceNumber}</p>
-                    <p className="text-[10px] text-slate-500 mt-1">
-                      {card.orderCount} order • {card.statusLabel}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Total</p>
-                    <p className="text-sm font-black text-slate-900">Rp {Number(card.total || 0).toLocaleString('id-ID')}</p>
-                  </div>
-                </div>
+	            invoiceCards.map((card) => (
+	              <div key={card.invoiceId} className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-sm">
+	                <div className="flex items-start justify-between gap-3">
+	                  <div className="min-w-0">
+	                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Invoice</p>
+	                    <p className="text-base font-black text-slate-900 leading-none truncate">{card.invoiceNumber}</p>
+	                    <p className="text-[10px] text-slate-500 mt-1">
+	                      {card.orderCount} order • {card.statusLabel}
+	                    </p>
+	                    <p className="text-[10px] text-slate-500 mt-1">
+	                      Tagihan:{' '}
+	                      <span className="font-black text-slate-700">
+	                        Rp {Math.round(Number(card.netTotalEstimate || 0)).toLocaleString('id-ID')}
+	                      </span>
+	                      {card.paymentMethod ? ` • ${String(card.paymentMethod).toUpperCase()}` : ''}
+	                      {card.paymentStatus ? ` • ${String(card.paymentStatus).toUpperCase()}` : ''}
+	                    </p>
+	                  </div>
+	                  <div className="text-right">
+	                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Total</p>
+	                    <p className="text-sm font-black text-slate-900">Rp {Number(card.total || 0).toLocaleString('id-ID')}</p>
+	                  </div>
+	                </div>
 
                 <div className="mt-3">
                   <button
@@ -657,16 +668,8 @@ export default function DriverCustomerOrdersPage() {
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran Customer</p>
-              <button
-                type="button"
-                disabled={activeInvoiceLoading || !activeInvoiceMeta.canRecordCod}
-                onClick={recordSingleCodPayment}
-                className="w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
-              >
-                Catat COD Invoice Ini
-              </button>
               <p className="text-[11px] font-semibold text-slate-500">
-                Jika invoice COD masih unpaid/draft, catat penerimaan uang customer di sini.
+                Pembayaran COD dicatat sekali untuk seluruh invoice COD customer ini melalui tombol <span className="font-black">Catat COD</span> di bagian Aksi Customer.
               </p>
             </div>
           </div>
