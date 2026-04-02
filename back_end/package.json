@@ -10,6 +10,8 @@
     "start": "node dist/server.js",
     "migrate:sql": "ts-node src/scripts/run_sql_migrations.ts",
     "migrate:sql:prod": "node dist/scripts/run_sql_migrations.js",
+    "reconcile:reservations": "ts-node src/scripts/reconcile_inventory_reservations.ts",
+    "reconcile:reservations:prod": "node dist/scripts/reconcile_inventory_reservations.js",
     "seed": "npm run seed:accounts && npm run seed:staff",
     "seed:accounts": "ts-node src/scripts/seed_accounts.ts",
     "seed:staff": "ts-node src/scripts/seed_staff.ts",

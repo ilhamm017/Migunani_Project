@@ -2149,9 +2149,55 @@ export default function AdminOrdersWorkspace({
     return payload;
   };
 
+  const capAllocationByBatchAvailability = async (
+    orderId: string,
+    items: Array<{ product_id: string; qty: number }>
+  ): Promise<Array<{ product_id: string; qty: number }>> => {
+    if (!orderId || items.length === 0) return items;
+    const uniqueProductIds = Array.from(new Set(items.map((it) => String(it.product_id || '').trim()).filter(Boolean)));
+    if (uniqueProductIds.length === 0) return items;
+
+    const availabilityByProductId = new Map<string, number>();
+    await Promise.allSettled(
+      uniqueProductIds.map(async (productId) => {
+        const res = await api.admin.inventory.getCostLayers(productId, { order_id: orderId });
+        const layers = Array.isArray((res as any)?.data?.layers) ? (res as any).data.layers : [];
+        const maxAvail = layers.reduce((sum: number, row: any) => {
+          const v = row?.qty_available_for_order ?? row?.qty_available ?? 0;
+          return sum + Math.max(0, Math.trunc(Number(v || 0)));
+        }, 0);
+        availabilityByProductId.set(productId, maxAvail);
+      })
+    );
+
+    const capped = items.map((it) => {
+      const productId = String(it.product_id || '').trim();
+      const maxAvail = availabilityByProductId.has(productId)
+        ? Number(availabilityByProductId.get(productId) || 0)
+        : Number.NaN;
+      const requested = Math.max(0, Math.trunc(Number(it.qty || 0)));
+      if (!Number.isFinite(maxAvail)) return { product_id: productId, qty: requested };
+      return { product_id: productId, qty: Math.max(0, Math.min(requested, Math.trunc(maxAvail))) };
+    });
+
+    const reduced = capped.some((row, idx) => row.qty < Math.max(0, Math.trunc(Number(items[idx]?.qty || 0))));
+    if (reduced) {
+      notifyOpen({
+        variant: 'warning',
+        title: 'Stok batch terbatas',
+        message: 'Sebagian qty alokasi dikurangi karena stok batch (FIFO) yang benar-benar tersedia lebih kecil dari stok tampilan produk.',
+      });
+    }
+
+    return capped;
+  };
+
   const saveAllocationDraft = async (orderId: string, draft: Record<string, number>) => {
     const items = buildAllocationPayload(orderId, draft);
-    if (items.length === 0) {
+    const cappedItems = await capAllocationByBatchAvailability(orderId, items);
+    const filteredItems = cappedItems.filter((row) => Number(row?.qty || 0) > 0 && String(row?.product_id || '').trim());
+
+    if (filteredItems.length === 0) {
       notifyOpen({
         variant: 'warning',
         title: 'Tidak ada alokasi valid',
@@ -2161,14 +2207,14 @@ export default function AdminOrdersWorkspace({
     }
     setAllocationDrafts((prev) => ({
       ...prev,
-      [orderId]: items.reduce<Record<string, number>>((acc, item) => {
+      [orderId]: filteredItems.reduce<Record<string, number>>((acc, item) => {
         acc[item.product_id] = item.qty;
         return acc;
       }, {})
     }));
     try {
       setAllocationSaving((prev) => ({ ...prev, [orderId]: true }));
-      await api.allocation.allocate(orderId, items);
+      await api.allocation.allocate(orderId, filteredItems);
       const refreshed = await api.orders.getOrderById(orderId);
       const detail = refreshed.data;
       if (detail?.id) {

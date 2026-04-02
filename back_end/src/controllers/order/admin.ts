@@ -496,7 +496,9 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
             }
         }
 
-        if (nextStatus === 'canceled') {
+        if (nextStatus === 'canceled' || nextStatus === 'expired' || nextStatus === 'completed') {
+            // Safety: ensure no batch reservations remain locked for terminal orders.
+            // Goods-out flow should normally consume & release reservations, but manual/legacy flows can leave stragglers.
             await InventoryReservationService.releaseReservationsForOrder({ order_id: orderId, transaction: t });
         }
 
