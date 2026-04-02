@@ -63,24 +63,81 @@ CREATE TABLE IF NOT EXISTS `clearance_promos` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4) Link promo to transactions
-ALTER TABLE `order_items`
-  ADD COLUMN `clearance_promo_id` CHAR(36) NULL AFTER `product_id`,
-  ADD KEY `idx_order_items_clearance_promo_id` (`clearance_promo_id`);
+-- NOTE: MySQL 8 does not support `ADD COLUMN IF NOT EXISTS`.
+-- This migration is written to be idempotent via information_schema checks.
 
-ALTER TABLE `pos_sale_items`
-  ADD COLUMN `clearance_promo_id` CHAR(36) NULL AFTER `product_id`,
-  ADD KEY `idx_pos_sale_items_clearance_promo_id` (`clearance_promo_id`);
+SET @db := DATABASE();
+
+-- order_items.clearance_promo_id
+SET @has_order_items_clearance_promo_id := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'order_items'
+    AND COLUMN_NAME = 'clearance_promo_id'
+);
+SET @ddl := IF(
+  @has_order_items_clearance_promo_id = 0,
+  'ALTER TABLE `order_items` ADD COLUMN `clearance_promo_id` CHAR(36) NULL AFTER `product_id`',
+  'SELECT \"skip order_items.clearance_promo_id\"'
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @has_idx_order_items_clearance_promo_id := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'order_items'
+    AND INDEX_NAME = 'idx_order_items_clearance_promo_id'
+);
+SET @ddl := IF(
+  @has_idx_order_items_clearance_promo_id = 0,
+  'ALTER TABLE `order_items` ADD KEY `idx_order_items_clearance_promo_id` (`clearance_promo_id`)',
+  'SELECT \"skip order_items.idx_order_items_clearance_promo_id\"'
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- pos_sale_items.clearance_promo_id
+SET @has_pos_sale_items_clearance_promo_id := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'pos_sale_items'
+    AND COLUMN_NAME = 'clearance_promo_id'
+);
+SET @ddl := IF(
+  @has_pos_sale_items_clearance_promo_id = 0,
+  'ALTER TABLE `pos_sale_items` ADD COLUMN `clearance_promo_id` CHAR(36) NULL AFTER `product_id`',
+  'SELECT \"skip pos_sale_items.clearance_promo_id\"'
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @has_idx_pos_sale_items_clearance_promo_id := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db
+    AND TABLE_NAME = 'pos_sale_items'
+    AND INDEX_NAME = 'idx_pos_sale_items_clearance_promo_id'
+);
+SET @ddl := IF(
+  @has_idx_pos_sale_items_clearance_promo_id = 0,
+  'ALTER TABLE `pos_sale_items` ADD KEY `idx_pos_sale_items_clearance_promo_id` (`clearance_promo_id`)',
+  'SELECT \"skip pos_sale_items.idx_pos_sale_items_clearance_promo_id\"'
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 5) Optional bootstrap: create 1 cost layer per product from existing moving-average state.
 -- This keeps the system usable immediately after migration for existing on-hand inventory.
-INSERT INTO `inventory_batches` (`product_id`, `unit_cost`, `qty_on_hand`, `source_type`, `source_id`, `note`)
+INSERT INTO `inventory_batches` (`product_id`, `unit_cost`, `qty_on_hand`, `source_type`, `source_id`, `note`, `createdAt`, `updatedAt`)
 SELECT
   pcs.`product_id`,
   pcs.`avg_cost`,
   pcs.`on_hand_qty`,
   'legacy_bootstrap',
   NULL,
-  'Bootstrap from product_cost_states (moving average)'
+  'Bootstrap from product_cost_states (moving average)',
+  NOW(),
+  NOW()
 FROM `product_cost_states` pcs
 WHERE pcs.`on_hand_qty` > 0
   AND NOT EXISTS (
