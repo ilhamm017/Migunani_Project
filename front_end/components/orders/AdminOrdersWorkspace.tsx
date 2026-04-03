@@ -5042,13 +5042,13 @@ export default function AdminOrdersWorkspace({
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {sectionFilterOptions.map((filter) => {
-                    const label = getSectionFilterLabel(filter);
-                    const active = orderSectionFilter === filter;
-                    const count = selectedGroup ? selectedGroup.counts[filter as OrderSection] || 0 : 0;
-                    return (
-                      <button
-                        key={filter}
+	                  {sectionFilterOptions.map((filter) => {
+	                    const label = getSectionFilterLabel(filter);
+	                    const active = orderSectionFilter === filter;
+	                    const count = selectedGroup ? derivedSummaryCounts[filter as OrderSection] || 0 : 0;
+	                    return (
+	                      <button
+	                        key={filter}
                         type="button"
                         onClick={() => setOrderSectionFilter(filter)}
                         className={`btn-3d px-2 py-1 rounded-full text-[10px] font-bold border ${active ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
@@ -5061,16 +5061,16 @@ export default function AdminOrdersWorkspace({
                       </button>
                     );
                   })}
-                  {warehouseCustomerFocusMode
-                    && orderSectionFilter !== 'all'
-                    && !sectionFilterOptions.includes(orderSectionFilter)
-                    && (() => {
-                      const filter = orderSectionFilter;
-                      const label = getSectionFilterLabel(filter);
-                      const count = selectedGroup ? selectedGroup.counts[filter as OrderSection] || 0 : 0;
-                      return (
-                        <button
-                          key={`temp-filter:${filter}`}
+	                  {warehouseCustomerFocusMode
+	                    && orderSectionFilter !== 'all'
+	                    && !sectionFilterOptions.includes(orderSectionFilter)
+	                    && (() => {
+	                      const filter = orderSectionFilter;
+	                      const label = getSectionFilterLabel(filter);
+	                      const count = selectedGroup ? derivedSummaryCounts[filter as OrderSection] || 0 : 0;
+	                      return (
+	                        <button
+	                          key={`temp-filter:${filter}`}
                           type="button"
                           onClick={() => setOrderSectionFilter(filter)}
                           className="btn-3d px-2 py-1 rounded-full text-[10px] font-bold border border-amber-300 bg-amber-50 text-amber-800"
@@ -5085,13 +5085,13 @@ export default function AdminOrdersWorkspace({
                     })()}
                 </div>
                 {warehouseCustomerFocusMode && (() => {
-                  const hiddenFilters: OrderSectionFilter[] = ['baru', 'pembayaran', 'selesai', 'backorder'];
-                  const hidden = hiddenFilters
-                    .map((filter) => ({
-                      filter,
-                      count: selectedGroup ? selectedGroup.counts[filter as OrderSection] || 0 : 0,
-                    }))
-                    .filter((row) => row.count > 0);
+	                  const hiddenFilters: OrderSectionFilter[] = ['baru', 'pembayaran', 'selesai', 'backorder'];
+	                  const hidden = hiddenFilters
+	                    .map((filter) => ({
+	                      filter,
+	                      count: selectedGroup ? derivedSummaryCounts[filter as OrderSection] || 0 : 0,
+	                    }))
+	                    .filter((row) => row.count > 0);
                   if (hidden.length === 0) return null;
                   return (
                     <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2">
