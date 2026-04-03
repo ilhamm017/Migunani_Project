@@ -1369,8 +1369,12 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
             throw new CustomError('Driver tidak ditemukan atau tidak aktif', 404);
         }
 
-        if (String(invoice.shipment_status || '') === 'delivered' || invoice.delivered_at) {
+        const normalizedShipmentStatus = String(invoice.shipment_status || '').trim().toLowerCase();
+        if (normalizedShipmentStatus === 'delivered' || invoice.delivered_at) {
             throw new CustomError('Invoice ini sudah selesai dikirim dan tidak bisa ditugaskan ulang ke driver.', 409);
+        }
+        if (normalizedShipmentStatus === 'shipped' || invoice.shipped_at) {
+            throw new CustomError('Invoice ini sudah dikirim dan tidak bisa ditugaskan ulang ke driver.', 409);
         }
 
         const relatedOrderIds = await findOrderIdsByInvoiceId(invoiceId, { transaction: t });
@@ -1386,14 +1390,6 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
 
         const updatedOrderIds: string[] = [];
         for (const order of orders) {
-            // Assigning driver should NOT mark shipped. Shipped is set at actual handover (checker step).
-            const assignableStatuses = ['ready_to_ship', 'checked', 'allocated', 'hold', 'partially_fulfilled', 'waiting_payment'];
-            if (!assignableStatuses.includes(String(order.status || ''))) continue;
-
-            await order.update({
-                courier_id: courier.id
-            }, { transaction: t });
-
             await recordOrderEvent({
                 transaction: t,
                 order_id: String(order.id),
@@ -1408,14 +1404,7 @@ export const assignInvoiceDriver = asyncWrapper(async (req: Request, res: Respon
         }
 
         if (updatedOrderIds.length === 0) {
-            // Optional: Check if already shipped
-            if (String(invoice.shipment_status || '') === 'delivered' || invoice.delivered_at) {
-                throw new CustomError('Invoice ini sudah selesai dikirim.', 409);
-            }
-            if (invoice.shipment_status === 'shipped') {
-                throw new CustomError('Invoice ini sudah dikirim sebelumnya.', 400);
-            }
-            throw new CustomError('Tidak ada pesanan dalam invoice ini yang siap untuk dikirim.', 400);
+            throw new CustomError('Invoice ini tidak memiliki pesanan yang valid.', 400);
         }
 
         // Update Invoice courier only (shipment_status unchanged)
