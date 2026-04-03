@@ -419,6 +419,18 @@ const resolveWorkspaceCourierId = (order: AdminOrderListRow, detail?: OrderDetai
   const courierId = String((order as any)?.courier_id || (detail as any)?.courier_id || '').trim();
   return normalizeUuid(courierId);
 };
+
+const resolveInvoiceOpsSection = (invoiceLike: any): 'gudang' | 'checker' | 'pengiriman' | null => {
+  const shipment = String(invoiceLike?.shipment_status || '').trim().toLowerCase();
+  const courierId = normalizeUuid(String(invoiceLike?.courier_id || '').trim());
+  if (!shipment) return null;
+  if (shipment === 'shipped') return 'pengiriman';
+  if (shipment === 'checked') return 'checker';
+  if (shipment === 'ready_to_ship') {
+    return courierId ? 'checker' : 'gudang';
+  }
+  return null;
+};
 const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailResponse) => {
   const invoice = detail?.Invoice || order?.Invoice || null;
   const paymentMethod = String(invoice?.payment_method || order?.payment_method || '').trim().toLowerCase();
@@ -1046,9 +1058,26 @@ export default function AdminOrdersWorkspace({
     if (isBackorder) sections.push('backorder');
     if (isPartialCompletion) sections.push('partially_fulfilled');
     if (isPayment) sections.push('pembayaran');
-    if (isShipping) sections.push('pengiriman');
     if (isAllocatedReady) sections.push('allocated');
-    if (isWarehouse) sections.push(isCheckerStage ? 'checker' : 'gudang');
+
+    // Warehouse/Checker/Shipping lanes are per-invoice when an order has multi invoices.
+    // If any invoice is in a lane, the order should appear in that lane so the UI can render
+    // only the relevant invoice cards for that lane.
+    const invoiceRefs = collectInvoiceRefs(order, detail);
+    const invoiceOpsSections = new Set<OrderSection>();
+    invoiceRefs.forEach((inv: any) => {
+      const lane = resolveInvoiceOpsSection(inv);
+      if (lane) invoiceOpsSections.add(lane as OrderSection);
+    });
+
+    if (invoiceOpsSections.size > 0) {
+      if (invoiceOpsSections.has('pengiriman')) sections.push('pengiriman');
+      if (invoiceOpsSections.has('checker')) sections.push('checker');
+      if (invoiceOpsSections.has('gudang')) sections.push('gudang');
+    } else {
+      if (isShipping) sections.push('pengiriman');
+      if (isWarehouse) sections.push(isCheckerStage ? 'checker' : 'gudang');
+    }
 
     if (sections.length === 0) sections.push('baru');
     return Array.from(new Set(sections));
@@ -1276,25 +1305,23 @@ export default function AdminOrdersWorkspace({
     };
   }, [groupedOrders, orderDetails, orderQuery]);
 
-  const countInvoiceBucketsForRows = useCallback((rows: AdminOrderListRow[]) => {
+  const countInvoiceBucketsForRows = useCallback((rows: AdminOrderListRow[], section?: OrderSection) => {
     const buckets = new Set<string>();
     (Array.isArray(rows) ? rows : []).forEach((row) => {
       const rowId = String(row?.id || '');
       if (!rowId) return;
       const detail = orderDetails[rowId];
-      const refs = collectInvoiceRefsForOrder(row, detail);
-      if (refs.length === 0) {
-        const invoiceId = normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
+      const invoiceRefs = collectInvoiceRefs(row, detail);
+      const refs = invoiceRefs.length > 0 ? invoiceRefs : [row?.Invoice || detail?.Invoice || null];
+      refs.forEach((inv: any) => {
+        if (section && ['gudang', 'checker', 'pengiriman'].includes(section)) {
+          const lane = resolveInvoiceOpsSection(inv);
+          if (lane !== section) return;
+        }
+        const invoiceId = normalizeInvoiceRef(inv?.id || row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
         const invoiceNumber = normalizeInvoiceRef(
-          row?.invoice_number || (row as any)?.Invoice?.invoice_number || (detail as any)?.invoice_number || (detail as any)?.Invoice?.invoice_number
+          inv?.invoice_number || row?.invoice_number || (row as any)?.Invoice?.invoice_number || (detail as any)?.invoice_number || (detail as any)?.Invoice?.invoice_number
         );
-        const key = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : '';
-        if (key) buckets.add(key);
-        return;
-      }
-      refs.forEach((ref) => {
-        const invoiceId = normalizeInvoiceRef(ref.invoiceId);
-        const invoiceNumber = normalizeInvoiceRef(ref.invoiceNumber);
         const key = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : '';
         if (key) buckets.add(key);
       });
@@ -1320,10 +1347,10 @@ export default function AdminOrdersWorkspace({
     // not "order rows", because a single order can now spawn multiple invoices.
     return {
       ...base,
-      pembayaran: countInvoiceBucketsForRows(filteredGroupedOrders.pembayaran),
-      gudang: countInvoiceBucketsForRows(filteredGroupedOrders.gudang),
-      checker: countInvoiceBucketsForRows(filteredGroupedOrders.checker),
-      pengiriman: countInvoiceBucketsForRows(filteredGroupedOrders.pengiriman),
+      pembayaran: countInvoiceBucketsForRows(filteredGroupedOrders.pembayaran, 'pembayaran'),
+      gudang: countInvoiceBucketsForRows(filteredGroupedOrders.gudang, 'gudang'),
+      checker: countInvoiceBucketsForRows(filteredGroupedOrders.checker, 'checker'),
+      pengiriman: countInvoiceBucketsForRows(filteredGroupedOrders.pengiriman, 'pengiriman'),
     };
   }, [countInvoiceBucketsForRows, filteredGroupedOrders, selectedGroup?.counts]);
 
@@ -5217,53 +5244,40 @@ export default function AdminOrdersWorkspace({
                 const canUseWarehouseChecklist = canAssignDriverWarehouse;
                 const isFinanceCompactView = isFinanceRole && ['pembayaran', 'gudang', 'pengiriman', 'selesai'].includes(section);
                 const isInvoiceCompactView = isWarehouseCompactView || isFinanceCompactView;
-                if (isInvoiceCompactView) {
-                  const invoiceBuckets = list.reduce<Map<string, WarehouseInvoiceBucket>>((acc, row) => {
-                    const rowId = String(row?.id || '');
-                    if (!rowId) return acc;
-                    const detail = orderDetails[rowId];
-                    const refs = collectInvoiceRefsForOrder(row, detail);
-                    if (refs.length === 0) {
-                      const invoiceId = normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
-                      const invoiceNumber = normalizeInvoiceRef(
-                        row?.invoice_number || row?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
-                      );
-                      const groupKey = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : `order:${rowId}`;
+	                if (isInvoiceCompactView) {
+	                  const invoiceBuckets = list.reduce<Map<string, WarehouseInvoiceBucket>>((acc, row) => {
+	                    const rowId = String(row?.id || '');
+	                    if (!rowId) return acc;
+	                    const detail = orderDetails[rowId];
+	                    const invoiceRefs = collectInvoiceRefs(row, detail);
+	                    const refs = invoiceRefs.length > 0 ? invoiceRefs : [row?.Invoice || detail?.Invoice || null];
 
-                      const bucket: WarehouseInvoiceBucket = acc.get(groupKey) || {
-                        groupKey,
-                        invoiceId,
-                        invoiceNumber,
-                        orders: [],
-                      };
+	                    refs.forEach((inv: any) => {
+	                      if (['gudang', 'checker', 'pengiriman'].includes(section)) {
+	                        const lane = resolveInvoiceOpsSection(inv);
+	                        if (lane !== section) return;
+	                      }
 
-                      if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
-                        bucket.orders.push(row);
-                      }
+	                      const invoiceId = normalizeInvoiceRef(inv?.id || row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
+	                      const invoiceNumber = normalizeInvoiceRef(
+	                        inv?.invoice_number || row?.invoice_number || row?.Invoice?.invoice_number || detail?.invoice_number || detail?.Invoice?.invoice_number
+	                      );
+	                      const groupKey = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : `order:${rowId}`;
 
-                      acc.set(groupKey, bucket);
-                      return acc;
-                    }
-
-                    refs.forEach((ref) => {
-                      const invoiceId = normalizeInvoiceRef(ref.invoiceId);
-                      const invoiceNumber = normalizeInvoiceRef(ref.invoiceNumber);
-                      const groupKey = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : `order:${rowId}`;
-
-                      const bucket: WarehouseInvoiceBucket = acc.get(groupKey) || {
-                        groupKey,
-                        invoiceId,
-                        invoiceNumber,
-                        orders: [],
-                      };
-                      if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
-                        bucket.orders.push(row);
-                      }
-                      acc.set(groupKey, bucket);
-                    });
-
-                    return acc;
-                  }, new Map<string, WarehouseInvoiceBucket>());
+	                      const bucket: WarehouseInvoiceBucket = acc.get(groupKey) || {
+	                        groupKey,
+	                        invoiceId,
+	                        invoiceNumber,
+	                        orders: [],
+	                      };
+	                      if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
+	                        bucket.orders.push(row);
+	                      }
+	                      acc.set(groupKey, bucket);
+	                    });
+	
+	                    return acc;
+	                  }, new Map<string, WarehouseInvoiceBucket>());
 
                   // Enrichment: Ensure all orders for the same invoice are in the bucket if they exist in the customer group
                   if (selectedGroup) {
