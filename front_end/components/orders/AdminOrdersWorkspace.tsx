@@ -1276,6 +1276,57 @@ export default function AdminOrdersWorkspace({
     };
   }, [groupedOrders, orderDetails, orderQuery]);
 
+  const countInvoiceBucketsForRows = useCallback((rows: AdminOrderListRow[]) => {
+    const buckets = new Set<string>();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const rowId = String(row?.id || '');
+      if (!rowId) return;
+      const detail = orderDetails[rowId];
+      const refs = collectInvoiceRefsForOrder(row, detail);
+      if (refs.length === 0) {
+        const invoiceId = normalizeInvoiceRef(row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
+        const invoiceNumber = normalizeInvoiceRef(
+          row?.invoice_number || (row as any)?.Invoice?.invoice_number || (detail as any)?.invoice_number || (detail as any)?.Invoice?.invoice_number
+        );
+        const key = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : '';
+        if (key) buckets.add(key);
+        return;
+      }
+      refs.forEach((ref) => {
+        const invoiceId = normalizeInvoiceRef(ref.invoiceId);
+        const invoiceNumber = normalizeInvoiceRef(ref.invoiceNumber);
+        const key = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : '';
+        if (key) buckets.add(key);
+      });
+    });
+    return buckets.size;
+  }, [orderDetails]);
+
+  const derivedSummaryCounts = useMemo(() => {
+    const base = selectedGroup?.counts || {
+      baru: 0,
+      allocated: 0,
+      backorder: 0,
+      pembayaran: 0,
+      gudang: 0,
+      checker: 0,
+      pengiriman: 0,
+      partially_fulfilled: 0,
+      selesai: 0,
+      canceled: 0,
+    };
+
+    // For invoice-centric lanes, show counts in "invoice cards" (unique invoice buckets),
+    // not "order rows", because a single order can now spawn multiple invoices.
+    return {
+      ...base,
+      pembayaran: countInvoiceBucketsForRows(filteredGroupedOrders.pembayaran),
+      gudang: countInvoiceBucketsForRows(filteredGroupedOrders.gudang),
+      checker: countInvoiceBucketsForRows(filteredGroupedOrders.checker),
+      pengiriman: countInvoiceBucketsForRows(filteredGroupedOrders.pengiriman),
+    };
+  }, [countInvoiceBucketsForRows, filteredGroupedOrders, selectedGroup?.counts]);
+
   const loadOrderDetails = useCallback(async (ordersToLoad: AdminOrderListRow[]) => {
     const validOrders = ordersToLoad.filter((order) => String(order?.id || '').trim());
     if (validOrders.length === 0) return;
@@ -4887,21 +4938,21 @@ export default function AdminOrdersWorkspace({
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
               {forcedCustomerId ? 'Ringkasan Customer' : 'Ringkasan Filter'}
             </p>
-            {loading ? (
-              <div className="mt-2 h-16 rounded-xl bg-slate-100 animate-pulse" />
-            ) : (
-              <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold">
-                <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Baru {selectedGroup?.counts.baru || 0}</span>
-                {!isWarehouseRole && (
-                  <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {selectedGroup?.counts.backorder || 0}</span>
-                )}
-                <span className="px-2 py-1 rounded-full bg-cyan-100 text-cyan-700">Sedang Terkirim {selectedGroup?.counts.pengiriman || 0}</span>
-                <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Bayar {selectedGroup?.counts.pembayaran || 0}</span>
-                <span className="px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">Proses Gudang {selectedGroup?.counts.gudang || 0}</span>
-                <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-700">Checker {selectedGroup?.counts.checker || 0}</span>
-              </div>
-            )}
-          </div>
+	            {loading ? (
+	              <div className="mt-2 h-16 rounded-xl bg-slate-100 animate-pulse" />
+	            ) : (
+	              <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold">
+	                <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">Baru {derivedSummaryCounts.baru || 0}</span>
+	                {!isWarehouseRole && (
+	                  <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700">Backorder {derivedSummaryCounts.backorder || 0}</span>
+	                )}
+	                <span className="px-2 py-1 rounded-full bg-cyan-100 text-cyan-700">Sedang Terkirim {derivedSummaryCounts.pengiriman || 0}</span>
+	                <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">Bayar {derivedSummaryCounts.pembayaran || 0}</span>
+	                <span className="px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">Proses Gudang {derivedSummaryCounts.gudang || 0}</span>
+	                <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-700">Checker {derivedSummaryCounts.checker || 0}</span>
+	              </div>
+	            )}
+	          </div>
         </div>
 
         <div className="space-y-4">
