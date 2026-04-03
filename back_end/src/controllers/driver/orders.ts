@@ -32,11 +32,23 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
                 if (normalized.includes('shipped') && !normalized.includes('checked')) {
                     requested.push('checked');
                 }
+                // Driver history page requests delivered/completed/partially_fulfilled, but in multi-invoice flows
+                // the order can remain in 'shipped' until all invoices are terminal. Also, post-delivery unpaid
+                // transfer flows can park the order at 'waiting_invoice'. Include both so delivered invoices
+                // remain visible, and rely on invoice shipment_status filtering below to keep results scoped.
+                const wantsHistoryLane = normalized.some((val) => ['delivered', 'completed', 'partially_fulfilled'].includes(val));
+                if (wantsHistoryLane) {
+                    if (!normalized.includes('shipped')) requested.push('shipped');
+                    if (!normalized.includes('waiting_invoice')) requested.push('waiting_invoice');
+                }
                 whereClause.status = { [Op.in]: requested };
             } else {
                 const normalized = String(statusStr || '').trim().toLowerCase();
                 if (normalized === 'shipped') {
                     whereClause.status = { [Op.in]: ['shipped', 'checked'] };
+                } else if (['delivered', 'completed', 'partially_fulfilled'].includes(normalized)) {
+                    // See notes above (history lane compatibility).
+                    whereClause.status = { [Op.in]: [normalized, 'shipped', 'waiting_invoice'] };
                 } else {
                     whereClause.status = status;
                 }
@@ -99,8 +111,14 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
         ordersWithInvoices.forEach((order: any) => {
             const invoices = Array.isArray(order.Invoices) ? order.Invoices : [];
             const strictCourierInvoices = invoices.filter((inv: any) => String(inv?.courier_id || '').trim() === String(userId));
+            const invoiceFilterInputs = requestedStatuses.flatMap((val) => {
+                // Driver history uses order statuses (completed/partially_fulfilled) but the invoice lane is still
+                // governed by shipment_status. Treat these as delivered invoices for filtering purposes.
+                if (val === 'completed' || val === 'partially_fulfilled') return ['delivered'];
+                return [val];
+            });
             const invoiceStatusFilter = new Set(
-                requestedStatuses.filter((val) =>
+                invoiceFilterInputs.filter((val) =>
                     ['ready_to_ship', 'checked', 'shipped', 'delivered', 'canceled', 'cancelled'].includes(val)
                 )
                     .map((val) => (val === 'cancelled' ? 'canceled' : val))

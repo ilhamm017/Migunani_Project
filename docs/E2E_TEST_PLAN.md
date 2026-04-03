@@ -40,6 +40,7 @@ Referensi kontrak:
 - API & RBAC: `back_end/docs/API_Contract.md`
 - Contract state map transaksi: `back_end/docs/TRANSACTION_CONTRACT_MAP.md`
 - Daftar halaman frontend: `front_end/PAGE_LIST.md`
+- Aturan bisnis order end-to-end (guardrail untuk refactor/AI): `docs/ORDER_RULES.md`
 
 ## 3) Artefak Test yang Sudah Ada (Wajib Dimanfaatkan)
 
@@ -73,11 +74,14 @@ Komponen:
    - `/driver/orders/[id]`
    - `/admin/finance/*` (minimal COD/settlement area yang dipakai operasional)
    - `/admin/orders/customer/[customerId]?section=checker` & `?section=pengiriman` (badge “Qty dialokasikan / SKU dialokasikan” harus ikut terhitung, tidak stuck `0`)
-   - `/admin/orders/customer/[customerId]?section=allocated`
-     - Validasi: saat masih ada order `waiting_invoice`, panel “Terbitkan Invoice” menampilkan tombol **Issue Invoice** (bukan hint invoice tambahan).
-     - Validasi: jika tidak ada `waiting_invoice` tapi ada alokasi baru (invoice tambahan), panel menampilkan hint **Issue Invoice Tambahan**.
-   - `/admin/orders?section=gudang` (atau lane “Proses Gudang”)
-     - Validasi: setelah “Tunjuk Driver” untuk beberapa invoice, kartu invoice pindah ke lane checker tanpa hard refresh.
+	   - `/admin/orders/customer/[customerId]?section=allocated`
+	     - Validasi: saat masih ada order `waiting_invoice`, panel “Terbitkan Invoice” menampilkan tombol **Issue Invoice** (bukan hint invoice tambahan).
+	     - Validasi: jika tidak ada `waiting_invoice` tapi ada alokasi baru (invoice tambahan), panel menampilkan hint **Issue Invoice Tambahan**.
+	     - Validasi: angka “Sudah Berinvoice” konsisten saat pindah filter section (mis. `allocated` → `checker` → `pengiriman`) dan saat menggunakan search order.
+	     - Validasi: angka “Sudah Berinvoice” tidak menghitung invoice yang `shipment_status=delivered`.
+	     - Validasi: angka “Nilai Siap Invoice” konsisten saat pindah filter section (dan konsisten dengan data order di section `allocated`; jika ada invoice pertama + tambahan, angka menampilkan total + breakdown).
+	   - `/admin/orders?section=gudang` (atau lane “Proses Gudang”)
+	     - Validasi: setelah “Tunjuk Driver” untuk beberapa invoice, kartu invoice pindah ke lane checker tanpa hard refresh.
    - `/orders/[id]`
    - `/invoices/[invoiceId]` (jika route aktif di UI build terbaru)
 

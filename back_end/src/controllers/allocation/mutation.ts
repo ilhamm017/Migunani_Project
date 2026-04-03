@@ -266,44 +266,58 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             const product = productById.get(productId);
             const rows = allocationsByProduct.get(productId) || [];
             const requestedQty = Number(requestedQtyByProduct.get(productId) || 0);
-            const previouslyAllocatedTotal = rows.reduce((sum, row) => sum + Number(row?.allocated_qty || 0), 0);
-            const currentStockQty = Number(product?.stock_quantity || 0);
-            const maxAllocatableQty = previouslyAllocatedTotal + Math.max(0, currentStockQty);
+            const shippedAllocatedTotal = rows
+                .filter((row) => String((row as any)?.status || '').trim().toLowerCase() === 'shipped')
+                .reduce((sum, row) => sum + Number(row?.allocated_qty || 0), 0);
+            const openRows = rows.filter((row) => String((row as any)?.status || '').trim().toLowerCase() !== 'shipped');
+            const openAllocatedTotal = openRows.reduce((sum, row) => sum + Number(row?.allocated_qty || 0), 0);
 
-            if (requestedQty > maxAllocatableQty) {
+            // Prevent de-allocating quantities that are already shipped (goods-out posted).
+            if (requestedQty < shippedAllocatedTotal) {
                 await t.rollback();
-                throw new CustomError(`Stok tidak cukup untuk ${product?.name || productId}. Sisa stok: ${Math.max(0, currentStockQty)}, maksimal alokasi saat ini: ${maxAllocatableQty}`, 400);
+                throw new CustomError(
+                    `Qty alokasi untuk ${product?.name || productId} tidak boleh kurang dari qty yang sudah dikirim (requested ${requestedQty}, shipped ${shippedAllocatedTotal}).`,
+                    409
+                );
             }
 
-            const delta = requestedQty - previouslyAllocatedTotal;
-            if (delta > 0) {
+            const openTarget = requestedQty - shippedAllocatedTotal;
+            const currentStockQty = Number(product?.stock_quantity || 0);
+            const maxOpenTarget = openAllocatedTotal + Math.max(0, currentStockQty);
+            if (openTarget > maxOpenTarget) {
+                await t.rollback();
+                throw new CustomError(
+                    `Stok tidak cukup untuk ${product?.name || productId}. Sisa stok: ${Math.max(0, currentStockQty)}, shipped: ${shippedAllocatedTotal}, maksimal reservasi tambahan saat ini: ${maxOpenTarget - openAllocatedTotal}, open_target: ${openTarget}`,
+                    400
+                );
+            }
+
+            const deltaReserved = openTarget - openAllocatedTotal;
+            if (deltaReserved !== 0) {
+                const nextStock = currentStockQty - deltaReserved;
+                const currentAllocatedQty = Number(product?.allocated_quantity || 0);
+                const nextAllocatedQty = Math.max(0, currentAllocatedQty + deltaReserved);
                 await product.update({
-                    stock_quantity: currentStockQty - delta,
-                    allocated_quantity: Number(product?.allocated_quantity || 0) + delta,
-                }, { transaction: t });
-            } else if (delta < 0) {
-                const absDelta = Math.abs(delta);
-                await product.update({
-                    stock_quantity: currentStockQty + absDelta,
-                    allocated_quantity: Math.max(0, Number(product?.allocated_quantity || 0) - absDelta),
+                    stock_quantity: nextStock,
+                    allocated_quantity: nextAllocatedQty,
                 }, { transaction: t });
             }
 
-            if (rows.length === 0) {
-                if (requestedQty > 0) {
+            if (openRows.length === 0) {
+                if (openTarget > 0) {
                     await OrderAllocation.create({
                         order_id: id,
                         product_id: productId,
-                        allocated_qty: requestedQty,
+                        allocated_qty: openTarget,
                         status: 'pending'
                     }, { transaction: t });
                 }
                 continue;
             }
 
-            const [primaryAllocation, ...extraAllocations] = rows;
-            await primaryAllocation.update({ allocated_qty: requestedQty }, { transaction: t });
-            for (const extra of extraAllocations) {
+            const [primaryOpen, ...extraOpen] = openRows;
+            await primaryOpen.update({ allocated_qty: openTarget }, { transaction: t });
+            for (const extra of extraOpen) {
                 if (Number(extra?.allocated_qty || 0) === 0) continue;
                 await extra.update({ allocated_qty: 0 }, { transaction: t });
             }

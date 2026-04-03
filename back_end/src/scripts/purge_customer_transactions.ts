@@ -5,17 +5,23 @@ import {
   CodCollection,
   CreditNote,
   CreditNoteLine,
+  CustomerBalanceEntry,
   Backorder,
   DeliveryHandover,
   DeliveryHandoverItem,
   DriverDebtAdjustment,
+  InventoryBatchConsumption,
+  InventoryBatchReservation,
   Invoice,
+  InvoiceCostOverride,
   InvoiceItem,
   Order,
   OrderAllocation,
   OrderEvent,
   OrderIssue,
   OrderItem,
+  PosSale,
+  PosSaleItem,
   Retur,
   ReturHandover,
   ReturHandoverItem,
@@ -212,6 +218,13 @@ async function main() {
   });
   const cartIds = carts.map((c: any) => String(c.id)).filter(Boolean);
 
+  const posSales = await PosSale.findAll({
+    where: { customer_id: customerId },
+    attributes: ['id'],
+    logging: false,
+  });
+  const posSaleIds = posSales.map((row: any) => String(row?.id || '')).filter(Boolean);
+
   const summary: PurgeSummary = {};
 
   const inClauseBatchSize = 1000;
@@ -242,7 +255,12 @@ async function main() {
     await countByIn(ReturHandover, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'retur_handovers');
     await countByIn(CreditNote, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'credit_notes');
     await countByIn(DeliveryHandover, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'delivery_handovers');
+    await countByIn(InvoiceCostOverride, { invoice_id: { [Op.in]: invoiceIds } }, summary, 'invoice_cost_overrides');
     await countByIn(Invoice, { id: { [Op.in]: invoiceIds } }, summary, 'invoices');
+  }
+  if (posSaleIds.length > 0) {
+    await countByIn(PosSaleItem, { pos_sale_id: { [Op.in]: posSaleIds } }, summary, 'pos_sale_items');
+    await countByIn(PosSale, { id: { [Op.in]: posSaleIds } }, summary, 'pos_sales');
   }
   if (deliveryHandoverItemIds.length > 0) {
     await countByIn(DeliveryHandoverItem, { id: { [Op.in]: deliveryHandoverItemIds } }, summary, 'delivery_handover_items');
@@ -256,6 +274,11 @@ async function main() {
   if (driverDebtAdjustmentIds.length > 0) {
     await countByIn(DriverDebtAdjustment, { id: { [Op.in]: driverDebtAdjustmentIds } }, summary, 'driver_debt_adjustments');
   }
+  if (orderItemIds.length > 0) {
+    await countByIn(InventoryBatchConsumption, { order_item_id: { [Op.in]: orderItemIds } }, summary, 'inventory_batch_consumptions');
+    await countByIn(InventoryBatchReservation, { order_item_id: { [Op.in]: orderItemIds } }, summary, 'inventory_batch_reservations');
+  }
+  await countByIn(CustomerBalanceEntry, { customer_id: customerId }, summary, 'customer_balance_entries');
 
   const printSummary = (title: string) => {
     console.log(`\n[purge] ${title}`);
@@ -278,6 +301,8 @@ async function main() {
   }
 
   await sequelize.transaction(async (tx) => {
+    await destroyByIn(CustomerBalanceEntry, { customer_id: customerId }, summary, 'customer_balance_entries_deleted', tx);
+
     // Carts
     if (cartIds.length > 0) {
       await destroyByIn(CartItem, { cart_id: { [Op.in]: cartIds } }, summary, 'cart_items_deleted', tx);
@@ -311,12 +336,17 @@ async function main() {
     if (invoiceIds.length > 0) {
       await destroyByIn(CreditNote, { [Op.or]: whereInBatches('invoice_id', invoiceIds) }, summary, 'credit_notes_deleted', tx);
       await destroyByIn(CodCollection, { [Op.or]: whereInBatches('invoice_id', invoiceIds) }, summary, 'cod_collections_deleted', tx);
+      await destroyByIn(InvoiceCostOverride, { [Op.or]: whereInBatches('invoice_id', invoiceIds) }, summary, 'invoice_cost_overrides_deleted', tx);
       await destroyByIn(InvoiceItem, { [Op.or]: whereInBatches('invoice_id', invoiceIds) }, summary, 'invoice_items_deleted', tx);
       await destroyByIn(Invoice, { [Op.or]: whereInBatches('id', invoiceIds) }, summary, 'invoices_deleted', tx);
     }
 
     // Order-linked children
     if (orderIds.length > 0) {
+      if (orderItemIds.length > 0) {
+        await destroyByIn(InventoryBatchConsumption, { [Op.or]: whereInBatches('order_item_id', orderItemIds) }, summary, 'inventory_batch_consumptions_deleted', tx);
+        await destroyByIn(InventoryBatchReservation, { [Op.or]: whereInBatches('order_item_id', orderItemIds) }, summary, 'inventory_batch_reservations_deleted', tx);
+      }
       await destroyByIn(OrderAllocation, { [Op.or]: whereInBatches('order_id', orderIds) }, summary, 'order_allocations_deleted', tx);
       await destroyByIn(OrderIssue, { [Op.or]: whereInBatches('order_id', orderIds) }, summary, 'order_issues_deleted', tx);
       await destroyByIn(Retur, { [Op.or]: whereInBatches('order_id', orderIds) }, summary, 'returs_deleted', tx);
@@ -328,6 +358,11 @@ async function main() {
       // Delete children orders first (non-null parent_order_id), then roots.
       await destroyByIn(Order, { customer_id: customerId, parent_order_id: { [Op.ne]: null } }, summary, 'orders_deleted', tx);
       await destroyByIn(Order, { customer_id: customerId, parent_order_id: null }, summary, 'orders_deleted', tx);
+    }
+
+    if (posSaleIds.length > 0) {
+      await destroyByIn(PosSaleItem, { [Op.or]: whereInBatches('pos_sale_id', posSaleIds) }, summary, 'pos_sale_items_deleted', tx);
+      await destroyByIn(PosSale, { [Op.or]: whereInBatches('id', posSaleIds) }, summary, 'pos_sales_deleted', tx);
     }
   });
 

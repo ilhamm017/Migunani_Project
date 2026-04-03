@@ -196,7 +196,14 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
             { model: User, as: 'Customer', attributes: ['id', 'name', 'whatsapp_number', 'email'] },
             { model: User, as: 'Courier', attributes: ['id', 'name', 'role', 'whatsapp_number'] },
             { model: OrderIssue, as: 'Issues', where: { status: 'open' }, required: false },
-            { model: OrderItem, attributes: orderItemAttributes, include: [{ model: Product, attributes: productAttributes }] },
+            {
+                model: OrderItem,
+                attributes: orderItemAttributes,
+                include: [
+                    { model: Product, attributes: productAttributes },
+                    { model: Backorder, attributes: ['id', 'qty_pending', 'status'], required: false },
+                ]
+            },
             { model: OrderAllocation, as: 'Allocations' },
             { model: Order, as: 'Children' },
             { model: Retur }
