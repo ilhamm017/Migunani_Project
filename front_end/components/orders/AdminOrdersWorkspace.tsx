@@ -3155,17 +3155,7 @@ export default function AdminOrdersWorkspace({
                 >
                   {model.allocationBusy ? 'Menyimpan...' : 'Selesai Alokasi'}
                 </button>
-                {canIssueAdditionalInvoice && (
-                  <button
-                    type="button"
-                    onClick={() => handleIssueInvoiceItemsForOrder(model.orderId)}
-                    disabled={model.allocationBusy}
-                    className="btn-3d px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white disabled:opacity-50"
-                    title={`Qty siap invoice ${invoiceableQty} • ${formatCurrency(invoiceableAmount)}`}
-                  >
-                    Issue Invoice Tambahan
-                  </button>
-                )}
+	                {/* Issue Invoice Tambahan hanya ditampilkan di section "Sudah Dialokasikan" (bukan di backorder editor). */}
                 <button
                   type="button"
                   onClick={() => void handleCancelBackorder(model.orderId)}
