@@ -32,6 +32,40 @@ const parseBatchIds = (raw: unknown): string[] => {
     return trimmed.split(',').map((v) => String(v || '').trim()).filter(Boolean);
 };
 
+const hasOtherOpenInvoicesForOrder = async (
+    params: { order_id: string; current_invoice_id: string; transaction: any; lock?: any }
+): Promise<boolean> => {
+    const orderItems = await OrderItem.findAll({
+        where: { order_id: String(params.order_id) },
+        attributes: ['id'],
+        transaction: params.transaction,
+        lock: params.lock
+    });
+    const orderItemIds = orderItems.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+    if (orderItemIds.length === 0) return false;
+
+    const invoiceItems = await InvoiceItem.findAll({
+        where: { order_item_id: { [Op.in]: orderItemIds } },
+        attributes: ['invoice_id'],
+        include: [{ model: Invoice, attributes: ['id', 'shipment_status'] }],
+        transaction: params.transaction,
+        lock: params.lock
+    }) as any[];
+
+    const currentInvoiceId = String(params.current_invoice_id || '').trim();
+    const openInvoiceIds = new Set<string>();
+    for (const row of invoiceItems) {
+        const invoice = row?.Invoice;
+        const invoiceId = String(invoice?.id || row?.invoice_id || '').trim();
+        if (!invoiceId || invoiceId === currentInvoiceId) continue;
+        const shipmentStatus = String(invoice?.shipment_status || '').trim().toLowerCase();
+        const isTerminal = shipmentStatus === 'delivered' || shipmentStatus === 'canceled' || shipmentStatus === 'cancelled';
+        if (!isTerminal) openInvoiceIds.add(invoiceId);
+    }
+
+    return openInvoiceIds.size > 0;
+};
+
 const completeSingleDeliveryInternal = async (
     id: string,
     params: { userId: string; userRole: string; file?: Express.Multer.File },
@@ -105,6 +139,13 @@ const completeSingleDeliveryInternal = async (
             })
             : 0;
 
+        const hasRemainingOpenInvoices = await hasOtherOpenInvoicesForOrder({
+            order_id: String(order.id),
+            current_invoice_id: String(invoice.id || ''),
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+
         let nextOrderStatus =
             isZeroDue
                 ? 'completed'
@@ -116,6 +157,11 @@ const completeSingleDeliveryInternal = async (
         if (openBackorderCount > 0) {
             nextOrderStatus = 'partially_fulfilled';
         }
+        // Multi-invoice flow: do not terminalize the whole order on the first delivered invoice.
+        // Keep order in the delivery lane until all invoices are delivered/canceled.
+        if (hasRemainingOpenInvoices && ['delivered', 'completed', 'partially_fulfilled'].includes(String(nextOrderStatus).toLowerCase())) {
+            nextOrderStatus = 'shipped';
+        }
         if (!isOrderTransitionAllowed(previousOrderStatus, nextOrderStatus)) {
             throw new CustomError(`Transisi status tidak diizinkan: '${previousOrderStatus}' -> '${nextOrderStatus}'`, 409);
         }
@@ -125,46 +171,51 @@ const completeSingleDeliveryInternal = async (
         }
 
         const updatePayload: any = { status: nextOrderStatus };
-        if (params.file) {
+        // Only stamp order-level proof when this invoice actually finishes the order.
+        if (params.file && !hasRemainingOpenInvoices && ['delivered', 'completed', 'partially_fulfilled'].includes(String(nextOrderStatus).toLowerCase())) {
             updatePayload.delivery_proof_url = params.file.path;
         }
         await order.update(updatePayload, { transaction: t });
-        if (nextOrderStatus === 'completed') {
+        if (nextOrderStatus === 'completed' && !hasRemainingOpenInvoices) {
             await OrderTerminalizationService.releaseReservationsForOrders({
                 order_ids: [String(order.id)],
                 transaction: t,
                 context: 'driver_complete_delivery',
             });
         }
-        await recordOrderStatusChanged({
-            transaction: t,
-            order_id: String(order.id),
-            invoice_id: String(invoice.id || ''),
-            from_status: previousOrderStatus,
-            to_status: nextOrderStatus,
-            actor_user_id: String(params.userId),
-            actor_role: params.userRole,
-            reason: 'driver_complete_delivery',
-        });
+        if (String(previousOrderStatus).trim().toLowerCase() !== String(nextOrderStatus).trim().toLowerCase()) {
+            await recordOrderStatusChanged({
+                transaction: t,
+                order_id: String(order.id),
+                invoice_id: String(invoice.id || ''),
+                from_status: previousOrderStatus,
+                to_status: nextOrderStatus,
+                actor_user_id: String(params.userId),
+                actor_role: params.userRole,
+                reason: 'driver_complete_delivery',
+            });
+        }
         affectedOrderIds.push(String(order.id));
 
-        await emitOrderStatusChanged({
-            order_id: String(order.id),
-            from_status: previousOrderStatus,
-            to_status: nextOrderStatus,
-            source: String(order.source || ''),
-            payment_method: String(invoice.payment_method || ''),
-            courier_id: String(order.courier_id || params.userId),
-            triggered_by_role: params.userRole,
-            target_roles: nextOrderStatus === 'completed'
-                ? ['admin_finance', 'customer']
-                : (nextOrderStatus === 'partially_fulfilled'
-                    ? ['admin_finance', 'customer', 'kasir', 'admin_gudang']
-                    : ['admin_finance']),
-        }, {
-            transaction: t,
-            requestContext: 'driver_complete_delivery_status_changed'
-        });
+        if (String(previousOrderStatus).trim().toLowerCase() !== String(nextOrderStatus).trim().toLowerCase()) {
+            await emitOrderStatusChanged({
+                order_id: String(order.id),
+                from_status: previousOrderStatus,
+                to_status: nextOrderStatus,
+                source: String(order.source || ''),
+                payment_method: String(invoice.payment_method || ''),
+                courier_id: String(order.courier_id || params.userId),
+                triggered_by_role: params.userRole,
+                target_roles: nextOrderStatus === 'completed'
+                    ? ['admin_finance', 'customer']
+                    : (nextOrderStatus === 'partially_fulfilled'
+                        ? ['admin_finance', 'customer', 'kasir', 'admin_gudang']
+                        : ['admin_finance']),
+            }, {
+                transaction: t,
+                requestContext: 'driver_complete_delivery_status_changed'
+            });
+        }
     }
 
     if (isZeroDue && paymentStatus !== 'paid') {

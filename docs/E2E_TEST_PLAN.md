@@ -73,6 +73,11 @@ Komponen:
    - `/driver/orders/[id]`
    - `/admin/finance/*` (minimal COD/settlement area yang dipakai operasional)
    - `/admin/orders/customer/[customerId]?section=checker` & `?section=pengiriman` (badge “Qty dialokasikan / SKU dialokasikan” harus ikut terhitung, tidak stuck `0`)
+   - `/admin/orders/customer/[customerId]?section=allocated`
+     - Validasi: saat masih ada order `waiting_invoice`, panel “Terbitkan Invoice” menampilkan tombol **Issue Invoice** (bukan hint invoice tambahan).
+     - Validasi: jika tidak ada `waiting_invoice` tapi ada alokasi baru (invoice tambahan), panel menampilkan hint **Issue Invoice Tambahan**.
+   - `/admin/orders?section=gudang` (atau lane “Proses Gudang”)
+     - Validasi: setelah “Tunjuk Driver” untuk beberapa invoice, kartu invoice pindah ke lane checker tanpa hard refresh.
    - `/orders/[id]`
    - `/invoices/[invoiceId]` (jika route aktif di UI build terbaru)
 

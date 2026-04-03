@@ -2292,10 +2292,18 @@ export default function AdminOrdersWorkspace({
     });
   }, [selectedGroup, orderDetails, availabilityByOrderId]);
 
-  const invoiceableSummary = useMemo(() => {
-    const total = invoiceableOrderIds.reduce((sum, orderId) => sum + Number(invoiceableAmountByOrderId[orderId] || 0), 0);
+  const additionalInvoiceOrderIds = useMemo(() => {
+    const readySet = new Set(readyOrderIds);
+    return invoiceableOrderIds.filter((orderId) => !readySet.has(orderId));
+  }, [invoiceableOrderIds, readyOrderIds]);
+
+  const additionalInvoiceSummary = useMemo(() => {
+    const total = additionalInvoiceOrderIds.reduce((sum, orderId) => sum + Number(invoiceableAmountByOrderId[orderId] || 0), 0);
     return { total };
-  }, [invoiceableOrderIds, invoiceableAmountByOrderId]);
+  }, [additionalInvoiceOrderIds, invoiceableAmountByOrderId]);
+
+  const showAdditionalInvoicePanel =
+    Boolean(forcedCustomerId) && orderSectionFilter === 'allocated' && readyOrderIds.length === 0 && additionalInvoiceOrderIds.length > 0;
 
   const handleAllocationChange = (orderId: string, productId: string, maxQty: number, rawValue: string) => {
     const parsed = Number(rawValue);
@@ -3510,62 +3518,92 @@ export default function AdminOrdersWorkspace({
     });
   };
 
-  const handleConfirmWarehouseAssign = async () => {
-    if (!warehouseAssignConfirm) return;
-    if (warehouseAssignConfirm.step === 1) {
-      setWarehouseAssignConfirm((prev) => (prev ? { ...prev, step: 2 } : prev));
-      return;
-    }
+	  const handleConfirmWarehouseAssign = async () => {
+	    if (!warehouseAssignConfirm) return;
+	    if (warehouseAssignConfirm.step === 1) {
+	      setWarehouseAssignConfirm((prev) => (prev ? { ...prev, step: 2 } : prev));
+	      return;
+	    }
 
-	    try {
-	      setWarehouseBatchAssigning(true);
+		    try {
+		      setWarehouseBatchAssigning(true);
 
-	      const tasks = warehouseAssignConfirm.cards.map(async (card) => {
-	        if (card.invoiceId) {
-	          // Process at Invoice level
-	          return api.invoices.assignDriver(card.invoiceId, {
-	            courier_id: warehouseAssignConfirm.courierId,
+		      const courierId = warehouseAssignConfirm.courierId;
+		      const cardsWithTargets = warehouseAssignConfirm.cards.map((card) => {
+		        const orderIds = Array.isArray(card.readyToShipOrderIds) ? card.readyToShipOrderIds : [];
+		        const invoiceIds = new Set<string>();
+		        const missing: string[] = [];
+		        if (card.invoiceId) {
+		          invoiceIds.add(String(card.invoiceId));
+		        } else {
+		          // Some groupings may not carry invoiceId on the card.
+		          // Try to resolve invoice IDs from orders/details and assign at invoice level
+		          // to avoid accidentally moving to shipped (handover).
+		          orderIds.forEach((orderId) => {
+		            const orderRow =
+		              (Array.isArray(ordersRef.current) ? ordersRef.current : []).find((row) => String(row?.id || '') === orderId) ||
+		              (Array.isArray(orders) ? orders : []).find((row) => String(row?.id || '') === orderId);
+		            const detail = orderDetails[orderId];
+		            const invoiceId = orderRow
+		              ? resolveInvoiceRefForOrder(orderRow, detail).invoiceId
+		              : normalizeInvoiceRef((detail as any)?.invoice_id);
+		            if (invoiceId) invoiceIds.add(invoiceId);
+		            else missing.push(orderId);
+		          });
+		        }
+		        if (missing.length > 0 || invoiceIds.size === 0) {
+		          throw new Error(
+		            `Invoice tidak ditemukan untuk sebagian order (${missing.length}/${orderIds.length}). Refresh data atau issue invoice terlebih dahulu.`
+		          );
+		        }
+		        return { card, orderIds, invoiceIds: Array.from(invoiceIds) };
+		      });
+
+		      const affectedOrderIds = new Set<string>();
+		      const affectedInvoiceIds = new Set<string>();
+		      cardsWithTargets.forEach((row) => {
+		        row.orderIds.forEach((orderId) => affectedOrderIds.add(String(orderId)));
+		        row.invoiceIds.forEach((invoiceId) => affectedInvoiceIds.add(String(invoiceId)));
+		      });
+
+		      const tasks = cardsWithTargets.map((row) =>
+		        Promise.all(row.invoiceIds.map((invoiceId) => api.invoices.assignDriver(invoiceId, { courier_id: courierId })))
+		      );
+	
+	      const results = await Promise.allSettled(tasks);
+	      const failedCount = results.filter((result) => result.status === 'rejected').length;
+
+	      await loadOrders();
+	      if (affectedOrderIds.size > 0) {
+	        setOrderDetails((prev) => {
+	          const next = { ...prev };
+	          affectedOrderIds.forEach((orderId) => {
+	            delete next[orderId];
 	          });
-	        }
-
-	        // Some groupings may not carry invoiceId on the card.
-	        // Try to resolve invoice IDs from orders/details and assign at invoice level
-	        // to avoid accidentally moving to shipped (handover).
-	        const invoiceIds = new Set<string>();
-	        const missing: string[] = [];
-	        card.readyToShipOrderIds.forEach((orderId) => {
-	          const orderRow =
-	            (Array.isArray(ordersRef.current) ? ordersRef.current : []).find((row) => String(row?.id || '') === orderId) ||
-	            (Array.isArray(orders) ? orders : []).find((row) => String(row?.id || '') === orderId);
-	          const detail = orderDetails[orderId];
-	          const invoiceId = orderRow
-	            ? resolveInvoiceRefForOrder(orderRow, detail).invoiceId
-	            : normalizeInvoiceRef((detail as any)?.invoice_id);
-	          if (invoiceId) invoiceIds.add(invoiceId);
-	          else missing.push(orderId);
+	          return next;
 	        });
+	      }
+	      if (affectedInvoiceIds.size > 0) {
+	        setInvoiceItemSummaryByInvoiceId((prev) => {
+	          const next = { ...prev };
+	          affectedInvoiceIds.forEach((invoiceId) => {
+	            delete next[invoiceId];
+	          });
+	          return next;
+	        });
+	        setInvoiceDetailByInvoiceId((prev) => {
+	          const next = { ...prev };
+	          affectedInvoiceIds.forEach((invoiceId) => {
+	            delete next[invoiceId];
+	          });
+	          return next;
+	        });
+	      }
+	      setSelectedWarehouseInvoiceGroups([]);
+	      setWarehouseAssignConfirm(null);
 
-	        if (missing.length > 0 || invoiceIds.size === 0) {
-	          throw new Error(
-	            `Invoice tidak ditemukan untuk sebagian order (${missing.length}/${card.readyToShipOrderIds.length}). Refresh data atau issue invoice terlebih dahulu.`
-	          );
-	        }
-
-	        const subTasks = Array.from(invoiceIds).map((invoiceId) =>
-	          api.invoices.assignDriver(invoiceId, { courier_id: warehouseAssignConfirm.courierId })
-	        );
-	        return Promise.all(subTasks);
-	      });
-
-      const results = await Promise.allSettled(tasks);
-      const failedCount = results.filter((result) => result.status === 'rejected').length;
-
-      await loadOrders();
-      setSelectedWarehouseInvoiceGroups([]);
-      setWarehouseAssignConfirm(null);
-
-      if (failedCount > 0) {
-        notifyAlert(`Sebagian grup gagal ditugaskan ke driver (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
+	      if (failedCount > 0) {
+	        notifyAlert(`Sebagian grup gagal ditugaskan ke driver (${failedCount}/${warehouseAssignConfirm.cards.length}).`);
       }
 	    } catch (error: unknown) {
 	      const message = axios.isAxiosError(error)
@@ -5082,20 +5120,20 @@ export default function AdminOrdersWorkspace({
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] text-slate-400">
-                    {forcedCustomerId && orderSectionFilter === 'allocated' ? 'Order siap invoice tambahan' : 'Order siap invoice'}
-                  </p>
-                  <p className="text-sm font-black text-slate-900">
-                    {forcedCustomerId && orderSectionFilter === 'allocated' ? invoiceableOrderIds.length : readyOrderIds.length}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {forcedCustomerId && orderSectionFilter === 'allocated' ? 'Estimasi nilai invoice tambahan' : 'Estimasi nilai invoice'}
-                  </p>
-                  <p className="text-xs text-emerald-700 font-bold">
-                    {formatCurrency(forcedCustomerId && orderSectionFilter === 'allocated' ? invoiceableSummary.total : readyInvoiceSummary.total)}
-                  </p>
-                </div>
-              </div>
+	                  <p className="text-[10px] text-slate-400">
+	                    {showAdditionalInvoicePanel ? 'Order siap invoice tambahan' : 'Order siap invoice'}
+	                  </p>
+	                  <p className="text-sm font-black text-slate-900">
+	                    {showAdditionalInvoicePanel ? additionalInvoiceOrderIds.length : readyOrderIds.length}
+	                  </p>
+	                  <p className="text-[10px] text-slate-500">
+	                    {showAdditionalInvoicePanel ? 'Estimasi nilai invoice tambahan' : 'Estimasi nilai invoice'}
+	                  </p>
+	                  <p className="text-xs text-emerald-700 font-bold">
+	                    {formatCurrency(showAdditionalInvoicePanel ? additionalInvoiceSummary.total : readyInvoiceSummary.total)}
+	                  </p>
+	                </div>
+	              </div>
 
               {!isWarehouseRole && (
                 <div className="bg-slate-900 text-white rounded-2xl p-4 flex flex-col gap-2">
@@ -5112,32 +5150,37 @@ export default function AdminOrdersWorkspace({
 	                      <p className="text-[11px] text-white/70">Menghitung seluruh invoice yang sudah terbit (bukan hanya latest per-order).</p>
 	                    </div>
                     <div className="rounded-xl bg-emerald-500/15 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-emerald-200">
-                        {forcedCustomerId && orderSectionFilter === 'allocated' ? 'Nilai Siap Invoice Tambahan' : 'Nilai Siap Invoice'}
-                      </p>
-                      <p className="mt-1 text-lg font-black text-white">
-                        {formatCurrency(forcedCustomerId && orderSectionFilter === 'allocated' ? invoiceableSummary.total : readyInvoiceSummary.total)}
-                      </p>
-                      <p className="text-[11px] text-emerald-100/90">Order yang sudah dialokasikan dan siap diterbitkan invoice.</p>
-                    </div>
-                  </div>
-                  {forcedCustomerId && orderSectionFilter === 'allocated' ? (
-                    <p className="text-[11px] text-white/70">
-                      Untuk invoice tambahan (alokasi baru setelah invoice pertama terbit), gunakan tombol <span className="font-black">Issue Invoice Tambahan</span> di kartu order.
-                    </p>
-                  ) : canIssueInvoice ? (
-                    <button
+	                      <p className="text-[10px] font-black uppercase tracking-widest text-emerald-200">
+	                        {showAdditionalInvoicePanel ? 'Nilai Siap Invoice Tambahan' : 'Nilai Siap Invoice'}
+	                      </p>
+	                      <p className="mt-1 text-lg font-black text-white">
+	                        {formatCurrency(showAdditionalInvoicePanel ? additionalInvoiceSummary.total : readyInvoiceSummary.total)}
+	                      </p>
+	                      <p className="text-[11px] text-emerald-100/90">Order yang sudah dialokasikan dan siap diterbitkan invoice.</p>
+	                    </div>
+	                  </div>
+	                  {showAdditionalInvoicePanel ? (
+	                    <p className="text-[11px] text-white/70">
+	                      Untuk invoice tambahan (alokasi baru setelah invoice pertama terbit), gunakan tombol <span className="font-black">Issue Invoice Tambahan</span> di kartu order.
+	                    </p>
+	                  ) : canIssueInvoice ? (
+	                    <button
                       onClick={handleIssueInvoice}
                       disabled={busyInvoice || readyOrderIds.length === 0}
                       className="btn-3d mt-2 px-4 py-2 rounded-xl bg-emerald-500 text-xs font-black uppercase disabled:opacity-50"
                     >
                       {busyInvoice ? 'Memproses...' : 'Issue Invoice'}
-                    </button>
-                  ) : (
-                    <p className="text-[11px] text-white/70">Hanya kasir atau super admin yang bisa menerbitkan invoice.</p>
-                  )}
-                </div>
-              )}
+	                    </button>
+	                  ) : (
+	                    <p className="text-[11px] text-white/70">Hanya kasir atau super admin yang bisa menerbitkan invoice.</p>
+	                  )}
+	                  {!showAdditionalInvoicePanel && additionalInvoiceOrderIds.length > 0 && (
+	                    <p className="text-[11px] text-white/70">
+	                      Ada alokasi baru untuk invoice tambahan. Gunakan tombol <span className="font-black">Issue Invoice Tambahan</span> di kartu order.
+	                    </p>
+	                  )}
+	                </div>
+	              )}
 
               <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Search Order</label>
@@ -5785,12 +5828,13 @@ export default function AdminOrdersWorkspace({
                         if (orderStatus === 'checked') return canManageCheckerFlow;
                         return (normalizedRole === 'admin_gudang' || normalizedRole === 'super_admin');
                       })();
-                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
-                      const invoiceRefs = collectInvoiceRefsForOrder(order as any, detail as any);
-                      const invoiceRefLabelBase = formatInvoiceReference(invoiceId, invoiceNumber);
-                      const invoiceRefLabel = invoiceRefs.length > 1
-                        ? `${invoiceRefLabelBase} (+${invoiceRefs.length - 1})`
-                        : invoiceRefLabelBase;
+	                      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order as any, detail as any);
+	                      const invoiceRefs = collectInvoiceRefsForOrder(order as any, detail as any);
+	                      const hasInvoiceRefForOrder = Boolean(invoiceId || invoiceNumber) || invoiceRefs.length > 0;
+	                      const invoiceRefLabelBase = formatInvoiceReference(invoiceId, invoiceNumber);
+	                      const invoiceRefLabel = invoiceRefs.length > 1
+	                        ? `${invoiceRefLabelBase} (+${invoiceRefs.length - 1})`
+	                        : invoiceRefLabelBase;
                       const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
                       const invoicePaymentStatus = String(
                         invoiceDetail?.payment_status || order?.Invoice?.payment_status || detail?.Invoice?.payment_status || ''
@@ -5806,12 +5850,14 @@ export default function AdminOrdersWorkspace({
                         : orderStatus === 'shipped'
                           ? 'Lihat Pengiriman'
                           : 'Proses Gudang';
-                      const isBackorder = isOrderBackorder(order, detail, backorderIds);
-                      const canIssueAdditionalInvoiceForOrder =
-                        Boolean(canIssueInvoice) &&
-                        Boolean(detail) &&
-                        !isReportOnlySection &&
-                        invoiceableQty > 0;
+	                      const isBackorder = isOrderBackorder(order, detail, backorderIds);
+	                      const canIssueAdditionalInvoiceForOrder =
+	                        Boolean(canIssueInvoice) &&
+	                        Boolean(detail) &&
+	                        Boolean(isAllocatedOnlyView) &&
+	                        !isReportOnlySection &&
+	                        invoiceableQty > 0 &&
+	                        hasInvoiceRefForOrder;
 	                      const isOrderCancelable =
 	                        canCancelOrder &&
 	                        CANCELABLE_ORDER_STATUSES.has(rawOrderStatus) &&

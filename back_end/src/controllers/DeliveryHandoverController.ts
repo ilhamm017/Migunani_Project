@@ -216,8 +216,8 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
 
             // Some flows can leave the overall order already in the delivery lane (e.g. previously handed over),
             // while a new invoice/checking is being processed. In that case, do not move the order backwards
-            // from shipped -> checked; keep it as-is and only record the warehouse checking event.
-            const shouldSkipPassStatusUpdate = !shouldFail && prevStatusKey === 'shipped';
+            // to 'checked'; keep it as-is and only record the warehouse checking event.
+            const shouldSkipPassStatusUpdate = !shouldFail && ['shipped', 'delivered', 'partially_fulfilled', 'completed'].includes(prevStatusKey);
 
             if (!shouldSkipPassStatusUpdate) {
                 if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
@@ -437,6 +437,7 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
 
 	        for (const order of orders) {
 	            const prevStatus = String(order.status || '');
+	            const prevStatusKey = prevStatus.trim().toLowerCase();
 	            const hasActiveBackorder = orderIdsWithActiveBackorder.has(String(order.id));
 	            // Handover is a shipping stage transition. Even if the order still has active backorders,
 	            // we must keep the main order status in the delivery lane so:
@@ -444,6 +445,12 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
 	            // - status transitions remain valid (checked -> shipped is allowed; checked -> partially_fulfilled is not)
 	            // Backorder visibility should be driven by Backorder rows, not by forcing order.status early.
 	            const nextOrderStatus = 'shipped';
+	            if (['delivered', 'completed', 'partially_fulfilled', 'canceled', 'cancelled'].includes(prevStatusKey)) {
+	                throw new CustomError(
+	                    `Order sudah berstatus '${prevStatus}' sehingga invoice ini tidak bisa di-handover ke driver. (Order sudah selesai dikirim).`,
+	                    409
+	                );
+	            }
 	            if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
 	                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
 	            }
