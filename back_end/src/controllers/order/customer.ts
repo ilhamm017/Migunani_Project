@@ -8,6 +8,7 @@ import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoi
 import { withOrderTrackingFields } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbiguity';
 import { isOrderTransitionAllowed, resolveLegacyOrderStatusAlias } from '../../utils/orderTransitions';
 import { enqueueWhatsappNotification } from '../../services/TransactionNotificationOutboxService';
 import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
@@ -349,24 +350,17 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
         }
 
         let invoice = null;
-        if (requestedInvoiceId) {
-            const targetInvoice = await Invoice.findByPk(requestedInvoiceId, { transaction: t, lock: t.LOCK.UPDATE });
-            if (!targetInvoice) {
-                await t.rollback();
-                throw new CustomError('Invoice not found', 404);
-            }
-            const relatedOrderIds = await findOrderIdsByInvoiceId(requestedInvoiceId, { transaction: t });
-            if (!relatedOrderIds.includes(orderId)) {
-                await t.rollback();
-                throw new CustomError('Invoice tidak terkait dengan order ini', 400);
-            }
-            if (String(targetInvoice.customer_id || '') !== String(userId)) {
-                await t.rollback();
-                throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
-            }
-            invoice = targetInvoice;
-        } else {
-            invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+        const selection = await ensureSingleInvoiceOrRequireInvoiceId({
+            order_id: orderId,
+            invoice_id: requestedInvoiceId || null,
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+            if_none: { statusCode: 404, message: 'Invoice not found' },
+        });
+        invoice = selection.invoice;
+        if (String((invoice as any).customer_id || '') !== String(userId)) {
+            await t.rollback();
+            throw new CustomError('Tidak memiliki akses ke invoice ini.', 403);
         }
         if (!invoice) {
             await t.rollback();
@@ -381,12 +375,6 @@ export const uploadPaymentProof = asyncWrapper(async (req: Request, res: Respons
         if (String(invoice.payment_method || '').trim().toLowerCase() !== 'transfer_manual') {
             await t.rollback();
             throw new CustomError('Bukti transfer hanya berlaku untuk invoice transfer manual.', 400);
-        }
-
-        const latestInvoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
-        if (latestInvoice && String(latestInvoice.id) !== String(invoice.id)) {
-            await t.rollback();
-            throw new CustomError('Invoice ini sudah digantikan oleh invoice yang lebih baru. Bukti transfer tidak dapat diunggah.', 409);
         }
 
         if (invoice.payment_status === 'paid') {

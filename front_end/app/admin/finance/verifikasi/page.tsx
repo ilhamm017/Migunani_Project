@@ -77,6 +77,18 @@ export default function FinanceVerifyPage() {
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [invoicePicker, setInvoicePicker] = useState<null | {
+    id: string;
+    action: 'approve' | 'reject';
+    amountReceived?: number;
+    candidates: Array<{
+      invoice_id: string;
+      invoice_number?: string;
+      createdAt?: string | null;
+      shipment_status?: string;
+      payment_status?: string;
+    }>;
+  }>(null);
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
     try {
@@ -227,19 +239,19 @@ export default function FinanceVerifyPage() {
 
   if (!allowed) return null;
 
-  const handleAction = async (
-    id: string,
-    verifyAction?: 'approve' | 'reject',
-    opts?: { collectible_total?: number; payment_method?: string }
-  ) => {
-    const action = verifyAction || 'approve';
-    try {
-      setBusyId(id);
-      let amountReceived: number | undefined = undefined;
-      if (action === 'approve') {
-        const suggested = Number(opts?.collectible_total ?? 0);
-        const input = prompt('Masukkan amount_received (kosong = sesuai tagihan):', suggested > 0 ? String(suggested) : '');
-        if (input === null) {
+	  const handleAction = async (
+	    id: string,
+	    verifyAction?: 'approve' | 'reject',
+	    opts?: { collectible_total?: number; payment_method?: string }
+	  ) => {
+	    const action = verifyAction || 'approve';
+	    let amountReceived: number | undefined = undefined;
+	    try {
+	      setBusyId(id);
+	      if (action === 'approve') {
+	        const suggested = Number(opts?.collectible_total ?? 0);
+	        const input = prompt('Masukkan amount_received (kosong = sesuai tagihan):', suggested > 0 ? String(suggested) : '');
+	        if (input === null) {
           setBusyId(null);
           return;
         }
@@ -255,29 +267,97 @@ export default function FinanceVerifyPage() {
         }
       }
 
-      await api.admin.finance.verifyPayment(id, action, amountReceived);
-      await load();
-      notifyOpen({
-        variant: 'success',
-        title: action === 'approve' ? 'Approve berhasil' : 'Reject berhasil',
+	      await api.admin.finance.verifyPayment(id, action, amountReceived);
+	      await load();
+	      notifyOpen({
+	        variant: 'success',
+	        title: action === 'approve' ? 'Approve berhasil' : 'Reject berhasil',
         message:
           action === 'approve'
             ? 'Pembayaran transfer sudah diverifikasi. Status invoice dan order terkait akan ikut ter-update.'
             : 'Pembayaran ditolak. Status invoice dan order terkait akan ikut ter-update.',
         autoCloseMs: 1600,
       });
-    } catch (error: unknown) {
-      console.error('Action failed:', error);
-      notifyOpen({ variant: 'error', title: 'Gagal memproses', message: getErrorMessage(error, 'Gagal memproses.') });
-    } finally {
-      setBusyId(null);
-    }
-  };
+	    } catch (error: unknown) {
+	      const status = Number((error as any)?.response?.status || 0);
+	      const data = (error as any)?.response?.data as any;
+	      const code = String(data?.data?.code || '');
+	      const candidates = Array.isArray(data?.data?.candidates) ? data.data.candidates : [];
+	      if (status === 409 && code === 'INVOICE_ID_REQUIRED' && candidates.length > 0) {
+	        setInvoicePicker({ id, action, amountReceived, candidates });
+	        return;
+	      }
 
-  return (
-    <div className="bg-slate-50 min-h-screen pb-24">
-      <div className="bg-white px-6 pb-4 pt-2 shadow-sm sticky top-0 z-40">
-        <FinanceHeader title="Verifikasi Command" />
+	      console.error('Action failed:', error);
+	      notifyOpen({ variant: 'error', title: 'Gagal memproses', message: getErrorMessage(error, 'Gagal memproses.') });
+	    } finally {
+	      setBusyId(null);
+	    }
+	  };
+
+	  return (
+	    <div className="bg-slate-50 min-h-screen pb-24">
+	      {invoicePicker && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+	          <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl border border-slate-200 overflow-hidden">
+	            <div className="p-5 border-b border-slate-100">
+	              <p className="text-xs font-black uppercase tracking-[0.24em] text-slate-500">Pilih Invoice</p>
+	              <p className="mt-1 text-sm font-bold text-slate-900">
+	                Order ini punya lebih dari satu invoice. Pilih invoice yang mau diverifikasi.
+	              </p>
+	            </div>
+	            <div className="p-4 space-y-2 max-h-[60vh] overflow-auto">
+	              {invoicePicker.candidates.map((c) => (
+	                <button
+	                  key={String(c.invoice_id)}
+	                  onClick={async () => {
+	                    const candidateId = String(c.invoice_id || '').trim();
+	                    if (!candidateId) return;
+	                    try {
+	                      setBusyId(invoicePicker.id);
+	                      await api.admin.finance.verifyPayment(invoicePicker.id, invoicePicker.action, invoicePicker.amountReceived, candidateId);
+	                      setInvoicePicker(null);
+	                      await load();
+	                      notifyOpen({
+	                        variant: 'success',
+	                        title: invoicePicker.action === 'approve' ? 'Approve berhasil' : 'Reject berhasil',
+	                        message: 'Verifikasi diproses untuk invoice terpilih.',
+	                        autoCloseMs: 1600,
+	                      });
+	                    } catch (err) {
+	                      notifyOpen({ variant: 'error', title: 'Gagal memproses', message: getErrorMessage(err, 'Gagal memproses.') });
+	                    } finally {
+	                      setBusyId(null);
+	                    }
+	                  }}
+	                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:bg-slate-50"
+	                >
+	                  <div className="flex items-center justify-between gap-3">
+	                    <div className="min-w-0">
+	                      <p className="text-sm font-black text-slate-900 truncate">
+	                        {String(c.invoice_number || c.invoice_id)}
+	                      </p>
+	                      <p className="mt-0.5 text-xs text-slate-500">
+	                        {String(c.payment_status || '-')}{' • '}{String(c.shipment_status || '-')}{c.createdAt ? ` • ${String(c.createdAt)}` : ''}
+	                      </p>
+	                    </div>
+	                  </div>
+	                </button>
+	              ))}
+	            </div>
+	            <div className="p-4 border-t border-slate-100">
+	              <button
+	                onClick={() => setInvoicePicker(null)}
+	                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-50"
+	              >
+	                Batal
+	              </button>
+	            </div>
+	          </div>
+	        </div>
+	      )}
+	      <div className="bg-white px-6 pb-4 pt-2 shadow-sm sticky top-0 z-40">
+	        <FinanceHeader title="Verifikasi Command" />
 
         <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
           <button

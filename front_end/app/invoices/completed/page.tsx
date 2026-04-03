@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { extractInvoicesFromOrder } from '@/lib/invoiceRefs';
 
 type InvoiceRow = {
   id: string;
@@ -90,27 +91,23 @@ export default function CustomerCompletedInvoicesPage() {
     }
     try {
       if (!silent) setLoading(true);
-      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
-      const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
-      const invoiceMap = new Map<string, InvoiceRow>();
-      orders.forEach((order) => {
-        const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
-          ? order.Invoices
-          : order?.Invoice
-            ? [order.Invoice]
-            : [];
-        invoices.forEach((invoice) => {
-          const id = String(invoice?.id || '');
-          if (!id) return;
-	          const existing: InvoiceRow = invoiceMap.get(id) || {
-	            id,
-	            invoice_number: String(invoice?.invoice_number || id),
+	      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
+	      const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
+	      const invoiceMap = new Map<string, InvoiceRow>();
+	      orders.forEach((order) => {
+	        const invoices = extractInvoicesFromOrder(order);
+	        invoices.forEach((invoice) => {
+	          const id = String(invoice?.id || '').trim();
+	          if (!id) return;
+		          const existing: InvoiceRow = invoiceMap.get(id) || {
+		            id,
+		            invoice_number: String(invoice?.invoice_number || id),
 	            payment_status: String(invoice?.payment_status || ''),
 	            payment_method: String(invoice?.payment_method || ''),
 	            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
               amount_paid: Number((invoice as any)?.amount_paid ?? 0),
 	            total: Number((invoice as any)?.collectible_total ?? invoice?.total ?? 0),
-	            createdAt: invoice?.createdAt || invoice?.created_at || undefined,
+		            createdAt: invoice?.createdAt ? String(invoice.createdAt) : invoice?.created_at ? String(invoice.created_at) : undefined,
 	            orderIds: [],
 	          };
           if (!existing.orderIds.includes(String(order.id))) {

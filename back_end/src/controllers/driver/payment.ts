@@ -8,6 +8,7 @@ import { attachInvoicesToOrders, findInvoicesByOrderId, findLatestInvoiceByOrder
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbiguity';
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
@@ -525,6 +526,7 @@ export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Respon
     try {
         const { id } = req.params;
         const userId = req.user!.id;
+        const requestedInvoiceId = String(req.body?.invoice_id || '').trim();
         const rawMethod = String(req.body?.payment_method || '').trim().toLowerCase();
         if (!['cod', 'transfer_manual'].includes(rawMethod)) {
             await safeRollback();
@@ -533,6 +535,10 @@ export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Respon
         const nextMethod = rawMethod as 'cod' | 'transfer_manual';
 
         const invoiceById = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE });
+        if (invoiceById && requestedInvoiceId && String(invoiceById.id) !== requestedInvoiceId) {
+            await safeRollback();
+            throw new CustomError('invoice_id tidak sesuai dengan invoice pada URL.', 400);
+        }
         const order = invoiceById
             ? null
             : await findOrderByIdOrInvoiceId(String(id), userId, { transaction: t });
@@ -543,7 +549,13 @@ export const updatePaymentMethod = asyncWrapper(async (req: Request, res: Respon
 
         const invoice = invoiceById
             ? invoiceById
-            : await findLatestInvoiceByOrderId(String((order as any).id), { transaction: t });
+            : (await ensureSingleInvoiceOrRequireInvoiceId({
+                order_id: String((order as any).id),
+                invoice_id: requestedInvoiceId || null,
+                transaction: t,
+                lock: t.LOCK.UPDATE,
+                if_none: { statusCode: 404, message: 'Invoice tidak ditemukan.' },
+            })).invoice;
         if (!invoice) {
             await safeRollback();
             throw new CustomError('Invoice tidak ditemukan.', 400);

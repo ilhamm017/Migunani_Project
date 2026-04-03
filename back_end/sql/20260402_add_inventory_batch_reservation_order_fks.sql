@@ -31,6 +31,11 @@ LEFT JOIN (
 ) s ON s.`batch_id` = b.`id`
 SET b.`qty_reserved` = LEAST(b.`qty_on_hand`, COALESCE(s.`qty`, 0));
 
+-- 2.5) Normalize UUID collation for FK compatibility (must be safe to re-run)
+-- `orders.id` uses `utf8mb4_bin`, so referencing columns must match.
+ALTER TABLE `inventory_batch_reservations`
+  MODIFY COLUMN `order_id` CHAR(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+
 -- 3) Add missing FKs (conditional, so migration is idempotent)
 SET @schema := DATABASE();
 
@@ -72,4 +77,3 @@ SET @sql := IF(
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-

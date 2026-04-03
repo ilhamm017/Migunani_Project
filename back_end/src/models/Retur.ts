@@ -5,6 +5,7 @@ interface ReturAttributes {
     id: string; // UUID
     retur_type: 'customer_request' | 'delivery_refusal' | 'delivery_damage';
     order_id: string; // UUID
+    invoice_id?: string | null; // UUID (nullable for legacy)
     product_id: string; // UUID
     qty: number;
     qty_received?: number | null;
@@ -21,12 +22,13 @@ interface ReturAttributes {
     created_by: string; // User ID (Customer)
 }
 
-interface ReturCreationAttributes extends Optional<ReturAttributes, 'id' | 'retur_type' | 'status' | 'evidence_img' | 'admin_response' | 'courier_id' | 'refund_amount' | 'is_back_to_stock' | 'qty_received'> { }
+interface ReturCreationAttributes extends Optional<ReturAttributes, 'id' | 'retur_type' | 'status' | 'evidence_img' | 'admin_response' | 'courier_id' | 'refund_amount' | 'is_back_to_stock' | 'qty_received' | 'invoice_id'> { }
 
 class Retur extends Model<ReturAttributes, ReturCreationAttributes> implements ReturAttributes {
     declare id: string;
     declare retur_type: 'customer_request' | 'delivery_refusal' | 'delivery_damage';
     declare order_id: string;
+    declare invoice_id: string | null;
     declare product_id: string;
     declare qty: number;
     declare qty_received: number | null;
@@ -61,6 +63,10 @@ Retur.init(
         order_id: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        invoice_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
         product_id: {
             type: DataTypes.UUID,

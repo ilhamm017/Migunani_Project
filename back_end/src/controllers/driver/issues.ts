@@ -3,7 +3,8 @@ import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
-import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
+import { attachInvoicesToOrders, findOrderIdsByInvoiceId, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbiguity';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
@@ -142,19 +143,27 @@ export const reportIssue = asyncWrapper(async (req: Request, res: Response) => {
             reason: 'driver_report_issue',
         });
 
-        let paymentMethod: string | null = null;
-        try {
-            const invoice = await findLatestInvoiceByOrderId(String(order.id));
-            paymentMethod = typeof invoice?.payment_method === 'string'
-                ? String(invoice.payment_method)
-                : null;
-        } catch (invoiceLookupError) {
-            console.warn('[DriverController.reportIssue] Invoice lookup failed after commit', {
-                order_id: String(order.id),
-                driver_id: String(userId),
-                error: invoiceLookupError instanceof Error ? invoiceLookupError.message : String(invoiceLookupError)
-            });
-        }
+	        let paymentMethod: string | null = null;
+	        try {
+	            const context = await ensureSingleInvoiceOrRequireInvoiceId({
+	                order_id: String(order.id),
+	                transaction: t,
+	            });
+	            paymentMethod = typeof (context.invoice as any)?.payment_method === 'string'
+	                ? String((context.invoice as any).payment_method)
+	                : null;
+	        } catch (invoiceLookupError) {
+	            const err = invoiceLookupError as any;
+	            const code = String(err?.data?.code || '');
+	            const isAmbiguous = err instanceof CustomError && err.statusCode === 409 && code === 'INVOICE_ID_REQUIRED';
+	            if (!isAmbiguous) {
+	                console.warn('[DriverController.reportIssue] Invoice lookup failed', {
+	                    order_id: String(order.id),
+	                    driver_id: String(userId),
+	                    error: invoiceLookupError instanceof Error ? invoiceLookupError.message : String(invoiceLookupError)
+	                });
+	            }
+	        }
 
         await emitOrderStatusChanged({
             order_id: String(order.id),

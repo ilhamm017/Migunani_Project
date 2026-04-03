@@ -11,11 +11,23 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
+import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 
 const normalizeId = (raw: unknown) => String(raw || '').trim();
 const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'partially_fulfilled', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
-  const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
+  const directId = normalizeId((order as any)?.invoice_id);
+  const directNumber = normalizeId((order as any)?.invoice_number);
+  if (directId || directNumber) {
+    return {
+      id: directId,
+      number: directNumber,
+      total: Number((order as any)?.Invoice?.total || 0),
+    };
+  }
+
+  const refs = collectInvoiceRefs(order);
+  const latestInvoice = refs[0] || null;
   return {
     id: normalizeId(order?.invoice_id || latestInvoice?.id),
     number: normalizeId(order?.invoice_number || latestInvoice?.invoice_number),

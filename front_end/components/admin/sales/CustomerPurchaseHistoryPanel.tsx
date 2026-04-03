@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Package, ShoppingBag } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { extractInvoicesFromOrder } from '@/lib/invoiceRefs';
 
 type CustomerOrderItem = {
   id?: string;
@@ -114,36 +115,18 @@ const monthStartInput = () => {
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
 };
 
-const extractOrderInvoices = (order: CustomerOrderRow) => {
-  const rows = Array.isArray(order.Invoices) ? order.Invoices : [];
-  if (rows.length > 0) {
-    return rows
-      .map((invoice) => ({
-        id: String(invoice?.id || '').trim(),
-        invoiceNumber: String(invoice?.invoice_number || '-'),
-        paymentStatus: String(invoice?.payment_status || '-'),
-        paymentMethod: String(invoice?.payment_method || '-'),
-        createdAt: String(invoice?.createdAt || ''),
-        totalValue: Number(invoice?.collectible_total ?? invoice?.delivery_return_summary?.net_total ?? invoice?.total ?? 0),
-        returnTotal: Number(invoice?.delivery_return_summary?.return_total ?? 0),
-      }))
-      .filter((invoice) => invoice.id);
-  }
-
-  if (order.Invoice?.id || order.Invoice?.invoice_number) {
-    return [{
-      id: String(order.Invoice?.id || order.Invoice?.invoice_number || '').trim(),
-      invoiceNumber: String(order.Invoice?.invoice_number || '-'),
-      paymentStatus: String(order.Invoice?.payment_status || '-'),
-      paymentMethod: String(order.Invoice?.payment_method || '-'),
-      createdAt: String(order.Invoice?.createdAt || order.createdAt || ''),
-      totalValue: Number(order.total_amount || 0),
-      returnTotal: 0,
-    }].filter((invoice) => invoice.id);
-  }
-
-  return [];
-};
+const extractOrderInvoices = (order: CustomerOrderRow) =>
+  extractInvoicesFromOrder(order)
+    .map((invoice) => ({
+      id: String(invoice?.id || '').trim(),
+      invoiceNumber: String((invoice as any)?.invoice_number || '-'),
+      paymentStatus: String((invoice as any)?.payment_status || '-'),
+      paymentMethod: String((invoice as any)?.payment_method || '-'),
+      createdAt: String((invoice as any)?.createdAt || ''),
+      totalValue: Number((invoice as any)?.collectible_total ?? (invoice as any)?.delivery_return_summary?.net_total ?? (invoice as any)?.total ?? 0),
+      returnTotal: Number((invoice as any)?.delivery_return_summary?.return_total ?? 0),
+    }))
+    .filter((invoice) => invoice.id);
 
 export default function CustomerPurchaseHistoryPanel({
   customerId,
@@ -204,6 +187,7 @@ export default function CustomerPurchaseHistoryPanel({
         OrderItems: Array.isArray(detail.OrderItems) ? detail.OrderItems : row.OrderItems,
         item_summaries: Array.isArray(detail.item_summaries) ? detail.item_summaries : row.item_summaries,
         Invoice: detail.Invoice || row.Invoice,
+        Invoices: detail.Invoices || row.Invoices,
       };
     });
   }, []);

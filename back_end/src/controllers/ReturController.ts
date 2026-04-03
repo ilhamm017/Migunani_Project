@@ -9,12 +9,13 @@ export const requestRetur = asyncWrapper(async (req: Request, res: Response) => 
     try {
         const userId = req.user!.id;
         const userRole = req.user!.role;
-        const { order_id, product_id, qty, reason } = req.body;
+        const { order_id, invoice_id, product_id, qty, reason } = req.body;
         const file = req.file;
 
         await ReturService.requestRetur({
             userId,
             order_id,
+            invoice_id,
             product_id,
             qty,
             reason,

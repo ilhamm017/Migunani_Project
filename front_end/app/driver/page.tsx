@@ -12,12 +12,24 @@ import { useAuthStore } from '@/store/authStore';
 import { useOrderStatusNotifications } from '@/lib/useOrderStatusNotifications';
 import { formatOrderStatusLabel } from '@/lib/orderStatusMeta';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 
 const normalizeInvoiceRef = (raw: unknown) => String(raw || '').trim();
 const isDoneOrderStatus = (raw: unknown) => ['delivered', 'completed', 'partially_fulfilled', 'cancelled', 'canceled'].includes(String(raw || '').toLowerCase());
 const getOrderInvoicePayload = (order?: DriverAssignedOrderRow | null) => {
-  const latestInvoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
+  const directId = normalizeInvoiceRef((order as any)?.invoice_id);
+  const directNumber = normalizeInvoiceRef((order as any)?.invoice_number);
+  if (directId || directNumber) {
+    return {
+      id: directId,
+      number: directNumber,
+      total: Number((order as any)?.Invoice?.total || 0),
+    };
+  }
+
+  const refs = collectInvoiceRefs(order);
+  const latestInvoice = refs[0] || null;
   return {
     id: normalizeInvoiceRef(order?.invoice_id || latestInvoice?.id),
     number: normalizeInvoiceRef(order?.invoice_number || latestInvoice?.invoice_number),

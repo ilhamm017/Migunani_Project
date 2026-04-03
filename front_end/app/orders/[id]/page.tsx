@@ -12,6 +12,7 @@ import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import axios from 'axios';
 import type { OrderDetailResponse } from '@/lib/apiTypes';
 import { notifyAlert } from '@/lib/notify';
+import { extractInvoicesFromOrder } from '@/lib/invoiceRefs';
 
 export default function OrderDetailPage() {
   const params = useParams();
@@ -378,8 +379,16 @@ export default function OrderDetailPage() {
     acc[key] = String(item?.Product?.name || 'Produk');
     return acc;
   }, {});
-  const paymentMethodRaw = String(order?.Invoice?.payment_method || order?.payment_method || '').trim().toLowerCase();
-  const paymentStatus = String(order?.Invoice?.payment_status || '');
+  const invoiceRefs = extractInvoicesFromOrder(order);
+  const primaryInvoice = invoiceRefs[0] || null;
+  const invoiceLabel = invoiceRefs.length === 0
+    ? '-'
+    : invoiceRefs.length === 1
+      ? String(primaryInvoice?.invoice_number || primaryInvoice?.id || '-')
+      : `${String(primaryInvoice?.invoice_number || primaryInvoice?.id || '-') } (+${invoiceRefs.length - 1})`;
+
+  const paymentMethodRaw = String((primaryInvoice as any)?.payment_method || order?.payment_method || '').trim().toLowerCase();
+  const paymentStatus = String((primaryInvoice as any)?.payment_status || '');
   const normalizedOrderStatus = String(order?.status || '');
   const paymentMethodLabel = (() => {
     if (!paymentMethodRaw || paymentMethodRaw === 'pending') return 'Mengikuti Driver';
@@ -393,7 +402,7 @@ export default function OrderDetailPage() {
     paymentStatus !== 'paid' &&
     !['canceled', 'expired'].includes(normalizedOrderStatus);
   const isWaitingFinanceVerification = paymentStatus === 'waiting_admin_verification';
-  const invoiceId = String(order?.Invoice?.id || '');
+  const invoiceId = String((primaryInvoice as any)?.id || '');
 
   const customerPaymentStatusLabel = paymentStatus === 'cod_pending'
     ? 'Sudah Dibayar ke Driver'
@@ -415,13 +424,13 @@ export default function OrderDetailPage() {
             <StatusIcon size={14} />
             <span className="text-xs font-bold">{statusView.label}</span>
           </div>
-        </div>
-
-        <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
-          <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{order.Invoice?.invoice_number || '-'}</span></p>
-          <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{paymentMethodLabel}</span></p>
-          <p className="text-xs text-slate-600">Status Bayar: <span className="font-bold text-slate-900">{customerPaymentStatusLabel}</span></p>
-        </div>
+	        </div>
+	
+	        <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
+	          <p className="text-xs text-slate-600">Invoice: <span className="font-bold text-slate-900">{invoiceLabel}</span></p>
+	          <p className="text-xs text-slate-600">Metode Bayar: <span className="font-bold text-slate-900">{paymentMethodLabel}</span></p>
+	          <p className="text-xs text-slate-600">Status Bayar: <span className="font-bold text-slate-900">{customerPaymentStatusLabel}</span></p>
+	        </div>
 
         {invoiceId && (
           <div

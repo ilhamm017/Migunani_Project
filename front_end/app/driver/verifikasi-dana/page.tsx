@@ -10,6 +10,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import type { DriverAssignedOrderRow } from '@/lib/apiTypes';
+import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 
 const formatCurrency = (value: number) =>
   `Rp ${Number.isFinite(value) ? value.toLocaleString('id-ID') : '0'}`;
@@ -65,7 +66,7 @@ export default function DriverVerifikasiDanaPage() {
     }>();
 
     orders.forEach((order) => {
-      const invoice = order?.Invoice || (Array.isArray(order?.Invoices) ? order.Invoices[0] : null) || null;
+      const invoice = collectInvoiceRefs(order)[0] || null;
       const paymentMethod = String(invoice?.payment_method || order?.payment_method || '').toLowerCase();
       const paymentStatus = String(invoice?.payment_status || order?.payment_status || '').toLowerCase();
       if (paymentMethod !== 'cod' || paymentStatus !== 'cod_pending') return;

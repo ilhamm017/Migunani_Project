@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/authStore';
 import { api } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { formatCurrency } from '@/lib/utils';
+import { extractInvoicesFromOrder } from '@/lib/invoiceRefs';
 
 type ProductPreview = {
   id: string;
@@ -73,13 +74,9 @@ export default function MemberHome() {
         const orders: MyOrderSummary[] = Array.isArray(ordersRes.data?.orders) ? ordersRes.data.orders : [];
         const invoiceMap = new Map<string, OrderInvoiceSummary & { orderIds: string[] }>();
         orders.forEach((order) => {
-          const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
-            ? order.Invoices
-            : order?.Invoice
-              ? [order.Invoice]
-              : [];
+          const invoices = extractInvoicesFromOrder(order);
           invoices.forEach((invoice) => {
-            const id = String(invoice?.id || '');
+            const id = String(invoice?.id || '').trim();
             if (!id) return;
             const existing = invoiceMap.get(id) || {
               id,

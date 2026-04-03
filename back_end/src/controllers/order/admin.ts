@@ -9,6 +9,7 @@ import { JournalService } from '../../services/JournalService';
 import { InventoryReservationService } from '../../services/InventoryReservationService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbiguity';
 import { recordOrderEvent, recordOrderStatusChanged } from '../../utils/orderEvent';
 import { DELIVERY_EMPLOYEE_ROLES, withOrderTrackingFields, normalizeIssueNote, ISSUE_SLA_HOURS, resolveEmployeeDisplayName, ORDER_STATUS_OPTIONS } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
@@ -278,6 +279,7 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         const orderId = String(req.params.id);
         const userRole = req.user!.role;
         const { status, courier_id, issue_type, issue_note, resolution_note, reason } = req.body;
+        const requestedInvoiceId = String(req.body?.invoice_id || '').trim();
         const cancelReason = typeof reason === 'string' ? reason.trim() : '';
 
         const nextStatus = typeof status === 'string' ? status : '';
@@ -349,12 +351,15 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
 
         // --- Courier validation for shipped ---
         let courierIdToSave: string | null = null;
+        let targetInvoice: any | null = null;
         if (nextStatus === 'shipped') {
-            const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
-            if (!invoice) {
-                await t.rollback();
-                throw new CustomError('Invoice tidak ditemukan untuk order ini.', 400);
-            }
+            targetInvoice = (await ensureSingleInvoiceOrRequireInvoiceId({
+                order_id: orderId,
+                invoice_id: requestedInvoiceId || null,
+                transaction: t,
+                lock: t.LOCK.UPDATE,
+                if_none: { statusCode: 400, message: 'Invoice tidak ditemukan untuk order ini.' },
+            })).invoice;
             // Pembayaran Transfer/COD diubah alur logikanya: bisa dikirim dulu baru bayar belakangan
             // Jadi pengecekan pesanan non-COD harus lunas kita hapus.
             // Fitur pembayaran di awal tetap berjalan karena sistem mengecek jika sudah lunas maka statusnya 'paid'.
@@ -412,14 +417,21 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
         }
 
         if (nextStatus === 'shipped') {
-            const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+            const invoice = targetInvoice
+                || (await ensureSingleInvoiceOrRequireInvoiceId({
+                    order_id: orderId,
+                    invoice_id: requestedInvoiceId || null,
+                    transaction: t,
+                    lock: t.LOCK.UPDATE,
+                    if_none: { statusCode: 400, message: 'Invoice tidak ditemukan untuk order ini.' },
+                })).invoice;
             if (invoice) {
                 if (String(invoice.shipment_status || '') === 'delivered' || invoice.delivered_at) {
                     await t.rollback();
                     throw new CustomError('Invoice untuk order ini sudah selesai dikirim dan tidak bisa dikembalikan ke status shipped.', 409);
                 }
                 if (invoice.payment_method !== 'cod') {
-                    await AccountingPostingService.postGoodsOutForOrder(orderId, String(req.user!.id), t, 'non_cod');
+                    await AccountingPostingService.postGoodsOutForOrder(orderId, String(req.user!.id), t, 'non_cod', String(invoice.id));
                 }
                 await invoice.update({
                     shipment_status: 'shipped',
@@ -527,7 +539,13 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
 
             // Auto-Reversal for Shipped/Delivered/Completed
             if (['shipped', 'delivered', 'completed'].includes(prevStatus)) {
-                const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+                const invoice = (await ensureSingleInvoiceOrRequireInvoiceId({
+                    order_id: orderId,
+                    invoice_id: requestedInvoiceId || null,
+                    transaction: t,
+                    lock: t.LOCK.UPDATE,
+                    if_none: { statusCode: 404, message: 'Invoice tidak ditemukan.' },
+                })).invoice;
                 if (invoice) {
                     // Reverse HPP
                     const invoiceItems = await InvoiceItem.findAll({

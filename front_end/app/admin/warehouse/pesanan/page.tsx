@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { Package, Clock, User, Hash, GripVertical, RefreshCw } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { notifyAlert } from '@/lib/notify';
+import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 
 interface OrderCard {
     id: string;
@@ -130,23 +131,26 @@ export default function WarehouseKanbanPage() {
                         .then((res) => (Array.isArray(res.data?.orders) ? res.data.orders : []))
                         .catch(() => [])
                 )
-            );
-
-            const flattened = results.flat() as OrderApiRow[];
-            const allOrders: OrderCard[] = flattened.map((order) => ({
-                id: String(order.id ?? ''),
-                order_number: order.order_number || String(order.id ?? '').slice(0, 8),
-                customer_name: order.User?.name || order.customer_name || 'Customer',
-                total_amount: Number(order.total_amount || 0),
-                item_count: order.OrderItems?.length || order.item_count || 0,
-                status: order.status === 'waiting_payment' ? 'ready_to_ship' : String(order.status || ''),
-                created_at: String(order.createdAt || order.created_at || ''),
-                payment_method: order.payment_method,
-                courier_id: order.Invoice?.courier_id || order.courier_id || order.Courier?.id || null,
-                courier_name: order.Courier?.name || null,
-                invoice_id: order.Invoice?.id ? String(order.Invoice.id) : null,
-                invoice_number: order.Invoice?.invoice_number ? String(order.Invoice.invoice_number) : null,
-            }));
+	            );
+	
+	            const flattened = results.flat() as OrderApiRow[];
+	            const allOrders: OrderCard[] = flattened.map((order) => {
+	                const invoice = collectInvoiceRefs(order)[0] || null;
+	                return {
+	                    id: String(order.id ?? ''),
+	                    order_number: order.order_number || String(order.id ?? '').slice(0, 8),
+	                    customer_name: order.User?.name || order.customer_name || 'Customer',
+	                    total_amount: Number(order.total_amount || 0),
+	                    item_count: order.OrderItems?.length || order.item_count || 0,
+	                    status: order.status === 'waiting_payment' ? 'ready_to_ship' : String(order.status || ''),
+	                    created_at: String(order.createdAt || order.created_at || ''),
+	                    payment_method: order.payment_method,
+	                    courier_id: (invoice as any)?.courier_id || order.courier_id || order.Courier?.id || null,
+	                    courier_name: order.Courier?.name || null,
+	                    invoice_id: (invoice as any)?.id ? String((invoice as any).id) : null,
+	                    invoice_number: (invoice as any)?.invoice_number ? String((invoice as any).invoice_number) : null,
+	                };
+	            });
 
             setOrders(allOrders);
             setLastRefresh(new Date());

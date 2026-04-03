@@ -14,6 +14,7 @@ export const errorMiddleware = async (
     let statusCode = 500;
     let message = 'Internal Server Error';
     let errors = undefined;
+    let data = undefined;
     const requestIdFromHeader = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].trim() : '';
     const request_id = requestIdFromHeader || crypto.randomUUID();
 
@@ -46,6 +47,7 @@ export const errorMiddleware = async (
         statusCode = err.statusCode;
         message = err.message;
         errors = err.errors;
+        data = (err as any).data;
     }
     // Handling Sequelize Unique Constraint Errors
     else if (err instanceof UniqueConstraintError) {
@@ -83,6 +85,7 @@ export const errorMiddleware = async (
         statusCode,
         message,
         request_id,
+        ...(data !== undefined && { data }),
         ...(exposeErrorDetails && {
             debug: {
                 name: err.name,

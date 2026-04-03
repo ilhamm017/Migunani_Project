@@ -5,6 +5,7 @@ import { InventoryCostService } from './InventoryCostService';
 import { InventoryReservationService } from './InventoryReservationService';
 import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
 import { CustomError } from '../utils/CustomError';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../utils/invoiceAmbiguity';
 
 const n = (v: unknown) => Number(v || 0);
 const round2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -38,12 +39,24 @@ const computeEmbeddedDiscountTotal = (items: any[]): number => {
 const getAccount = async (code: string, t: Transaction) => Account.findOne({ where: { code }, transaction: t });
 
 export class AccountingPostingService {
-    static async postGoodsOutForOrder(orderId: string, actorId: string, t: Transaction, mode: 'non_cod' | 'cod') {
+    static async postGoodsOutForOrder(
+        orderId: string,
+        actorId: string,
+        t: Transaction,
+        mode: 'non_cod' | 'cod',
+        invoiceId?: string | null
+    ) {
         const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
         if (!order) throw new CustomError('Order tidak ditemukan untuk proses goods out.', 404);
         if (order.goods_out_posted_at) return { revenue: 0, cogs: 0 };
 
-        const invoice = await findLatestInvoiceByOrderId(orderId, { transaction: t });
+        const invoice = (await ensureSingleInvoiceOrRequireInvoiceId({
+            order_id: orderId,
+            invoice_id: String(invoiceId || '').trim() || null,
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+            if_none: { statusCode: 409, message: 'Invoice tidak ditemukan untuk proses goods out.' },
+        })).invoice;
         if (!invoice) throw new CustomError('Invoice tidak ditemukan untuk proses goods out.', 409);
 
         const orderItems = await OrderItem.findAll({ where: { order_id: orderId }, transaction: t, lock: t.LOCK.UPDATE });

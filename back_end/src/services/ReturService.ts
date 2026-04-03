@@ -5,12 +5,14 @@ import { InventoryCostService } from './InventoryCostService';
 import { emitReturStatusChanged } from '../utils/orderNotification';
 import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
 import { calculateDriverCodExposure } from '../utils/codExposure';
-import { findLatestInvoiceByOrderId } from '../utils/invoiceLookup';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../utils/invoiceAmbiguity';
+import { CustomError } from '../utils/CustomError';
 
 export class ReturService {
     static async requestRetur(payload: {
         userId: string;
         order_id: string;
+        invoice_id?: string;
         product_id: string;
         qty: number;
         reason: string;
@@ -19,7 +21,7 @@ export class ReturService {
     }) {
         const t = await sequelize.transaction();
         try {
-            const { userId, order_id, product_id, qty, reason, filePath, userRole } = payload;
+            const { userId, order_id, invoice_id, product_id, qty, reason, filePath, userRole } = payload;
 
             const order = await Order.findOne({
                 where: { id: order_id, customer_id: userId },
@@ -61,8 +63,17 @@ export class ReturService {
                 throw new Error('Jumlah retur melebihi jumlah yang dibeli');
             }
 
+            const invoiceSelection = await ensureSingleInvoiceOrRequireInvoiceId({
+                order_id: String(order_id),
+                invoice_id: String(invoice_id || '').trim() || null,
+                transaction: t,
+                lock: t.LOCK.SHARE,
+                if_none: { statusCode: 404, message: 'Invoice tidak ditemukan untuk order ini' },
+            });
+
             const createdRetur = await Retur.create({
                 order_id,
+                invoice_id: String((invoiceSelection as any)?.invoice?.id || '') || null,
                 product_id,
                 qty,
                 reason,
@@ -141,6 +152,7 @@ export class ReturService {
         id: string,
         payload: {
             status: string;
+            invoice_id?: string;
             admin_response?: string;
             courier_id?: string;
             refund_amount?: number;
@@ -195,6 +207,7 @@ export class ReturService {
 
             const updateData: {
                 status: AdminAllowedReturStatus;
+                invoice_id?: string | null;
                 admin_response?: string | null;
                 courier_id?: string | null;
                 refund_amount?: number | null;
@@ -204,6 +217,17 @@ export class ReturService {
 
             if (admin_response !== undefined) {
                 updateData.admin_response = admin_response;
+            }
+
+            if (payload.invoice_id !== undefined) {
+                const invoiceSelection = await ensureSingleInvoiceOrRequireInvoiceId({
+                    order_id: String((retur as any).order_id || ''),
+                    invoice_id: String(payload.invoice_id || '').trim() || null,
+                    transaction: t,
+                    lock: t.LOCK.SHARE,
+                    if_none: { statusCode: 404, message: 'Invoice terkait tidak ditemukan untuk retur.' },
+                });
+                updateData.invoice_id = String((invoiceSelection as any).invoice?.id || '') || null;
             }
 
             if (nextStatus === 'pickup_assigned') {
@@ -266,10 +290,14 @@ export class ReturService {
                 const receivedQty = Math.max(0, Math.trunc(Number((retur as any).qty_received || updateData.qty_received || 0)));
 
                 if (receivedQty < claimedQty) {
-                    const latestInvoice = await findLatestInvoiceByOrderId(String(retur.order_id), { transaction: t });
-                    if (!latestInvoice) {
-                        throw new Error('Invoice terkait tidak ditemukan untuk retur delivery');
-                    }
+                    const invoiceSelection = await ensureSingleInvoiceOrRequireInvoiceId({
+                        order_id: String(retur.order_id),
+                        invoice_id: String((retur as any).invoice_id || payload.invoice_id || '').trim() || null,
+                        transaction: t,
+                        lock: t.LOCK.SHARE,
+                        if_none: { statusCode: 404, message: 'Invoice terkait tidak ditemukan untuk retur delivery' },
+                    });
+                    const latestInvoice = invoiceSelection.invoice;
 
                     const claimedTotals = await computeInvoiceNetTotals(String(latestInvoice.id), {
                         transaction: t,
@@ -328,7 +356,13 @@ export class ReturService {
                     }, { transaction: t });
 
                     // --- Journal for Return to Stock (Persediaan vs HPP Reversal) ---
-                    const invoice = await findLatestInvoiceByOrderId(String(retur.order_id), { transaction: t });
+                    const invoice = (await ensureSingleInvoiceOrRequireInvoiceId({
+                        order_id: String(retur.order_id),
+                        invoice_id: String((retur as any).invoice_id || payload.invoice_id || '').trim() || null,
+                        transaction: t,
+                        lock: t.LOCK.SHARE,
+                        if_none: { statusCode: 404, message: 'Invoice terkait tidak ditemukan untuk retur.' },
+                    })).invoice;
                     const invoiceItems = invoice
                         ? await InvoiceItem.findAll({
                             where: { invoice_id: String(invoice.id) },

@@ -1235,10 +1235,6 @@ export const uploadInvoicePaymentProof = asyncWrapper(async (req: Request, res: 
             if (orderPaymentMethod && orderPaymentMethod !== 'transfer_manual') {
                 throw new CustomError('Metode pembayaran order sudah berubah. Bukti transfer tidak dapat diunggah untuk invoice ini.', 409);
             }
-            const latestInvoice = await findLatestInvoiceByOrderId(String(order.id), { transaction: t });
-            if (latestInvoice && String(latestInvoice.id) !== invoiceId) {
-                throw new CustomError('Invoice ini sudah digantikan oleh invoice yang lebih baru. Bukti transfer tidak dapat diunggah untuk invoice ini.', 409);
-            }
         }
 
         const previousStatuses = new Map<string, string>();

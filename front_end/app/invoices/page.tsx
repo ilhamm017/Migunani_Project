@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
+import { extractInvoicesFromOrder } from '@/lib/invoiceRefs';
 
 type InvoiceRow = {
   id: string;
@@ -145,34 +146,25 @@ export default function CustomerInvoicesPage() {
       return;
     }
     try {
-      if (!silent) setLoading(true);
-      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
-      const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
-      const latestInvoiceIds = new Set<string>();
-      orders.forEach((order) => {
-        const id = String(order?.Invoice?.id || '').trim();
-        if (id) latestInvoiceIds.add(id);
-      });
-
-      const invoiceMap = new Map<string, InvoiceRow>();
-      orders.forEach((order) => {
-        const invoices = Array.isArray(order?.Invoices) && order.Invoices.length > 0
-          ? order.Invoices
-          : order?.Invoice
-            ? [order.Invoice]
-            : [];
-        invoices.forEach((invoice) => {
-          const id = String(invoice?.id || '');
-          if (!id) return;
-	          const existing: InvoiceRow = invoiceMap.get(id) || {
-	            id,
-	            invoice_number: String(invoice?.invoice_number || id),
-	            payment_status: String(invoice?.payment_status || ''),
+	      if (!silent) setLoading(true);
+	      const res = await api.orders.getMyOrders({ page: 1, limit: 200, include_collectible_total: 'true' });
+	      const orders: OrderSummary[] = Array.isArray(res.data?.orders) ? res.data.orders : [];
+	
+	      const invoiceMap = new Map<string, InvoiceRow>();
+	      orders.forEach((order) => {
+	        const invoices = extractInvoicesFromOrder(order);
+	        invoices.forEach((invoice) => {
+	          const id = String(invoice?.id || '').trim();
+	          if (!id) return;
+		          const existing: InvoiceRow = invoiceMap.get(id) || {
+		            id,
+		            invoice_number: String(invoice?.invoice_number || id),
+		            payment_status: String(invoice?.payment_status || ''),
 	            payment_method: String(invoice?.payment_method || ''),
 	            payment_proof_url: invoice?.payment_proof_url ? String(invoice.payment_proof_url) : null,
               amount_paid: Number((invoice as any)?.amount_paid ?? 0),
 	            total: Number((invoice as any)?.collectible_total ?? invoice?.total ?? 0),
-	            createdAt: invoice?.createdAt || invoice?.created_at || undefined,
+		            createdAt: invoice?.createdAt ? String(invoice.createdAt) : invoice?.created_at ? String(invoice.created_at) : undefined,
 	            orderIds: []
 	          };
           if (!existing.orderIds.includes(String(order.id))) {
@@ -180,14 +172,13 @@ export default function CustomerInvoicesPage() {
           }
           invoiceMap.set(id, existing);
         });
-      });
-      const unpaid = Array.from(invoiceMap.values()).filter((inv) => {
-        const status = String(inv.payment_status || '');
-        if (!latestInvoiceIds.has(String(inv.id || '').trim())) return false;
-        if (status === 'paid') return false;
-        if (status === 'cod_pending') {
-          const amountPaid = Number((inv as any).amount_paid || 0);
-          return !(Number.isFinite(amountPaid) && amountPaid > 0);
+	      });
+	      const unpaid = Array.from(invoiceMap.values()).filter((inv) => {
+	        const status = String(inv.payment_status || '');
+	        if (status === 'paid') return false;
+	        if (status === 'cod_pending') {
+	          const amountPaid = Number((inv as any).amount_paid || 0);
+	          return !(Number.isFinite(amountPaid) && amountPaid > 0);
         }
         return true;
       });

@@ -121,7 +121,7 @@ const completeSingleDeliveryInternal = async (
         }
 
         if (paymentMethod === 'cod') {
-            await AccountingPostingService.postGoodsOutForOrder(String(order.id), String(params.userId), t, 'cod');
+            await AccountingPostingService.postGoodsOutForOrder(String(order.id), String(params.userId), t, 'cod', String(invoice.id || ''));
         }
 
         const updatePayload: any = { status: nextOrderStatus };

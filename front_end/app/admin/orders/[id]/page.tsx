@@ -109,6 +109,34 @@ const getInvoiceRefFromOrder = (orderData: unknown): string => {
   return '';
 };
 
+const collectInvoiceRefsFromOrder = (orderData: unknown): Array<{ invoiceId: string; invoiceNumber: string }> => {
+  const orderRow = asRecord(orderData);
+  const rows = [
+    ...(Array.isArray(orderRow.Invoices) ? orderRow.Invoices : []),
+    ...(Array.isArray(asRecord(orderRow.Invoice).Invoices) ? (asRecord(orderRow.Invoice).Invoices as unknown[]) : []),
+  ];
+
+  const byKey = new Map<string, { invoiceId: string; invoiceNumber: string }>();
+  rows.forEach((row: unknown) => {
+    const r = asRecord(row);
+    const invoiceId = String(r.id || '').trim();
+    const invoiceNumber = String(r.invoice_number || '').trim();
+    const key = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : '';
+    if (!key) return;
+    if (byKey.has(key)) return;
+    byKey.set(key, { invoiceId, invoiceNumber });
+  });
+
+  const fallbackId = String(orderRow.invoice_id || asRecord(orderRow.Invoice).id || '').trim();
+  const fallbackNumber = String(orderRow.invoice_number || asRecord(orderRow.Invoice).invoice_number || '').trim();
+  if (fallbackId || fallbackNumber) {
+    const key = fallbackId ? `id:${fallbackId}` : `num:${fallbackNumber.toLowerCase()}`;
+    if (!byKey.has(key)) byKey.set(key, { invoiceId: fallbackId, invoiceNumber: fallbackNumber });
+  }
+
+  return Array.from(byKey.values()).filter((ref) => Boolean(ref.invoiceId));
+};
+
 const getOrderItemSuppliedQty = (orderData: unknown, invoiceData: unknown, itemId: string) => {
   const orderRow = asRecord(orderData);
   const invoiceRow = asRecord(invoiceData);
@@ -139,6 +167,7 @@ export default function AdminInvoiceDetailPage() {
   const [orders, setOrders] = useState<LooseRecord[]>([]);
   const [resolvedInvoiceId, setResolvedInvoiceId] = useState('');
   const [resolvedFromOrderId, setResolvedFromOrderId] = useState('');
+  const [availableInvoicesFromOrder, setAvailableInvoicesFromOrder] = useState<Array<{ invoiceId: string; invoiceNumber: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState('');
@@ -204,10 +233,12 @@ export default function AdminInvoiceDetailPage() {
         const invoiceRes = await api.invoices.getById(routeRefId);
         invoiceData = invoiceRes.data && typeof invoiceRes.data === 'object' ? (invoiceRes.data as LooseRecord) : null;
         invoiceId = String(asRecord(invoiceData).id || routeRefId).trim();
+        setAvailableInvoicesFromOrder([]);
       } catch {
         const orderRes = await api.orders.getOrderById(routeRefId);
         fallbackOrderData = orderRes.data && typeof orderRes.data === 'object' ? (orderRes.data as LooseRecord) : null;
         fallbackOrderId = String(asRecord(fallbackOrderData).id || '').trim();
+        setAvailableInvoicesFromOrder(collectInvoiceRefsFromOrder(fallbackOrderData));
         invoiceId = getInvoiceRefFromOrder(fallbackOrderData);
         if (!invoiceId) throw new Error('Invoice tidak ditemukan dari order ini.');
         const invoiceRes = await api.invoices.getById(invoiceId);
@@ -252,6 +283,7 @@ export default function AdminInvoiceDetailPage() {
       setOrders([]);
       setResolvedInvoiceId('');
       setResolvedFromOrderId('');
+      setAvailableInvoicesFromOrder([]);
       setError(
         typeof e === 'object' && e !== null
           ? String((e as { response?: { data?: { message?: unknown } }; message?: unknown }).response?.data?.message || (e as { message?: unknown }).message || 'Gagal memuat detail invoice')
@@ -711,6 +743,29 @@ export default function AdminInvoiceDetailPage() {
             <p className="text-xs text-slate-500">Invoice ID: {resolvedInvoiceId || '-'}</p>
             {resolvedFromOrderId && (
               <p className="text-[11px] text-amber-700">Dibuka dari order #{resolvedFromOrderId.slice(-8).toUpperCase()}, otomatis dialihkan ke invoice ini.</p>
+            )}
+            {resolvedFromOrderId && availableInvoicesFromOrder.length > 1 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {availableInvoicesFromOrder.map((ref) => {
+                  const id = String(ref.invoiceId || '').trim();
+                  if (!id) return null;
+                  const label = String(ref.invoiceNumber || '').trim() || `INV-${id.slice(-8).toUpperCase()}`;
+                  const active = id === resolvedInvoiceId;
+                  return (
+                    <Link
+                      key={id}
+                      href={`/admin/orders/${encodeURIComponent(id)}`}
+                      className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider ${active
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      title="Buka invoice lain untuk order ini"
+                    >
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2">

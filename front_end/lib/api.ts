@@ -675,11 +675,12 @@ export const api = {
                 apiClient.post('/admin/finance/invoices/issue-batch', { order_ids: orderIds }),
             issueInvoiceByItems: (items: Array<{ order_item_id: string | number; qty: number }>) =>
                 apiClient.post('/admin/finance/invoices/issue-items', { items }),
-            verifyPayment: (orderId: string, action: 'approve' | 'reject', amount_received?: number) =>
-                apiClient.patch(`/admin/finance/orders/${orderId}/verify`, {
-                    action,
-                    ...(amount_received !== undefined ? { amount_received } : {}),
-                }),
+	            verifyPayment: (orderOrInvoiceId: string, action: 'approve' | 'reject', amount_received?: number, invoice_id?: string) =>
+	                apiClient.patch(`/admin/finance/orders/${orderOrInvoiceId}/verify`, {
+	                    action,
+	                    ...(invoice_id ? { invoice_id } : {}),
+	                    ...(amount_received !== undefined ? { amount_received } : {}),
+	                }),
             getAR: () => apiClient.get('/admin/finance/ar'),
             getARById: (invoiceId: string) => apiClient.get(`/admin/finance/ar/${invoiceId}`),
             getInvoiceCostOverrides: (invoiceId: string) =>

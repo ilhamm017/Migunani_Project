@@ -34,6 +34,13 @@ export default function ReturnRequestPage() {
     const [reason, setReason] = useState('');
     const [evidence, setEvidence] = useState<File | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    const [invoicePicker, setInvoicePicker] = useState<null | Array<{
+        invoice_id: string;
+        invoice_number?: string;
+        createdAt?: string | null;
+        shipment_status?: string;
+        payment_status?: string;
+    }>>(null);
 
     const loadOrder = useCallback(async () => {
         if (!id) return;
@@ -49,27 +56,44 @@ export default function ReturnRequestPage() {
         if (id) void loadOrder();
     }, [id, loadOrder]);
 
+    const submitRetur = async (opts?: { invoice_id?: string }) => {
+        if (!selectedItem || !reason || !qty) return;
+        const formData = new FormData();
+        formData.append('order_id', id as string);
+        formData.append('product_id', selectedItem);
+        formData.append('qty', String(qty));
+        formData.append('reason', reason);
+        if (opts?.invoice_id) {
+            formData.append('invoice_id', String(opts.invoice_id));
+        }
+        if (evidence) {
+            formData.append('evidence_img', evidence);
+        }
+
+        await api.retur.request(formData);
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedItem || !reason || !qty) return;
 
         try {
             setSubmitting(true);
-            const formData = new FormData();
-            formData.append('order_id', id as string);
-            formData.append('product_id', selectedItem);
-            formData.append('qty', String(qty));
-            formData.append('reason', reason);
-            if (evidence) {
-                formData.append('evidence_img', evidence);
-            }
-
-            await api.retur.request(formData);
+            setInvoicePicker(null);
+            await submitRetur();
             notifyAlert('Permintaan retur berhasil dikirim!');
             router.push(`/orders/${id}`);
         } catch (error: unknown) {
+            const status = Number((error as any)?.response?.status || 0);
+            const data = (error as any)?.response?.data as any;
+            const code = String(data?.data?.code || '');
+            const candidates = Array.isArray(data?.data?.candidates) ? data.data.candidates : [];
+            if (status === 409 && code === 'INVOICE_ID_REQUIRED' && candidates.length > 0) {
+                setInvoicePicker(candidates);
+                return;
+            }
             const err = error as ApiErrorWithMessage;
-            notifyAlert(err.response?.data?.message || 'Gagal mengirim permintaan retur');
+            notifyAlert((err as any)?.response?.data?.message || 'Gagal mengirim permintaan retur');
         } finally {
             setSubmitting(false);
         }
@@ -81,6 +105,58 @@ export default function ReturnRequestPage() {
 
     return (
         <div className="p-6">
+            {invoicePicker && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+                    <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl border border-slate-200 overflow-hidden">
+                        <div className="p-5 border-b border-slate-100">
+                            <p className="text-xs font-black uppercase tracking-[0.24em] text-slate-500">Pilih Invoice</p>
+                            <p className="mt-1 text-sm font-bold text-slate-900">
+                                Order ini punya lebih dari satu invoice. Pilih invoice yang terkait retur ini.
+                            </p>
+                        </div>
+                        <div className="p-4 space-y-2 max-h-[60vh] overflow-auto">
+                            {invoicePicker.map((c) => (
+                                <button
+                                    key={String(c.invoice_id)}
+                                    onClick={async () => {
+                                        const candidateId = String(c.invoice_id || '').trim();
+                                        if (!candidateId) return;
+                                        try {
+                                            setSubmitting(true);
+                                            await submitRetur({ invoice_id: candidateId });
+                                            setInvoicePicker(null);
+                                            notifyAlert('Permintaan retur berhasil dikirim!');
+                                            router.push(`/orders/${id}`);
+                                        } catch (err) {
+                                            notifyAlert(String((err as any)?.response?.data?.message || 'Gagal mengirim permintaan retur'));
+                                        } finally {
+                                            setSubmitting(false);
+                                        }
+                                    }}
+                                    disabled={submitting}
+                                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    <p className="text-sm font-black text-slate-900 truncate">
+                                        {String(c.invoice_number || c.invoice_id)}
+                                    </p>
+                                    <p className="mt-0.5 text-xs text-slate-500">
+                                        {String(c.payment_status || '-')}{' • '}{String(c.shipment_status || '-')}{c.createdAt ? ` • ${String(c.createdAt)}` : ''}
+                                    </p>
+                                </button>
+                            ))}
+                        </div>
+                        <div className="p-4 border-t border-slate-100">
+                            <button
+                                onClick={() => setInvoicePicker(null)}
+                                disabled={submitting}
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                            >
+                                Batal
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <div className="mb-6">
                 <Link href={`/orders/${id}`} className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 font-bold mb-4">
                     <ArrowLeft size={20} /> Kembali ke Order

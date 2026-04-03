@@ -8,6 +8,7 @@ import { OrderTerminalizationService } from '../../services/OrderTerminalization
 import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { generateInvoiceNumber } from '../../utils/invoice';
 import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
+import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbiguity';
 
 
 import {
@@ -28,6 +29,7 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
     try {
         const { id } = req.params; // Order ID
         const { action } = req.body; // 'approve' | 'reject'
+        const requestedInvoiceId = String(req.body?.invoice_id || '').trim();
         const verifierId = req.user!.id;
         const verifierRole = req.user!.role;
 
@@ -41,8 +43,21 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             throw new CustomError('Invalid action', 400);
         }
 
-        const invoice = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE })
-            || await findLatestInvoiceByOrderId(String(id), { transaction: t });
+        const directInvoice = await Invoice.findByPk(String(id), { transaction: t, lock: t.LOCK.UPDATE });
+        if (directInvoice && requestedInvoiceId && String(directInvoice.id) !== requestedInvoiceId) {
+            await t.rollback();
+            throw new CustomError('invoice_id tidak sesuai dengan invoice pada URL.', 400);
+        }
+
+        const invoice = directInvoice
+            ? directInvoice
+            : (await ensureSingleInvoiceOrRequireInvoiceId({
+                order_id: String(id),
+                invoice_id: requestedInvoiceId || null,
+                transaction: t,
+                lock: t.LOCK.UPDATE,
+                if_none: { statusCode: 404, message: 'Invoice not found' },
+            })).invoice;
         if (!invoice) {
             await t.rollback();
             throw new CustomError('Invoice not found', 404);
