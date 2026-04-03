@@ -148,6 +148,7 @@ type WarehouseInvoiceBucket = {
   groupKey: string;
   invoiceId: string;
   invoiceNumber: string;
+  invoiceLike?: any;
   orders: AdminOrderListRow[];
 };
 type InvoiceItemSummary = {
@@ -223,7 +224,18 @@ const CANCELED_STATUSES = new Set(['canceled', 'expired']);
 const PAYMENT_STATUSES = new Set(['waiting_admin_verification']);
 const WAREHOUSE_STATUSES = new Set(['allocated', 'ready_to_ship', 'checked', 'waiting_payment', 'processing', 'hold']);
 const ALLOCATION_EDITABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'hold', 'partially_fulfilled']);
-const BACKORDER_REALLOCATABLE_STATUSES = new Set(['pending', 'waiting_invoice', 'allocated', 'ready_to_ship', 'partially_fulfilled', 'hold', 'delivered', 'completed']);
+const BACKORDER_REALLOCATABLE_STATUSES = new Set([
+  'pending',
+  'waiting_invoice',
+  'allocated',
+  'ready_to_ship',
+  'checked',
+  'shipped',
+  'partially_fulfilled',
+  'hold',
+  'delivered',
+  'completed',
+]);
 const WORKSPACE_ORDER_STATUS_PREFERRED_OVER_INVOICE_SHIPMENT = new Set([
   'pending',
   'waiting_invoice',
@@ -5252,11 +5264,11 @@ export default function AdminOrdersWorkspace({
 	                    const invoiceRefs = collectInvoiceRefs(row, detail);
 	                    const refs = invoiceRefs.length > 0 ? invoiceRefs : [row?.Invoice || detail?.Invoice || null];
 
-	                    refs.forEach((inv: any) => {
-	                      if (['gudang', 'checker', 'pengiriman'].includes(section)) {
-	                        const lane = resolveInvoiceOpsSection(inv);
-	                        if (lane !== section) return;
-	                      }
+		                    refs.forEach((inv: any) => {
+		                      if (['gudang', 'checker', 'pengiriman'].includes(section)) {
+		                        const lane = resolveInvoiceOpsSection(inv);
+		                        if (lane !== section) return;
+		                      }
 
 	                      const invoiceId = normalizeInvoiceRef(inv?.id || row?.invoice_id || row?.Invoice?.id || detail?.invoice_id || detail?.Invoice?.id);
 	                      const invoiceNumber = normalizeInvoiceRef(
@@ -5264,17 +5276,21 @@ export default function AdminOrdersWorkspace({
 	                      );
 	                      const groupKey = invoiceId ? `id:${invoiceId}` : invoiceNumber ? `num:${invoiceNumber.toLowerCase()}` : `order:${rowId}`;
 
-	                      const bucket: WarehouseInvoiceBucket = acc.get(groupKey) || {
-	                        groupKey,
-	                        invoiceId,
-	                        invoiceNumber,
-	                        orders: [],
-	                      };
-	                      if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
-	                        bucket.orders.push(row);
-	                      }
-	                      acc.set(groupKey, bucket);
-	                    });
+		                      const bucket: WarehouseInvoiceBucket = acc.get(groupKey) || {
+		                        groupKey,
+		                        invoiceId,
+		                        invoiceNumber,
+		                        invoiceLike: undefined,
+		                        orders: [],
+		                      };
+		                      if (!bucket.invoiceLike && inv && typeof inv === 'object') {
+		                        bucket.invoiceLike = inv;
+		                      }
+		                      if (!bucket.orders.some((bucketOrder) => String(bucketOrder?.id || '') === rowId)) {
+		                        bucket.orders.push(row);
+		                      }
+		                      acc.set(groupKey, bucket);
+		                    });
 	
 	                    return acc;
 	                  }, new Map<string, WarehouseInvoiceBucket>());
@@ -5303,41 +5319,59 @@ export default function AdminOrdersWorkspace({
                     });
                   }
 
-                  const warehouseCards = Array.from(invoiceBuckets.values())
-                    .map((bucket: WarehouseInvoiceBucket) => {
-                      const invoiceId = bucket.invoiceId;
-                      const invoiceSummary = invoiceId ? invoiceItemSummaryByInvoiceId[invoiceId] : undefined;
-                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
+	                  const warehouseCards = Array.from(invoiceBuckets.values())
+		                    .map((bucket: WarehouseInvoiceBucket) => {
+		                      const invoiceId = bucket.invoiceId;
+		                      const invoiceSummary = invoiceId ? invoiceItemSummaryByInvoiceId[invoiceId] : undefined;
+		                      const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
+		                      const invoiceLike = bucket.invoiceLike || null;
 
-                      let allocatedQty = 0;
-                      let totalAmount = invoiceDetail ? Number(invoiceDetail.total || 0) : 0;
-                      let latestTs = 0;
-                      let hasMissingDetails = false;
-                      let hasMissingInvoiceSummary = false;
-                      const allocatedSkuSet = new Set<string>();
-                      const statusSet = new Set<string>();
-                      const paymentMethodSet = new Set<string>();
-                      const paymentStatusSet = new Set<string>();
+		                      const invoiceShipmentStatus = String(
+		                        (invoiceDetail as any)?.shipment_status ??
+		                        (invoiceLike as any)?.shipment_status ??
+		                        ''
+		                      ).trim().toLowerCase();
+		                      const courierId = normalizeUuid(String(
+		                        (invoiceDetail as any)?.courier_id ??
+		                        (invoiceLike as any)?.courier_id ??
+		                        ''
+		                      ).trim());
+		                      const invoicePaymentMethod = String(
+		                        (invoiceDetail as any)?.payment_method ??
+		                        (invoiceLike as any)?.payment_method ??
+		                        ''
+		                      ).trim();
+		                      const invoicePaymentStatus = String(
+		                        (invoiceDetail as any)?.payment_status ??
+		                        (invoiceLike as any)?.payment_status ??
+		                        ''
+		                      ).trim();
 
-                      bucket.orders.forEach((row) => {
-                        const rowId = String(row?.id || '');
-                        if (!rowId) return;
+		                      let allocatedQty = 0;
+		                      const fallbackInvoiceTotal = toFiniteNumber(
+		                        (invoiceLike as any)?.collectible_total ??
+		                        (invoiceLike as any)?.delivery_return_summary?.net_total ??
+		                        (invoiceLike as any)?.total ??
+		                        null
+		                      );
+	                      let totalAmount = invoiceDetail
+	                        ? Number((invoiceDetail as any)?.total || 0)
+	                        : fallbackInvoiceTotal !== null
+	                          ? fallbackInvoiceTotal
+	                          : 0;
+	                      let latestTs = 0;
+	                      let hasMissingDetails = false;
+	                      let hasMissingInvoiceSummary = false;
+	                      const allocatedSkuSet = new Set<string>();
 
-                        // Fallback totalAmount if invoice detail not loaded
-                        if (!invoiceDetail) {
-                          totalAmount += Number(row?.total_amount || 0);
-                        }
-
-                        const detail = orderDetails[rowId];
-                        const normalizedStatus = resolveWorkspaceShipmentStatus(row, detail);
-                        if (normalizedStatus) statusSet.add(normalizedStatus);
-                        const paymentMethod = String(row?.Invoice?.payment_method || '').trim();
-                        if (paymentMethod) paymentMethodSet.add(paymentMethod);
-                        const paymentStatus = String(row?.Invoice?.payment_status || '').trim();
-                        if (paymentStatus) paymentStatusSet.add(paymentStatus);
-                        const rowTs = Date.parse(String(row?.updatedAt || row?.createdAt || ''));
-                        if (Number.isFinite(rowTs)) latestTs = Math.max(latestTs, rowTs);
-                        if (invoiceSummary) {
+	                      bucket.orders.forEach((row) => {
+	                        const rowId = String(row?.id || '');
+	                        if (!rowId) return;
+	
+	                        const detail = orderDetails[rowId];
+	                        const rowTs = Date.parse(String(row?.updatedAt || row?.createdAt || ''));
+	                        if (Number.isFinite(rowTs)) latestTs = Math.max(latestTs, rowTs);
+	                        if (invoiceSummary) {
                           allocatedQty += Number(invoiceSummary.qtyByOrderId[rowId] || 0);
                           const rowSkuCount = Number(invoiceSummary.skuByOrderId[rowId] || 0);
                           if (rowSkuCount > 0) {
@@ -5378,71 +5412,42 @@ export default function AdminOrdersWorkspace({
                       if (invoiceSummary) {
                         allocatedQty = Number(invoiceSummary.totalQty || 0);
                       }
-                      const orderIds = bucket.orders
-                        .map((row) => String(row?.id || ''))
-                        .filter(Boolean);
-                      const previewIds = orderIds.slice(0, 3).map((id: string) => `#${id.slice(-8).toUpperCase()}`);
-                      const extraOrderCount = Math.max(0, orderIds.length - previewIds.length);
-                      const hasReadyToShip = bucket.orders.some((row) => {
-                        const rowId = String(row?.id || '');
-                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
-                      });
-                      const hasChecked = bucket.orders.some((row) => {
-                        const rowId = String(row?.id || '');
-                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'checked';
-                      });
-                      const readyToShipOrderIds = bucket.orders
-                        .filter((row) => {
-                          const rowId = String(row?.id || '');
-                          return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
-                        })
-                        .map((row) => String(row?.id || ''))
-                        .filter(Boolean);
-                      const hasShipped = bucket.orders.some((row) => {
-                        const rowId = String(row?.id || '');
-                        return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'shipped';
-                      });
-                      const primaryOrder =
-                        bucket.orders.find((row) => {
-                          const rowId = String(row?.id || '');
-                          return resolveWorkspaceShipmentStatus(row, orderDetails[rowId]) === 'ready_to_ship';
-                        }) ||
-                        bucket.orders[0] ||
-                        null;
-                      const primaryOrderId = String(primaryOrder?.id || '');
-                      const primaryOrderDetail = primaryOrderId ? orderDetails[primaryOrderId] : undefined;
-                      const courierId = normalizeUuid(String(
-                        (invoiceDetail as any)?.courier_id ||
-                        (primaryOrderDetail as any)?.Invoice?.courier_id ||
-                        (primaryOrder as any)?.Invoice?.courier_id ||
-                        ''
-                      ).trim());
-                      const statusLabel = statusSet.size <= 1 ? (Array.from(statusSet)[0] || '-') : `${statusSet.size} status`;
-                      const actionLabel = isFinanceCompactView
-                        ? 'Lihat Detail Invoice'
-                        : hasReadyToShip
-                          ? `Tunjuk Driver (${orderIds.length} order)`
-                          : hasShipped
-                            ? 'Lihat Pengiriman'
-                            : isWarehouseCompactView
-                              ? 'Lihat Detail Invoice'
-                              : 'Proses Gudang';
-                      const paymentMethodLabel = (() => {
-                        if (paymentMethodSet.size !== 1) return `${paymentMethodSet.size} metode`;
-                        const raw = String(Array.from(paymentMethodSet)[0] || '').trim().toLowerCase();
-                        if (!raw || raw === 'pending') return 'Mengikuti Driver';
-                        if (raw === 'cod') return 'COD';
-                        if (raw === 'transfer_manual') return 'Transfer';
-                        if (raw === 'cash_store') return 'Cash Store';
-                        return raw.toUpperCase();
-                      })();
-                      const paymentStatusLabel = paymentStatusSet.size <= 1
-                        ? (Array.from(paymentStatusSet)[0] || '-')
-                        : `${paymentStatusSet.size} status bayar`;
-                      const invoiceTitle = bucket.invoiceNumber
-                        ? `Invoice ${bucket.invoiceNumber}`
-                        : bucket.invoiceId
-                          ? `Invoice ID ${bucket.invoiceId}`
+	                      const orderIds = bucket.orders
+	                        .map((row) => String(row?.id || ''))
+	                        .filter(Boolean);
+	                      const previewIds = orderIds.slice(0, 3).map((id: string) => `#${id.slice(-8).toUpperCase()}`);
+	                      const extraOrderCount = Math.max(0, orderIds.length - previewIds.length);
+		                      const hasReadyToShip = invoiceShipmentStatus === 'ready_to_ship';
+		                      const hasChecked = invoiceShipmentStatus === 'checked';
+		                      const hasShipped = invoiceShipmentStatus === 'shipped' || invoiceShipmentStatus === 'delivered';
+		                      const readyToShipOrderIds = hasReadyToShip && !courierId ? orderIds : [];
+		                      const primaryOrder = bucket.orders[0] || null;
+		                      const primaryOrderId = String(primaryOrder?.id || '');
+		                      const statusLabel = shipmentStatusLabel(invoiceShipmentStatus || '-');
+		                      const actionLabel = isFinanceCompactView
+		                        ? 'Lihat Detail Invoice'
+	                        : hasReadyToShip
+	                          ? courierId
+	                            ? `Lihat Checker (${orderIds.length} order)`
+	                            : `Tunjuk Driver (${orderIds.length} order)`
+	                          : hasShipped
+	                            ? 'Lihat Pengiriman'
+	                            : isWarehouseCompactView
+	                              ? 'Lihat Detail Invoice'
+	                              : 'Proses Gudang';
+	                      const paymentMethodLabel = (() => {
+	                        const raw = String(invoicePaymentMethod || '').trim().toLowerCase();
+	                        if (!raw || raw === 'pending') return 'Mengikuti Driver';
+	                        if (raw === 'cod') return 'COD';
+	                        if (raw === 'transfer_manual') return 'Transfer';
+	                        if (raw === 'cash_store') return 'Cash Store';
+		                        return raw.toUpperCase();
+		                      })();
+		                      const paymentStatusText = paymentStatusLabel(invoicePaymentStatus || '-');
+	                      const invoiceTitle = bucket.invoiceNumber
+	                        ? `Invoice ${bucket.invoiceNumber}`
+	                        : bucket.invoiceId
+	                          ? `Invoice ID ${bucket.invoiceId}`
                           : 'Invoice belum tercatat';
                       const customerLabel = Array.from(
                         new Set(
@@ -5468,15 +5473,15 @@ export default function AdminOrdersWorkspace({
                         courierId,
                         hasReadyToShip,
                         hasChecked,
-                        hasShipped,
-                        actionLabel,
-                        paymentMethodLabel,
-                        paymentStatusLabel,
-                        hasMissingInvoiceSummary,
-                        latestTs,
-                        hasMissingDetails,
-                      };
-                    })
+	                        hasShipped,
+	                        actionLabel,
+	                        paymentMethodLabel,
+	                        paymentStatusLabel: paymentStatusText,
+	                        hasMissingInvoiceSummary,
+	                        latestTs,
+	                        hasMissingDetails,
+	                      };
+	                    })
                     .filter((card) => (isFinanceCompactView ? true : card.hasMissingDetails || card.hasMissingInvoiceSummary || card.allocatedQty > 0))
                     .sort((a, b) => b.latestTs - a.latestTs);
 	                  return (
@@ -5582,17 +5587,25 @@ export default function AdminOrdersWorkspace({
                             <div className="text-right">
                               <p className="text-[11px] text-slate-500">{card.statusLabel}</p>
                               <p className="text-sm font-black text-slate-900">{formatCurrency(card.totalAmount)}</p>
-                              {(card.invoiceId || card.primaryOrderId) && section !== 'checker' && (
-                                <Link
-                                  href={`/admin/orders/${card.invoiceId || card.primaryOrderId}`}
-                                  className={`mt-1 text-[10px] font-black uppercase transition-all ${card.actionLabel.includes('Tunjuk Driver')
-                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
-                                    : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
-                                    }`}
-                                >
-                                  {card.actionLabel}
-                                </Link>
-                              )}
+	                              {(card.invoiceId || card.primaryOrderId) && section !== 'checker' && (
+	                                <Link
+	                                  href={`/admin/orders/${card.invoiceId || card.primaryOrderId}`}
+	                                  className={`mt-1 text-[10px] font-black uppercase transition-all ${card.actionLabel.includes('Tunjuk Driver')
+	                                    ? 'btn-3d inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-xl shadow-sm shadow-amber-200 hover:bg-amber-700 active:scale-95'
+	                                    : 'inline-block font-bold text-emerald-700 hover:text-emerald-800'
+	                                    }`}
+	                                >
+	                                  {card.actionLabel}
+	                                </Link>
+	                              )}
+	                              {(card.invoiceId || card.primaryOrderId) && section === 'checker' && (
+	                                <Link
+	                                  href={`/admin/orders/${card.invoiceId || card.primaryOrderId}`}
+	                                  className="mt-1 inline-block text-[10px] font-bold text-emerald-700 hover:text-emerald-800"
+	                                >
+	                                  Lihat Detail Invoice
+	                                </Link>
+	                              )}
                               {isFinanceCompactView && section === 'pembayaran' && (
                                 <Link href="/admin/finance/verifikasi" className="inline-block mt-1 text-[10px] font-bold text-blue-700">
                                   Buka Verifikasi
