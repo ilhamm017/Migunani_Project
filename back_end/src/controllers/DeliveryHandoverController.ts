@@ -419,20 +419,25 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
             transaction: t,
             lock: t.LOCK.SHARE
         }) as any[];
-        const orderIdsWithActiveBackorder = new Set<string>();
-        activeBackorders.forEach((row: any) => {
-            const orderId = String(row?.OrderItem?.order_id || '').trim();
-            if (orderId) orderIdsWithActiveBackorder.add(orderId);
-        });
+	        const orderIdsWithActiveBackorder = new Set<string>();
+	        activeBackorders.forEach((row: any) => {
+	            const orderId = String(row?.OrderItem?.order_id || '').trim();
+	            if (orderId) orderIdsWithActiveBackorder.add(orderId);
+	        });
 
-        for (const order of orders) {
-            const prevStatus = String(order.status || '');
-            const hasActiveBackorder = orderIdsWithActiveBackorder.has(String(order.id));
-            const nextOrderStatus = hasActiveBackorder ? 'partially_fulfilled' : 'shipped';
-            if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
-                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
-            }
-            await order.update({ status: nextOrderStatus as any, courier_id: courierId }, { transaction: t });
+	        for (const order of orders) {
+	            const prevStatus = String(order.status || '');
+	            const hasActiveBackorder = orderIdsWithActiveBackorder.has(String(order.id));
+	            // Handover is a shipping stage transition. Even if the order still has active backorders,
+	            // we must keep the main order status in the delivery lane so:
+	            // - driver task list remains consistent (it keys off order.status)
+	            // - status transitions remain valid (checked -> shipped is allowed; checked -> partially_fulfilled is not)
+	            // Backorder visibility should be driven by Backorder rows, not by forcing order.status early.
+	            const nextOrderStatus = 'shipped';
+	            if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
+	                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
+	            }
+	            await order.update({ status: nextOrderStatus as any, courier_id: courierId }, { transaction: t });
             await recordOrderStatusChanged({
                 transaction: t,
                 order_id: String(order.id),
@@ -459,16 +464,16 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
                 requestContext: `delivery_handover_handed_over_status_changed:${invoiceId}:${order.id}`
             });
 
-            await recordOrderEvent({
-                transaction: t,
-                order_id: String(order.id),
-                invoice_id: invoiceId,
-                event_type: 'warehouse_handed_over',
-                payload: { handover_id: handover.id },
-                actor_user_id: actorId,
-                actor_role: actorRole,
-            });
-        }
+	            await recordOrderEvent({
+	                transaction: t,
+	                order_id: String(order.id),
+	                invoice_id: invoiceId,
+	                event_type: 'warehouse_handed_over',
+	                payload: { handover_id: handover.id, has_active_backorder: hasActiveBackorder },
+	                actor_user_id: actorId,
+	                actor_role: actorRole,
+	            });
+	        }
 
         for (const order of orders) {
             const method = String(invoice.payment_method || '').toLowerCase() === 'cod' ? 'cod' : 'non_cod';
