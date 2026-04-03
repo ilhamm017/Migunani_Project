@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { sequelize, Invoice, InvoiceItem, Order, OrderItem, Backorder, DeliveryHandover, DeliveryHandoverItem, OrderIssue, Product } from '../models';
+import { sequelize, Invoice, InvoiceItem, Order, OrderItem, Backorder, DeliveryHandover, DeliveryHandoverItem, OrderIssue, Product, OrderAllocation } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 import { findOrderIdsByInvoiceId } from '../utils/invoiceLookup';
@@ -308,6 +308,17 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
                     );
                 }
             }
+
+            await OrderAllocation.update(
+                { status: 'picked', picked_at: new Date() },
+                {
+                    where: {
+                        order_id: { [Op.in]: orders.map((o: any) => String(o.id)).filter(Boolean) },
+                        status: 'pending',
+                    },
+                    transaction: t,
+                }
+            );
             await invoice.update({
                 shipment_status: 'checked',
             }, { transaction: t });

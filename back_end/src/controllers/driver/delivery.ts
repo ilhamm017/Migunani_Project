@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, Backorder } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
+import { OrderTerminalizationService } from '../../services/OrderTerminalizationService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
@@ -128,6 +129,13 @@ const completeSingleDeliveryInternal = async (
             updatePayload.delivery_proof_url = params.file.path;
         }
         await order.update(updatePayload, { transaction: t });
+        if (nextOrderStatus === 'completed') {
+            await OrderTerminalizationService.releaseReservationsForOrders({
+                order_ids: [String(order.id)],
+                transaction: t,
+                context: 'driver_complete_delivery',
+            });
+        }
         await recordOrderStatusChanged({
             transaction: t,
             order_id: String(order.id),

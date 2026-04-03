@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
+import { OrderTerminalizationService } from '../../services/OrderTerminalizationService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findInvoicesByOrderId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId, findOrderIdsByInvoiceIds, findOrderByIdOrInvoiceId } from '../../utils/invoiceLookup';
 import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
@@ -169,6 +170,11 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                     { status: 'completed' },
                     { where: { id: { [Op.in]: deliveredOrderIds } }, transaction: t }
                 );
+                await OrderTerminalizationService.releaseReservationsForOrders({
+                    order_ids: deliveredOrderIds,
+                    transaction: t,
+                    context: 'driver_record_payment',
+                });
             }
 
             await emitAdminRefreshBadges({

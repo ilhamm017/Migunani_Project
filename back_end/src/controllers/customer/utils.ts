@@ -70,6 +70,8 @@ export const releaseOrderAllocationStock = async (orderId: string, t: Transactio
 
     for (const alloc of allocations) {
         if (!alloc.allocated_qty || alloc.allocated_qty <= 0) continue;
+        const allocStatus = String((alloc as any)?.status || '').trim().toLowerCase();
+        if (allocStatus === 'shipped') continue;
 
         const product = await Product.findByPk(alloc.product_id, {
             transaction: t,

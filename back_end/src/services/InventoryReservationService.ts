@@ -65,7 +65,7 @@ export class InventoryReservationService {
         }
 
         const allocations = await OrderAllocation.findAll({
-            where: { order_id: orderId },
+            where: { order_id: orderId, status: { [Op.in]: ['pending', 'picked'] } },
             attributes: ['product_id', 'allocated_qty'],
             transaction: t,
             lock: t.LOCK.UPDATE
@@ -236,12 +236,13 @@ export class InventoryReservationService {
                 }
             }
 
-            if (remaining > 0) {
-                throw new Error(
-                    `Insufficient available inventory batches for product ${productId} to reserve ${desired} qty (remaining ${remaining}).`
-                );
-            }
-        }
+	            if (remaining > 0) {
+	                throw new CustomError(
+	                    `Stok batch (FIFO) tidak cukup untuk produk ${productId}: desired=${desired}, remaining=${remaining}. Kurangi alokasi atau jalankan audit reservasi.`,
+	                    409
+	                );
+	            }
+	        }
 
         const itemsSummary = Array.from(reservedLayersByItemId.entries()).map(([order_item_id, layersMap]) => ({
             order_item_id,

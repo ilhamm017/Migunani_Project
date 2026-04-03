@@ -513,9 +513,12 @@ export const updateOrderStatus = asyncWrapper(async (req: Request, res: Response
                         transaction: t, lock: t.LOCK.UPDATE
                     });
                     if (product) {
+                        const allocStatus = String((alloc as any)?.status || '').trim().toLowerCase();
                         await product.update({
                             stock_quantity: product.stock_quantity + alloc.allocated_qty,
-                            allocated_quantity: Math.max(0, product.allocated_quantity - alloc.allocated_qty),
+                            allocated_quantity: allocStatus === 'shipped'
+                                ? Number(product.allocated_quantity || 0)
+                                : Math.max(0, Number(product.allocated_quantity || 0) - alloc.allocated_qty),
                         }, { transaction: t });
                     }
                 }

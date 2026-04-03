@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { Op } from 'sequelize';
 import { Order, ChatSession, Product, StockMutation } from '../models'; // Ensure models export types correctly
+import { OrderTerminalizationService } from '../services/OrderTerminalizationService';
 import sequelize from '../config/database';
 
 // 1. The 30-Day Reaper
@@ -11,21 +12,39 @@ cron.schedule('0 0 * * *', async () => {
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-        const result = await Order.update(
-            {
-                status: 'expired'
-            },
-            {
+        const t = await sequelize.transaction();
+        try {
+            const candidates = await Order.findAll({
                 where: {
-                    status: 'Pending',
-                    createdAt: {
-                        [Op.lt]: thirtyDaysAgo
-                    }
-                }
-            }
-        );
+                    status: { [Op.in]: ['pending', 'Pending'] as any },
+                    createdAt: { [Op.lt]: thirtyDaysAgo }
+                } as any,
+                attributes: ['id'],
+                transaction: t,
+                lock: t.LOCK.UPDATE,
+            });
+            const orderIds = (candidates as any[])
+                .map((row: any) => String(row?.id || '').trim())
+                .filter(Boolean);
 
-        console.log(`Expired ${result[0]} pending orders older than 30 days.`);
+            if (orderIds.length > 0) {
+                await Order.update(
+                    { status: 'expired' },
+                    { where: { id: { [Op.in]: orderIds } }, transaction: t }
+                );
+                await OrderTerminalizationService.releaseReservationsForOrders({
+                    order_ids: orderIds,
+                    transaction: t,
+                    context: 'cron_30_day_reaper',
+                });
+            }
+
+            await t.commit();
+            console.log(`Expired ${orderIds.length} pending orders older than 30 days.`);
+        } catch (error) {
+            try { await t.rollback(); } catch { }
+            throw error;
+        }
 
         // Ideally, we should also restock products here if they were reserved.
         // However, the PRD says "stock_released = TRUE", implying a flag or separate logic.

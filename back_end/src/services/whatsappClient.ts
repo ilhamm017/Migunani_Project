@@ -6,6 +6,8 @@ import { Setting } from '../models';
 
 const protocolTimeout = Number(process.env.WA_PROTOCOL_TIMEOUT_MS || 120000);
 const stuckInitTimeoutMs = Number(process.env.WA_INIT_STUCK_MS || 45000);
+const authTimeoutMsRaw = Number(process.env.WA_AUTH_TIMEOUT_MS || 120000);
+const authTimeoutMs = Number.isFinite(authTimeoutMsRaw) && authTimeoutMsRaw >= 0 ? authTimeoutMsRaw : 120000;
 const chromeExecutablePath = process.env.WA_CHROME_PATH;
 const autoReconnectEnabled = process.env.WA_AUTO_RECONNECT !== 'false';
 const reconnectBaseDelayMs = Number(process.env.WA_RECONNECT_BASE_DELAY_MS || 5000);
@@ -16,6 +18,7 @@ const dumpBrowserIo = String(process.env.WA_DUMPIO || '').trim().toLowerCase() =
 
 const waClient = new Client({
     authStrategy: new LocalAuth({ dataPath: process.env.WA_SESSION_PATH }),
+    authTimeoutMs,
     puppeteer: {
         headless: true,
         protocolTimeout,

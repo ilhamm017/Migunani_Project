@@ -2192,86 +2192,114 @@ export default function AdminOrdersWorkspace({
     return capped;
   };
 
-  const saveAllocationDraft = async (orderId: string, draft: Record<string, number>) => {
-    const items = buildAllocationPayload(orderId, draft);
-    const cappedItems = await capAllocationByBatchAvailability(orderId, items);
-    const filteredItems = cappedItems.filter((row) => Number(row?.qty || 0) > 0 && String(row?.product_id || '').trim());
-
-    if (filteredItems.length === 0) {
-      notifyOpen({
-        variant: 'warning',
-        title: 'Tidak ada alokasi valid',
-        message: 'Isi qty alokasi minimal 1 item (dan pastikan tidak melebihi stok/permintaan).',
-      });
-      return false;
-    }
-    setAllocationDrafts((prev) => ({
-      ...prev,
-      [orderId]: filteredItems.reduce<Record<string, number>>((acc, item) => {
-        acc[item.product_id] = item.qty;
-        return acc;
-      }, {})
-    }));
-    try {
-      setAllocationSaving((prev) => ({ ...prev, [orderId]: true }));
-      await api.allocation.allocate(orderId, filteredItems);
-      const refreshed = await api.orders.getOrderById(orderId);
-      const detail = refreshed.data;
-      if (detail?.id) {
-        const nextOrderId = String(detail.id);
-        setOrderDetails((prev) => ({ ...prev, [nextOrderId]: detail }));
-        const draft: Record<string, number> = {};
-        const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-        const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
-        const allocByProduct: Record<string, number> = {};
-        allocations.forEach((allocation: any) => {
-          const key = String(allocation?.product_id || '');
-          if (!key) return;
-          allocByProduct[key] = Number(allocByProduct[key] || 0) + Number(allocation?.allocated_qty || 0);
-        });
-        items.forEach((item: any) => {
-          const key = String(item?.product_id || '');
-          if (!key) return;
-          if (draft[key] === undefined) draft[key] = Number(allocByProduct[key] || 0);
-        });
-        setAllocationDrafts((prev) => ({ ...prev, [nextOrderId]: draft }));
-
-        const snapshot = buildBackorderSnapshotFromDetail(detail);
-        setBackorderHistoryByOrderId((prev) => {
-          const existing = prev[nextOrderId] || [];
-          if (!snapshot) {
-            if (existing.length === 0) return prev;
-            return { ...prev, [nextOrderId]: [] };
-          }
-          const latest = existing[0];
-          if (latest && isSameBackorderSnapshot(latest, snapshot)) return prev;
-          return { ...prev, [nextOrderId]: [snapshot, ...existing] };
-        });
-      }
-      await loadOrders();
-      notifyOpen({
-        variant: 'success',
-        title: 'Alokasi tersimpan',
-        message: "Qty alokasi sudah tersimpan. Jika order berpindah stage, cek tab 'Sudah Dialokasikan'.",
-        primaryLabel: 'Buka Sudah Dialokasikan',
-        onPrimary: () => {
-          setOrderSectionFilter('allocated');
-          notifyClose();
-        },
-        autoCloseMs: 8000,
-      });
-      return true;
-    } catch (error: unknown) {
-      console.error('Allocation save failed:', error);
-      const message = axios.isAxiosError(error)
-        ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan alokasi.')
-        : 'Gagal menyimpan alokasi.';
-      notifyOpen({ variant: 'error', title: 'Gagal menyimpan alokasi', message });
-      return false;
-    } finally {
-      setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
-    }
-  };
+	  const saveAllocationDraft = async (orderId: string, draft: Record<string, number>) => {
+	    const items = buildAllocationPayload(orderId, draft);
+	    const cappedItems = await capAllocationByBatchAvailability(orderId, items);
+	    const persistedAlloc = persistedAllocByOrderId[orderId] || {};
+	
+	    const normalizedItems = cappedItems
+	      .map((row) => ({
+	        product_id: String(row?.product_id || '').trim(),
+	        qty: Math.max(0, Math.trunc(Number(row?.qty || 0))),
+	      }))
+	      .filter((row) => Boolean(row.product_id));
+	
+	    if (normalizedItems.length === 0) {
+	      notifyOpen({
+	        variant: 'warning',
+	        title: 'Tidak ada alokasi valid',
+	        message: 'Isi qty alokasi minimal 1 item (dan pastikan tidak melebihi stok/permintaan).',
+	      });
+	      return false;
+	    }
+	
+	    const draftMap = normalizedItems.reduce<Record<string, number>>((acc, item) => {
+	      acc[item.product_id] = item.qty;
+	      return acc;
+	    }, {});
+	
+	    const changedItems = normalizedItems.filter((item) => {
+	      const prevQty = Math.max(0, Math.trunc(Number(persistedAlloc[item.product_id] || 0)));
+	      return prevQty !== item.qty;
+	    });
+	
+	    setAllocationDrafts((prev) => ({
+	      ...prev,
+	      [orderId]: {
+	        ...(prev[orderId] || {}),
+	        ...draftMap,
+	      },
+	    }));
+	
+	    if (changedItems.length === 0) {
+	      notifyOpen({
+	        variant: 'warning',
+	        title: 'Tidak ada perubahan alokasi',
+	        message: 'Tidak ada perubahan qty alokasi yang perlu disimpan.',
+	      });
+	      return true;
+	    }
+	
+	    try {
+	      setAllocationSaving((prev) => ({ ...prev, [orderId]: true }));
+	      await api.allocation.allocate(orderId, changedItems);
+	      const refreshed = await api.orders.getOrderById(orderId);
+	      const detail = refreshed.data;
+	      if (detail?.id) {
+	        const nextOrderId = String(detail.id);
+	        setOrderDetails((prev) => ({ ...prev, [nextOrderId]: detail }));
+	        const draft: Record<string, number> = {};
+	        const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
+	        const items = Array.isArray(detail.OrderItems) ? detail.OrderItems : [];
+	        const allocByProduct: Record<string, number> = {};
+	        allocations.forEach((allocation: any) => {
+	          const key = String(allocation?.product_id || '');
+	          if (!key) return;
+	          allocByProduct[key] = Number(allocByProduct[key] || 0) + Number(allocation?.allocated_qty || 0);
+	        });
+	        items.forEach((item: any) => {
+	          const key = String(item?.product_id || '');
+	          if (!key) return;
+	          if (draft[key] === undefined) draft[key] = Number(allocByProduct[key] || 0);
+	        });
+	        setAllocationDrafts((prev) => ({ ...prev, [nextOrderId]: draft }));
+	
+	        const snapshot = buildBackorderSnapshotFromDetail(detail);
+	        setBackorderHistoryByOrderId((prev) => {
+	          const existing = prev[nextOrderId] || [];
+	          if (!snapshot) {
+	            if (existing.length === 0) return prev;
+	            return { ...prev, [nextOrderId]: [] };
+	          }
+	          const latest = existing[0];
+	          if (latest && isSameBackorderSnapshot(latest, snapshot)) return prev;
+	          return { ...prev, [nextOrderId]: [snapshot, ...existing] };
+	        });
+	      }
+	      await loadOrders();
+	      notifyOpen({
+	        variant: 'success',
+	        title: 'Alokasi tersimpan',
+	        message: "Qty alokasi sudah tersimpan. Jika order berpindah stage, cek tab 'Sudah Dialokasikan'.",
+	        primaryLabel: 'Buka Sudah Dialokasikan',
+	        onPrimary: () => {
+	          setOrderSectionFilter('allocated');
+	          notifyClose();
+	        },
+	        autoCloseMs: 8000,
+	      });
+	      return true;
+	    } catch (error: unknown) {
+	      console.error('Allocation save failed:', error);
+	      const message = axios.isAxiosError(error)
+	        ? String((error.response?.data as any)?.message || error.message || 'Gagal menyimpan alokasi.')
+	        : 'Gagal menyimpan alokasi.';
+	      notifyOpen({ variant: 'error', title: 'Gagal menyimpan alokasi', message });
+	      return false;
+	    } finally {
+	      setAllocationSaving((prev) => ({ ...prev, [orderId]: false }));
+	    }
+	  };
 
   const handleSaveAllocation = async (orderId: string) => {
     setAllocationConfirm({ orderId, step: 1, action: 'allocation' });

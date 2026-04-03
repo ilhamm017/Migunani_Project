@@ -1075,10 +1075,16 @@ export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) =>
         andClauses.push({ verified_at: verified ? { [Op.ne]: null } : null });
     }
 
-    const whereClause: any = andClauses.length > 0 ? { [Op.and]: andClauses } : {};
+    // Ownership: customer must only see their own invoices.
+    // Prefer direct invoice.customer_id to avoid heavy/nested join queries that can break under pagination subqueries.
+    andClauses.push({ customer_id: userId });
 
-    const orderWhere: any = { customer_id: userId };
-    if (orderId) orderWhere.id = orderId;
+    if (orderId) {
+        // Legacy support: some invoices may still reference the primary order in invoices.order_id.
+        andClauses.push({ order_id: orderId });
+    }
+
+    const whereClause: any = andClauses.length > 0 ? { [Op.and]: andClauses } : {};
 
     const orderBy: any[] = (() => {
         const selected = sortAllowed.has(sort) ? sort : 'createdAt_desc';
@@ -1113,36 +1119,19 @@ export const getMyInvoices = asyncWrapper(async (req: Request, res: Response) =>
             'createdAt',
             'updatedAt'
         ],
-        include: [
-            {
-                model: InvoiceItem,
-                as: 'Items',
-                attributes: [],
-                required: true,
-                include: [
-                    {
-                        model: OrderItem,
-                        attributes: [],
-                        required: true,
-                        include: [
-                            {
-                                model: Order,
-                                attributes: [],
-                                required: true,
-                                where: orderWhere
-                            }
-                        ]
-                    }
-                ]
-            }
-        ],
-        distinct: true,
         limit,
         offset,
         order: orderBy
     });
 
-    const invoices = result.rows.map((row) => row.get({ plain: true }) as any);
+    const invoices = result.rows.map((row) => {
+        const plain = row.get({ plain: true }) as any;
+        // Ensure response does not leak join-only include payloads.
+        if (plain && typeof plain === 'object' && 'Items' in plain) {
+            delete plain.Items;
+        }
+        return plain;
+    });
     const invoiceIds = invoices.map((inv) => String(inv?.id || '').trim()).filter(Boolean);
     const orderIdsByInvoiceId = await findOrderIdsByInvoiceIds(invoiceIds);
     const totalsByInvoiceId = includeCollectibleTotals && invoiceIds.length > 0

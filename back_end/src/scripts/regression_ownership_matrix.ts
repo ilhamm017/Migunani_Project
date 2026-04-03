@@ -236,6 +236,10 @@ async function main() {
   assertStatus(ownerInvoice.status, 200, 'customer1 invoice detail');
   console.log(`PASS customer1 invoice detail -> ${ownerInvoice.status}`);
 
+  const ownerInvoiceList = await requestJson(sessions.customer1.token, 'GET', '/invoices/my?page=1&limit=1');
+  assertStatus(ownerInvoiceList.status, 200, 'customer1 invoice list');
+  console.log(`PASS customer1 invoice list -> ${ownerInvoiceList.status}`);
+
   const otherCustomerInvoice = await requestJson(sessions.customer2.token, 'GET', `/invoices/${invoiceId}`);
   assertStatus(otherCustomerInvoice.status, 403, 'customer2 invoice detail');
   console.log(`PASS customer2 invoice detail -> ${otherCustomerInvoice.status}`);
@@ -350,6 +354,10 @@ async function main() {
 
 main().catch((error) => {
   console.error('\nOwnership matrix regression failed');
-  console.error(error instanceof Error ? error.message : error);
+  if (error instanceof Error) {
+    console.error(error.stack || error.message);
+  } else {
+    console.error(error);
+  }
   process.exit(1);
 });

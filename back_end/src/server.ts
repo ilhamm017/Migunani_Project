@@ -18,6 +18,33 @@ import { TaxConfigService } from './services/TaxConfigService';
 import { startNotificationOutboxWorker } from './services/TransactionNotificationOutboxService';
 import { auditLogMiddleware } from './middleware/auditLogMiddleware';
 
+const getUnhandledRejectionMessage = (reason: unknown): string => {
+    if (reason instanceof Error) return reason.message;
+    if (typeof reason === 'string') return reason;
+    try {
+        return JSON.stringify(reason);
+    } catch {
+        return String(reason);
+    }
+};
+
+// whatsapp-web.js can throw/reject with a plain string like "auth timeout" from internal async event handlers.
+// If Node is configured to throw on unhandled rejections, this would crash the whole backend.
+process.on('unhandledRejection', (reason) => {
+    const message = getUnhandledRejectionMessage(reason).trim().toLowerCase();
+    if (message === 'auth timeout') {
+        console.error(
+            '[WA] Unhandled rejection: auth timeout. ' +
+            'WhatsApp Web did not finish loading/injecting in time. ' +
+            'Try increasing WA_AUTH_TIMEOUT_MS or check connectivity to web.whatsapp.com.'
+        );
+        return;
+    }
+
+    console.error('Unhandled promise rejection:', reason);
+    throw reason instanceof Error ? reason : new Error(getUnhandledRejectionMessage(reason));
+});
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -89,7 +116,11 @@ waClient.on('disconnected', () => {
 
 waClient.on('message', async msg => {
     console.log('MESSAGE RECEIVED', msg);
-    await handleIncomingMessage(msg);
+    try {
+        await handleIncomingMessage(msg);
+    } catch (error) {
+        console.error('[WA] Unhandled error in message handler:', error);
+    }
 });
 
 // Socket.io Connection

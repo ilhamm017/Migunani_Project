@@ -4,6 +4,7 @@ import { Op } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
+import { OrderTerminalizationService } from '../../services/OrderTerminalizationService';
 import { emitAdminRefreshBadges, emitCodSettlementUpdated, emitOrderStatusChanged } from '../../utils/orderNotification';
 import { generateInvoiceNumber } from '../../utils/invoice';
 import { findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
@@ -135,14 +136,14 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
             const paymentAccCode = isTransferManual ? '1102' : '1101';
             const paymentAcc = await Account.findOne({ where: { code: paymentAccCode }, transaction: t });
             const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
-            const revenueAcc = await Account.findOne({ where: { code: '4100' }, transaction: t });
+            const deferredRevenueAcc = await Account.findOne({ where: { code: '2300' }, transaction: t });
             const ppnOutputAcc = await Account.findOne({ where: { code: '2201' }, transaction: t });
             const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
 
             const vat = Math.max(0, Math.round(Number((invoice as any).tax_amount || 0) * 100) / 100);
             const dpp = Math.max(0, Math.round((collectibleTotal - vat) * 100) / 100);
 
-            if (revenueAcc) {
+            if (deferredRevenueAcc) {
                 const lines: any[] = [];
                 if (amountReceived > 0 && paymentAcc) {
                     lines.push({ account_id: paymentAcc.id, debit: amountReceived, credit: 0 });
@@ -150,7 +151,7 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
                 if (delta < 0 && arAcc) {
                     lines.push({ account_id: arAcc.id, debit: Math.abs(delta), credit: 0 });
                 }
-                if (dpp > 0) lines.push({ account_id: revenueAcc.id, debit: 0, credit: dpp });
+                if (dpp > 0) lines.push({ account_id: deferredRevenueAcc.id, debit: 0, credit: dpp });
                 if (vat > 0 && ppnOutputAcc) lines.push({ account_id: ppnOutputAcc.id, debit: 0, credit: vat });
                 if (delta > 0 && customerSaldoAcc) {
                     lines.push({ account_id: customerSaldoAcc.id, debit: 0, credit: delta });
@@ -233,6 +234,11 @@ export const verifyPayment = asyncWrapper(async (req: Request, res: Response) =>
                     { status: 'completed' },
                     { where: { id: { [Op.in]: toCompletedIds } }, transaction: t }
                 );
+                await OrderTerminalizationService.releaseReservationsForOrders({
+                    order_ids: toCompletedIds,
+                    transaction: t,
+                    context: 'finance_verify_payment',
+                });
             }
 
         } else {

@@ -1,5 +1,5 @@
-import { Transaction } from 'sequelize';
-import { Account, ClearancePromo, Invoice, InvoiceItem, Order, OrderItem, OrderAllocation } from '../models';
+import { Op, Transaction } from 'sequelize';
+import { Account, ClearancePromo, Invoice, InvoiceItem, Order, OrderItem, OrderAllocation, Product } from '../models';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
 import { InventoryReservationService } from './InventoryReservationService';
@@ -286,6 +286,54 @@ export class AccountingPostingService {
                         { account_id: inventoryAcc.id, debit: 0, credit: cogs }
                     ]
                 }, t);
+            }
+        }
+
+        const openAllocations = await OrderAllocation.findAll({
+            where: {
+                order_id: orderId,
+                status: { [Op.in]: ['pending', 'picked'] },
+                allocated_qty: { [Op.gt]: 0 }
+            },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        }) as any[];
+
+        if (openAllocations.length > 0) {
+            const now = new Date();
+            const shippedQtyByProductId = new Map<string, number>();
+
+            for (const alloc of openAllocations) {
+                const productId = String(alloc?.product_id || '').trim();
+                const qty = Math.max(0, Math.trunc(n(alloc?.allocated_qty)));
+                if (!productId || qty <= 0) continue;
+
+                shippedQtyByProductId.set(productId, Number(shippedQtyByProductId.get(productId) || 0) + qty);
+
+                await alloc.update({
+                    status: 'shipped',
+                    shipped_at: now,
+                    picked_at: alloc?.picked_at ? new Date(alloc.picked_at) : now,
+                }, { transaction: t });
+            }
+
+            const productIdsToUpdate = Array.from(shippedQtyByProductId.keys());
+            if (productIdsToUpdate.length > 0) {
+                const products = await Product.findAll({
+                    where: { id: { [Op.in]: productIdsToUpdate } },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                }) as any[];
+
+                for (const product of products) {
+                    const productId = String(product?.id || '').trim();
+                    const dec = Number(shippedQtyByProductId.get(productId) || 0);
+                    if (!productId || dec <= 0) continue;
+                    const currentAllocated = Number(product?.allocated_quantity || 0);
+                    await product.update({
+                        allocated_quantity: Math.max(0, currentAllocated - dec),
+                    }, { transaction: t });
+                }
             }
         }
 
