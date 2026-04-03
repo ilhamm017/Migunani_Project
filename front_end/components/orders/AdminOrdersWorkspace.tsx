@@ -1815,10 +1815,10 @@ export default function AdminOrdersWorkspace({
     if (orderSectionFilter === 'all') setOrderSectionFilter('baru');
   }, [orderSectionFilter]);
 
-  const invoiceStatusBoard = useMemo<InvoiceStatusSnapshot[]>(() => {
-    const boardMap = new Map<
-      string,
-      {
+	  const invoiceStatusBoard = useMemo<InvoiceStatusSnapshot[]>(() => {
+	    const boardMap = new Map<
+	      string,
+	      {
         groupKey: string;
         invoiceId: string;
         invoiceNumber: string;
@@ -1831,65 +1831,81 @@ export default function AdminOrdersWorkspace({
         hasMissingInvoiceSummary: boolean;
         latestTs: number;
       }
-    >();
+	    >();
 
-    visibleOrdersForInvoiceBoard.forEach((order) => {
-      const rowId = String(order?.id || '').trim();
-      if (!rowId) return;
-      const detail = orderDetails[rowId];
-      const { invoiceId, invoiceNumber } = resolveInvoiceRefForOrder(order, detail);
-      const groupKey = invoiceId
-        ? `id:${invoiceId}`
-        : invoiceNumber
-          ? `num:${invoiceNumber.toLowerCase()}`
-          : 'no-invoice';
-      const current = boardMap.get(groupKey) || {
-        groupKey,
-        invoiceId,
-        invoiceNumber,
-        orderIds: new Set<string>(),
-        totalQty: null as number | null,
-        totalAmount: 0,
-        paymentStatuses: new Set<string>(),
-        shipmentStatuses: new Set<string>(),
-        hasMissingInvoiceDetail: false,
-        hasMissingInvoiceSummary: false,
-        latestTs: 0,
-      };
-      current.orderIds.add(rowId);
+	    visibleOrdersForInvoiceBoard.forEach((order) => {
+	      const rowId = String(order?.id || '').trim();
+	      if (!rowId) return;
+	      const detail = orderDetails[rowId];
+	      const invoiceRefs = collectInvoiceRefs(order, detail);
+	      const refs = invoiceRefs.length > 0 ? invoiceRefs : [null];
 
-      const rowTs = Date.parse(String(order?.updatedAt || order?.createdAt || ''));
-      if (Number.isFinite(rowTs)) current.latestTs = Math.max(current.latestTs, rowTs);
+	      refs.forEach((invoiceRef: any) => {
+	        const invoiceId = normalizeInvoiceRef(invoiceRef?.id || resolveInvoiceRefForOrder(order, detail).invoiceId);
+	        const invoiceNumber = normalizeInvoiceRef(invoiceRef?.invoice_number || resolveInvoiceRefForOrder(order, detail).invoiceNumber);
+	        const groupKey = invoiceId
+	          ? `id:${invoiceId}`
+	          : invoiceNumber
+	            ? `num:${invoiceNumber.toLowerCase()}`
+	            : 'no-invoice';
 
-      if (invoiceId) {
-        const invoiceSummary = invoiceItemSummaryByInvoiceId[invoiceId];
-        if (invoiceSummary === undefined) {
-          current.hasMissingInvoiceSummary = true;
-        } else if (invoiceSummary && Number.isFinite(invoiceSummary.totalQty)) {
-          current.totalQty = Number(invoiceSummary.totalQty || 0);
-        }
+	        const current = boardMap.get(groupKey) || {
+	          groupKey,
+	          invoiceId,
+	          invoiceNumber,
+	          orderIds: new Set<string>(),
+	          totalQty: null as number | null,
+	          totalAmount: 0,
+	          paymentStatuses: new Set<string>(),
+	          shipmentStatuses: new Set<string>(),
+	          hasMissingInvoiceDetail: false,
+	          hasMissingInvoiceSummary: false,
+	          latestTs: 0,
+	        };
+	        current.orderIds.add(rowId);
 
-        const invoiceDetail = invoiceDetailByInvoiceId[invoiceId];
-        if (invoiceDetail === undefined) {
-          current.hasMissingInvoiceDetail = true;
-          current.totalAmount += Number(order?.total_amount || 0);
-        } else if (invoiceDetail) {
-          current.totalAmount = Number(invoiceDetail?.total || 0);
-        }
-        const paymentStatus = String(
-          invoiceDetail?.payment_status || order?.Invoice?.payment_status || detail?.Invoice?.payment_status || ''
-        ).trim().toLowerCase();
-        const shipmentStatus = String(
-          invoiceDetail?.shipment_status || order?.Invoice?.shipment_status || detail?.Invoice?.shipment_status || ''
-        ).trim().toLowerCase();
-        if (paymentStatus) current.paymentStatuses.add(paymentStatus);
-        if (shipmentStatus) current.shipmentStatuses.add(shipmentStatus);
-      } else {
-        current.totalAmount += Number(order?.total_amount || 0);
-      }
+	        const rowTs = Date.parse(String(order?.updatedAt || order?.createdAt || ''));
+	        if (Number.isFinite(rowTs)) current.latestTs = Math.max(current.latestTs, rowTs);
 
-      boardMap.set(groupKey, current);
-    });
+	        if (invoiceId) {
+	          const invoiceSummary = invoiceItemSummaryByInvoiceId[invoiceId];
+	          if (invoiceSummary === undefined) {
+	            current.hasMissingInvoiceSummary = true;
+	          } else if (invoiceSummary && Number.isFinite(invoiceSummary.totalQty)) {
+	            current.totalQty = Number(invoiceSummary.totalQty || 0);
+	          }
+
+	          const invoiceDetail = invoiceDetailByInvoiceId[invoiceId];
+	          if (invoiceDetail === undefined) {
+	            current.hasMissingInvoiceDetail = true;
+	            const fallbackTotal = toFiniteNumber(
+	              (invoiceRef as any)?.collectible_total ??
+	              (invoiceRef as any)?.delivery_return_summary?.net_total ??
+	              (invoiceRef as any)?.total ??
+	              null
+	            );
+	            if (fallbackTotal !== null) {
+	              current.totalAmount = Math.max(current.totalAmount, fallbackTotal);
+	            }
+	          } else if (invoiceDetail) {
+	            current.totalAmount = Number((invoiceDetail as any)?.total || 0);
+	          }
+
+	          const paymentStatus = String(
+	            (invoiceDetail as any)?.payment_status || (invoiceRef as any)?.payment_status || ''
+	          ).trim().toLowerCase();
+	          const shipmentStatus = String(
+	            (invoiceDetail as any)?.shipment_status || (invoiceRef as any)?.shipment_status || ''
+	          ).trim().toLowerCase();
+	          if (paymentStatus) current.paymentStatuses.add(paymentStatus);
+	          if (shipmentStatus) current.shipmentStatuses.add(shipmentStatus);
+	        } else {
+	          current.totalAmount += Number(order?.total_amount || 0);
+	        }
+
+	        boardMap.set(groupKey, current);
+	      });
+	    });
 
     return Array.from(boardMap.values())
       .map((bucket) => {
@@ -4997,11 +5013,11 @@ export default function AdminOrdersWorkspace({
                       : 'Invoice dihitung dari qty yang sudah dialokasikan untuk order yang siap invoice (lintas order ID).'}
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="rounded-xl bg-white/10 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-white/60">Sudah Berinvoice</p>
-                      <p className="mt-1 text-lg font-black text-white">{formatCurrency(invoiceStatusBoardSummary.totalValue)}</p>
-                      <p className="text-[11px] text-white/70">Hanya menghitung order yang invoice-nya sudah terbit.</p>
-                    </div>
+	                    <div className="rounded-xl bg-white/10 px-3 py-3">
+	                      <p className="text-[10px] font-black uppercase tracking-widest text-white/60">Sudah Berinvoice</p>
+	                      <p className="mt-1 text-lg font-black text-white">{formatCurrency(invoiceStatusBoardSummary.totalValue)}</p>
+	                      <p className="text-[11px] text-white/70">Menghitung seluruh invoice yang sudah terbit (bukan hanya latest per-order).</p>
+	                    </div>
                     <div className="rounded-xl bg-emerald-500/15 px-3 py-3">
                       <p className="text-[10px] font-black uppercase tracking-widest text-emerald-200">
                         {forcedCustomerId && orderSectionFilter === 'allocated' ? 'Nilai Siap Invoice Tambahan' : 'Nilai Siap Invoice'}
