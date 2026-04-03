@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
 import { AccountSelector } from '@/components/finance/AccountSelector';
 import Image from 'next/image';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 
 export default function TransferDetailPage() {
     const router = useRouter();
@@ -25,8 +25,15 @@ export default function TransferDetailPage() {
         proofUrl: 'https://placehold.co/400x600/png?text=Bukti+Transfer'
     };
 
-    const handleApprove = () => {
-        if (!confirm('Yakin verifikasi pembayaran ini? Jurnal akan otomatis dibuat.')) return;
+    const handleApprove = async () => {
+        const ok = await notifyConfirm({
+            title: 'Verifikasi Pembayaran',
+            message: 'Yakin verifikasi pembayaran ini? Jurnal akan otomatis dibuat.',
+            confirmLabel: 'Verifikasi',
+            cancelLabel: 'Batal',
+            variant: 'warning',
+        });
+        if (!ok) return;
         // API Call here
         notifyAlert(`Approved to Account ${selectedAccount}`);
         router.push('/finance/transfers');

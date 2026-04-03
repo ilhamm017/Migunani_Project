@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, RefreshCw, Save, Trash2, Truck } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
+import { notifyConfirm } from '@/lib/notify';
 
 type ShippingMethod = {
   code: string;
@@ -162,7 +163,14 @@ export default function ShippingMethodsPage() {
   };
 
   const handleDeleteRow = async (code: string) => {
-    if (!confirm(`Hapus metode pengiriman "${code}"?`)) return;
+    const ok = await notifyConfirm({
+      title: 'Hapus Metode Pengiriman',
+      message: `Hapus metode pengiriman "${code}"?`,
+      confirmLabel: 'Hapus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       setProcessingCode(code);
       setError('');

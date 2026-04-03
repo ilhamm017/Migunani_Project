@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Plus, RefreshCw, Pencil, Trash2, ArrowLeftRight, ExternalLink } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyConfirm, notifyPrompt } from '@/lib/notify';
 
 type ApiErrorWithMessage = {
   response?: {
@@ -109,7 +110,14 @@ export default function VehicleTypesPage() {
   };
 
   const onDelete = async (name: string) => {
-    if (!confirm(`Hapus jenis kendaraan "${name}"?`)) return;
+    const ok = await notifyConfirm({
+      title: 'Hapus Jenis Kendaraan',
+      message: `Hapus jenis kendaraan "${name}"?`,
+      confirmLabel: 'Hapus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     setSaving(true);
     setMessage(null);
@@ -122,7 +130,20 @@ export default function VehicleTypesPage() {
       const status = err?.response?.status;
       const serverMsg = err?.response?.data?.message || 'Gagal menghapus jenis kendaraan.';
       if (status === 409) {
-        const replacement = window.prompt(`${serverMsg}\n\nIsi replacement untuk mengganti di semua produk (wajib jika sedang dipakai):`, '');
+        const replacement = await notifyPrompt({
+          title: 'Butuh Replacement',
+          message: (
+            <span className="whitespace-pre-wrap">
+              {`${serverMsg}\n\nIsi replacement untuk mengganti di semua produk (wajib jika sedang dipakai):`}
+            </span>
+          ),
+          inputLabel: 'Replacement',
+          placeholder: 'Contoh: MATIC 125',
+          initialValue: '',
+          confirmLabel: 'Hapus & Migrasi',
+          cancelLabel: 'Batal',
+          variant: 'warning',
+        });
         if (replacement === null) {
           setSaving(false);
           return;
@@ -293,4 +314,3 @@ export default function VehicleTypesPage() {
     </div>
   );
 }
-

@@ -86,6 +86,9 @@ type BackorderSnapshotItem = {
   allocatedQty: number;
   shortageQty: number;
   allocatableQty: number;
+  stockQty?: number | null;
+  reservedQty?: number | null;
+  availableQty?: number | null;
   canceledValue?: number;
 };
 
@@ -561,12 +564,13 @@ const buildBackorderSnapshotFromDetail = (detail: OrderDetailResponse): Backorde
   const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
   if (orderItems.length === 0) return null;
 
-  const orderedByProduct = new Map<string, { qty: number; name: string; sku: string; stockQty: number }>();
+  const orderedByProduct = new Map<string, { qty: number; name: string; sku: string; stockQty: number; reservedQty: number }>();
   orderItems.forEach((item: any) => {
     const productId = String(item?.product_id || '');
     if (!productId) return;
     const product = item?.Product || {};
     const stockQty = Number(product?.stock_quantity);
+    const reservedQty = Number(product?.allocated_quantity);
     const prev = orderedByProduct.get(productId);
     if (prev) {
       prev.qty += Number(item?.qty || 0);
@@ -576,6 +580,7 @@ const buildBackorderSnapshotFromDetail = (detail: OrderDetailResponse): Backorde
         name: String(product?.name || 'Produk'),
         sku: String(product?.sku || productId),
         stockQty: Number.isFinite(stockQty) ? stockQty : Number.NaN,
+        reservedQty: Number.isFinite(reservedQty) ? reservedQty : Number.NaN,
       });
     }
   });
@@ -593,7 +598,15 @@ const buildBackorderSnapshotFromDetail = (detail: OrderDetailResponse): Backorde
     const allocatedQty = Number(allocatedByProduct.get(productId) || 0);
     const shortageQty = Math.max(0, orderedQty - allocatedQty);
     if (shortageQty <= 0) return;
-    const maxAvailable = Number.isFinite(meta.stockQty) ? meta.stockQty + allocatedQty : orderedQty;
+    const availableQty = Number.isFinite(meta.stockQty) && Number.isFinite(meta.reservedQty)
+      ? meta.stockQty - meta.reservedQty
+      : Number.NaN;
+    // Allow keeping existing allocations even if global reserved qty includes this order already.
+    const maxAvailable = Number.isFinite(availableQty)
+      ? Math.max(0, availableQty) + allocatedQty
+      : Number.isFinite(meta.stockQty)
+        ? meta.stockQty + allocatedQty
+        : orderedQty;
     const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
     const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
     snapshotItems.push({
@@ -604,6 +617,9 @@ const buildBackorderSnapshotFromDetail = (detail: OrderDetailResponse): Backorde
       allocatedQty,
       shortageQty,
       allocatableQty,
+      stockQty: Number.isFinite(meta.stockQty) ? meta.stockQty : null,
+      reservedQty: Number.isFinite(meta.reservedQty) ? meta.reservedQty : null,
+      availableQty: Number.isFinite(availableQty) ? availableQty : null,
     });
   });
 
@@ -1731,7 +1747,7 @@ export default function AdminOrdersWorkspace({
       return !orderDetails[orderId];
     });
     void loadOrderDetails(missingDetails);
-  }, [groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.selesai, selectedGroup, orderDetails, orderDetailErrors, loadOrderDetails]);
+  }, [groupedOrders.baru, groupedOrders.allocated, groupedOrders.backorder, groupedOrders.pembayaran, groupedOrders.gudang, groupedOrders.checker, groupedOrders.pengiriman, groupedOrders.selesai, selectedGroup, orderDetails, orderDetailErrors, loadOrderDetails]);
 
   useEffect(() => {
     const detailEntries = Object.entries(orderDetails);
@@ -1759,7 +1775,16 @@ export default function AdminOrdersWorkspace({
 
   useEffect(() => {
     if (!selectedGroup) return;
-    const targetOrders = [...groupedOrders.baru, ...groupedOrders.allocated, ...groupedOrders.backorder, ...groupedOrders.pembayaran, ...groupedOrders.gudang, ...groupedOrders.selesai];
+    const targetOrders = [
+      ...groupedOrders.baru,
+      ...groupedOrders.allocated,
+      ...groupedOrders.backorder,
+      ...groupedOrders.pembayaran,
+      ...groupedOrders.gudang,
+      ...groupedOrders.checker,
+      ...groupedOrders.pengiriman,
+      ...groupedOrders.selesai,
+    ];
     const invoiceIds = Array.from(new Set(
       targetOrders
         .flatMap((order) => {
@@ -2803,9 +2828,15 @@ export default function AdminOrdersWorkspace({
           );
           const shortageQty = Math.max(0, orderedQty - allocatedQty);
           if (shortageQty <= 0) return null;
-          const stockQty = Number(item?.Product?.stock_quantity);
+          const stockQty = toFiniteNumber(item?.Product?.stock_quantity);
+          const reservedQty = toFiniteNumber(item?.Product?.allocated_quantity);
+          const availableQty = stockQty !== null && reservedQty !== null ? stockQty - reservedQty : null;
           const persistedQty = Number(persistedAlloc[productId] || 0);
-          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+          const maxAvailable = availableQty !== null
+            ? Math.max(0, availableQty) + persistedQty
+            : stockQty !== null
+              ? stockQty + persistedQty
+              : orderedQty;
           const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
           const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
           return {
@@ -2816,6 +2847,9 @@ export default function AdminOrdersWorkspace({
             allocatedQty,
             shortageQty,
             allocatableQty,
+            stockQty,
+            reservedQty,
+            availableQty,
           };
         })
         .filter(Boolean) as BackorderEditableItem[];
@@ -3046,9 +3080,17 @@ export default function AdminOrdersWorkspace({
         );
         const shortageQty = Math.max(0, orderedQty - allocatedQty);
         if (shortageQty <= 0) return null;
-        const stockQty = Number(item?.Product?.stock_quantity);
+        const stockQty = toFiniteNumber(item?.Product?.stock_quantity);
+        const reservedQty = toFiniteNumber(item?.Product?.allocated_quantity);
+        const availableQty = stockQty !== null && reservedQty !== null ? stockQty - reservedQty : null;
         const persistedQty = Number(persistedAlloc[productId] || 0);
-        const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+        // Use stock minus reserved to estimate what can be allocated without stealing other orders' reservations.
+        // Add persisted qty so existing allocations remain editable.
+        const maxAvailable = availableQty !== null
+          ? Math.max(0, availableQty) + persistedQty
+          : stockQty !== null
+            ? stockQty + persistedQty
+            : orderedQty;
         const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
         const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
         return {
@@ -3059,6 +3101,9 @@ export default function AdminOrdersWorkspace({
           allocatedQty,
           shortageQty,
           allocatableQty,
+          stockQty,
+          reservedQty,
+          availableQty,
         } satisfies BackorderEditableItem;
       })
       .filter(Boolean) as BackorderEditableItem[];
@@ -3232,12 +3277,25 @@ export default function AdminOrdersWorkspace({
               {model.items.map((item) => {
                 const topupDraft = Number(model.topupDraftByProductId[item.product_id] ?? 0);
                 const topupQty = Math.max(0, Math.min(item.allocatableQty, topupDraft));
+                const hasAvailability = typeof item.availableQty === 'number' && Number.isFinite(item.availableQty);
+                const hasStock = typeof item.stockQty === 'number' && Number.isFinite(item.stockQty);
                 return (
                   <div key={item.product_id} className="bg-white border border-amber-100 rounded-xl p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="text-xs font-bold text-slate-900">{item.name}</p>
                         <p className="text-[10px] text-slate-500">SKU: {item.sku}</p>
+                        {(hasAvailability || hasStock) && (
+                          <p className="text-[10px] text-slate-500">
+                            {hasAvailability ? (
+                              <>
+                                Stok {formatIdrNumber(item.stockQty)} • Reserved {formatIdrNumber(item.reservedQty)} • Tersedia {formatIdrNumber(item.availableQty)}
+                              </>
+                            ) : (
+                              <>Stok {formatIdrNumber(item.stockQty)}</>
+                            )}
+                          </p>
+                        )}
                         <p className="text-[10px] text-slate-500">
                           Pesan {item.orderedQty} • Tersuplai {item.allocatedQty}
                         </p>
@@ -3690,9 +3748,15 @@ export default function AdminOrdersWorkspace({
           const allocatedQtyItem = Number(draft[productId] !== undefined ? draft[productId] : persisted[productId] || 0);
           const shortageQty = Math.max(0, orderedQtyItem - allocatedQtyItem);
           if (shortageQty <= 0) return null;
-          const stockQty = Number(item?.Product?.stock_quantity);
+          const stockQty = toFiniteNumber(item?.Product?.stock_quantity);
+          const reservedQty = toFiniteNumber(item?.Product?.allocated_quantity);
+          const availableQty = stockQty !== null && reservedQty !== null ? stockQty - reservedQty : null;
           const persistedQty = Number(persisted[productId] || 0);
-          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQtyItem;
+          const maxAvailable = availableQty !== null
+            ? Math.max(0, availableQty) + persistedQty
+            : stockQty !== null
+              ? stockQty + persistedQty
+              : orderedQtyItem;
           const maxAlloc = Math.min(orderedQtyItem, Math.max(0, maxAvailable));
           const allocatableQty = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQtyItem));
           const requestedTopup = Number(topupDraft[productId] || 0);
@@ -5354,7 +5418,7 @@ export default function AdminOrdersWorkspace({
 		                        (invoiceLike as any)?.total ??
 		                        null
 		                      );
-	                      let totalAmount = invoiceDetail
+	                      const totalAmount = invoiceDetail
 	                        ? Number((invoiceDetail as any)?.total || 0)
 	                        : fallbackInvoiceTotal !== null
 	                          ? fallbackInvoiceTotal
@@ -5368,9 +5432,11 @@ export default function AdminOrdersWorkspace({
 	                        const rowId = String(row?.id || '');
 	                        if (!rowId) return;
 	
-	                        const detail = orderDetails[rowId];
 	                        const rowTs = Date.parse(String(row?.updatedAt || row?.createdAt || ''));
 	                        if (Number.isFinite(rowTs)) latestTs = Math.max(latestTs, rowTs);
+                          if (invoiceSummary === undefined && bucket.invoiceId) {
+                            hasMissingInvoiceSummary = true;
+                          }
 	                        if (invoiceSummary) {
                           allocatedQty += Number(invoiceSummary.qtyByOrderId[rowId] || 0);
                           const rowSkuCount = Number(invoiceSummary.skuByOrderId[rowId] || 0);
@@ -5381,34 +5447,30 @@ export default function AdminOrdersWorkspace({
                             }
                           }
                         } else {
-                          if (invoiceSummary === undefined && bucket.invoiceId) {
-                            hasMissingInvoiceSummary = true;
+                          const totals = orderTotalsById[rowId];
+                          if (totals && Number(totals.orderedQty || 0) > 0) {
+                            const rowAllocated = Number(totals.allocQty || 0);
+                            allocatedQty += Math.max(0, rowAllocated);
                           } else {
-                            const totals = orderTotalsById[rowId];
-                            if (totals && Number(totals.orderedQty || 0) > 0) {
-                              const rowAllocated = Number(totals.allocQty || 0);
-                              allocatedQty += Math.max(0, rowAllocated);
-                            } else {
-                              const detail = orderDetails[rowId];
-                              if (!detail) {
-                                hasMissingDetails = true;
-                              } else {
-                                const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-                                const rowAllocated = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
-                                allocatedQty += Math.max(0, rowAllocated);
-                              }
-                            }
                             const detail = orderDetails[rowId];
-                            if (!detail) return;
-                            const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
-                            allocations.forEach((alloc: any) => {
-                              const productId = String(alloc?.product_id || '');
-                              const allocQty = Number(alloc?.allocated_qty || 0);
-                              if (productId && allocQty > 0) allocatedSkuSet.add(productId);
-                            });
+                            if (!detail) {
+                              hasMissingDetails = true;
+                            } else {
+                              const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
+                              const rowAllocated = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.allocated_qty || 0), 0);
+                              allocatedQty += Math.max(0, rowAllocated);
+                            }
                           }
+                          const detail = orderDetails[rowId];
+                          if (!detail) return;
+                          const allocations = Array.isArray(detail.Allocations) ? detail.Allocations : [];
+                          allocations.forEach((alloc: any) => {
+                            const productId = String(alloc?.product_id || '');
+                            const allocQty = Number(alloc?.allocated_qty || 0);
+                            if (productId && allocQty > 0) allocatedSkuSet.add(productId);
+                          });
                         }
-                      });
+	                      });
                       if (invoiceSummary) {
                         allocatedQty = Number(invoiceSummary.totalQty || 0);
                       }
@@ -5845,8 +5907,14 @@ export default function AdminOrdersWorkspace({
                           const shortageQty = Math.max(0, orderedQty - allocatedQty);
                           if (shortageQty <= 0) return acc;
 
-                          const stockQty = Number(item?.Product?.stock_quantity);
-                          const maxAvailable = Number.isFinite(stockQty) ? stockQty + persistedQty : orderedQty;
+                          const stockQty = toFiniteNumber(item?.Product?.stock_quantity);
+                          const reservedQty = toFiniteNumber(item?.Product?.allocated_quantity);
+                          const availableQty = stockQty !== null && reservedQty !== null ? stockQty - reservedQty : null;
+                          const maxAvailable = availableQty !== null
+                            ? Math.max(0, availableQty) + persistedQty
+                            : stockQty !== null
+                              ? stockQty + persistedQty
+                              : orderedQty;
                           const maxAlloc = Math.min(orderedQty, Math.max(0, maxAvailable));
                           const allocatableNow = Math.max(0, Math.min(shortageQty, maxAlloc - allocatedQty));
 

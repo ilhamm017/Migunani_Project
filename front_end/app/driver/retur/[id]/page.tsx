@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 import {
     ArrowLeft,
     CheckCircle2,
@@ -174,7 +174,14 @@ export default function DriverReturDetailPage() {
             ? 'Konfirmasi: barang retur sudah Anda pickup dari customer?'
             : 'Konfirmasi: barang retur sudah Anda serahkan ke kasir?';
 
-        if (!confirm(confirmationText)) return;
+        const ok = await notifyConfirm({
+            title: 'Konfirmasi Retur',
+            message: confirmationText,
+            confirmLabel: 'Ya',
+            cancelLabel: 'Batal',
+            variant: 'warning',
+        });
+        if (!ok) return;
 
         try {
             setSubmitting(true);

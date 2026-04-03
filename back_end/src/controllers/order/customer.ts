@@ -230,7 +230,12 @@ export const getOrderDetails = asyncWrapper(async (req: Request, res: Response) 
     const allocatedByItemId: Record<string, number> = {};
     itemsByProduct.forEach((rows, productId) => {
         let remaining = Number(allocatedByProduct[productId] || 0);
-        const sortedRows = [...rows].sort((a: any, b: any) => String(a?.id || '').localeCompare(String(b?.id || '')));
+        const sortedRows = [...rows].sort((a: any, b: any) => {
+            const aId = Number(a?.id);
+            const bId = Number(b?.id);
+            if (Number.isFinite(aId) && Number.isFinite(bId)) return aId - bId;
+            return String(a?.id || '').localeCompare(String(b?.id || ''));
+        });
         sortedRows.forEach((row: any) => {
             const itemId = String(row?.id || '');
             const activeQty = Math.max(0, Number(row?.qty || 0));

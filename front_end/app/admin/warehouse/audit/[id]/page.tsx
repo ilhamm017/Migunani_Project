@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Save, CheckCircle, AlertTriangle, ScanLine } from 'lucide-react';
 import Link from 'next/link';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 
 type ProductOption = {
     id: string;
@@ -85,7 +85,14 @@ export default function AuditDetailPage() {
     };
 
     const handleFinish = async () => {
-        if (!confirm('Selesaikan audit ini? Laporan akan difinalisasi.')) return;
+        const ok = await notifyConfirm({
+            title: 'Selesaikan Audit',
+            message: 'Selesaikan audit ini? Laporan akan difinalisasi.',
+            confirmLabel: 'Selesaikan',
+            cancelLabel: 'Batal',
+            variant: 'warning',
+        });
+        if (!ok) return;
         try {
             await api.admin.inventory.finishAudit(id as string);
             router.push('/admin/warehouse/audit');

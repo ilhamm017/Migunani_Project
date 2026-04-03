@@ -9,7 +9,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
-import { notifyOpen } from '@/lib/notify';
+import { notifyConfirm, notifyOpen, notifyPrompt } from '@/lib/notify';
 
 type OrderInvoiceSummary = {
   id: string;
@@ -250,7 +250,16 @@ export default function FinanceVerifyPage() {
 	      setBusyId(id);
 	      if (action === 'approve') {
 	        const suggested = Number(opts?.collectible_total ?? 0);
-	        const input = prompt('Masukkan amount_received (kosong = sesuai tagihan):', suggested > 0 ? String(suggested) : '');
+	        const input = await notifyPrompt({
+	          title: 'Amount Received',
+	          message: 'Masukkan amount_received (kosong = sesuai tagihan):',
+	          inputLabel: 'amount_received',
+	          placeholder: 'Kosongkan = sesuai tagihan',
+	          initialValue: suggested > 0 ? String(suggested) : '',
+	          confirmLabel: 'OK',
+	          cancelLabel: 'Batal',
+	          variant: 'info',
+	        });
 	        if (input === null) {
           setBusyId(null);
           return;
@@ -460,10 +469,18 @@ export default function FinanceVerifyPage() {
 
                   {activeTab === 'completed' && (o.Invoice?.payment_status === 'paid') && (
                       <button
-                        onClick={() => {
-                          if (!confirm('Void invoice ini?')) return;
-                        api.admin.finance.voidInvoice(String(o.Invoice?.id || o.id)).then(() => load());
-                      }}
+                        onClick={async () => {
+                          const ok = await notifyConfirm({
+                            title: 'Void Invoice',
+                            message: 'Void invoice ini?',
+                            confirmLabel: 'Void',
+                            cancelLabel: 'Batal',
+                            variant: 'warning',
+                          });
+                          if (!ok) return;
+                          await api.admin.finance.voidInvoice(String(o.Invoice?.id || o.id));
+                          await load();
+                        }}
                       className="flex-1 bg-rose-100 text-rose-600 py-2.5 rounded-xl text-xs font-bold"
                     >
                       Void (Batal)

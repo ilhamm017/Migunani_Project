@@ -5,10 +5,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useReducer,
 import NotifyPopup from '@/components/ui/NotifyPopup';
 import {
   notifyClose,
+  notifyConfirm,
   notifyError,
   notifyFromAlertMessage,
   notifyInfo,
   notifyOpen,
+  notifyPrompt,
   notifySuccess,
   notifyWarning,
   type NotifyOpenOptions,
@@ -21,6 +23,8 @@ type NotifyApi = {
   error: (message: ReactNode, title?: string) => void;
   warning: (message: ReactNode, title?: string) => void;
   info: (message: ReactNode, title?: string, autoCloseMs?: number) => void;
+  confirm: (options: Parameters<typeof notifyConfirm>[0]) => Promise<boolean>;
+  prompt: (options: Parameters<typeof notifyPrompt>[0]) => Promise<string | null>;
   fromAlertMessage: (message: unknown) => void;
 };
 
@@ -43,6 +47,8 @@ export function useNotify(): NotifyApi {
     error: notifyError,
     warning: notifyWarning,
     info: notifyInfo,
+    confirm: notifyConfirm,
+    prompt: notifyPrompt,
     fromAlertMessage: notifyFromAlertMessage,
   };
 }
@@ -86,8 +92,9 @@ export default function NotificationProvider({ children }: { children: React.Rea
 
   const close = useCallback(() => {
     clearAutoCloseTimer();
+    active?.onClose?.();
     dispatch({ type: 'CLOSE' });
-  }, [clearAutoCloseTimer]);
+  }, [active, clearAutoCloseTimer]);
 
   const open = useCallback((options: NotifyOpenOptions) => {
     const next = toActivePopup(options);
@@ -131,6 +138,8 @@ export default function NotificationProvider({ children }: { children: React.Rea
       error: notifyError,
       warning: notifyWarning,
       info: notifyInfo,
+      confirm: notifyConfirm,
+      prompt: notifyPrompt,
       fromAlertMessage: notifyFromAlertMessage,
     }),
     [close, open],
@@ -143,10 +152,12 @@ export default function NotificationProvider({ children }: { children: React.Rea
         open={Boolean(active)}
         title={active?.title || ''}
         message={active?.message}
+        prompt={active?.prompt}
         variant={active?.variant || 'info'}
         primaryLabel={active?.primaryLabel}
         secondaryLabel={active?.secondaryLabel}
         onPrimary={active?.onPrimary}
+        onPrimaryValue={active?.onPrimaryValue}
         onSecondary={active?.onSecondary}
         onClose={close}
       />

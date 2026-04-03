@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, ShieldOff, ShieldCheck, Search, History, Plus, Pencil } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyConfirm } from '@/lib/notify';
 
 type CustomerRow = {
   id: string;
@@ -74,7 +75,14 @@ export default function AdminSalesHubPage() {
       ? `Blokir customer ${customer.name || customer.whatsapp_number || customer.id}?\n\nOrder aktif customer juga akan dibatalkan.`
       : `Aktifkan kembali customer ${customer.name || customer.whatsapp_number || customer.id}?`;
 
-    if (!confirm(message)) return;
+    const ok = await notifyConfirm({
+      title: nextStatus === 'banned' ? 'Blokir Customer' : 'Aktifkan Customer',
+      message: <span className="whitespace-pre-wrap">{message}</span>,
+      confirmLabel: nextStatus === 'banned' ? 'Blokir' : 'Aktifkan',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     try {
       setProcessingCustomerId(customer.id);

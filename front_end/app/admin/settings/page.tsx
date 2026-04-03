@@ -5,7 +5,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { MessageSquare, Coins, Key, Loader2, QrCode, RefreshCw, Smartphone, LogOut, CheckCircle2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 
 type WhatsAppStatusInfo = {
   pushname?: string;
@@ -71,7 +71,14 @@ export default function AdminSettingsPage() {
   };
 
   const handleLogout = async () => {
-    if (!confirm('Yakin ingin memutus koneksi WhatsApp?')) return;
+    const ok = await notifyConfirm({
+      title: 'Putus Koneksi WhatsApp',
+      message: 'Yakin ingin memutus koneksi WhatsApp?',
+      confirmLabel: 'Putus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       setLoading(true);
       await api.whatsapp.logout();

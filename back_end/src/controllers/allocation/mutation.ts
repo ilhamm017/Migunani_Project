@@ -367,14 +367,6 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             const prev = Number(invoicedQtyByOrderItemId.get(key) || 0);
             invoicedQtyByOrderItemId.set(key, prev + Number(item?.qty || 0));
         });
-        const hasNewInvoiceableQty = itemBreakdown.some((row) => {
-            const orderItemId = String(row?.oi?.id || '');
-            if (!orderItemId) return false;
-            const allocatedQty = Number(row?.allocated_qty || 0);
-            const alreadyInvoiced = Number(invoicedQtyByOrderItemId.get(orderItemId) || 0);
-            return allocatedQty > alreadyInvoiced;
-        });
-
         // --- Recalculate total based on what can be processed now ---
         const allocatedTotal = itemBreakdown.reduce((sum, row) => {
             return sum + (Number(row.oi.price_at_purchase || 0) * Number(row.allocated_qty || 0));
@@ -420,17 +412,9 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             };
             const previousOrderStatus = String(order.status || '');
             let nextStatus = previousOrderStatus;
-            if (hasNewInvoiceableQty) {
-                // Keep ready_to_ship as-is; extra allocation can be billed via issueInvoiceByItems without
-                // downgrading the warehouse queue status.
-                nextStatus = safeLower(previousOrderStatus) === 'ready_to_ship'
-                    ? previousOrderStatus
-                    : 'waiting_invoice';
-            } else {
-                const currentRank = Number(statusProgressRank[previousOrderStatus] || 0);
-                const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
-                nextStatus = currentRank >= waitingInvoiceRank ? previousOrderStatus : 'waiting_invoice';
-            }
+            const currentRank = Number(statusProgressRank[previousOrderStatus] || 0);
+            const waitingInvoiceRank = Number(statusProgressRank.waiting_invoice);
+            nextStatus = currentRank >= waitingInvoiceRank ? previousOrderStatus : 'waiting_invoice';
 
             if (nextStatus !== previousOrderStatus) {
                 if (!isOrderTransitionAllowed(previousOrderStatus, nextStatus)) {

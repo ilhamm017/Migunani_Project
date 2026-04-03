@@ -219,6 +219,8 @@ export default function TrackerGudangCheckPage() {
     if (busy) return false;
     if (!invoice) return false;
     if (rows.length === 0) return false;
+    const shipment = normalizeText((invoice as any)?.shipment_status).toLowerCase();
+    if (shipment && shipment !== 'ready_to_ship') return false;
     return true;
   }, [busy, invoice, invoiceId, rows.length]);
 
@@ -788,6 +790,12 @@ export default function TrackerGudangCheckPage() {
             {!courierId && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
                 Invoice belum ditugaskan ke driver. Assign driver dulu dari Proses Gudang.
+              </div>
+            )}
+            {courierId && shipmentStatus !== 'ready_to_ship' && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-700">
+                Checking hanya bisa dilakukan saat invoice masih <span className="font-black">ready_to_ship</span>. Status saat ini:{' '}
+                <span className="font-black">{shipmentStatus || '-'}</span>.
               </div>
             )}
           </div>

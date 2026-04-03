@@ -9,7 +9,7 @@ import type { ChangeEvent } from 'react';
 import { ArrowLeft, ChevronRight, MapPin, Package, Phone, User, Wallet, X, Minus, Plus } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
+import { notifyConfirm, notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 
@@ -42,6 +42,8 @@ const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
 
 type ShortageDraftRow = {
   key: string;
+  invoiceId: string;
+  invoiceNumber: string | null;
   product_id: string | null;
   sku: string;
   name: string;
@@ -314,6 +316,35 @@ export default function DriverCustomerOrdersPage() {
     () => invoiceCards.reduce((sum, row) => sum + Number(row.total || 0), 0),
     [invoiceCards]
   );
+  const overallNetTotalEstimate = useMemo(
+    () => invoiceCards.reduce((sum, row) => sum + Number(row.netTotalEstimate || 0), 0),
+    [invoiceCards]
+  );
+
+  const allInvoiceIds = useMemo(
+    () => Array.from(new Set(invoiceCards.map((row) => normalizeId(row.invoiceId)).filter(Boolean))),
+    [invoiceCards]
+  );
+
+  const paymentMethodSummary = useMemo(() => {
+    const methods = new Set<string>();
+    const statuses = new Set<string>();
+    let hasUnresolvedMethod = false;
+    invoiceCards.forEach((row: any) => {
+      const method = String(row.paymentMethod || '').trim().toLowerCase();
+      const status = String(row.paymentStatus || '').trim().toLowerCase();
+      if (method) methods.add(method);
+      if (status) statuses.add(status);
+      if (!['cod', 'transfer_manual', 'cash_store'].includes(method) && status !== 'paid') {
+        hasUnresolvedMethod = true;
+      }
+    });
+    return {
+      uniqueMethods: Array.from(methods),
+      uniqueStatuses: Array.from(statuses),
+      hasUnresolvedMethod,
+    };
+  }, [invoiceCards]);
 
   const codInvoiceCards = useMemo(
     () => invoiceCards.filter((row: any) => row.paymentMethod === 'cod' && ['unpaid', 'draft'].includes(String(row.paymentStatus || '').toLowerCase())),
@@ -362,9 +393,17 @@ export default function DriverCustomerOrdersPage() {
   }, [invoiceCards, invoiceDetailsById]);
 
   const startBatchComplete = useCallback(() => {
-    const ids = Array.from(new Set(invoiceCards.map((row) => normalizeId(row.invoiceId)).filter(Boolean)));
+    const ids = allInvoiceIds;
     if (ids.length === 0) {
       notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice yang bisa diproses.' });
+      return;
+    }
+    if (paymentMethodSummary.hasUnresolvedMethod) {
+      notifyOpen({
+        variant: 'warning',
+        title: 'Perhatian',
+        message: 'Metode pembayaran masih belum ditentukan untuk sebagian invoice. Pilih COD/Transfer dulu sebelum menyelesaikan pengiriman.',
+      });
       return;
     }
     if (codInvoiceIds.length > 0) {
@@ -380,7 +419,7 @@ export default function DriverCustomerOrdersPage() {
     pendingInvoiceIdsRef.current = ids;
     proofInputRef.current.value = '';
     proofInputRef.current.click();
-  }, [batchLoading, codInvoiceIds.length, codTotalEstimate, invoiceCards]);
+  }, [allInvoiceIds, batchLoading, codInvoiceIds.length, codTotalEstimate, paymentMethodSummary.hasUnresolvedMethod]);
 
   const handleProofSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -389,7 +428,13 @@ export default function DriverCustomerOrdersPage() {
     pendingInvoiceIdsRef.current = [];
     if (!file || ids.length === 0) return;
 
-    const confirmed = window.confirm(`Selesaikan pengiriman untuk ${ids.length} invoice customer ini?`);
+    const confirmed = await notifyConfirm({
+      title: 'Selesaikan Pengiriman',
+      message: `Selesaikan pengiriman untuk ${ids.length} invoice customer ini?`,
+      confirmLabel: 'Lanjut',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
     if (!confirmed) return;
 
     try {
@@ -411,7 +456,13 @@ export default function DriverCustomerOrdersPage() {
       return;
     }
     const totalLabel = `Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`;
-    const confirmed = window.confirm(`Catat pembayaran COD untuk ${codInvoiceIds.length} invoice (total ${totalLabel})?`);
+    const confirmed = await notifyConfirm({
+      title: 'Catat Pembayaran COD',
+      message: `Catat pembayaran COD untuk ${codInvoiceIds.length} invoice (total ${totalLabel})?`,
+      confirmLabel: 'Catat COD',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
     if (!confirmed) return;
 
     try {
@@ -442,10 +493,63 @@ export default function DriverCustomerOrdersPage() {
     }
   }, [activeInvoiceId]);
 
+  const updateAllInvoicesPaymentMethod = useCallback(async (nextMethod: 'cod' | 'transfer_manual') => {
+    if (activeInvoiceLoading) return;
+    if (allInvoiceIds.length === 0) {
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice.' });
+      return;
+    }
+    const label = nextMethod === 'cod' ? 'COD' : 'Transfer';
+    const confirmed = await notifyConfirm({
+      title: 'Ubah Metode Pembayaran',
+      message: `Terapkan metode pembayaran ${label} untuk ${allInvoiceIds.length} invoice customer ini?`,
+      confirmLabel: 'Terapkan',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!confirmed) return;
+
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    try {
+      setActiveInvoiceLoading(true);
+      for (const invoiceId of allInvoiceIds) {
+        try {
+          await api.driver.updatePaymentMethod(invoiceId, nextMethod);
+          succeeded.push(invoiceId);
+          const res = await api.invoices.getById(invoiceId);
+          setInvoiceDetailsById((prev) => ({ ...prev, [invoiceId]: res.data || null }));
+        } catch (error: any) {
+          failed.push({
+            id: invoiceId,
+            reason: String((error?.response?.data as any)?.message || error?.message || 'gagal'),
+          });
+        }
+      }
+      if (failed.length === 0) {
+        notifySuccess(`Metode pembayaran ${label} diterapkan untuk ${succeeded.length} invoice.`);
+      } else {
+        notifyOpen({
+          variant: 'warning',
+          title: 'Sebagian gagal',
+          message: `${succeeded.length} berhasil, ${failed.length} gagal. Contoh: ${failed[0]?.reason || 'gagal'}`,
+        });
+      }
+    } finally {
+      setActiveInvoiceLoading(false);
+    }
+  }, [activeInvoiceLoading, allInvoiceIds]);
+
   const recordSingleCodPayment = useCallback(async () => {
     const invoiceId = normalizeId(activeInvoiceId);
     if (!invoiceId) return;
-    const confirmed = window.confirm('Catat pembayaran COD untuk invoice ini?');
+    const confirmed = await notifyConfirm({
+      title: 'Catat Pembayaran COD',
+      message: 'Catat pembayaran COD untuk invoice ini?',
+      confirmLabel: 'Catat COD',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
     if (!confirmed) return;
     try {
       setActiveInvoiceLoading(true);
@@ -461,57 +565,71 @@ export default function DriverCustomerOrdersPage() {
   }, [activeInvoiceId]);
 
   const openShortageModal = useCallback(() => {
-    const invoiceId = normalizeId(activeInvoiceId);
-    if (!invoiceId) return;
-    const invoiceDetail = invoiceDetailsById[invoiceId] || null;
-    const invoiceItems = getInvoiceItems(invoiceDetail);
-    if (!invoiceItems || invoiceItems.length === 0) {
+    if (allInvoiceIds.length === 0) return;
+
+    const buckets = new Map<string, ShortageDraftRow>();
+    let hasAnyItem = false;
+
+    allInvoiceIds.forEach((invoiceId) => {
+      const invoiceDetail = invoiceDetailsById[invoiceId] || null;
+      const invoiceItems = getInvoiceItems(invoiceDetail);
+      const invoiceNumber = String((invoiceDetail as any)?.invoice_number || '').trim() || null;
+      if (!invoiceItems || invoiceItems.length === 0) return;
+
+      invoiceItems.forEach((item: any, idx: number) => {
+        const orderItem = item?.OrderItem || {};
+        const product = orderItem?.Product || {};
+        const productId = normalizeId(orderItem?.product_id) || '';
+        const sku = String(product?.sku || '').trim() || '-';
+        const name = String(product?.name || 'Produk');
+        const qty = Math.max(0, Math.trunc(Number(item?.qty ?? item?.allocated_qty ?? 0)));
+        if (!qty) return;
+        hasAnyItem = true;
+
+        const key = `${invoiceId}:${productId || `${sku}:${name}:${idx}`}`;
+        const existing = buckets.get(key);
+        if (existing) {
+          existing.invoiceQty += qty;
+          buckets.set(key, existing);
+          return;
+        }
+        buckets.set(key, {
+          key,
+          invoiceId,
+          invoiceNumber,
+          product_id: productId || null,
+          sku,
+          name,
+          invoiceQty: qty,
+          missingQty: 0,
+        });
+      });
+    });
+
+    if (!hasAnyItem) {
       notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Item invoice tidak tersedia untuk dipilih.' });
       return;
     }
 
-    const buckets = new Map<string, ShortageDraftRow>();
-    invoiceItems.forEach((item: any, idx: number) => {
-      const orderItem = item?.OrderItem || {};
-      const product = orderItem?.Product || {};
-      const productId = normalizeId(orderItem?.product_id) || '';
-      const sku = String(product?.sku || '').trim() || '-';
-      const name = String(product?.name || 'Produk');
-      const qty = Math.max(0, Math.trunc(Number(item?.qty ?? item?.allocated_qty ?? 0)));
-      if (!qty) return;
-      const key = productId || `${sku}:${name}:${idx}`;
-      const existing = buckets.get(key);
-      if (existing) {
-        existing.invoiceQty += qty;
-        buckets.set(key, existing);
-        return;
-      }
-      buckets.set(key, {
-        key,
-        product_id: productId || null,
-        sku,
-        name,
-        invoiceQty: qty,
-        missingQty: 0,
-      });
+    const rows = Array.from(buckets.values()).sort((a, b) => {
+      const invA = String(a.invoiceNumber || a.invoiceId);
+      const invB = String(b.invoiceNumber || b.invoiceId);
+      const cmp = invA.localeCompare(invB);
+      if (cmp !== 0) return cmp;
+      return b.invoiceQty - a.invoiceQty;
     });
-
-    const rows = Array.from(buckets.values()).sort((a, b) => b.invoiceQty - a.invoiceQty);
-    const invoiceNumber = String((invoiceDetail as any)?.invoice_number || '').trim() || null;
     setShortageModal({
-      invoiceId,
-      invoiceNumber,
+      invoiceId: '',
+      invoiceNumber: null,
       rows,
       saving: false,
       error: '',
     });
-  }, [activeInvoiceId, invoiceDetailsById]);
+  }, [allInvoiceIds, invoiceDetailsById]);
 
   const submitShortageReport = useCallback(async () => {
     if (!shortageModal) return;
     if (shortageModal.saving) return;
-    const invoiceId = normalizeId(shortageModal.invoiceId);
-    if (!invoiceId) return;
 
     const selected = shortageModal.rows
       .map((row) => ({ ...row, missingQty: Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(row.missingQty || 0)))) }))
@@ -522,43 +640,89 @@ export default function DriverCustomerOrdersPage() {
       return;
     }
 
-    const noteLines = selected.map((row) => {
-      const skuLabel = row.sku && row.sku !== '-' ? `(${row.sku}) ` : '';
-      return `- ${skuLabel}${row.name} x${row.missingQty}`;
+    const groups = new Map<string, ShortageDraftRow[]>();
+    selected.forEach((row) => {
+      const invoiceId = normalizeId(row.invoiceId);
+      if (!invoiceId) return;
+      const bucket = groups.get(invoiceId) || [];
+      bucket.push(row);
+      groups.set(invoiceId, bucket);
     });
-    const note = `Barang kurang:\n${noteLines.join('\n')}`;
+    const invoiceIds = Array.from(groups.keys()).filter(Boolean);
+    if (invoiceIds.length === 0) {
+      setShortageModal((prev) => prev ? { ...prev, error: 'Invoice tidak valid.' } : prev);
+      return;
+    }
 
-    const shortageItemsPayload = selected.map((row) => ({
-      product_id: row.product_id,
-      sku: row.sku,
-      name: row.name,
-      missing_qty: row.missingQty,
-    }));
-
-    const checklistSnapshot = JSON.stringify({
-      invoice_id: invoiceId,
-      invoice_number: shortageModal.invoiceNumber,
-      items: shortageModal.rows.map((row) => ({
-        product_id: row.product_id,
-        sku: row.sku,
-        name: row.name,
-        invoice_qty: row.invoiceQty,
-        missing_qty: Math.max(0, Math.min(row.invoiceQty, Math.trunc(Number(row.missingQty || 0)))),
-      }))
+    const confirmed = await notifyConfirm({
+      title: 'Kirim Laporan Barang Kurang',
+      message: `Kirim laporan barang kurang untuk ${selected.length} item pada ${invoiceIds.length} invoice?`,
+      confirmLabel: 'Kirim',
+      cancelLabel: 'Batal',
+      variant: 'warning',
     });
-
-    const confirmed = window.confirm(`Kirim laporan barang kurang untuk ${selected.length} item?`);
     if (!confirmed) return;
 
     try {
       setShortageModal((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
       setActiveInvoiceLoading(true);
-      await api.driver.reportIssue(invoiceId, {
-        note,
-        checklist_snapshot: checklistSnapshot,
-        shortage_items: JSON.stringify(shortageItemsPayload),
-      });
-      notifySuccess('Laporan barang kurang berhasil dikirim.');
+      const succeeded: string[] = [];
+      const failed: Array<{ invoiceId: string; reason: string }> = [];
+
+      for (const invoiceId of invoiceIds) {
+        const rows = groups.get(invoiceId) || [];
+        if (rows.length === 0) continue;
+        const invoiceNumber = rows[0]?.invoiceNumber || null;
+
+        const noteLines = rows.map((row) => {
+          const skuLabel = row.sku && row.sku !== '-' ? `(${row.sku}) ` : '';
+          return `- ${skuLabel}${row.name} x${row.missingQty}`;
+        });
+        const note = `Barang kurang:\n${noteLines.join('\n')}`;
+
+        const shortageItemsPayload = rows.map((row) => ({
+          product_id: row.product_id,
+          sku: row.sku,
+          name: row.name,
+          missing_qty: row.missingQty,
+        }));
+
+        const checklistSnapshot = JSON.stringify({
+          invoice_id: invoiceId,
+          invoice_number: invoiceNumber,
+          items: rows.map((row) => ({
+            product_id: row.product_id,
+            sku: row.sku,
+            name: row.name,
+            invoice_qty: row.invoiceQty,
+            missing_qty: row.missingQty,
+          }))
+        });
+
+        try {
+          await api.driver.reportIssue(invoiceId, {
+            note,
+            checklist_snapshot: checklistSnapshot,
+            shortage_items: JSON.stringify(shortageItemsPayload),
+          });
+          succeeded.push(invoiceId);
+        } catch (error: any) {
+          failed.push({
+            invoiceId,
+            reason: String((error?.response?.data as any)?.message || error?.message || 'Gagal mengirim laporan barang kurang.'),
+          });
+        }
+      }
+
+      if (failed.length === 0) {
+        notifySuccess(`Laporan barang kurang berhasil dikirim untuk ${succeeded.length} invoice.`);
+      } else {
+        notifyOpen({
+          variant: 'warning',
+          title: 'Sebagian gagal',
+          message: `${succeeded.length} berhasil, ${failed.length} gagal. Contoh: ${failed[0]?.reason || 'Gagal.'}`,
+        });
+      }
       setShortageModal(null);
       await load();
       clearSelectedInvoice();
@@ -581,7 +745,7 @@ export default function DriverCustomerOrdersPage() {
         <button
           type="button"
           onClick={() => router.push('/driver')}
-          className="h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700"
+          className="btn-3d h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700"
         >
           <ArrowLeft size={18} />
         </button>
@@ -663,7 +827,7 @@ export default function DriverCustomerOrdersPage() {
                   <button
                     type="button"
                     onClick={() => openInvoiceModal(card.invoiceId)}
-                    className="w-full py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
+                    className="btn-3d w-full py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-black uppercase inline-flex items-center justify-center gap-1"
                   >
                     Detail Invoice <ChevronRight size={14} />
                   </button>
@@ -674,28 +838,32 @@ export default function DriverCustomerOrdersPage() {
         </div>
       </div>
 
-      {activeInvoiceId && (
+      {invoiceCards.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-[24px] p-5 shadow-sm space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aksi Invoice Terpilih</p>
-              <p className="text-lg font-black text-slate-900 truncate">
-                {String((activeInvoiceDetail as any)?.invoice_number || '').trim()
-                  || `INV-${String(activeInvoiceId).slice(-8).toUpperCase()}`}
-              </p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aksi Pengiriman (Gabungan)</p>
+              <p className="text-lg font-black text-slate-900 truncate">{customerMeta.name}</p>
               <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Status bayar: {String((activeInvoiceDetail as any)?.payment_status || '-')} • Metode: {String((activeInvoiceDetail as any)?.payment_method || '-')}
+                {invoiceCards.length} invoice • Total Rp {Math.round(overallNetTotalEstimate).toLocaleString('id-ID')}
               </p>
+              {paymentMethodSummary.uniqueMethods.length > 0 ? (
+                <p className="text-[11px] font-bold text-slate-500 mt-1">
+                  Metode: {paymentMethodSummary.uniqueMethods.join(', ')} • Status bayar: {paymentMethodSummary.uniqueStatuses.join(', ') || '-'}
+                </p>
+              ) : null}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                clearSelectedInvoice();
-              }}
-              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50"
-            >
-              Reset Pilihan
-            </button>
+            {activeInvoiceId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  clearSelectedInvoice();
+                }}
+                className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50"
+              >
+                Reset Pilihan
+              </button>
+            ) : null}
           </div>
 
           {activeInvoiceLoading && (
@@ -708,41 +876,50 @@ export default function DriverCustomerOrdersPage() {
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Opsi Pembayaran</p>
               <div className="flex items-center gap-2">
+                {(() => {
+                  const methods = paymentMethodSummary.uniqueMethods;
+                  const codSelected = !paymentMethodSummary.hasUnresolvedMethod && methods.length === 1 && methods[0] === 'cod';
+                  const transferSelected = !paymentMethodSummary.hasUnresolvedMethod && methods.length === 1 && methods[0] === 'transfer_manual';
+                  return (
+                    <>
                 <button
                   type="button"
-                  disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
-                  onClick={() => updateInvoicePaymentMethod('cod')}
-                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0}
+                  onClick={() => updateAllInvoicesPaymentMethod('cod')}
+                  className={`btn-3d flex-1 px-3 py-2 rounded-xl border text-[10px] font-black uppercase disabled:opacity-60 ${codSelected ? 'border-amber-200 bg-amber-600 text-white hover:bg-amber-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
                 >
                   COD
                 </button>
                 <button
                   type="button"
-                  disabled={activeInvoiceLoading || !activeInvoiceMeta.canUpdatePaymentMethod}
-                  onClick={() => updateInvoicePaymentMethod('transfer_manual')}
-                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-[10px] font-black uppercase text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0}
+                  onClick={() => updateAllInvoicesPaymentMethod('transfer_manual')}
+                  className={`btn-3d flex-1 px-3 py-2 rounded-xl border text-[10px] font-black uppercase disabled:opacity-60 ${transferSelected ? 'border-sky-200 bg-sky-600 text-white hover:bg-sky-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
                 >
                   Transfer
                 </button>
+                    </>
+                  );
+                })()}
               </div>
-              {activeInvoiceMeta.paymentMethodLockReason ? (
+              {paymentMethodSummary.hasUnresolvedMethod ? (
                 <p className="text-[11px] font-semibold text-slate-500">
-                  Metode pembayaran dikunci: <span className="font-black">{activeInvoiceMeta.paymentMethodLockReason}</span>
+                  Metode pembayaran belum ditentukan untuk sebagian invoice. Pilih COD/Transfer dulu.
                 </p>
               ) : null}
             </div>
 
-            {activeInvoiceMeta.paymentMethod === 'cod' ? (
+            {codInvoiceIds.length > 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pembayaran COD</p>
                 <p className="text-[11px] font-semibold text-slate-600">
-                  Catat penerimaan uang COD untuk seluruh invoice COD customer ini: <span className="font-black">Rp {Math.round(codTotalEstimate).toLocaleString('id-ID')}</span>
+                  Catat penerimaan uang COD untuk invoice COD yang belum dibayar: <span className="font-black">Rp {Math.round(codTotalEstimate).toLocaleString('id-ID')}</span>
                 </p>
                 <button
                   type="button"
                   disabled={paymentLoading || codInvoiceIds.length === 0}
                   onClick={recordCodPaymentOnce}
-                  className="w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                  className="btn-3d w-full px-3 py-2 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
                 >
                   {paymentLoading ? 'COD...' : `Catat COD • Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`}
                 </button>
@@ -765,12 +942,17 @@ export default function DriverCustomerOrdersPage() {
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bukti Foto Pengiriman</p>
               <button
                 type="button"
-                disabled={activeInvoiceLoading || batchLoading || invoiceCards.length === 0 || codInvoiceIds.length > 0}
+                disabled={activeInvoiceLoading || batchLoading || invoiceCards.length === 0 || codInvoiceIds.length > 0 || paymentMethodSummary.hasUnresolvedMethod}
                 onClick={startBatchComplete}
-                className="w-full px-3 py-3 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                className="btn-3d w-full px-3 py-3 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
               >
                 {batchLoading ? 'Proses...' : 'Upload Foto & Selesaikan Pengiriman'}
               </button>
+              {paymentMethodSummary.hasUnresolvedMethod ? (
+                <p className="text-[11px] font-semibold text-amber-700">
+                  Metode pembayaran belum dipilih. Pilih <span className="font-black">COD</span> atau <span className="font-black">Transfer</span> dulu.
+                </p>
+              ) : null}
               {codInvoiceIds.length > 0 ? (
                 <p className="text-[11px] font-semibold text-amber-700">
                   COD belum dicatat. Terima uang dan klik <span className="font-black">Catat COD</span> dulu.
@@ -782,14 +964,14 @@ export default function DriverCustomerOrdersPage() {
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Laporan Barang Kurang</p>
               <button
                 type="button"
-                disabled={activeInvoiceLoading}
+                disabled={activeInvoiceLoading || invoiceCards.length === 0}
                 onClick={openShortageModal}
-                className="w-full px-3 py-2 rounded-xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
+                className="btn-3d w-full px-3 py-2 rounded-xl bg-rose-600 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-60"
               >
                 Pilih Barang Kurang
               </button>
               <p className="text-[11px] font-semibold text-slate-500">
-                Pilih item yang kurang dari daftar barang invoice agar admin mudah tindak lanjut.
+                Pilih item yang kurang dari gabungan barang semua invoice agar admin mudah tindak lanjut.
               </p>
             </div>
           </div>
@@ -844,7 +1026,7 @@ export default function DriverCustomerOrdersPage() {
                 <button
                   type="button"
                   onClick={closeInvoiceModal}
-                  className="h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700"
+                  className="btn-3d h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700"
                 >
                   <X size={18} />
                 </button>
@@ -914,7 +1096,7 @@ export default function DriverCustomerOrdersPage() {
                   type="button"
                   onClick={() => shortageModal.saving ? undefined : setShortageModal(null)}
                   disabled={shortageModal.saving}
-                  className="h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700 disabled:opacity-60"
+                  className="btn-3d h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700 disabled:opacity-60"
                 >
                   <X size={18} />
                 </button>
@@ -936,6 +1118,9 @@ export default function DriverCustomerOrdersPage() {
                           <div className="min-w-0">
                             <p className="text-sm font-black text-slate-900 truncate">{row.name}</p>
                             <p className="text-[10px] text-slate-500">SKU {row.sku}</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                              Invoice {row.invoiceNumber || row.invoiceId}
+                            </p>
                             <p className="text-[11px] text-slate-600 mt-1">
                               Qty invoice <span className="font-black">{row.invoiceQty}</span>
                             </p>

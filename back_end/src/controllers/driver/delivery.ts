@@ -243,11 +243,22 @@ export const completeDeliveryBatch = asyncWrapper(async (req: Request, res: Resp
                 continue;
             }
 
-            const result = await completeSingleDeliveryInternal(String(inputId), { userId, userRole, file }, { transaction: t, context });
-            const doneInvoiceId = String(result.invoice_id || '').trim();
-            if (doneInvoiceId) processedInvoiceIds.add(doneInvoiceId);
-            result.affected_order_ids.forEach((oid) => affectedOrderIds.add(String(oid)));
-            results.push({ input_id: inputId, invoice_id: doneInvoiceId, affected_order_ids: result.affected_order_ids });
+            try {
+                const result = await completeSingleDeliveryInternal(String(inputId), { userId, userRole, file }, { transaction: t, context });
+                const doneInvoiceId = String(result.invoice_id || '').trim();
+                if (doneInvoiceId) processedInvoiceIds.add(doneInvoiceId);
+                result.affected_order_ids.forEach((oid) => affectedOrderIds.add(String(oid)));
+                results.push({ input_id: inputId, invoice_id: doneInvoiceId, affected_order_ids: result.affected_order_ids });
+            } catch (error: any) {
+                const statusCode = Number(error?.statusCode || 0);
+                const message = String(error?.message || '').trim();
+                const isAlreadyDone = statusCode === 409 && message.includes('Semua order pada invoice ini sudah selesai diproses');
+                if (isAlreadyDone) {
+                    skipped.push({ input_id: inputId, invoice_id: invId || undefined, reason: 'already_completed' });
+                    continue;
+                }
+                throw error;
+            }
         }
 
         await t.commit();

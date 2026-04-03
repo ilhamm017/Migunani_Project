@@ -4,7 +4,7 @@ import { useCallback, useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 import {
     ArrowLeft,
     Package,
@@ -107,7 +107,14 @@ export default function FinanceReturDetailPage() {
             notifyAlert('Data retur tidak ditemukan.');
             return;
         }
-        if (!confirm('Apakah Anda yakin ingin mencairkan dana refund ini? Pastikan Anda sudah melakukan transfer ke customer.')) return;
+        const ok = await notifyConfirm({
+            title: 'Cairkan Refund',
+            message: 'Apakah Anda yakin ingin mencairkan dana refund ini? Pastikan Anda sudah melakukan transfer ke customer.',
+            confirmLabel: 'Cairkan',
+            cancelLabel: 'Batal',
+            variant: 'warning',
+        });
+        if (!ok) return;
 
         try {
             setSubmitting(true);

@@ -164,8 +164,14 @@ export const useRealtimeRefresh = ({
         runRefresh();
       }
     };
+    const onPageShow = (event: PageTransitionEvent) => {
+      // When navigating back/forward, Next.js may restore the page from BFCache.
+      // In that case effects don't re-run and data can be stale (e.g. after assigning driver).
+      if (event.persisted) runRefresh();
+    };
     if (refreshOnFocus) window.addEventListener('focus', onFocus);
     if (refreshOnVisibility) document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pageshow', onPageShow);
 
     return () => {
       socket.off('order:status_changed', onOrderChanged);
@@ -176,6 +182,7 @@ export const useRealtimeRefresh = ({
       if (pollTimer) window.clearInterval(pollTimer);
       if (refreshOnFocus) window.removeEventListener('focus', onFocus);
       if (refreshOnVisibility) document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pageshow', onPageShow);
 
       if (debounceTimerRef.current) {
         window.clearTimeout(debounceTimerRef.current);

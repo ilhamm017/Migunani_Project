@@ -4,6 +4,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Lock, FileText, Settings, Archive, ChevronRight, LogOut } from 'lucide-react';
+import { notifyConfirm } from '@/lib/notify';
 
 export default function FinanceMorePage() {
     // Mock Data
@@ -16,11 +17,17 @@ export default function FinanceMorePage() {
         { icon: Settings, label: 'Pengaturan Akun', href: '/finance/settings', desc: 'Manage Chart of Accounts' },
     ];
 
-    const handleLogout = () => {
-        if (confirm('Yakin logout?')) {
-            sessionStorage.clear();
-            window.location.href = '/auth/login';
-        }
+    const handleLogout = async () => {
+        const ok = await notifyConfirm({
+            title: 'Logout',
+            message: 'Yakin logout?',
+            confirmLabel: 'Logout',
+            cancelLabel: 'Batal',
+            variant: 'warning',
+        });
+        if (!ok) return;
+        sessionStorage.clear();
+        window.location.href = '/auth/login';
     };
 
     return (

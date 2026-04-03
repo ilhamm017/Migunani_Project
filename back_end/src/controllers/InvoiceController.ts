@@ -43,6 +43,12 @@ export const getInvoiceDetail = asyncWrapper(async (req: Request, res: Response)
     const invoice = await Invoice.findByPk(invoiceId, {
         include: [
             {
+                model: User,
+                as: 'Courier',
+                attributes: ['id', 'name', 'email', 'whatsapp_number', 'role'],
+                required: false,
+            },
+            {
                 model: InvoiceItem,
                 as: 'Items',
                 attributes: ['id', 'qty', 'unit_price', 'unit_cost', 'line_total', 'order_item_id'],

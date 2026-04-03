@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { api } from '@/lib/api'; // Ensure this helper exists or use fetch
 import Link from 'next/link';
 import { Plus, Eye, Calendar, User } from 'lucide-react';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyPrompt } from '@/lib/notify';
 
 type AuditRow = {
     id: string;
@@ -47,7 +47,16 @@ export default function AuditListPage() {
 
     const handleStartNew = async () => {
         try {
-            const note = prompt('Catatan untuk Audit ini?');
+            const note = await notifyPrompt({
+                title: 'Mulai Audit Baru',
+                message: 'Catatan untuk Audit ini?',
+                inputLabel: 'Catatan',
+                placeholder: 'Opsional',
+                initialValue: '',
+                confirmLabel: 'Mulai',
+                cancelLabel: 'Batal',
+                variant: 'info',
+            });
             if (note === null) return;
 
             await api.admin.inventory.startAudit({ notes: note });

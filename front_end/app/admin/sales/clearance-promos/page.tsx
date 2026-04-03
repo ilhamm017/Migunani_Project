@@ -7,6 +7,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { notifyConfirm } from '@/lib/notify';
 
 type ProductOption = {
   id: string;
@@ -579,12 +580,14 @@ export default function AdminClearancePromosPage() {
     if (!promoId) return;
 
     const promoName = String(promo.name || 'promo');
-    if (typeof window !== 'undefined') {
-      const ok = window.confirm(
-        `Hapus promo "${promoName}"?\n\nCatatan: jika promo sudah pernah dipakai, penghapusan akan ditolak.`
-      );
-      if (!ok) return;
-    }
+    const ok = await notifyConfirm({
+      title: 'Hapus Promo',
+      message: `Hapus promo "${promoName}"?\n\nCatatan: jika promo sudah pernah dipakai, penghapusan akan ditolak.`,
+      confirmLabel: 'Hapus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     try {
       setProcessingPromoId(promoId);

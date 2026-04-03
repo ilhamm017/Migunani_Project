@@ -10,6 +10,7 @@ import getSocket from '@/lib/socket';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import AdminChatTabs from '@/components/chat/AdminChatTabs';
+import { notifyConfirm } from '@/lib/notify';
 
 type PersistApi = {
   hasHydrated?: () => boolean;
@@ -119,7 +120,14 @@ export default function WhatsappConfigPage() {
   }, [status]);
 
   const handleLogout = async () => {
-    if (!confirm('Apakah Anda yakin ingin logout dari WhatsApp?')) return;
+    const ok = await notifyConfirm({
+      title: 'Logout WhatsApp',
+      message: 'Apakah Anda yakin ingin logout dari WhatsApp?',
+      confirmLabel: 'Logout',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       await api.whatsapp.logout();
       await fetchStatus();

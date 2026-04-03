@@ -4,7 +4,7 @@ import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, Custom
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findDriverInvoiceContextByOrderOrInvoiceId, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
-import { isDeadlockError, FINAL_ORDER_STATUSES, COURIER_OWNERSHIP_REQUIRED_STATUSES } from './utils';
+import { isDeadlockError, FINAL_ORDER_STATUSES } from './utils';
 import { asyncWrapper } from '../../utils/asyncWrapper';
 import { CustomError } from '../../utils/CustomError';
 import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
@@ -18,16 +18,28 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
             .split(',')
             .map((value) => value.trim().toLowerCase())
             .filter(Boolean);
-
         const whereClause: any = { courier_id: userId };
 
         // If status specified, filter. Else show active deliveries?
         if (status) {
             const statusStr = String(status);
             if (statusStr.includes(',')) {
-                whereClause.status = { [Op.in]: statusStr.split(',').map(s => s.trim()) };
+                const requested = statusStr.split(',').map(s => s.trim());
+                // Some invoices can transition to shipment_status=shipped while a subset of related orders
+                // are still at 'checked' (race/legacy flows). Include 'checked' when the client requests shipped,
+                // and rely on invoice shipment_status filtering below to avoid leaking pre-handover tasks.
+                const normalized = requested.map((v) => String(v || '').trim().toLowerCase());
+                if (normalized.includes('shipped') && !normalized.includes('checked')) {
+                    requested.push('checked');
+                }
+                whereClause.status = { [Op.in]: requested };
             } else {
-                whereClause.status = status;
+                const normalized = String(statusStr || '').trim().toLowerCase();
+                if (normalized === 'shipped') {
+                    whereClause.status = { [Op.in]: ['shipped', 'checked'] };
+                } else {
+                    whereClause.status = status;
+                }
             }
         } else {
             // Default: Show only actionable or pending tasks.
@@ -86,13 +98,22 @@ export const getAssignedOrders = asyncWrapper(async (req: Request, res: Response
         const explodedOrders: any[] = [];
         ordersWithInvoices.forEach((order: any) => {
             const invoices = Array.isArray(order.Invoices) ? order.Invoices : [];
-            const normalizedOrderStatus = String(order.status || '').trim().toLowerCase();
-            const shouldOnlyShowLatestInvoice =
-                COURIER_OWNERSHIP_REQUIRED_STATUSES.has(normalizedOrderStatus)
-                || requestedStatuses.every((row) => COURIER_OWNERSHIP_REQUIRED_STATUSES.has(row));
-            const visibleInvoices = shouldOnlyShowLatestInvoice
-                ? invoices.slice(0, 1)
-                : invoices;
+            const strictCourierInvoices = invoices.filter((inv: any) => String(inv?.courier_id || '').trim() === String(userId));
+            const invoiceStatusFilter = new Set(
+                requestedStatuses.filter((val) =>
+                    ['ready_to_ship', 'checked', 'shipped', 'delivered', 'canceled', 'cancelled'].includes(val)
+                )
+                    .map((val) => (val === 'cancelled' ? 'canceled' : val))
+            );
+            const baseInvoices = strictCourierInvoices.length > 0 ? strictCourierInvoices : invoices;
+            const visibleInvoices = invoiceStatusFilter.size > 0
+                ? baseInvoices.filter((inv: any) => invoiceStatusFilter.has(String(inv?.shipment_status || '').trim().toLowerCase()))
+                : baseInvoices;
+            if (invoiceStatusFilter.size > 0 && baseInvoices.length > 0 && visibleInvoices.length === 0) {
+                // When the client requests a specific delivery lane (e.g. shipped),
+                // do not leak "in-progress" invoices (e.g. checked) as anonymous orders.
+                return;
+            }
             if (visibleInvoices.length > 0) {
                 visibleInvoices.forEach((inv: any) => {
                     explodedOrders.push({

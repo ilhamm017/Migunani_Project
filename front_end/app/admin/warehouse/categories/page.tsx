@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyPrompt } from '@/lib/notify';
 
 interface CategoryRow {
   id: number;
@@ -196,10 +197,20 @@ export default function InventoryCategoriesPage() {
       ? `Dipakai: ${primaryCount} produk (utama) + ${tagCount} produk (tag)`
       : 'Tidak dipakai produk.';
 
-    const replacementInput = window.prompt(
-      `Hapus kategori "${category.name}"?\n${usageDetail}\n\nJika kategori dipakai, wajib isi ID kategori pengganti.\nKosongkan hanya jika benar-benar tidak dipakai.`,
-      ''
-    );
+    const replacementInput = await notifyPrompt({
+      title: 'Hapus Kategori',
+      message: (
+        <span className="whitespace-pre-wrap">
+          {`Hapus kategori "${category.name}"?\n${usageDetail}\n\nJika kategori dipakai, wajib isi ID kategori pengganti.\nKosongkan hanya jika benar-benar tidak dipakai.`}
+        </span>
+      ),
+      inputLabel: 'ID Kategori Pengganti',
+      placeholder: 'Contoh: 12 (kosongkan jika tidak dipakai)',
+      initialValue: '',
+      confirmLabel: 'Lanjut',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
     if (replacementInput === null) return;
 
     const replacementId = replacementInput.trim() === '' ? undefined : Number(replacementInput.trim());

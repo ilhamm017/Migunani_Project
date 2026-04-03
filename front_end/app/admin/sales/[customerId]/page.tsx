@@ -7,6 +7,7 @@ import { MessageSquare, RefreshCw, ShieldOff, ShieldCheck, Pencil, X, KeyRound, 
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
+import { notifyConfirm } from '@/lib/notify';
 
 type TierType = 'regular' | 'gold' | 'platinum';
 type CustomerDetail = {
@@ -194,7 +195,14 @@ export default function AdminCustomerDetailPage() {
       setError('Password minimal 6 karakter.');
       return;
     }
-    if (!confirm('Reset password customer? Password lama akan diganti.')) return;
+    const ok = await notifyConfirm({
+      title: 'Reset Password',
+      message: 'Reset password customer? Password lama akan diganti.',
+      confirmLabel: 'Reset',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     try {
       setUpdatingPassword(true);
@@ -218,7 +226,14 @@ export default function AdminCustomerDetailPage() {
     const message = nextStatus === 'banned'
       ? `Blokir customer ${selectedCustomer.name || selectedCustomer.whatsapp_number || selectedCustomer.id}?\n\nOrder aktif customer juga akan dibatalkan.`
       : `Aktifkan kembali customer ${selectedCustomer.name || selectedCustomer.whatsapp_number || selectedCustomer.id}?`;
-    if (!confirm(message)) return;
+    const ok = await notifyConfirm({
+      title: nextStatus === 'banned' ? 'Blokir Customer' : 'Aktifkan Customer',
+      message: <span className="whitespace-pre-wrap">{message}</span>,
+      confirmLabel: nextStatus === 'banned' ? 'Blokir' : 'Aktifkan',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     try {
       setProcessingCustomer(true);

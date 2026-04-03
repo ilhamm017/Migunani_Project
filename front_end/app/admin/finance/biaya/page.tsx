@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import FinanceHeader from '@/components/admin/finance/FinanceHeader';
 import FinanceBottomNav from '@/components/admin/finance/FinanceBottomNav';
 import { Plus } from 'lucide-react';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm, notifyPrompt } from '@/lib/notify';
 
 type ExpenseLabel = {
   id: number;
@@ -210,7 +210,14 @@ export default function FinanceExpensePage() {
                 {e.status === 'requested' && (
                   <button
                     onClick={async () => {
-                      if (!confirm('Approve biaya ini?')) return;
+                      const ok = await notifyConfirm({
+                        title: 'Approve Biaya',
+                        message: 'Approve biaya ini?',
+                        confirmLabel: 'Approve',
+                        cancelLabel: 'Batal',
+                        variant: 'warning',
+                      });
+                      if (!ok) return;
                       try {
                         await api.admin.finance.approveExpense(e.id);
                         load();
@@ -227,10 +234,21 @@ export default function FinanceExpensePage() {
                 {e.status === 'approved' && (
                   <button
                     onClick={async () => {
-                      const accId = prompt('Masukkan ID Akun Sumber Dana (cth: 1 untuk Kas, 2 untuk Bank):', '1');
-                      if (!accId) return;
+                      const accId = await notifyPrompt({
+                        title: 'Bayar Biaya',
+                        message: 'Masukkan ID Akun Sumber Dana (cth: 1 untuk Kas, 2 untuk Bank):',
+                        inputLabel: 'ID Akun',
+                        placeholder: 'Contoh: 1',
+                        initialValue: '1',
+                        confirmLabel: 'Bayar',
+                        cancelLabel: 'Batal',
+                        variant: 'info',
+                      });
+                      if (accId === null) return;
+                      const trimmed = accId.trim();
+                      if (!trimmed) return;
                       try {
-                        await api.admin.finance.payExpense(e.id, accId);
+                        await api.admin.finance.payExpense(e.id, trimmed);
                         load();
                       } catch (err) {
                         console.error(err);

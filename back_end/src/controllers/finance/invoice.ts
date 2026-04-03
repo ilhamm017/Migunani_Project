@@ -713,7 +713,9 @@ export const issueInvoiceByItems = asyncWrapper(async (req: Request, res: Respon
             if (!orderItem) return;
             const available = Number(availabilityByOrderItemId.get(reqItem.order_item_id) || 0);
             if (reqItem.qty > available) {
-                validationError = `Qty invoice melebihi alokasi untuk item ${reqItem.order_item_id}.`;
+                const orderId = String(orderItem.order_id || '').trim();
+                const productId = String(orderItem.product_id || '').trim();
+                validationError = `Qty invoice melebihi alokasi untuk item ${reqItem.order_item_id} (order_id=${orderId || '-'}, product_id=${productId || '-'}, requested=${Number(reqItem.qty || 0)}, available=${available}).`;
                 return;
             }
 

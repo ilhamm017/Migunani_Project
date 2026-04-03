@@ -69,8 +69,10 @@ Komponen:
 3) Backend transaction gate: `cd back_end && API_BASE_URL=http://127.0.0.1:5000/api/v1 npm run test:transaction-assurance`
 4) UI smoke E2E (otomasi) untuk halaman yang saat ini masih “PENDING MANUAL” di release gate:
    - `/driver`
+     - Validasi: jika 1 customer punya >1 invoice aktif (mis. split invoice), halaman harus menampilkan semua invoice (count “Invoice” tidak collapse jadi 1).
    - `/driver/orders/[id]`
    - `/admin/finance/*` (minimal COD/settlement area yang dipakai operasional)
+   - `/admin/orders/customer/[customerId]?section=checker` & `?section=pengiriman` (badge “Qty dialokasikan / SKU dialokasikan” harus ikut terhitung, tidak stuck `0`)
    - `/orders/[id]`
    - `/invoices/[invoiceId]` (jika route aktif di UI build terbaru)
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
+import { notifyPrompt } from '@/lib/notify';
 
 interface SupplierRow {
   id: number;
@@ -129,10 +130,20 @@ export default function InventorySuppliersPage() {
   };
 
   const onDeleteSupplier = async (supplier: SupplierRow) => {
-    const replacementInput = window.prompt(
-      `Hapus supplier "${supplier.name}"?\nJika supplier masih dipakai PO, isi ID supplier pengganti.\nKosongkan jika tidak dipakai.`,
-      ''
-    );
+    const replacementInput = await notifyPrompt({
+      title: 'Hapus Supplier',
+      message: (
+        <span className="whitespace-pre-wrap">
+          {`Hapus supplier "${supplier.name}"?\nJika supplier masih dipakai PO, isi ID supplier pengganti.\nKosongkan jika tidak dipakai.`}
+        </span>
+      ),
+      inputLabel: 'ID Supplier Pengganti',
+      placeholder: 'Contoh: 7 (kosongkan jika tidak dipakai)',
+      initialValue: '',
+      confirmLabel: 'Lanjut',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
     if (replacementInput === null) return;
 
     const replacementId = replacementInput.trim() === '' ? undefined : Number(replacementInput.trim());

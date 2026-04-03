@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { notifyAlert } from '@/lib/notify';
+import { notifyAlert, notifyConfirm } from '@/lib/notify';
 
 type ExpenseLabel = {
   id: number;
@@ -87,8 +87,14 @@ export default function ExpenseLabelConfigPage() {
   };
 
   const deleteLabel = async (label: ExpenseLabel) => {
-    const confirmed = confirm(`Hapus label "${label.name}"?`);
-    if (!confirmed) return;
+    const ok = await notifyConfirm({
+      title: 'Hapus Label',
+      message: `Hapus label "${label.name}"?`,
+      confirmLabel: 'Hapus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
 
     try {
       await api.admin.finance.deleteExpenseLabel(label.id);

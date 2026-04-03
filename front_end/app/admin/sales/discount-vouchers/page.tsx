@@ -6,6 +6,7 @@ import { ArrowLeft, Percent, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
+import { notifyConfirm } from '@/lib/notify';
 
 type DiscountVoucher = {
   code: string;
@@ -395,7 +396,14 @@ export default function DiscountVouchersPage() {
   };
 
   const handleDeleteRow = async (code: string) => {
-    if (!confirm(`Hapus voucher "${code}"?`)) return;
+    const ok = await notifyConfirm({
+      title: 'Hapus Voucher',
+      message: `Hapus voucher "${code}"?`,
+      confirmLabel: 'Hapus',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       setProcessingCode(code);
       setError('');

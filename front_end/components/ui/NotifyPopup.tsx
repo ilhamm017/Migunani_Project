@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 
 export type NotifyPopupVariant = 'success' | 'warning' | 'error' | 'info';
@@ -9,10 +9,16 @@ type Props = {
   open: boolean;
   title: string;
   message?: ReactNode;
+  prompt?: {
+    placeholder?: string;
+    initialValue?: string;
+    inputLabel?: string;
+  };
   variant?: NotifyPopupVariant;
   primaryLabel?: string;
   secondaryLabel?: string;
   onPrimary?: () => void;
+  onPrimaryValue?: (value: string) => void;
   onSecondary?: () => void;
   onClose: () => void;
 };
@@ -28,25 +34,53 @@ export default function NotifyPopup({
   open,
   title,
   message,
+  prompt,
   variant = 'info',
   primaryLabel = 'OK',
   secondaryLabel,
   onPrimary,
+  onPrimaryValue,
   onSecondary,
   onClose,
 }: Props) {
+  const [promptValue, setPromptValue] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
+      if (event.key === 'Enter' && prompt) {
+        event.preventDefault();
+        if (onPrimaryValue) {
+          onPrimaryValue(promptValue);
+          onClose();
+          return;
+        }
+        onPrimary?.();
+        onClose();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [onClose, onPrimary, onPrimaryValue, open, prompt, promptValue]);
+
+  useEffect(() => {
+    if (!open) return;
+    const initial = String(prompt?.initialValue ?? '').trim();
+    setPromptValue(initial);
+  }, [open, prompt?.initialValue]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!prompt) return;
+    queueMicrotask(() => inputRef.current?.focus());
+  }, [open, prompt]);
 
   if (!open) return null;
   const meta = VARIANT_META[variant];
   const Icon = meta.icon;
+  const resolvedLabel = String(prompt?.inputLabel || '').trim();
 
   return (
     <div
@@ -86,6 +120,22 @@ export default function NotifyPopup({
           </div>
         ) : null}
 
+        {prompt ? (
+          <div className="mt-3 space-y-2 rounded-2xl bg-white/70 p-3">
+            {resolvedLabel ? (
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">{resolvedLabel}</p>
+            ) : null}
+            <input
+              ref={inputRef}
+              type="text"
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+              placeholder={prompt.placeholder || ''}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-300"
+            />
+          </div>
+        ) : null}
+
         <div className="mt-4 flex gap-2">
           {secondaryLabel ? (
             <button
@@ -102,7 +152,11 @@ export default function NotifyPopup({
           <button
             type="button"
             onClick={() => {
-              onPrimary?.();
+              if (prompt && onPrimaryValue) {
+                onPrimaryValue(promptValue);
+              } else {
+                onPrimary?.();
+              }
               onClose();
             }}
             className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-black"
@@ -114,4 +168,3 @@ export default function NotifyPopup({
     </div>
   );
 }
-

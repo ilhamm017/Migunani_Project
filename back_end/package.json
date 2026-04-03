@@ -32,6 +32,7 @@
     "test:boundary-read": "ts-node src/scripts/regression_boundary_read.ts",
     "test:catalog-stock-sort": "ts-node src/scripts/regression_catalog_search_stock_sort.ts",
     "test:invoice-partial-retur-scope": "ts-node src/scripts/regression_invoice_partial_retur_scope.ts",
+    "test:driver-orders-multi-invoice": "ts-node src/scripts/regression_driver_orders_multi_invoice.ts",
     "test:upload-policy": "ts-node src/scripts/regression_upload_policy.ts",
     "test:transaction-assurance": "ts-node src/scripts/transaction_assurance.ts",
     "record:customer-transaction": "ts-node src/scripts/record_customer_transaction.ts",

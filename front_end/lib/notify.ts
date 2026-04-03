@@ -8,10 +8,17 @@ export type NotifyOpenOptions = {
   variant?: NotifyVariant;
   title: string;
   message?: ReactNode;
+  prompt?: {
+    placeholder?: string;
+    initialValue?: string;
+    inputLabel?: string;
+  };
   primaryLabel?: string;
   secondaryLabel?: string;
   onPrimary?: () => void;
+  onPrimaryValue?: (value: string) => void;
   onSecondary?: () => void;
+  onClose?: () => void;
   autoCloseMs?: number;
 };
 
@@ -41,6 +48,82 @@ export const notifyWarning = (message: ReactNode, title = 'Perhatian') =>
 
 export const notifyInfo = (message: ReactNode, title = 'Info', autoCloseMs?: number) =>
   emitNotify({ variant: 'info', title, message, ...(autoCloseMs ? { autoCloseMs } : {}) });
+
+export const notifyConfirm = (options: {
+  title: string;
+  message?: ReactNode;
+  variant?: NotifyVariant;
+  confirmLabel?: string;
+  cancelLabel?: string;
+}): Promise<boolean> => {
+  return new Promise((resolve) => {
+    let settled = false;
+    emitNotify({
+      variant: options.variant ?? 'warning',
+      title: options.title,
+      message: options.message,
+      primaryLabel: options.confirmLabel ?? 'Ya',
+      secondaryLabel: options.cancelLabel ?? 'Batal',
+      onPrimary: () => {
+        if (settled) return;
+        settled = true;
+        resolve(true);
+      },
+      onSecondary: () => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      },
+      onClose: () => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      },
+    });
+  });
+};
+
+export const notifyPrompt = (options: {
+  title: string;
+  message?: ReactNode;
+  variant?: NotifyVariant;
+  placeholder?: string;
+  initialValue?: string;
+  inputLabel?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+}): Promise<string | null> => {
+  return new Promise((resolve) => {
+    let settled = false;
+    emitNotify({
+      variant: options.variant ?? 'info',
+      title: options.title,
+      message: options.message,
+      prompt: {
+        placeholder: options.placeholder,
+        initialValue: options.initialValue,
+        inputLabel: options.inputLabel,
+      },
+      primaryLabel: options.confirmLabel ?? 'OK',
+      secondaryLabel: options.cancelLabel ?? 'Batal',
+      onPrimaryValue: (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(String(value ?? ''));
+      },
+      onSecondary: () => {
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      },
+      onClose: () => {
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      },
+    });
+  });
+};
 
 const classifyAlertVariant = (message: string): NotifyVariant => {
   const normalized = message.toLowerCase();

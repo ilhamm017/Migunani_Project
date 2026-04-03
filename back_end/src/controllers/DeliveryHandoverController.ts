@@ -212,36 +212,45 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
 
         for (const order of orders) {
             const prevStatus = String(order.status || '');
-            if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
-                throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
+            const prevStatusKey = prevStatus.trim().toLowerCase();
+
+            // Some flows can leave the overall order already in the delivery lane (e.g. previously handed over),
+            // while a new invoice/checking is being processed. In that case, do not move the order backwards
+            // from shipped -> checked; keep it as-is and only record the warehouse checking event.
+            const shouldSkipPassStatusUpdate = !shouldFail && prevStatusKey === 'shipped';
+
+            if (!shouldSkipPassStatusUpdate) {
+                if (!isOrderTransitionAllowed(prevStatus, nextOrderStatus)) {
+                    throw new CustomError(`Transisi status tidak diizinkan: '${prevStatus}' -> '${nextOrderStatus}'`, 409);
+                }
+
+                await order.update({ status: nextOrderStatus }, { transaction: t });
+                await recordOrderStatusChanged({
+                    transaction: t,
+                    order_id: String(order.id),
+                    invoice_id: invoiceId,
+                    from_status: prevStatus,
+                    to_status: nextOrderStatus,
+                    actor_user_id: actorId,
+                    actor_role: actorRole,
+                    reason: 'delivery_handover_check',
+                });
+
+                await emitOrderStatusChanged({
+                    order_id: String(order.id),
+                    from_status: prevStatus,
+                    to_status: nextOrderStatus,
+                    source: String(order.source || ''),
+                    payment_method: String(invoice.payment_method || ''),
+                    courier_id: courierId || String(order.courier_id || ''),
+                    triggered_by_role: String(req.user?.role || ''),
+                    target_roles: shouldFail ? ['admin_gudang', 'super_admin', 'kasir'] : ['admin_gudang', 'super_admin', 'driver'],
+                    target_user_ids: courierId ? [courierId] : []
+                }, {
+                    transaction: t,
+                    requestContext: `delivery_handover_check_status_changed:${invoiceId}:${order.id}`
+                });
             }
-
-            await order.update({ status: nextOrderStatus }, { transaction: t });
-            await recordOrderStatusChanged({
-                transaction: t,
-                order_id: String(order.id),
-                invoice_id: invoiceId,
-                from_status: prevStatus,
-                to_status: nextOrderStatus,
-                actor_user_id: actorId,
-                actor_role: actorRole,
-                reason: 'delivery_handover_check',
-            });
-
-            await emitOrderStatusChanged({
-                order_id: String(order.id),
-                from_status: prevStatus,
-                to_status: nextOrderStatus,
-                source: String(order.source || ''),
-                payment_method: String(invoice.payment_method || ''),
-                courier_id: courierId || String(order.courier_id || ''),
-                triggered_by_role: String(req.user?.role || ''),
-                target_roles: shouldFail ? ['admin_gudang', 'super_admin', 'kasir'] : ['admin_gudang', 'super_admin', 'driver'],
-                target_user_ids: courierId ? [courierId] : []
-            }, {
-                transaction: t,
-                requestContext: `delivery_handover_check_status_changed:${invoiceId}:${order.id}`
-            });
 
             await recordOrderEvent({
                 transaction: t,
@@ -252,6 +261,7 @@ export const checkInvoice = asyncWrapper(async (req: Request, res: Response) => 
                     handover_id: handover.id,
                     result: shouldFail ? 'fail' : 'pass',
                     has_mismatch: hasMismatch,
+                    skipped_status_update: shouldSkipPassStatusUpdate,
                 },
                 actor_user_id: actorId,
                 actor_role: actorRole,

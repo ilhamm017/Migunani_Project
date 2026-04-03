@@ -207,7 +207,9 @@ export const useOrderStatusNotifications = ({
     if (!normalizedRole) return 0;
     if (normalizedRole === 'driver') {
       try {
-        const res = await api.driver.getOrders();
+        // Driver "tugas baru" should reflect handover-ready deliveries only.
+        // Tasks still in warehouse checking (checked/ready_to_ship) should not count.
+        const res = await api.driver.getOrders({ status: 'shipped' });
         return Array.isArray(res.data) ? res.data.length : 0;
       } catch {
         return 0;
