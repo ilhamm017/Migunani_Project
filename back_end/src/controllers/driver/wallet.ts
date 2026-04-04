@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem } from '../../models';
+import { Order, OrderItem, Invoice, Product, OrderIssue, sequelize, User, CustomerProfile, Retur, CodCollection, InvoiceItem, DriverBalanceAdjustment } from '../../models';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
 import { emitAdminRefreshBadges, emitOrderStatusChanged, emitReturStatusChanged } from '../../utils/orderNotification';
 import { attachInvoicesToOrders, findLatestInvoiceByOrderId, findOrderIdsByInvoiceId } from '../../utils/invoiceLookup';
@@ -83,11 +83,30 @@ export const getDriverWallet = asyncWrapper(async (req: Request, res: Response) 
         const exposure = await calculateDriverCodExposure(String(userId));
         const displayDebt = exposure.exposure > 0 ? exposure.exposure : totalCash;
 
+        const adjustments = await DriverBalanceAdjustment.findAll({
+            where: { driver_id: userId, status: 'open' }
+        });
+        const adjustmentEntries = adjustments.map((row: any) => ({
+            id: String(row.id || ''),
+            direction: String(row.direction || '').trim(),
+            reason: String(row.reason || '').trim(),
+            amount: Math.round(Number(row.amount || 0) * 100) / 100,
+            note: typeof row.note === 'string' ? row.note : null,
+            created_at: row.createdAt ? new Date(String(row.createdAt)).toISOString() : null,
+        }));
+        const outstandingAdjustment = adjustmentEntries
+            .filter((entry) => entry.direction === 'debt')
+            .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+
         res.json({
             driver_id: userId,
             cash_on_hand: displayDebt,
             debt: displayDebt,
             cod_pending_calculated: totalCash,
+            balance_adjustments: {
+                total_outstanding: Math.round(outstandingAdjustment * 100) / 100,
+                entries: adjustmentEntries,
+            },
             orders: details
         });
 

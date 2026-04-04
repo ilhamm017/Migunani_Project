@@ -48,6 +48,57 @@ type HistoryReturHandoverRow = {
   items: HistoryHandoverItemRow[];
 };
 
+type DriverDepositCodInvoiceRow = {
+  invoice_id: string;
+  invoice_number: string;
+  expected_total: number;
+  created_at: string | null;
+  order_ids: string[];
+  customer_names: string[];
+  requires_retur_handover: boolean;
+  pending_handover_id: number | null;
+};
+
+type DriverDepositHandoverRow = {
+  handover_id: number;
+  invoice_id: string;
+  status: 'submitted' | 'received' | string;
+  submitted_at: string | null;
+  note: string | null;
+  items: Array<{
+    retur_id: string;
+    qty: number;
+    product?: { id: string; name: string; sku: string; unit: string } | null;
+  }>;
+};
+
+type DriverBalanceAdjustmentEntry = {
+  id: string;
+  direction: 'debt' | 'credit' | string;
+  reason: string;
+  amount: number;
+  note: string | null;
+  created_at: string | null;
+};
+
+type DriverBalanceAdjustmentSummary = {
+  total_outstanding: number;
+  entries: DriverBalanceAdjustmentEntry[];
+};
+
+type DriverDepositListRow = {
+  driver: DriverOption | null;
+  cod_invoices_pending: DriverDepositCodInvoiceRow[];
+  retur_handovers_pending: DriverDepositHandoverRow[];
+  balance_adjustments?: DriverBalanceAdjustmentSummary | null;
+  totals: {
+    cod_invoice_count: number;
+    cod_expected_total: number;
+    handover_count: number;
+    retur_item_count: number;
+  };
+};
+
 const formatRp = (value: number) => new Intl.NumberFormat('id-ID').format(Number(value || 0));
 
 const formatDateTime = (iso: string | null) => {
@@ -68,6 +119,7 @@ export default function AdminRiwayatSetoranDriverPage() {
 
   const [drivers, setDrivers] = useState<DriverOption[]>([]);
   const [driverId, setDriverId] = useState<string>('');
+  const [balanceAdjustmentTotals, setBalanceAdjustmentTotals] = useState<Record<string, number>>({});
 
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
@@ -131,24 +183,34 @@ export default function AdminRiwayatSetoranDriverPage() {
   const loadDrivers = useCallback(async () => {
     try {
       const res = await api.admin.driverDeposit.getList();
-      const list = Array.isArray(res.data) ? (res.data as any[]) : [];
+      const list = Array.isArray(res.data) ? (res.data as DriverDepositListRow[]) : [];
       const opts: DriverOption[] = list
         .map((row) => row?.driver)
-        .filter(Boolean)
+        .filter((d): d is DriverOption => Boolean(d))
         .map((d) => ({
           id: String(d.id || ''),
           name: String(d.name || 'Driver'),
           whatsapp_number: d.whatsapp_number ? String(d.whatsapp_number) : null,
         }))
         .filter((d) => d.id);
-      // unique by id
       const map = new Map<string, DriverOption>();
       opts.forEach((d) => { if (!map.has(d.id)) map.set(d.id, d); });
       setDrivers(Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)));
+
+      const totals: Record<string, number> = {};
+      list.forEach((row) => {
+        const driver = row?.driver;
+        const outstanding = Number(row?.balance_adjustments?.total_outstanding || 0);
+        if (driver && outstanding > 0) {
+          totals[String(driver.id)] = Math.round(outstanding * 100) / 100;
+        }
+      });
+      setBalanceAdjustmentTotals(totals);
     } catch (err: any) {
       const message = String(err?.response?.data?.message || err?.message || 'Gagal memuat driver.');
       setErrorMsg(message);
       setDrivers([]);
+      setBalanceAdjustmentTotals({});
     }
   }, []);
 
@@ -206,6 +268,16 @@ export default function AdminRiwayatSetoranDriverPage() {
       } catch { }
     })();
   }, [allowed, bumpLastSeenFromHistoryData]);
+
+  const outstandingDrivers = useMemo(() => {
+    return drivers
+      .map((driver) => ({
+        ...driver,
+        outstanding: Number(balanceAdjustmentTotals[driver.id] || 0),
+      }))
+      .filter((driver) => driver.id && Number(driver.outstanding || 0) > 0)
+      .sort((a, b) => Number(b.outstanding || 0) - Number(a.outstanding || 0));
+  }, [drivers, balanceAdjustmentTotals]);
 
   if (!allowed) return null;
 
@@ -276,6 +348,27 @@ export default function AdminRiwayatSetoranDriverPage() {
           />
           Tampilkan handover yang belum diterima (submitted)
         </label>
+
+        {outstandingDrivers.length > 0 && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-black text-rose-600">Setoran Driver Belum Disettle</p>
+              <span className="text-[10px] font-black uppercase tracking-widest text-rose-600">
+                {outstandingDrivers.length} driver
+              </span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {outstandingDrivers.map((driver) => (
+                <div key={driver.id} className="rounded-2xl border border-rose-100 bg-white px-3 py-2">
+                  <p className="text-sm font-black text-slate-900">{driver.name}</p>
+                  <p className="text-xs font-semibold text-rose-700">
+                    Setoran tertinggal: Rp {formatRp(driver.outstanding)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <button

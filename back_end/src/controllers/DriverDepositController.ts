@@ -285,16 +285,48 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         handoversByDriverId.set(driverId, list);
     });
 
+    const adjustments = await DriverBalanceAdjustment.findAll({
+        where: { status: 'open' },
+        order: [['createdAt', 'DESC']],
+    });
+    const adjustmentsByDriverId = new Map<string, any[]>();
+    adjustments.forEach((row: any) => {
+        const driverId = String(row?.driver_id || '').trim();
+        if (!driverId) return;
+        const list = adjustmentsByDriverId.get(driverId) || [];
+        list.push(row);
+        adjustmentsByDriverId.set(driverId, list);
+    });
+
     const response: any[] = [];
     const driverIds = new Set<string>([
         ...Array.from(codRowsByDriverId.keys()),
         ...Array.from(handoversByDriverId.keys()),
+        ...Array.from(adjustmentsByDriverId.keys()),
     ]);
     driverIds.forEach((driverId) => {
         const d = driverById.get(driverId);
         if (!d) return;
         const codRows = (codRowsByDriverId.get(driverId) || []).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
         const hRows = (handoversByDriverId.get(driverId) || []).sort((a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')));
+        const adjustmentRows = adjustmentsByDriverId.get(driverId) || [];
+        const adjustmentEntries = adjustmentRows.map((adj: any) => {
+            const amount = Math.round(toNumber(adj.amount) * 100) / 100;
+            return {
+                id: String(adj.id || ''),
+                direction: String(adj.direction || '').trim(),
+                reason: String(adj.reason || '').trim(),
+                amount,
+                note: typeof adj.note === 'string' ? adj.note : null,
+                created_at: adj.createdAt ? new Date(String(adj.createdAt)).toISOString() : null,
+            };
+        });
+        const debtEntries = adjustmentEntries.filter((entry) => entry.direction === 'debt');
+        const totalOutstanding = debtEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+        const balanceAdjustments = adjustmentEntries.length > 0 ? {
+            total_outstanding: Math.round(totalOutstanding * 100) / 100,
+            entries: adjustmentEntries,
+        } : null;
         response.push({
             driver: {
                 id: String(d.id),
@@ -304,6 +336,7 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
             },
             cod_invoices_pending: codRows,
             retur_handovers_pending: hRows,
+            balance_adjustments: balanceAdjustments,
             totals: {
                 cod_invoice_count: codRows.length,
                 cod_expected_total: Math.round(codRows.reduce((sum, r) => sum + toNumber(r.expected_total), 0) * 100) / 100,
@@ -752,6 +785,19 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                 settled_at: new Date()
             }, { transaction: t });
             settlementId = String(settlement.id);
+
+            if (codDiff !== 0) {
+                const adjustment = await DriverBalanceAdjustment.create({
+                    driver_id: driverId,
+                    direction: codDiff < 0 ? 'debt' : 'credit',
+                    amount: Math.round(Math.abs(codDiff) * 100) / 100,
+                    reason: codDiff < 0 ? 'cod_shortage' : 'cod_surplus',
+                    status: 'open',
+                    note: `COD settlement #${settlement.id} diff ${codDiff}`,
+                    created_by: actor.id,
+                }, { transaction: t });
+                createdAdjustment = adjustment;
+            }
 
             // Mark collections settled (if any)
             const collections = await CodCollection.findAll({

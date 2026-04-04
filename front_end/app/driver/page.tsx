@@ -50,6 +50,8 @@ export default function DriverTaskPage() {
   const [returs, setReturs] = useState<any[]>([]);
   const [deliveryReturs, setDeliveryReturs] = useState<any[]>([]);
   const [search, setSearch] = useState('');
+  const outstandingAdjustmentAmount = Number(wallet?.balance_adjustments?.total_outstanding || 0);
+  const displayedUnsettledAmount = outstandingAdjustmentAmount > 0 ? outstandingAdjustmentAmount : Number(wallet?.cash_on_hand || 0);
   const { user } = useAuthStore();
   const canMonitorReturTasks = ['driver', 'super_admin'].includes(String(user?.role || ''));
   const {
@@ -372,10 +374,15 @@ export default function DriverTaskPage() {
         <div className="bg-slate-900 rounded-[32px] p-6 text-white shadow-xl shadow-slate-200 relative overflow-hidden">
           <div className="relative z-10">
             <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mb-1">Setoran COD Belum Disettle</p>
-            <h3 className="text-3xl font-black">Rp {(wallet?.cash_on_hand || 0).toLocaleString('id-ID')}</h3>
+            <h3 className="text-3xl font-black">Rp {displayedUnsettledAmount.toLocaleString('id-ID')}</h3>
             <p className="text-[10px] mt-3 bg-white/10 inline-block px-2 py-1 rounded-lg">
               Nilai ini menunjukkan COD yang masih dibawa driver atau masih menunggu settlement finance.
             </p>
+            {outstandingAdjustmentAmount > 0 && (
+              <p className="text-[10px] mt-2 text-rose-200 font-black uppercase tracking-wider">
+                Sisa setoran tertinggal: Rp {outstandingAdjustmentAmount.toLocaleString('id-ID')}
+              </p>
+            )}
           </div>
           <Wallet size={100} className="absolute -right-6 -bottom-6 opacity-10" />
         </div>
