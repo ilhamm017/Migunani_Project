@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductRow } from '../inventory/types';
 import { api } from '@/lib/api';
 import { normalizeProductImageUrl } from '@/lib/image';
+import { useAuthStore } from '@/store/authStore';
 import { Camera, ExternalLink, History, Package, Save, X } from 'lucide-react';
 
 interface WarehouseDetailProps {
@@ -96,6 +97,26 @@ interface StockHistoryRow {
     };
     hint?: string;
 }
+
+type CostLayerAggRow = {
+    unit_cost: number;
+    qty_on_hand: number;
+    qty_reserved_total: number;
+    qty_available: number;
+};
+
+type InventoryBatchRow = {
+    id: string;
+    product_id: string;
+    unit_cost: number;
+    qty_on_hand: number;
+    qty_reserved: number;
+    source_type: string | null;
+    source_id: string | null;
+    note: string | null;
+    createdAt: string;
+    updatedAt: string;
+};
 
 const getErrorMessage = (error: unknown, fallback: string) => {
     if (typeof error === 'object' && error !== null) {
@@ -492,6 +513,9 @@ const MultiSelectCombobox = ({
 };
 
 export default function WarehouseDetailPanel({ product, categories, onClose, onProductUpdated, mode = 'info', onRequestEdit }: WarehouseDetailProps) {
+    const user = useAuthStore((state) => state.user);
+    const canManageCostLayers = String(user?.role || '').trim() === 'super_admin';
+
     const [mutations, setMutations] = useState<MutationRow[]>([]);
     const [loadingMutations, setLoadingMutations] = useState(false);
     const [stockHistory, setStockHistory] = useState<StockHistoryRow[]>([]);
@@ -505,6 +529,18 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const [vehicleOptions, setVehicleOptions] = useState<string[]>([]);
     const [loadingVehicleOptions, setLoadingVehicleOptions] = useState(false);
+    const [costLayers, setCostLayers] = useState<CostLayerAggRow[]>([]);
+    const [costBatches, setCostBatches] = useState<InventoryBatchRow[]>([]);
+    const [loadingCostLayers, setLoadingCostLayers] = useState(false);
+    const [costLayerError, setCostLayerError] = useState<string | null>(null);
+    const [costLayerModal, setCostLayerModal] = useState<null | { mode: 'create' } | { mode: 'edit'; batch: InventoryBatchRow }>(null);
+    const [costLayerForm, setCostLayerForm] = useState<{ qty: string; unit_cost: string; note: string; merge_same_unit_cost: boolean; qty_on_hand: string }>({
+        qty: '1',
+        unit_cost: '',
+        note: '',
+        merge_same_unit_cost: true,
+        qty_on_hand: '0',
+    });
 
     useEffect(() => {
         if (!product) {
@@ -514,6 +550,9 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             setAllocationRows([]);
             setAllocationSummary({ totalAllocated: 0, openAllocated: 0, orderCount: 0 });
             setAllocationError(null);
+            setCostLayers([]);
+            setCostBatches([]);
+            setCostLayerError(null);
             return;
         }
         setForm(toFormState(product));
@@ -622,6 +661,119 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
             active = false;
         };
     }, [product?.id]);
+
+    const loadCostLayers = useCallback(async () => {
+        if (!product?.id) {
+            setCostLayers([]);
+            setCostBatches([]);
+            return;
+        }
+        setLoadingCostLayers(true);
+        setCostLayerError(null);
+        try {
+            const res = await api.admin.inventory.getCostLayers(product.id, { include_batches: true });
+            const layersRaw = Array.isArray(res.data?.layers) ? res.data.layers : [];
+            const mappedLayers: CostLayerAggRow[] = layersRaw.map((row: any) => ({
+                unit_cost: Number(row?.unit_cost ?? 0),
+                qty_on_hand: Number(row?.qty_on_hand ?? 0),
+                qty_reserved_total: Number(row?.qty_reserved_total ?? 0),
+                qty_available: Number(row?.qty_available ?? 0),
+            }));
+            const batchesRaw = Array.isArray(res.data?.batches) ? res.data.batches : [];
+            const mappedBatches: InventoryBatchRow[] = batchesRaw.map((row: any) => ({
+                id: String(row?.id ?? ''),
+                product_id: String(row?.product_id ?? ''),
+                unit_cost: Number(row?.unit_cost ?? 0),
+                qty_on_hand: Number(row?.qty_on_hand ?? 0),
+                qty_reserved: Number(row?.qty_reserved ?? 0),
+                source_type: row?.source_type ? String(row.source_type) : null,
+                source_id: row?.source_id ? String(row.source_id) : null,
+                note: row?.note ? String(row.note) : null,
+                createdAt: String(row?.createdAt ?? ''),
+                updatedAt: String(row?.updatedAt ?? ''),
+            })).filter((b: InventoryBatchRow) => Boolean(b.id));
+
+            setCostLayers(mappedLayers);
+            setCostBatches(mappedBatches);
+        } catch (error) {
+            setCostLayers([]);
+            setCostBatches([]);
+            setCostLayerError(getErrorMessage(error, 'Gagal memuat layer HPP.'));
+        } finally {
+            setLoadingCostLayers(false);
+        }
+    }, [product?.id]);
+
+    useEffect(() => {
+        void loadCostLayers();
+    }, [loadCostLayers]);
+
+    const openCreateCostLayer = useCallback(() => {
+        setCostLayerForm({
+            qty: '1',
+            unit_cost: '',
+            note: '',
+            merge_same_unit_cost: true,
+            qty_on_hand: '0',
+        });
+        setCostLayerModal({ mode: 'create' });
+    }, []);
+
+    const openEditCostLayer = useCallback((batch: InventoryBatchRow) => {
+        setCostLayerForm({
+            qty: '1',
+            unit_cost: String(Number(batch.unit_cost || 0)),
+            note: String(batch.note || ''),
+            merge_same_unit_cost: true,
+            qty_on_hand: String(Number(batch.qty_on_hand || 0)),
+        });
+        setCostLayerModal({ mode: 'edit', batch });
+    }, []);
+
+    const submitCostLayer = useCallback(async () => {
+        if (!product?.id || !costLayerModal) return;
+        try {
+            if (costLayerModal.mode === 'create') {
+                const qty = Number(costLayerForm.qty);
+                const unitCost = Number(costLayerForm.unit_cost);
+                const note = costLayerForm.note.trim();
+                await api.admin.inventory.createCostLayerBatch(product.id, {
+                    qty: Number.isFinite(qty) ? Math.trunc(qty) : 0,
+                    unit_cost: unitCost,
+                    note: note || undefined,
+                    merge_same_unit_cost: costLayerForm.merge_same_unit_cost,
+                });
+                setFeedback({ type: 'success', message: 'Layer HPP berhasil dibuat.' });
+            } else {
+                const unitCost = Number(costLayerForm.unit_cost);
+                const qtyOnHand = Number(costLayerForm.qty_on_hand);
+                const note = costLayerForm.note.trim();
+                await api.admin.inventory.updateCostLayerBatch(costLayerModal.batch.id, {
+                    unit_cost: Number.isFinite(unitCost) ? unitCost : undefined,
+                    qty_on_hand: Number.isFinite(qtyOnHand) ? Math.max(0, Math.trunc(qtyOnHand)) : undefined,
+                    note: note,
+                });
+                setFeedback({ type: 'success', message: 'Layer HPP berhasil diperbarui.' });
+            }
+            setCostLayerModal(null);
+            await loadCostLayers();
+        } catch (error) {
+            setFeedback({ type: 'error', message: getErrorMessage(error, 'Gagal menyimpan layer HPP.') });
+        }
+    }, [product?.id, costLayerModal, costLayerForm, loadCostLayers]);
+
+    const deleteCostLayer = useCallback(async (batch: InventoryBatchRow) => {
+        if (!canManageCostLayers) return;
+        const ok = window.confirm(`Hapus batch #${batch.id}? (qty_on_hand=${batch.qty_on_hand}, reserved=${batch.qty_reserved})`);
+        if (!ok) return;
+        try {
+            await api.admin.inventory.deleteCostLayerBatch(batch.id);
+            setFeedback({ type: 'success', message: 'Batch berhasil dihapus.' });
+            await loadCostLayers();
+        } catch (error) {
+            setFeedback({ type: 'error', message: getErrorMessage(error, 'Gagal menghapus batch.') });
+        }
+    }, [canManageCostLayers, loadCostLayers]);
 
     const categoryDisplay = useMemo(() => {
         if (!form?.category_id) return '';
@@ -1117,6 +1269,133 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                     </div>
                 </section>
 
+                {canManageCostLayers && (
+                    <section className="space-y-2">
+                        <h3 className="font-bold text-slate-900 text-sm flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-2">
+                                <Package size={14} className="text-slate-500" />
+                                Layer HPP (Batch)
+                            </span>
+                            <button
+                                type="button"
+                                onClick={openCreateCostLayer}
+                                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-black text-white hover:bg-emerald-700"
+                            >
+                                Tambah Layer
+                            </button>
+                        </h3>
+
+                        <div className="border border-slate-200 rounded-xl overflow-hidden text-xs bg-white">
+                            {loadingCostLayers ? (
+                                <div className="p-4 text-center text-slate-400 animate-pulse">Memuat layer HPP...</div>
+                            ) : costLayerError ? (
+                                <div className="p-4 text-center text-rose-600">{costLayerError}</div>
+                            ) : (
+                                <>
+                                    <div className="px-3 py-2 border-b border-slate-200 bg-slate-50">
+                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Ringkasan per Harga</p>
+                                    </div>
+                                    {costLayers.length === 0 ? (
+                                        <div className="p-4 text-center text-slate-400 italic">Belum ada batch HPP.</div>
+                                    ) : (
+                                        <table className="w-full text-left">
+                                            <thead className="bg-white text-slate-500 font-bold text-[10px] uppercase">
+                                                <tr>
+                                                    <th className="px-3 py-2">Unit Cost</th>
+                                                    <th className="px-3 py-2 text-right">On Hand</th>
+                                                    <th className="px-3 py-2 text-right">Reserved</th>
+                                                    <th className="px-3 py-2 text-right">Available</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {costLayers.map((row) => (
+                                                    <tr key={String(row.unit_cost)} className="hover:bg-slate-50/50">
+                                                        <td className="px-3 py-2 font-mono font-bold text-slate-800">
+                                                            Rp {Number(row.unit_cost || 0).toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono font-bold text-slate-700">
+                                                            {Number(row.qty_on_hand || 0)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono font-bold text-amber-700">
+                                                            {Number(row.qty_reserved_total || 0)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">
+                                                            {Number(row.qty_available || 0)}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    )}
+
+                                    <div className="px-3 py-2 border-t border-slate-200 bg-slate-50">
+                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Daftar Batch</p>
+                                    </div>
+                                    {costBatches.length === 0 ? (
+                                        <div className="p-4 text-center text-slate-400 italic">Tidak ada batch.</div>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="min-w-[700px] w-full text-left">
+                                                <thead className="bg-white text-slate-500 font-bold text-[10px] uppercase">
+                                                    <tr>
+                                                        <th className="px-3 py-2">Batch</th>
+                                                        <th className="px-3 py-2">Unit Cost</th>
+                                                        <th className="px-3 py-2 text-right">On Hand</th>
+                                                        <th className="px-3 py-2 text-right">Reserved</th>
+                                                        <th className="px-3 py-2">Source</th>
+                                                        <th className="px-3 py-2">Note</th>
+                                                        <th className="px-3 py-2 text-right">Aksi</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {costBatches.map((b) => {
+                                                        const canDelete = Number(b.qty_on_hand || 0) === 0 && Number(b.qty_reserved || 0) === 0;
+                                                        const blocked = Number(b.qty_reserved || 0) > 0;
+                                                        return (
+                                                            <tr key={b.id} className="hover:bg-slate-50/50">
+                                                                <td className="px-3 py-2 font-mono text-slate-700">#{b.id}</td>
+                                                                <td className="px-3 py-2 font-mono font-bold text-slate-800">Rp {Number(b.unit_cost || 0).toLocaleString('id-ID')}</td>
+                                                                <td className="px-3 py-2 text-right font-mono font-bold text-slate-700">{Number(b.qty_on_hand || 0)}</td>
+                                                                <td className="px-3 py-2 text-right font-mono font-bold text-amber-700">{Number(b.qty_reserved || 0)}</td>
+                                                                <td className="px-3 py-2 text-slate-500 truncate max-w-[140px]" title={[b.source_type, b.source_id].filter(Boolean).join(' / ') || undefined}>
+                                                                    {[b.source_type, b.source_id].filter(Boolean).join(' / ') || '—'}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-slate-500 truncate max-w-[180px]" title={b.note || undefined}>{b.note || '—'}</td>
+                                                                <td className="px-3 py-2 text-right">
+                                                                    <div className="inline-flex items-center gap-2">
+                                                                        <button
+                                                                            type="button"
+                                                                            disabled={blocked}
+                                                                            onClick={() => openEditCostLayer(b)}
+                                                                            className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase ${blocked ? 'border-slate-200 text-slate-300' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                                                                            title={blocked ? 'Tidak bisa edit karena ada reservasi' : 'Edit batch'}
+                                                                        >
+                                                                            Edit
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            disabled={!canDelete}
+                                                                            onClick={() => deleteCostLayer(b)}
+                                                                            className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase ${canDelete ? 'border-rose-200 text-rose-700 hover:bg-rose-50' : 'border-slate-200 text-slate-300'}`}
+                                                                            title={canDelete ? 'Hapus batch' : 'Hanya bisa hapus jika qty_on_hand=0 dan reserved=0'}
+                                                                        >
+                                                                            Hapus
+                                                                        </button>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </section>
+                )}
+
                 <section className="space-y-2">
                     <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
                         <History size={14} className="text-slate-500" />
@@ -1255,6 +1534,105 @@ export default function WarehouseDetailPanel({ product, categories, onClose, onP
                     </div>
                 </section>
             </div>
+
+            {canManageCostLayers && costLayerModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4">
+                    <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+                        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-widest text-slate-400">Layer HPP</p>
+                                <p className="text-sm font-black text-slate-900">
+                                    {costLayerModal.mode === 'create' ? 'Tambah Layer' : `Edit Batch #${costLayerModal.batch.id}`}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCostLayerModal(null)}
+                                className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+                                title="Tutup"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-4 space-y-3">
+                            {costLayerModal.mode === 'create' && (
+                                <label className="block">
+                                    <span className="text-[11px] text-slate-500 font-semibold">Qty</span>
+                                    <input
+                                        value={costLayerForm.qty}
+                                        onChange={(e) => setCostLayerForm((prev) => ({ ...prev, qty: e.target.value }))}
+                                        inputMode="numeric"
+                                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500"
+                                    />
+                                </label>
+                            )}
+
+                            {costLayerModal.mode === 'edit' && (
+                                <label className="block">
+                                    <span className="text-[11px] text-slate-500 font-semibold">Qty On Hand</span>
+                                    <input
+                                        value={costLayerForm.qty_on_hand}
+                                        onChange={(e) => setCostLayerForm((prev) => ({ ...prev, qty_on_hand: e.target.value }))}
+                                        inputMode="numeric"
+                                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500"
+                                    />
+                                    <p className="mt-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                                        Catatan: edit diblok jika batch punya reservasi.
+                                    </p>
+                                </label>
+                            )}
+
+                            <label className="block">
+                                <span className="text-[11px] text-slate-500 font-semibold">Unit Cost</span>
+                                <input
+                                    value={costLayerForm.unit_cost}
+                                    onChange={(e) => setCostLayerForm((prev) => ({ ...prev, unit_cost: e.target.value }))}
+                                    inputMode="decimal"
+                                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500"
+                                />
+                            </label>
+
+                            <label className="block">
+                                <span className="text-[11px] text-slate-500 font-semibold">Note</span>
+                                <input
+                                    value={costLayerForm.note}
+                                    onChange={(e) => setCostLayerForm((prev) => ({ ...prev, note: e.target.value }))}
+                                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500"
+                                />
+                            </label>
+
+                            {costLayerModal.mode === 'create' && (
+                                <label className="flex items-center gap-2 text-xs text-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={costLayerForm.merge_same_unit_cost}
+                                        onChange={(e) => setCostLayerForm((prev) => ({ ...prev, merge_same_unit_cost: e.target.checked }))}
+                                    />
+                                    Gabung jika harga sama (tidak buat layer baru)
+                                </label>
+                            )}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 bg-slate-50">
+                            <button
+                                type="button"
+                                onClick={() => setCostLayerModal(null)}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void submitCostLayer()}
+                                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+                            >
+                                Simpan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -60,6 +60,9 @@ router.post('/admin/inventory/mutation', authenticateToken, authorizeRoles('supe
 router.get('/admin/inventory/mutation/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang'), InventoryController.getProductMutations);
 router.get('/admin/inventory/stock-history/:product_id', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getProductStockHistory);
 router.get('/admin/inventory/cost-layers/:productId', authenticateToken, authorizeRoles('super_admin', 'admin_gudang', 'admin_finance', 'kasir'), InventoryController.getCostLayersByProduct);
+router.post('/admin/inventory/cost-layers/:productId/batches', authenticateToken, authorizeRoles('super_admin'), InventoryController.createCostLayerBatch);
+router.patch('/admin/inventory/cost-layers/batches/:batchId', authenticateToken, authorizeRoles('super_admin'), InventoryController.updateCostLayerBatch);
+router.delete('/admin/inventory/cost-layers/batches/:batchId', authenticateToken, authorizeRoles('super_admin'), InventoryController.deleteCostLayerBatch);
 
 /**
  * Inbound Gudang (Receipt)

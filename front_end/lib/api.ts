@@ -585,6 +585,16 @@ export const api = {
             createMutation: (data: JsonRecord) => apiClient.post('/admin/inventory/mutation', data),
             getCostLayers: (productId: string, params?: { include_batches?: boolean; order_id?: string }) =>
                 apiClient.get(`/admin/inventory/cost-layers/${productId}`, { params }),
+            createCostLayerBatch: (
+                productId: string,
+                data: { qty: number; unit_cost: number; note?: string; merge_same_unit_cost?: boolean }
+            ) => apiClient.post(`/admin/inventory/cost-layers/${productId}/batches`, data),
+            updateCostLayerBatch: (
+                batchId: string | number,
+                data: { unit_cost?: number; qty_on_hand?: number; note?: string }
+            ) => apiClient.patch(`/admin/inventory/cost-layers/batches/${encodeURIComponent(String(batchId))}`, data),
+            deleteCostLayerBatch: (batchId: string | number) =>
+                apiClient.delete(`/admin/inventory/cost-layers/batches/${encodeURIComponent(String(batchId))}`),
             // Inbound Gudang (canonical)
             createInbound: (data: JsonRecord) => apiClient.post('/admin/inventory/inbound', data),
             getInbounds: (params?: { page?: number; limit?: number; status?: string; supplier_id?: number; startDate?: string; endDate?: string }) =>
