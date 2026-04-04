@@ -118,7 +118,7 @@ export default function FinanceReturDetailPage() {
 
         try {
             setSubmitting(true);
-            await api.retur.disburse(retur.id, 'Pencairan manual via admin finance');
+            await api.retur.disburse(retur.id, { note: 'Pencairan manual via admin finance', refund_amount: effectiveRefund });
             notifyAlert('Pencairan dana berhasil dicatat!');
             loadData(); // Refresh to see update
         } catch (error: unknown) {
@@ -157,6 +157,7 @@ export default function FinanceReturDetailPage() {
     const qtyPurchased = Number(orderItem?.qty || 0);
     const calculatedRefund = priceAtPurchase * retur.qty;
     const actualRefund = Number(retur.refund_amount || 0);
+    const effectiveRefund = calculatedRefund > 0 ? calculatedRefund : actualRefund;
 
     const getStatusInfo = (status: string) => {
         switch (status) {
@@ -283,8 +284,13 @@ export default function FinanceReturDetailPage() {
                                 {formatCurrency(priceAtPurchase)} × {retur.qty} = {formatCurrency(calculatedRefund)}
                             </p>
                         )}
+                        {calculatedRefund > 0 && actualRefund > 0 && Math.abs(actualRefund - calculatedRefund) >= 1 && (
+                            <p className="text-[10px] opacity-80 mt-1">
+                                Tersimpan: {formatCurrency(actualRefund)}
+                            </p>
+                        )}
                     </div>
-                    <p className="text-3xl font-black">{formatCurrency(actualRefund)}</p>
+                    <p className="text-3xl font-black">{formatCurrency(effectiveRefund)}</p>
                 </div>
 
                 {/* Disbursement Action */}
@@ -312,7 +318,7 @@ export default function FinanceReturDetailPage() {
                             </div>
                             <button
                                 onClick={handleDisburse}
-                                disabled={submitting || actualRefund <= 0}
+                                disabled={submitting || effectiveRefund <= 0}
                                 className="w-full py-3 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {submitting ? 'Memproses...' : 'Konfirmasi Pencairan Dana'}

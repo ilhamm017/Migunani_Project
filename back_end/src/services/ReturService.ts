@@ -9,6 +9,37 @@ import { ensureSingleInvoiceOrRequireInvoiceId } from '../utils/invoiceAmbiguity
 import { CustomError } from '../utils/CustomError';
 
 export class ReturService {
+    private static computeRefundFromOrderItems(params: {
+        returQty: number;
+        productId: string;
+        orderItems: Array<{ product_id?: unknown; qty?: unknown; price_at_purchase?: unknown }>;
+    }) {
+        const targetProductId = String(params.productId || '').trim();
+        const returQty = Math.max(0, Math.trunc(Number(params.returQty || 0)));
+        if (!targetProductId || returQty <= 0) return 0;
+
+        const rows = (Array.isArray(params.orderItems) ? params.orderItems : [])
+            .map((row) => ({
+                product_id: String((row as any)?.product_id || '').trim(),
+                qty: Math.max(0, Math.trunc(Number((row as any)?.qty || 0))),
+                price_at_purchase: Number((row as any)?.price_at_purchase || 0),
+            }))
+            .filter((row) => row.product_id === targetProductId && row.qty > 0 && Number.isFinite(row.price_at_purchase) && row.price_at_purchase > 0);
+
+        if (rows.length === 0) return 0;
+
+        // Allocate refund qty across order item rows (FIFO by input order).
+        let remaining = returQty;
+        let total = 0;
+        for (const row of rows) {
+            if (remaining <= 0) break;
+            const take = Math.min(remaining, row.qty);
+            remaining -= take;
+            total += take * row.price_at_purchase;
+        }
+        return Math.max(0, Math.round(total * 100) / 100);
+    }
+
     static async requestRetur(payload: {
         userId: string;
         order_id: string;
@@ -243,8 +274,29 @@ export class ReturService {
                     throw new Error('Driver tidak ditemukan');
                 }
                 updateData.courier_id = normalizedCourierId;
-                if (refund_amount !== undefined) {
-                    updateData.refund_amount = Number(refund_amount);
+                const baselineItems = await OrderItem.findAll({
+                    where: {
+                        order_id: String((retur as any).order_id || ''),
+                        product_id: String((retur as any).product_id || ''),
+                    },
+                    attributes: ['product_id', 'qty', 'price_at_purchase'],
+                    transaction: t,
+                });
+                const computedBaseline = ReturService.computeRefundFromOrderItems({
+                    returQty: Number((retur as any)?.qty || 0),
+                    productId: String((retur as any)?.product_id || ''),
+                    orderItems: baselineItems as any,
+                });
+
+                const requestedRefund = refund_amount === undefined ? null : Number(refund_amount);
+                const hasValidRequested = requestedRefund !== null && Number.isFinite(requestedRefund) && requestedRefund > 0;
+                if (computedBaseline > 0) {
+                    // Guardrail: do not allow setting refund lower than the purchase price baseline.
+                    updateData.refund_amount = hasValidRequested
+                        ? Math.max(requestedRefund as number, computedBaseline)
+                        : computedBaseline;
+                } else if (hasValidRequested) {
+                    updateData.refund_amount = requestedRefund as number;
                 }
             }
 
@@ -456,7 +508,12 @@ export class ReturService {
         }
     }
 
-    static async disburseRefund(id: string, note: string | undefined, user: { id: string; role: string }) {
+    static async disburseRefund(
+        id: string,
+        note: string | undefined,
+        user: { id: string; role: string },
+        opts?: { refund_amount_override?: number }
+    ) {
         const t = await sequelize.transaction();
         try {
             const retur = await Retur.findByPk(id, {
@@ -484,9 +541,27 @@ export class ReturService {
                 throw new Error('Dana retur ini sudah dicairkan sebelumnya');
             }
 
-            const refundAmount = Number(retur.refund_amount || 0);
+            const overrideRaw = opts?.refund_amount_override;
+            const overrideParsed = overrideRaw === undefined ? null : Number(overrideRaw);
+            if (overrideParsed !== null) {
+                if (!Number.isFinite(overrideParsed) || overrideParsed <= 0) {
+                    throw new Error('Nominal refund override tidak valid');
+                }
+                await retur.update({ refund_amount: overrideParsed }, { transaction: t });
+            }
+
+            let refundAmount = Number(retur.refund_amount || 0);
             if (refundAmount <= 0) {
-                throw new Error('Nominal refund belum diatur atau 0');
+                const computed = ReturService.computeRefundFromOrderItems({
+                    returQty: Number((retur as any)?.qty || 0),
+                    productId: String((retur as any)?.product_id || ''),
+                    orderItems: Array.isArray((retur as any)?.Order?.OrderItems) ? (retur as any).Order.OrderItems : [],
+                });
+                if (computed <= 0) {
+                    throw new Error('Nominal refund belum diatur atau 0');
+                }
+                await retur.update({ refund_amount: computed }, { transaction: t });
+                refundAmount = computed;
             }
 
             const expenseNote = `Refund Retur: ${(retur as any).Product?.name} (Order #${retur.order_id.slice(0, 8)}). ${note || ''}`;

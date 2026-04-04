@@ -435,15 +435,19 @@ export const handoverToDriver = asyncWrapper(async (req: Request, res: Response)
 	            if (orderId) orderIdsWithActiveBackorder.add(orderId);
 	        });
 
+	        if (orderIdsWithActiveBackorder.size > 0) {
+	            throw new CustomError(
+	                `Invoice tidak bisa di-handover karena order berikut masih memiliki backorder aktif: ${Array.from(orderIdsWithActiveBackorder).sort().join(', ')}. Untuk kebijakan 1 goods-out per order, sisa backorder harus dipisah menjadi child order terlebih dahulu.`,
+	                409
+	            );
+	        }
+
 	        for (const order of orders) {
 	            const prevStatus = String(order.status || '');
 	            const prevStatusKey = prevStatus.trim().toLowerCase();
-	            const hasActiveBackorder = orderIdsWithActiveBackorder.has(String(order.id));
-	            // Handover is a shipping stage transition. Even if the order still has active backorders,
-	            // we must keep the main order status in the delivery lane so:
-	            // - driver task list remains consistent (it keys off order.status)
-	            // - status transitions remain valid (checked -> shipped is allowed; checked -> partially_fulfilled is not)
-	            // Backorder visibility should be driven by Backorder rows, not by forcing order.status early.
+	            const hasActiveBackorder = false;
+	            // Handover adalah tahap shipping + goods-out. Order yang masih punya backorder aktif
+	            // harus di-split (child order) dulu supaya goods-out tetap 1x per order dan data tidak korup.
 	            const nextOrderStatus = 'shipped';
 	            if (['delivered', 'completed', 'partially_fulfilled', 'canceled', 'cancelled'].includes(prevStatusKey)) {
 	                throw new CustomError(

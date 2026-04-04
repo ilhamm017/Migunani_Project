@@ -59,6 +59,13 @@ const phases: Phase[] = [
     command: 'npm run test:upload-policy',
     required: true,
     note: 'Memastikan MIME/size rejection konsisten pada upload path inti.'
+  },
+  {
+    key: 'backorder-split',
+    title: 'Phase H - Backorder Split (Child Order) Regression',
+    command: 'npm run test:backorder-split',
+    required: true,
+    note: 'Membuktikan partial allocation auto-split menjadi child order dan allocation pada goods-out order ditolak.'
   }
 ];
 

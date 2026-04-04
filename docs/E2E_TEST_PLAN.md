@@ -33,8 +33,8 @@ Role & akun seed (dipakai sebagai test actor):
 - `gudang@migunani.com` / `gudang123`
 - `finance@migunani.com` / `finance123`
 - `kasir@migunani.com` / `kasir123`
-- `driver@migunani.com` / `driver123`
-- `customer@migunani.com` / `customer123`
+- `driver1@migunani.com` / `driver123` (jika ada juga `driver@...`, pastikan script regression konsisten)
+- `customer1@migunani.com` / `customer123` (jika ada juga `customer@...`, pastikan script regression konsisten)
 
 Referensi kontrak:
 - API & RBAC: `back_end/docs/API_Contract.md`
@@ -47,7 +47,7 @@ Referensi kontrak:
 Backend runtime regression/gate (sudah siap pakai):
 - Runner: `back_end/src/scripts/transaction_assurance.ts`
 - Command: `cd back_end && npm run test:transaction-assurance`
-- Isi gate: action matrix, ownership, finance replay, notification soft-fail, boundary read, upload policy.
+- Isi gate: action matrix, ownership, finance replay, notification soft-fail, boundary read, upload policy, backorder split (child order).
 
 Matriks eksekusi & evidence:
 - `back_end/docs/TRANSACTION_EXECUTION_MATRIX.md`

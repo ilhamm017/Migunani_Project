@@ -101,10 +101,15 @@ export const updateReturStatus = asyncWrapper(async (req: Request, res: Response
 export const disburseRefund = asyncWrapper(async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id);
-        const { note } = req.body;
+        const { note, refund_amount } = req.body as { note?: unknown; refund_amount?: unknown };
         const user = { id: req.user!.id, role: req.user!.role };
 
-        const retur = await ReturService.disburseRefund(id, note, user);
+        const refundAmountOverride = refund_amount === undefined || refund_amount === null || String(refund_amount).trim() === ''
+            ? undefined
+            : Number(refund_amount);
+        const retur = await ReturService.disburseRefund(id, typeof note === 'string' ? note : undefined, user, {
+            refund_amount_override: refundAmountOverride,
+        });
         return res.json({ message: 'Dana refund berhasil dicairkan dan tercatat di pengeluaran', retur });
     } catch (error: any) {
         if (error instanceof CustomError) {

@@ -116,15 +116,9 @@ export default function WarehouseReturPage() {
             return;
         }
 
-        // Only auto-calc if refund_amount is not meaningfully set (null, 0, "0.00")
         const existingRefund = Number(selectedRetur.refund_amount || 0);
-        if (existingRefund > 0) {
-            setDebugPriceInfo(`Refund sudah ditetapkan: ${existingRefund}`);
-            setRefundAmount(existingRefund.toString());
-            return;
-        }
 
-        // Try to calculate from OrderItem price history
+        // Try to calculate from OrderItem price history (baseline minimal refund).
         const orderItems = selectedRetur.Order?.OrderItems;
         console.log('Auto-calc: product_id=', selectedRetur.product_id, 'OrderItems=', orderItems);
 
@@ -133,15 +127,30 @@ export default function WarehouseReturPage() {
             if (item) {
                 const price = Number(item.price_at_purchase || 0);
                 const total = price * Number(selectedRetur.qty);
-                setDebugPriceInfo(`Hitung: Rp ${price.toLocaleString()} x ${selectedRetur.qty} = Rp ${total.toLocaleString()}`);
-                setRefundAmount(total > 0 ? total.toString() : '');
+                if (total > 0) {
+                    if (existingRefund > 0 && existingRefund >= total) {
+                        setDebugPriceInfo(`Refund tersimpan: Rp ${existingRefund.toLocaleString()} (baseline: Rp ${total.toLocaleString()})`);
+                        setRefundAmount(existingRefund.toString());
+                    } else if (existingRefund > 0 && existingRefund < total) {
+                        setDebugPriceInfo(`Refund tersimpan terlalu kecil (Rp ${existingRefund.toLocaleString()}). Disarankan minimal Rp ${total.toLocaleString()}.`);
+                        setRefundAmount(total.toString());
+                    } else {
+                        setDebugPriceInfo(`Hitung baseline: Rp ${price.toLocaleString()} x ${selectedRetur.qty} = Rp ${total.toLocaleString()}`);
+                        setRefundAmount(total.toString());
+                    }
+                    return;
+                }
+                setDebugPriceInfo('Harga beli produk tidak valid untuk menghitung baseline refund.');
+                setRefundAmount(existingRefund > 0 ? existingRefund.toString() : '');
                 return;
             }
         }
 
         // Fallback: OrderItems not available, show message
-        setDebugPriceInfo('Data harga item tidak tersedia dari riwayat pesanan.');
-        setRefundAmount('');
+        setDebugPriceInfo(existingRefund > 0
+            ? `Refund sudah ditetapkan: Rp ${existingRefund.toLocaleString()} (baseline tidak tersedia)`
+            : 'Data harga item tidak tersedia dari riwayat pesanan.');
+        setRefundAmount(existingRefund > 0 ? existingRefund.toString() : '');
     }, [selectedRetur]);
 
     const handleUpdateStatus = async (id: string, nextStatus: string) => {

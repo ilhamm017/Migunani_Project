@@ -15,6 +15,7 @@ function CustomerOrderDetailPageContent() {
     || requestedSection === 'baru'
     || requestedSection === 'allocated'
     || requestedSection === 'pembayaran'
+    || requestedSection === 'checker'
     || requestedSection === 'gudang'
     || requestedSection === 'pengiriman'
     || requestedSection === 'selesai'

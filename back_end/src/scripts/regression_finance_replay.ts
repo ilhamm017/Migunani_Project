@@ -17,8 +17,8 @@ const credentials: Record<RoleKey, { email: string; password: string }> = {
   admin_gudang: { email: 'gudang@migunani.com', password: 'gudang123' },
   admin_finance: { email: 'finance@migunani.com', password: 'finance123' },
   kasir: { email: 'kasir@migunani.com', password: 'kasir123' },
-  driver: { email: 'driver@migunani.com', password: 'driver123' },
-  customer: { email: 'customer@migunani.com', password: 'customer123' },
+  driver: { email: 'driver1@migunani.com', password: 'driver123' },
+  customer: { email: 'customer1@migunani.com', password: 'customer123' },
 };
 
 const tinyPngBuffer = Buffer.from(
@@ -588,8 +588,8 @@ async function runCodReplay(
   assert(invoiceTotal > 0, `Invalid COD invoice total for ${invoiceId}`);
 
   await shipInvoiceViaHandover(superAdminToken, adminGudangToken, invoiceId, driverId);
-  await completeDelivery(driverToken, orderId);
   await recordCodPayment(driverToken, orderId);
+  await completeDelivery(driverToken, orderId);
 
   const before = 0;
   const startedAt = new Date();

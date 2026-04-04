@@ -181,6 +181,22 @@ async function uploadPaymentProof(customerToken: string, orderId: string) {
   assertStatus(response.status, 200, 'upload payment proof');
 }
 
+async function shipInvoiceViaHandover(superAdminToken: string, adminGudangToken: string, invoiceId: string, driverId: string) {
+  const assign = await requestJson(adminGudangToken, 'PATCH', `/invoices/${invoiceId}/assign-driver`, { courier_id: driverId });
+  assertStatus(assign.status, 200, 'assign driver invoice');
+
+  const form = new FormData();
+  form.append('invoice_id', invoiceId);
+  form.append('result', 'pass');
+  const check = await requestFormData(superAdminToken, 'POST', '/admin/delivery-handovers/check', form);
+  assertStatus(check.status, 200, 'delivery handover check');
+  const handoverId = String((check.data as any)?.handover_id || '');
+  assert(handoverId, 'Missing handover_id');
+
+  const handover = await requestJson(superAdminToken, 'POST', `/admin/delivery-handovers/${handoverId}/handover`, {});
+  assertStatus(handover.status, 200, 'delivery handover');
+}
+
 async function completeDelivery(driverToken: string, orderId: string) {
   const form = new FormData();
   form.append('proof', new Blob([tinyPngBuffer], { type: 'image/png' }), 'delivery.png');
@@ -252,11 +268,7 @@ async function main() {
   const verify = await requestJson(sessions.admin_finance.token, 'PATCH', `/admin/finance/orders/${orderId}/verify`, { action: 'approve' });
   assertStatus(verify.status, 200, 'verify payment');
 
-  const ship = await requestJson(sessions.admin_gudang.token, 'PATCH', `/orders/admin/${orderId}/status`, {
-    status: 'shipped',
-    courier_id: sessions.driver1.userId
-  });
-  assertStatus(ship.status, 200, 'ship order');
+  await shipInvoiceViaHandover(sessions.super_admin.token, sessions.admin_gudang.token, invoiceId, sessions.driver1.userId);
 
   const assignedDriverInvoice = await requestJson(sessions.driver1.token, 'GET', `/invoices/${invoiceId}`);
   assertStatus(assignedDriverInvoice.status, 200, 'driver1 assigned invoice');

@@ -109,7 +109,8 @@ Endpoint utama:
 Aturan utama:
 1) **Editable/reallocatable order status**:
    - Editable: `pending|waiting_invoice|allocated|hold|partially_fulfilled` (lihat `back_end/src/controllers/allocation/utils.ts`).
-   - Ada pengecualian: top-up backorder boleh pada kondisi tertentu walau status `ready_to_ship|shipped|completed` jika ada backorder aktif (lihat guard di `allocation/mutation.ts`).
+   - Guard tambahan: jika `orders.goods_out_posted_at != null` maka alokasi **ditolak 409** (order sudah goods-out; sisa backorder harus via child order/continuation order).
+   - Catatan legacy: ada pengecualian top-up untuk status `ready_to_ship|shipped|completed` bila ada backorder aktif, tetapi jalur utama yang didukung sekarang adalah **split backorder → child order** saat issue invoice (lihat bagian 6).
 
 2) **Qty allocation tidak boleh melebihi demand order**:
    - Demand dihitung dari `ordered_qty_original` (fallback `qty`) dikurangi `qty_canceled_backorder` dan `qty_canceled_manual`.
@@ -154,6 +155,10 @@ Aturan utama:
 4) Invoice item qty didasarkan pada alokasi yang ada (dan “remaining” terhadap invoice-item historis).
 5) Metode pembayaran combined invoice diselaraskan (order-level payment_method bisa di-sync).
 6) Idempotency untuk mencegah issue invoice duplikat pada batch/items.
+7) **(Guard baru) Auto-split backorder → child order sebelum invoice dibuat**:
+   - Jika `allocated > 0` dan `allocated < demand` (ada shortage), sistem membuat **child order** (`parent_order_id=parent.id`) berisi sisa shortage.
+   - Parent order di-trim sehingga **tidak punya shortage lagi** (fully invoiceable untuk sesi ini).
+   - `shipping_fee`, `discount_amount`, dan `total_amount` di-split proporsional berbasis subtotal item (remainder ke child).
 
 ---
 
@@ -180,12 +185,13 @@ Endpoint:
 
 Aturan:
 1) Invoice harus dalam status yang valid untuk handover (umumnya `checked`).
-2) Order status berubah ke `shipped` (dengan guard transition).
-3) Goods-out diposting via `AccountingPostingService.postGoodsOutForOrder` untuk setiap order terkait invoice:
+2) **Handover ditolak jika masih ada backorder aktif** pada salah satu order terkait invoice (harus split jadi child order dulu).
+3) Order status berubah ke `shipped` (dengan guard transition).
+4) Goods-out diposting via `AccountingPostingService.postGoodsOutForOrder` untuk setiap order terkait invoice:
    - Mengubah `OrderAllocation` open (`pending|picked`) menjadi `shipped`.
    - Mengurangi `products.allocated_quantity` sesuai shipped qty.
    - Menandai `orders.goods_out_posted_at/by` (idempotent: kalau sudah ada, skip).
-4) Invoice `shipment_status='shipped'`, `shipped_at` terisi, `courier_id` diset.
+5) Invoice `shipment_status='shipped'`, `shipped_at` terisi, `courier_id` diset.
 
 ---
 
@@ -285,7 +291,7 @@ Jurnal:
 Jika mengubah salah satu modul di bawah, pastikan aturan ini tetap benar:
 1) **Status machine**: jangan ubah allowed transitions tanpa audit seluruh endpoint yang memanggilnya (`isOrderTransitionAllowed`).
 2) **Shipped allocation invariant**: qty shipped tidak boleh bisa “ditarik mundur” oleh endpoint alokasi.
-3) **Backorder = shortage**: `Backorder.qty_pending` harus selalu sinkron dengan shortage hasil distribusi allocation (bukan dari invoice).
+3) **Backorder = shortage**: `Backorder.qty_pending` harus selalu sinkron dengan shortage hasil distribusi allocation, dan shortage setelah sebagian diproses harus dipisah menjadi **child order**.
 4) **Invoice & gudang gating**: top-up backorder harus tetap mempertimbangkan invoice yang belum lewat gudang (grace window).
 5) **Goods-out idempotent**: `postGoodsOutForOrder` tidak boleh double-post (jurnal & inventory).
 6) **Multi-invoice**: penyelesaian driver tidak boleh menutup order jika masih ada invoice lain yang open.
@@ -296,5 +302,5 @@ Jika mengubah salah satu modul di bawah, pastikan aturan ini tetap benar:
 
 Saran praktik saat refactor:
 - Setiap perubahan yang menyentuh `allocation/mutation.ts`, `AccountingPostingService`, `DeliveryHandoverController`, atau driver delivery/payment:
-  - jalankan regression scripts yang relevan di `back_end/src/scripts/` (mis. `reconcile_shipped_allocations.ts`, `regression_driver_orders_multi_invoice.ts` bila ada).
-
+  - jalankan regression scripts yang relevan di `back_end/src/scripts/` (mis. `regression_backorder_split.ts`, `reconcile_shipped_allocations.ts`, `regression_driver_orders_multi_invoice.ts` bila ada).
+  - jalankan `cd back_end && npm run audit:order-integrity` untuk cek anomali produksi (read-only).

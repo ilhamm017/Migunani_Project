@@ -266,7 +266,8 @@ export const api = {
             is_back_to_stock?: boolean;
             qty_received?: number;
         }) => apiClient.put(`/retur/${id}/status`, data),
-        disburse: (id: string, note?: string) => apiClient.post(`/retur/${id}/disburse`, { note }),
+        disburse: (id: string, payload?: { note?: string; refund_amount?: number }) =>
+            apiClient.post(`/retur/${id}/disburse`, { note: payload?.note, refund_amount: payload?.refund_amount }),
         getHandovers: (params?: { status?: 'submitted' | 'received' }) =>
             apiClient.get('/retur/handovers', { params }),
         receiveHandover: (handoverId: number | string, payload: { items: Array<{ retur_id: string; qty_received: number }>; note?: string }) =>

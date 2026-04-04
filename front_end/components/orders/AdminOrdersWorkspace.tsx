@@ -248,6 +248,7 @@ const WORKSPACE_ORDER_STATUS_PREFERRED_OVER_INVOICE_SHIPMENT = new Set([
   'processing',
   'hold',
   'waiting_payment',
+  'waiting_admin_verification',
   'partially_fulfilled',
 ]);
 const BACKORDER_TOPUP_GRACE_MS = 24 * 60 * 60 * 1000;

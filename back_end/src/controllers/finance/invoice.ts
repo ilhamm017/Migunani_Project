@@ -25,6 +25,36 @@ const normalizeScopeList = (values: unknown[]): string =>
             .filter(Boolean)
     )).sort().join(',');
 
+const safeLower = (value: unknown): string => String(value || '').trim().toLowerCase();
+const n = (value: unknown): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+const round2 = (value: number): number => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const toSnapshot = (raw: unknown): Record<string, unknown> | null => {
+    if (!raw) return null;
+    if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+    if (typeof raw !== 'string') return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
+const embeddedDiscountForQty = (orderItem: any, qtyRaw: unknown): number => {
+    const qty = Math.max(0, Math.trunc(n(qtyRaw)));
+    if (qty <= 0) return 0;
+    const unitPrice = n(orderItem?.price_at_purchase);
+    const snapshot = toSnapshot(orderItem?.pricing_snapshot);
+    const basePriceRaw = snapshot ? snapshot['base_price'] : null;
+    const basePrice = Number(basePriceRaw);
+    const safeBase = Number.isFinite(basePrice) && basePrice > 0 ? basePrice : unitPrice;
+    return round2(Math.max(0, safeBase - unitPrice) * qty);
+};
+
 const buildIssueInvoiceScope = (userId: unknown, orderIds: unknown[]) =>
     `finance_issue_invoice:${String(userId || '').trim()}:${normalizeScopeList(orderIds)}`;
 
@@ -134,11 +164,15 @@ const syncBackordersFromInvoicedQty = async (
             0,
             Number(orderItem?.qty_canceled_backorder || 0)
         );
+        const canceledManualQty = Math.max(
+            0,
+            Number(orderItem?.qty_canceled_manual || 0)
+        );
         const invoicedQty = Math.max(
             0,
             Number(invoicedQtyByOrderItemId.get(orderItemId) || 0)
         );
-        const qtyPending = Math.max(0, orderedQtyOriginal - invoicedQty - canceledBackorderQty);
+        const qtyPending = Math.max(0, orderedQtyOriginal - invoicedQty - canceledBackorderQty - canceledManualQty);
 
         const [backorder] = await Backorder.findOrCreate({
             where: { order_item_id: orderItemId },
@@ -161,6 +195,287 @@ const syncBackordersFromInvoicedQty = async (
             }, { transaction });
         }
     }
+};
+
+const computeAllocationByProduct = (allocationsRaw: any[]): Map<string, number> => {
+    const allocations = Array.isArray(allocationsRaw) ? allocationsRaw : [];
+    const result = new Map<string, number>();
+    allocations.forEach((allocation: any) => {
+        if (safeLower(allocation?.status) === 'shipped') return;
+        const key = String(allocation?.product_id || '').trim();
+        if (!key) return;
+        result.set(key, n(result.get(key)) + n(allocation?.allocated_qty));
+    });
+    return result;
+};
+
+const distributeAllocationToOrderItems = (orderItemsRaw: any[], allocatedByProduct: Map<string, number>) => {
+    const orderItems = Array.isArray(orderItemsRaw) ? orderItemsRaw : [];
+    const itemsByProduct = new Map<string, any[]>();
+    orderItems.forEach((item: any) => {
+        const key = String(item?.product_id || '').trim();
+        if (!key) return;
+        const bucket = itemsByProduct.get(key) || [];
+        bucket.push(item);
+        itemsByProduct.set(key, bucket);
+    });
+
+    const breakdownByOrderItemId = new Map<string, { ordered_qty: number; allocated_qty: number; shortage_qty: number }>();
+    itemsByProduct.forEach((itemsForProduct, productId) => {
+        let remainingAlloc = Math.max(0, Math.trunc(n(allocatedByProduct.get(productId))));
+        const sortedItems = [...itemsForProduct].sort((a, b) => {
+            const aId = Number(a?.id);
+            const bId = Number(b?.id);
+            if (Number.isFinite(aId) && Number.isFinite(bId)) return aId - bId;
+            return String(a?.id || '').localeCompare(String(b?.id || ''));
+        });
+
+        for (const item of sortedItems) {
+            const orderItemId = String(item?.id || '').trim();
+            if (!orderItemId) continue;
+            const orderedQty = Math.max(0, Math.trunc(n(item?.qty)));
+            const allocatedQty = Math.max(0, Math.min(orderedQty, remainingAlloc));
+            remainingAlloc = Math.max(0, remainingAlloc - allocatedQty);
+            breakdownByOrderItemId.set(orderItemId, {
+                ordered_qty: orderedQty,
+                allocated_qty: allocatedQty,
+                shortage_qty: Math.max(0, orderedQty - allocatedQty),
+            });
+        }
+    });
+
+    return breakdownByOrderItemId;
+};
+
+const autoSplitBackorderToChildOrderForInvoice = async (
+    order: any,
+    transaction: any,
+    actor: { id: string | null; role: string | null }
+) => {
+    const orderId = String(order?.id || '').trim();
+    if (!orderId) return null;
+
+    const orderItems = Array.isArray(order?.OrderItems) ? order.OrderItems : [];
+    const allocations = Array.isArray(order?.Allocations) ? order.Allocations : [];
+    if (orderItems.length === 0) return null;
+
+    const allocatedByProduct = computeAllocationByProduct(allocations);
+    const breakdown = distributeAllocationToOrderItems(orderItems, allocatedByProduct);
+
+    let orderedTotal = 0;
+    let allocatedTotal = 0;
+    let shortageTotal = 0;
+    for (const item of orderItems as any[]) {
+        const key = String(item?.id || '').trim();
+        if (!key) continue;
+        const row = breakdown.get(key) || { ordered_qty: Math.max(0, Math.trunc(n(item?.qty))), allocated_qty: 0, shortage_qty: Math.max(0, Math.trunc(n(item?.qty))) };
+        orderedTotal += n(row.ordered_qty);
+        allocatedTotal += n(row.allocated_qty);
+        shortageTotal += n(row.shortage_qty);
+    }
+
+    // Split only when there is some allocation to invoice now, but not enough to fulfill the full order demand.
+    if (allocatedTotal <= 0) return null;
+    if (shortageTotal <= 0) return null;
+    if (allocatedTotal >= orderedTotal) return null;
+
+    const fullItemsSubtotal = round2(orderItems.reduce((sum: number, item: any) => sum + (n(item?.price_at_purchase) * Math.max(0, Math.trunc(n(item?.qty)))), 0));
+    const parentItemsSubtotal = round2(orderItems.reduce((sum: number, item: any) => {
+        const key = String(item?.id || '').trim();
+        const row = key ? breakdown.get(key) : null;
+        const allocatedQty = row ? n(row.allocated_qty) : 0;
+        return sum + (n(item?.price_at_purchase) * Math.max(0, Math.trunc(allocatedQty)));
+    }, 0));
+    const childItemsSubtotal = round2(Math.max(0, fullItemsSubtotal - parentItemsSubtotal));
+
+    const embeddedDiscountFull = round2(orderItems.reduce((sum: number, item: any) => sum + embeddedDiscountForQty(item, item?.qty), 0));
+    const embeddedDiscountParent = round2(orderItems.reduce((sum: number, item: any) => {
+        const key = String(item?.id || '').trim();
+        const row = key ? breakdown.get(key) : null;
+        const allocatedQty = row ? n(row.allocated_qty) : 0;
+        return sum + embeddedDiscountForQty(item, allocatedQty);
+    }, 0));
+    const embeddedDiscountChild = round2(Math.max(0, embeddedDiscountFull - embeddedDiscountParent));
+
+    const discountRaw = n(order?.discount_amount);
+    const externalDiscountFull = Math.max(0, round2(discountRaw - embeddedDiscountFull));
+
+    const ratio = fullItemsSubtotal > 0 ? Math.min(1, Math.max(0, parentItemsSubtotal / fullItemsSubtotal)) : 0;
+    const externalDiscountParent = round2(externalDiscountFull * ratio);
+    const externalDiscountChild = round2(Math.max(0, externalDiscountFull - externalDiscountParent));
+
+    const shippingFeeFull = round2(n(order?.shipping_fee));
+    const shippingFeeParent = round2(shippingFeeFull * ratio);
+    const shippingFeeChild = round2(shippingFeeFull - shippingFeeParent);
+
+    const discountParent = round2(embeddedDiscountParent + externalDiscountParent);
+    const discountChild = round2(embeddedDiscountChild + externalDiscountChild);
+
+    const totalParent = round2(Math.max(0, parentItemsSubtotal + shippingFeeParent - externalDiscountParent));
+    const totalChild = round2(Math.max(0, childItemsSubtotal + shippingFeeChild - externalDiscountChild));
+
+    const childOrder = await Order.create({
+        parent_order_id: orderId,
+        customer_id: order?.customer_id || null,
+        customer_name: order?.customer_name || null,
+        source: order?.source === 'whatsapp' ? 'whatsapp' : 'web',
+        status: 'pending',
+        payment_method: order?.payment_method ?? null,
+        total_amount: totalChild,
+        discount_amount: discountChild,
+        pricing_override_note: order?.pricing_override_note ?? null,
+        shipping_method_code: order?.shipping_method_code ?? null,
+	        shipping_method_name: order?.shipping_method_name ?? null,
+	        shipping_fee: shippingFeeChild,
+	        shipping_address: order?.shipping_address ?? null,
+	        customer_note: order?.customer_note ?? null,
+	        expiry_date: order?.expiry_date ?? null,
+	        stock_released: false,
+	    }, { transaction });
+
+    const parentBefore = {
+        total_amount: n(order?.total_amount),
+        discount_amount: n(order?.discount_amount),
+        shipping_fee: n(order?.shipping_fee),
+    };
+
+    await order.update({
+        total_amount: totalParent,
+        discount_amount: discountParent,
+        shipping_fee: shippingFeeParent,
+    }, { transaction });
+
+    const childItemIds: string[] = [];
+    for (const item of orderItems as any[]) {
+        const orderItemId = String(item?.id || '').trim();
+        if (!orderItemId) continue;
+        const row = breakdown.get(orderItemId);
+        const orderedQty = Math.max(0, Math.trunc(n(item?.qty)));
+        const allocatedQty = Math.max(0, Math.trunc(n(row?.allocated_qty)));
+        const shortageQty = Math.max(0, Math.trunc(orderedQty - allocatedQty));
+        if (shortageQty <= 0) {
+            // Parent item becomes "fully invoiceable" within parent order.
+            const canceledBackorder = Math.max(0, Math.trunc(n(item?.qty_canceled_backorder)));
+            const canceledManual = Math.max(0, Math.trunc(n(item?.qty_canceled_manual)));
+            const nextOrderedOriginal = Math.max(0, allocatedQty + canceledBackorder + canceledManual);
+            if (Number(item.qty || 0) !== allocatedQty || Number(item.ordered_qty_original || 0) !== nextOrderedOriginal) {
+                await item.update({
+                    qty: allocatedQty,
+                    ordered_qty_original: nextOrderedOriginal,
+                }, { transaction });
+            }
+            continue;
+        }
+
+        // Move shortage qty to child order (continuation order).
+        const createdItem = await OrderItem.create({
+            order_id: String(childOrder.id),
+            product_id: item.product_id,
+            clearance_promo_id: item.clearance_promo_id ?? null,
+            preferred_unit_cost: item.preferred_unit_cost ?? null,
+            qty: shortageQty,
+            ordered_qty_original: shortageQty,
+            qty_canceled_backorder: 0,
+            qty_canceled_manual: 0,
+            price_at_purchase: item.price_at_purchase,
+            cost_at_purchase: item.cost_at_purchase,
+            pricing_snapshot: item.pricing_snapshot ?? null,
+        }, { transaction });
+        childItemIds.push(String(createdItem.id));
+
+        await Backorder.create({
+            order_item_id: String(createdItem.id),
+            qty_pending: shortageQty,
+            status: 'waiting_stock',
+            notes: `Auto-split from order ${orderId}`,
+        } as any, { transaction });
+
+        // Parent keeps only the allocated portion.
+        const canceledBackorder = Math.max(0, Math.trunc(n(item?.qty_canceled_backorder)));
+        const canceledManual = Math.max(0, Math.trunc(n(item?.qty_canceled_manual)));
+        const nextOrderedOriginal = Math.max(0, allocatedQty + canceledBackorder + canceledManual);
+        await item.update({
+            qty: allocatedQty,
+            ordered_qty_original: nextOrderedOriginal,
+        }, { transaction });
+
+        const parentBackorder = await Backorder.findOne({
+            where: { order_item_id: orderItemId },
+            transaction
+        });
+        if (parentBackorder && safeLower(parentBackorder.status) !== 'canceled') {
+            await parentBackorder.update({
+                qty_pending: 0,
+                status: 'fulfilled',
+                notes: parentBackorder.notes
+                    ? `${String(parentBackorder.notes)} | Auto-split to child order ${String(childOrder.id)}`
+                    : `Auto-split to child order ${String(childOrder.id)}`
+            }, { transaction });
+        }
+    }
+
+    const parentAfter = {
+        total_amount: totalParent,
+        discount_amount: discountParent,
+        shipping_fee: shippingFeeParent,
+    };
+
+    await recordOrderEvent({
+        transaction,
+        order_id: orderId,
+        event_type: 'order_pricing_adjusted',
+        actor_user_id: actor.id,
+        actor_role: actor.role,
+        reason: 'auto_split_backorder_to_child_order',
+        payload: {
+            parent_order_id: orderId,
+            child_order_id: String(childOrder.id),
+            items_subtotal_full: fullItemsSubtotal,
+            items_subtotal_parent: parentItemsSubtotal,
+            items_subtotal_child: childItemsSubtotal,
+            shipping_fee_full: shippingFeeFull,
+            shipping_fee_parent: shippingFeeParent,
+            shipping_fee_child: shippingFeeChild,
+            discount_full: discountRaw,
+            embedded_discount_full: embeddedDiscountFull,
+            external_discount_full: externalDiscountFull,
+            discount_parent: discountParent,
+            discount_child: discountChild,
+            external_discount_parent: externalDiscountParent,
+            external_discount_child: externalDiscountChild,
+            before: parentBefore,
+            after: parentAfter,
+            child_order_summary: {
+                order_id: String(childOrder.id),
+                total_amount: totalChild,
+                discount_amount: discountChild,
+                shipping_fee: shippingFeeChild,
+                child_order_item_ids: childItemIds,
+            }
+        }
+    });
+
+    await recordOrderEvent({
+        transaction,
+        order_id: String(childOrder.id),
+        event_type: 'order_pricing_adjusted',
+        actor_user_id: actor.id,
+        actor_role: actor.role,
+        reason: 'auto_split_backorder_from_parent_order',
+        payload: {
+            parent_order_id: orderId,
+            child_order_id: String(childOrder.id),
+            items_subtotal: childItemsSubtotal,
+            shipping_fee: shippingFeeChild,
+            discount_amount: discountChild,
+            total_amount: totalChild,
+        }
+    });
+
+    return {
+        parent_order_id: orderId,
+        child_order_id: String(childOrder.id),
+    };
 };
 
 export const issueInvoiceForOrders = async (orderIds: string[], req: Request, res: Response) => {
@@ -225,8 +540,15 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
             }
         }
 
+        const actorId = String(req.user?.id || '').trim() || null;
+        const actorRole = String(req.user?.role || '').trim() || null;
+
         if (paymentMethod) {
             await syncCombinedInvoiceOrderPaymentMethod(orders as any[], paymentMethod, t);
+        }
+
+        for (const order of orders as any[]) {
+            await autoSplitBackorderToChildOrderForInvoice(order, t, { id: actorId, role: actorRole });
         }
 
         const orderItemIds = orders
@@ -359,8 +681,6 @@ export const issueInvoiceForOrders = async (orderIds: string[], req: Request, re
             ? paymentMethod
             : 'pending';
         const paymentStatus = invoicePaymentMethod === 'pending' ? 'draft' : 'unpaid';
-        const actorId = String(req.user?.id || '').trim() || null;
-        const actorRole = String(req.user?.role || '').trim() || null;
 
         const invoice = await Invoice.create({
             order_id: primaryOrder.id,

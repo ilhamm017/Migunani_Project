@@ -24,14 +24,38 @@ type ReturFinanceRow = {
     status: string;
     refund_disbursed_at?: string | null;
     order_id: string;
+    product_id?: string;
+    qty?: number;
     refund_amount?: number;
     createdAt?: string;
     Product?: { name?: string | null } | null;
+    Order?: { OrderItems?: Array<{ product_id?: string; qty?: number; price_at_purchase?: number | string | null }> } | null;
     Creator?: {
         id?: string | null;
         name?: string | null;
         whatsapp_number?: string | null;
     } | null;
+};
+
+const computeRefundFromOrderItems = (retur: ReturFinanceRow) => {
+    const returQty = Math.max(0, Math.trunc(Number(retur.qty || 0)));
+    const productId = String(retur.product_id || '').trim();
+    if (!productId || returQty <= 0) return 0;
+
+    const items = Array.isArray(retur.Order?.OrderItems) ? retur.Order!.OrderItems! : [];
+    let remaining = returQty;
+    let total = 0;
+    for (const item of items) {
+        if (remaining <= 0) break;
+        if (String(item?.product_id || '').trim() !== productId) continue;
+        const purchasedQty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+        const unitPrice = Number(item?.price_at_purchase || 0);
+        if (purchasedQty <= 0 || !Number.isFinite(unitPrice) || unitPrice <= 0) continue;
+        const take = Math.min(remaining, purchasedQty);
+        remaining -= take;
+        total += take * unitPrice;
+    }
+    return Math.max(0, Math.round(total * 100) / 100);
 };
 
 export default function FinanceReturPage() {
@@ -48,15 +72,38 @@ export default function FinanceReturPage() {
             const rows = Array.isArray(res.data) ? res.data : [];
             const mapped: ReturFinanceRow[] = rows.map((item) => {
                 const row = item as Record<string, unknown>;
+                const order = row.Order && typeof row.Order === 'object' ? (row.Order as Record<string, unknown>) : null;
+                const orderItemsRaw = order ? (order.OrderItems as unknown) : null;
+                const orderItems = Array.isArray(orderItemsRaw)
+                    ? orderItemsRaw.map((oi) => {
+                        const oiRow = (oi && typeof oi === 'object') ? (oi as Record<string, unknown>) : {};
+                        const priceRaw = oiRow.price_at_purchase;
+                        const priceAtPurchase = (typeof priceRaw === 'number' || typeof priceRaw === 'string')
+                            ? priceRaw
+                            : priceRaw === null || priceRaw === undefined
+                                ? null
+                                : String(priceRaw);
+                        return {
+                            product_id: oiRow.product_id ? String(oiRow.product_id) : '',
+                            qty: Math.max(0, Math.trunc(Number(oiRow.qty || 0))),
+                            price_at_purchase: priceAtPurchase,
+                        };
+                    })
+                    : [];
                 return {
                     id: String(row.id ?? ''),
                     status: String(row.status ?? ''),
                     refund_disbursed_at: row.refund_disbursed_at ? String(row.refund_disbursed_at) : null,
                     order_id: String(row.order_id ?? ''),
+                    product_id: row.product_id ? String(row.product_id) : '',
+                    qty: Math.max(0, Math.trunc(Number(row.qty || 0))),
                     refund_amount: Number(row.refund_amount ?? 0),
                     createdAt: row.createdAt ? String(row.createdAt) : undefined,
                     Product: row.Product && typeof row.Product === 'object'
                         ? { name: String((row.Product as Record<string, unknown>).name ?? '') }
+                        : null,
+                    Order: order
+                        ? { OrderItems: orderItems }
                         : null,
                     Creator: row.Creator && typeof row.Creator === 'object'
                         ? {
@@ -126,6 +173,9 @@ export default function FinanceReturPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {returs.map((r) => {
                         const hasDisbursed = Boolean(r.refund_disbursed_at);
+                        const computedRefund = computeRefundFromOrderItems(r);
+                        const storedRefund = Number(r.refund_amount || 0);
+                        const displayRefund = computedRefund > 0 ? computedRefund : storedRefund;
                         return (
                         <Link
                             key={r.id}
@@ -145,7 +195,12 @@ export default function FinanceReturPage() {
                                 <div className="flex items-center gap-2">
                                     <div className="text-right">
                                         <p className="text-[10px] font-black text-slate-400 uppercase">Estimasi Refund</p>
-                                        <p className="text-lg font-black text-emerald-600">{formatCurrency(r.refund_amount || 0)}</p>
+                                        <p className="text-lg font-black text-emerald-600">{formatCurrency(displayRefund)}</p>
+                                        {computedRefund > 0 && storedRefund > 0 && Math.abs(storedRefund - computedRefund) >= 1 && (
+                                            <p className="mt-0.5 text-[10px] text-slate-400">
+                                                Tersimpan: {formatCurrency(storedRefund)}
+                                            </p>
+                                        )}
                                     </div>
                                     <ChevronRight size={18} className="text-slate-300 group-hover:text-emerald-500 transition-colors" />
                                 </div>

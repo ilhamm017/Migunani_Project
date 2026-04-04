@@ -27,6 +27,12 @@ const resolveInvoiceScopedOrderStatus = (orderData: unknown, invoiceData: unknow
   const invoiceRow = asRecord(invoiceData);
   const orderRow = asRecord(orderData);
   const orderInvoiceRow = asRecord(orderRow.Invoice);
+  const orderStatusRaw = String(orderRow.status || '').trim();
+  // Finance gating: if order is waiting finance/admin verification, do NOT downgrade it to a warehouse/shipment lane
+  // just because the invoice has a shipment_status like `ready_to_ship`.
+  if (orderStatusRaw === 'waiting_admin_verification') {
+    return normalizeStatus(orderStatusRaw);
+  }
   const invoiceShipmentStatus = String(
     invoiceRow.shipment_status ||
     orderInvoiceRow.shipment_status ||

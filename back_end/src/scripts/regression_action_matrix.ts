@@ -152,12 +152,13 @@ const cases: RegressionCase[] = [
     name: 'inventory po create invalid',
     method: 'POST',
     path: '/admin/inventory/po',
-    body: {},
+    // Must include at least 1 item to reach supplier_id validation (items length is validated first).
+    body: { items: [{ product_id: 'not-real-id', qty: 1 }] },
     expectations: {
-      super_admin: { status: 400, messageIncludes: 'supplier_id tidak valid' },
+      super_admin: { status: 400, messageIncludes: 'supplier_id wajib diisi' },
       admin_gudang: forbidden,
       admin_finance: forbidden,
-      kasir: { status: 400, messageIncludes: 'supplier_id tidak valid' },
+      kasir: forbidden,
       driver: forbidden,
       customer: forbidden,
     }
@@ -307,9 +308,9 @@ const cases: RegressionCase[] = [
     body: { items: [] },
     expectations: {
       super_admin: { status: 404, messageIncludes: 'Purchase Order not found' },
-      admin_gudang: { status: 404, messageIncludes: 'Purchase Order not found' },
+      admin_gudang: forbidden,
       admin_finance: forbidden,
-      kasir: { status: 404, messageIncludes: 'Purchase Order not found' },
+      kasir: forbidden,
       driver: forbidden,
       customer: forbidden,
     }
@@ -485,7 +486,7 @@ const cases: RegressionCase[] = [
     body: { items: [{ product_id: 'not-real-id', qty: 1 }] },
     expectations: {
       super_admin: { status: 404, messageIncludes: 'Order not found' },
-      admin_gudang: forbidden,
+      admin_gudang: { status: 404, messageIncludes: 'Order not found' },
       admin_finance: forbidden,
       kasir: { status: 404, messageIncludes: 'Order not found' },
       driver: forbidden,
@@ -499,7 +500,7 @@ const cases: RegressionCase[] = [
     body: { reason: 'regression' },
     expectations: {
       super_admin: { status: 404, messageIncludes: 'Order tidak ditemukan' },
-      admin_gudang: forbidden,
+      admin_gudang: { status: 404, messageIncludes: 'Order tidak ditemukan' },
       admin_finance: forbidden,
       kasir: { status: 404, messageIncludes: 'Order tidak ditemukan' },
       driver: forbidden,
@@ -595,6 +596,26 @@ async function invoke(token: string, testCase: RegressionCase) {
   };
 }
 
+async function getFirstCategoryId(token: string): Promise<number | null> {
+  const response = await fetch(`${BASE_URL}/admin/categories`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) return null;
+  try {
+    const parsed = text ? JSON.parse(text) : null;
+    const rows = Array.isArray(parsed?.categories) ? parsed.categories : [];
+    const id = Number(rows[0]?.id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 function assertExpectation(role: Role, testCase: RegressionCase, actual: { status: number; bodyText: string }) {
   const expected = testCase.expectations[role];
   if (actual.status !== expected.status) {
@@ -616,12 +637,21 @@ async function main() {
     tokens[role] = await login(role);
   }
 
+  const seedCategoryId = await getFirstCategoryId(tokens.super_admin);
+  if (!seedCategoryId) {
+    throw new Error('No seeded category found for action matrix (cannot run tier-discount payload regression).');
+  }
+
   let passed = 0;
   for (const testCase of cases) {
-    console.log(`\n## ${testCase.name}`);
+    const effectiveCase: RegressionCase = testCase.name === 'inventory category tier discount invalid payload'
+      ? { ...testCase, path: `/admin/categories/${seedCategoryId}/tier-discount` }
+      : testCase;
+
+    console.log(`\n## ${effectiveCase.name}`);
     for (const role of Object.keys(credentials) as Role[]) {
-      const actual = await invoke(tokens[role], testCase);
-      assertExpectation(role, testCase, actual);
+      const actual = await invoke(tokens[role], effectiveCase);
+      assertExpectation(role, effectiveCase, actual);
       console.log(`PASS ${role.padEnd(14)} -> ${actual.status}`);
       passed += 1;
     }

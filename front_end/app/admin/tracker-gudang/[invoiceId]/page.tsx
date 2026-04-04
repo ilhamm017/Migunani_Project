@@ -51,6 +51,30 @@ const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
   return [];
 };
 
+const resolvePrimaryOrderId = (invoice: InvoiceDetailResponse | null): string => {
+  if (!invoice) return '';
+  const orderIds = (invoice as any)?.order_ids;
+  if (Array.isArray(orderIds) && orderIds.length > 0) return normalizeText(orderIds[0]);
+  return normalizeText(
+    (invoice as any)?.order_id ||
+      (invoice as any)?.Order?.id ||
+      (Array.isArray((invoice as any)?.Orders) ? (invoice as any)?.Orders?.[0]?.id : '') ||
+      ''
+  );
+};
+
+const resolveCustomerWorkspaceKey = (invoice: InvoiceDetailResponse | null): { key: string; name: string } => {
+  if (!invoice) return { key: '', name: '' };
+  const customerId = normalizeText(
+    (invoice as any)?.customer?.id || (invoice as any)?.Customer?.id || (invoice as any)?.customer_id || ''
+  );
+  const customerName = normalizeText(
+    (invoice as any)?.customer?.name || (invoice as any)?.Customer?.name || (invoice as any)?.customer_name || ''
+  );
+  const key = customerId || (customerName ? `guest:${customerName}` : '');
+  return { key, name: customerName };
+};
+
 const buildExpectedRows = (invoice: InvoiceDetailResponse | null): CheckRow[] => {
   if (!invoice) return [];
   const map = new Map<string, CheckRow>();
@@ -256,6 +280,17 @@ export default function TrackerGudangCheckPage() {
     void load();
   }, [load]);
 
+  const returnToCustomerCheckerUrl = useMemo(() => {
+    const { key, name } = resolveCustomerWorkspaceKey(invoice);
+    if (!key) return '/admin/orders';
+    const search = new URLSearchParams();
+    search.set('section', 'checker');
+    if (name) search.set('customerName', name);
+    const orderId = resolvePrimaryOrderId(invoice);
+    if (orderId) search.set('orderId', orderId);
+    return `/admin/orders/customer/${encodeURIComponent(key)}?${search.toString()}`;
+  }, [invoice]);
+
   const handleSubmitCheck = async () => {
     if (!canSubmit) return;
     const trimmedNote = note.trim();
@@ -320,7 +355,7 @@ export default function TrackerGudangCheckPage() {
       setBusy(true);
       await api.deliveryHandovers.handover(handoverId);
       notifyOpen({ variant: 'success', title: 'Handover', message: 'Berhasil: status invoice menjadi shipped.' });
-      router.push('/admin/orders');
+      router.push(returnToCustomerCheckerUrl);
 	    } catch (error: any) {
 	      console.error('Handover failed:', error);
 	      const message = String(error?.response?.data?.message || error?.message || 'Gagal handover ke driver.');
@@ -499,7 +534,7 @@ export default function TrackerGudangCheckPage() {
 
       <div className="flex items-center justify-between gap-3">
         <Link
-          href="/admin/orders"
+          href={returnToCustomerCheckerUrl}
           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-50"
         >
           <ArrowLeft size={14} /> Kembali

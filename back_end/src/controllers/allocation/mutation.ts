@@ -110,6 +110,13 @@ export const allocateOrder = asyncWrapper(async (req: Request, res: Response) =>
             await t.rollback();
             throw new CustomError('Order not found', 404);
         }
+        if ((order as any).goods_out_posted_at) {
+            await t.rollback();
+            throw new CustomError(
+                `Order ${id} sudah goods-out pada ${(order as any).goods_out_posted_at}. Alokasi dikunci. Jika masih ada kekurangan/backorder, proses harus lewat child order (continuation order).`,
+                409
+            );
+        }
 
         const activeBackorderRows = await Backorder.findAll({
             include: [{
