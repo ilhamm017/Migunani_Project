@@ -1,12 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useRequireRoles } from '@/lib/guards';
 import { formatCurrency } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notifyAlert } from '@/lib/notify';
+import { getDefaultMonthRange, toNumber } from '../reportUtils';
+import type { AxiosError } from 'axios';
 
 type PnlSummary = {
     net_profit: number;
@@ -14,18 +16,23 @@ type PnlSummary = {
     cogs: number;
     gross_profit: number;
     expenses: number;
+    invoices?: Array<{
+        invoice_id: string;
+        invoice_number: string;
+        customer_name: string;
+        subtotal: number;
+        modal: number;
+        laba: number;
+    }>;
 };
 
 export default function PnLPage() {
     const allowed = useRequireRoles(['super_admin', 'admin_finance']);
 
-    // Default to current month
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const defaults = useMemo(() => getDefaultMonthRange(), []);
 
-    const [startDate, setStartDate] = useState(firstDay);
-    const [endDate, setEndDate] = useState(lastDay);
+    const [startDate, setStartDate] = useState(defaults.startDate);
+    const [endDate, setEndDate] = useState(defaults.endDate);
     const [data, setData] = useState<PnlSummary | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -37,17 +44,32 @@ export default function PnLPage() {
             const res = await api.admin.finance.getPnL({ startDate, endDate });
             const payload = res.data as Record<string, unknown>;
             setData({
-                net_profit: Number(payload?.net_profit ?? 0),
-                revenue: Number(payload?.revenue ?? 0),
-                cogs: Number(payload?.cogs ?? 0),
-                gross_profit: Number(payload?.gross_profit ?? 0),
-                expenses: Number(payload?.expenses ?? 0),
+                net_profit: toNumber(payload?.net_profit),
+                revenue: toNumber(payload?.revenue),
+                cogs: toNumber(payload?.cogs),
+                gross_profit: toNumber(payload?.gross_profit),
+                expenses: toNumber(payload?.expenses),
+                invoices: Array.isArray(payload?.invoices)
+                    ? (payload.invoices as Array<Record<string, unknown>>).map((row) => ({
+                        invoice_id: String(row.invoice_id || ''),
+                        invoice_number: String(row.invoice_number || ''),
+                        customer_name: String(row.customer_name || '-'),
+                        subtotal: toNumber(row.subtotal),
+                        modal: toNumber(row.modal),
+                        laba: toNumber(row.laba),
+                    }))
+                    : [],
             });
         } catch (e) {
             console.error(e);
             notifyAlert('Gagal memuat laporan');
-            const status = (e as any)?.response?.status;
-            const message = String((e as any)?.response?.data?.message || '').trim();
+            const err = e as AxiosError<unknown>;
+            const status = err?.response?.status;
+            const data = err?.response?.data;
+            const message =
+                data && typeof data === 'object' && 'message' in data
+                    ? String((data as { message?: unknown }).message || '').trim()
+                    : '';
             if (status === 403) {
                 setError('Tidak punya akses P&L. Login sebagai super_admin / admin_finance.');
             } else {
@@ -153,6 +175,56 @@ export default function PnLPage() {
                                     </div>
                                     <span className="font-bold text-rose-600">({formatCurrency(data.expenses)})</span>
                                 </div>
+                            </div>
+                        </div>
+
+                        {/* Invoice Table */}
+                        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between gap-3">
+                                <h3 className="font-bold text-slate-900">Detail Invoice</h3>
+                                <p className="text-[11px] text-slate-500">
+                                    {Array.isArray(data.invoices) ? `${data.invoices.length} invoice` : '0 invoice'}
+                                </p>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-[760px] w-full text-sm">
+                                    <thead className="bg-white">
+                                        <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                                            <th className="px-4 py-3 font-bold">InvoiceId</th>
+                                            <th className="px-4 py-3 font-bold">Customer</th>
+                                            <th className="px-4 py-3 font-bold text-right">Subtotal</th>
+                                            <th className="px-4 py-3 font-bold text-right">Modal</th>
+                                            <th className="px-4 py-3 font-bold text-right">Laba</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {(data.invoices || []).length === 0 ? (
+                                            <tr>
+                                                <td className="px-4 py-6 text-slate-400" colSpan={5}>
+                                                    Tidak ada invoice paid di periode ini.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            (data.invoices || []).map((row) => (
+                                                <tr key={row.invoice_id} className="hover:bg-slate-50">
+                                                    <td className="px-4 py-3 font-mono text-[12px] text-slate-700">
+                                                        {row.invoice_number || row.invoice_id}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-slate-800">{row.customer_name || '-'}</td>
+                                                    <td className="px-4 py-3 text-right font-bold text-slate-900">
+                                                        {formatCurrency(row.subtotal)}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-bold text-slate-900">
+                                                        {formatCurrency(row.modal)}
+                                                    </td>
+                                                    <td className={`px-4 py-3 text-right font-black ${row.laba >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                                        {formatCurrency(row.laba)}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>

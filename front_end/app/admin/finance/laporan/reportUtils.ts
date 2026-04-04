@@ -1,4 +1,11 @@
-export const getIsoDate = (d: Date) => d.toISOString().split('T')[0];
+// Date input (`YYYY-MM-DD`) should reflect the user's local calendar date,
+// not UTC. Using `toISOString()` can shift the date in positive timezones.
+export const getIsoDate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export const getDefaultMonthRange = () => {
   const now = new Date();
@@ -16,4 +23,3 @@ export const toText = (value: unknown, fallback = '-') => {
   const text = String(value ?? '').trim();
   return text ? text : fallback;
 };
-

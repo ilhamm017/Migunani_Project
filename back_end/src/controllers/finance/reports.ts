@@ -18,12 +18,11 @@ import { CustomError } from '../../utils/CustomError';
 
 export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        const { startDate, endDate } = req.query;
-
-        const dateFilter: any = {};
-        if (startDate && endDate) {
-            dateFilter[Op.between] = [new Date(startDate as string), new Date(endDate as string)];
-        }
+        const { startDate, endDate, limit } = req.query;
+        const rowLimit = Math.min(Math.max(Number(limit || 200), 1), 2000);
+        const verifiedAtFilter = (startDate && endDate)
+            ? { [Op.between]: [new Date(String(startDate)), new Date(String(endDate))] }
+            : undefined;
 
         // 1. Revenue (Completed Sales)
         // Orders where status = completed? Or just Paid invoices?
@@ -33,14 +32,14 @@ export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response)
         const sales = await Invoice.sum('amount_paid', {
             where: {
                 payment_status: 'paid',
-                verified_at: dateFilter // Using verified_at instead of updatedAt
+                ...(verifiedAtFilter ? { verified_at: verifiedAtFilter } : {}) // Using verified_at instead of updatedAt
             }
         }) || 0;
 
         // 2. COGS (Cost of Goods Sold)
         // Aggregate from invoice items to support multi-order invoices.
         const paidInvoices = await Invoice.findAll({
-            where: { payment_status: 'paid', verified_at: dateFilter },
+            where: { payment_status: 'paid', ...(verifiedAtFilter ? { verified_at: verifiedAtFilter } : {}) },
             attributes: ['id']
         });
 
@@ -59,9 +58,42 @@ export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response)
         // 3. Expenses
         const opex = await Expense.sum('amount', {
             where: {
-                date: dateFilter
+                ...(verifiedAtFilter ? { date: verifiedAtFilter } : {})
             }
         }) || 0;
+
+        // 4. Invoice-level rows (for PnL detail table)
+        const invoiceRows = paidInvoiceIds.length > 0
+            ? await Invoice.findAll({
+                where: { id: { [Op.in]: paidInvoiceIds } },
+                attributes: ['id', 'invoice_number', 'subtotal', 'verified_at'],
+                include: [
+                    { model: InvoiceItem, as: 'Items', attributes: ['qty', 'unit_cost'] },
+                    {
+                        model: Order,
+                        attributes: ['id'],
+                        include: [{ model: User, as: 'Customer', attributes: ['id', 'name'] }]
+                    },
+                ],
+                order: [['verified_at', 'DESC']],
+                limit: rowLimit,
+            })
+            : [];
+
+        const invoices = invoiceRows.map((inv: any) => {
+            const items = Array.isArray(inv?.Items) ? inv.Items : [];
+            const modal = items.reduce((sum: number, it: any) => sum + (Number(it?.unit_cost || 0) * Number(it?.qty || 0)), 0);
+            const subtotal = Number(inv?.subtotal || 0);
+            const customerName = String(inv?.Order?.Customer?.name || '').trim() || '-';
+            return {
+                invoice_id: String(inv?.id),
+                invoice_number: String(inv?.invoice_number || ''),
+                customer_name: customerName,
+                subtotal,
+                modal,
+                laba: subtotal - modal,
+            };
+        });
 
         const grossProfit = Number(sales) - cogs;
         const netProfit = grossProfit - Number(opex);
@@ -72,11 +104,11 @@ export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response)
             cogs,
             gross_profit: grossProfit,
             expenses: Number(opex),
-            net_profit: netProfit
+            net_profit: netProfit,
+            invoices,
         });
 
     } catch (error) {
         throw new CustomError('Error calculating P&L', 500);
     }
 });
-

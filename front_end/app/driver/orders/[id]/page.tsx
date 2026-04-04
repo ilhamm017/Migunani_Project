@@ -354,6 +354,8 @@ export default function DriverCustomerOrdersPage() {
     const methods = new Set<string>();
     const statuses = new Set<string>();
     let hasUnresolvedMethod = false;
+    let hasLockedPaymentMethod = false;
+    let lockedPaymentMethodReason = '';
     invoiceCards.forEach((row: any) => {
       const method = String(row.paymentMethod || '').trim().toLowerCase();
       const status = String(row.paymentStatus || '').trim().toLowerCase();
@@ -362,11 +364,21 @@ export default function DriverCustomerOrdersPage() {
       if (!['cod', 'transfer_manual', 'cash_store'].includes(method) && status !== 'paid') {
         hasUnresolvedMethod = true;
       }
+      if (status === 'paid') {
+        hasLockedPaymentMethod = true;
+        lockedPaymentMethodReason = lockedPaymentMethodReason || 'Metode pembayaran dikunci karena invoice sudah lunas.';
+      }
+      if (status === 'cod_pending') {
+        hasLockedPaymentMethod = true;
+        lockedPaymentMethodReason = lockedPaymentMethodReason || 'Metode pembayaran dikunci karena COD sudah dicatat (pending setor).';
+      }
     });
     return {
       uniqueMethods: Array.from(methods),
       uniqueStatuses: Array.from(statuses),
       hasUnresolvedMethod,
+      hasLockedPaymentMethod,
+      lockedPaymentMethodReason,
     };
   }, [invoiceCards]);
 
@@ -637,6 +649,14 @@ export default function DriverCustomerOrdersPage() {
   const updateInvoicePaymentMethod = useCallback(async (nextMethod: 'cod' | 'transfer_manual') => {
     const invoiceId = normalizeId(activeInvoiceId);
     if (!invoiceId) return;
+    if (!activeInvoiceMeta.canUpdatePaymentMethod) {
+      notifyOpen({
+        variant: 'warning',
+        title: 'Perhatian',
+        message: activeInvoiceMeta.paymentMethodLockReason || 'Metode pembayaran sudah dikunci.',
+      });
+      return;
+    }
     try {
       setActiveInvoiceLoading(true);
       await api.driver.updatePaymentMethod(invoiceId, nextMethod);
@@ -648,12 +668,20 @@ export default function DriverCustomerOrdersPage() {
     } finally {
       setActiveInvoiceLoading(false);
     }
-  }, [activeInvoiceId]);
+  }, [activeInvoiceId, activeInvoiceMeta.canUpdatePaymentMethod, activeInvoiceMeta.paymentMethodLockReason]);
 
   const updateAllInvoicesPaymentMethod = useCallback(async (nextMethod: 'cod' | 'transfer_manual') => {
     if (activeInvoiceLoading) return;
     if (allInvoiceIds.length === 0) {
       notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada invoice.' });
+      return;
+    }
+    if (paymentMethodSummary.hasLockedPaymentMethod) {
+      notifyOpen({
+        variant: 'warning',
+        title: 'Perhatian',
+        message: paymentMethodSummary.lockedPaymentMethodReason || 'Metode pembayaran sudah dikunci.',
+      });
       return;
     }
     const label = nextMethod === 'cod' ? 'COD' : 'Transfer';
@@ -695,7 +723,7 @@ export default function DriverCustomerOrdersPage() {
     } finally {
       setActiveInvoiceLoading(false);
     }
-  }, [activeInvoiceLoading, allInvoiceIds]);
+  }, [activeInvoiceLoading, allInvoiceIds, paymentMethodSummary.hasLockedPaymentMethod, paymentMethodSummary.lockedPaymentMethodReason]);
 
   const recordSingleCodPayment = useCallback(async () => {
     const invoiceId = normalizeId(activeInvoiceId);
@@ -1041,7 +1069,7 @@ export default function DriverCustomerOrdersPage() {
                     <>
                 <button
                   type="button"
-                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0}
+                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0 || paymentMethodSummary.hasLockedPaymentMethod}
                   onClick={() => updateAllInvoicesPaymentMethod('cod')}
                   className={`btn-3d flex-1 px-3 py-2 rounded-xl border text-[10px] font-black uppercase disabled:opacity-60 ${codSelected ? 'border-amber-200 bg-amber-600 text-white hover:bg-amber-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
                 >
@@ -1049,7 +1077,7 @@ export default function DriverCustomerOrdersPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0}
+                  disabled={activeInvoiceLoading || allInvoiceIds.length === 0 || paymentMethodSummary.hasLockedPaymentMethod}
                   onClick={() => updateAllInvoicesPaymentMethod('transfer_manual')}
                   className={`btn-3d flex-1 px-3 py-2 rounded-xl border text-[10px] font-black uppercase disabled:opacity-60 ${transferSelected ? 'border-sky-200 bg-sky-600 text-white hover:bg-sky-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
                 >
@@ -1059,6 +1087,11 @@ export default function DriverCustomerOrdersPage() {
                   );
                 })()}
               </div>
+              {paymentMethodSummary.hasLockedPaymentMethod ? (
+                <p className="text-[11px] font-semibold text-amber-700">
+                  {paymentMethodSummary.lockedPaymentMethodReason || 'Metode pembayaran sudah dikunci.'}
+                </p>
+              ) : null}
               {paymentMethodSummary.hasUnresolvedMethod ? (
                 <p className="text-[11px] font-semibold text-slate-500">
                   Metode pembayaran belum ditentukan untuk sebagian invoice. Pilih COD/Transfer dulu.
