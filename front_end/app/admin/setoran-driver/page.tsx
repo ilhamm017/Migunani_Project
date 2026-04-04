@@ -11,7 +11,10 @@ import { formatMoneyId, parseMoneyInput } from '@/lib/money';
 type CodInvoiceRow = {
   invoice_id: string;
   invoice_number: string;
+  // `expected_total` from API is the outstanding amount (net_total - amount_received).
   expected_total: number;
+  net_total?: number;
+  amount_received?: number;
   created_at?: string | null;
   order_ids: string[];
   customer_names: string[];
@@ -342,6 +345,9 @@ export default function AdminSetoranDriverPage() {
                       const disabled = !canSelectInvoice(inv);
                       const checked = Boolean(selectedInvoiceIds[String(inv.invoice_id)]);
                       const warning = inv.requires_retur_handover && disabled;
+                      const netTotal = Number(inv.net_total || 0);
+                      const alreadyReceived = Number(inv.amount_received || 0);
+                      const outstanding = Number(inv.expected_total || 0);
                       return (
                         <label key={inv.invoice_id} className={`block rounded-2xl border p-4 ${warning ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-white'}`}>
                           <div className="flex items-start justify-between gap-3">
@@ -371,8 +377,14 @@ export default function AdminSetoranDriverPage() {
                               )}
                             </div>
                             <div className="text-right shrink-0">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Expected</p>
-                              <p className="text-sm font-black text-slate-900">{new Intl.NumberFormat('id-ID').format(Number(inv.expected_total || 0))}</p>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sisa</p>
+                              <p className="text-sm font-black text-slate-900">{new Intl.NumberFormat('id-ID').format(outstanding)}</p>
+                              {(netTotal > 0 || alreadyReceived > 0) && (
+                                <div className="mt-2 space-y-0.5">
+                                  <p className="text-[10px] font-bold text-slate-500">Total: <span className="font-black text-slate-700">{new Intl.NumberFormat('id-ID').format(netTotal)}</span></p>
+                                  <p className="text-[10px] font-bold text-slate-500">Sudah: <span className="font-black text-slate-700">{new Intl.NumberFormat('id-ID').format(alreadyReceived)}</span></p>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </label>

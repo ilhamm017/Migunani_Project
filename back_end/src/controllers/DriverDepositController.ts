@@ -33,7 +33,11 @@ import { parseMoneyInput } from '../utils/money';
 type DriverDepositCodInvoiceRow = {
     invoice_id: string;
     invoice_number: string;
+    // `expected_total` here means the outstanding amount to be settled (net_total - amount_received).
+    // Kept for backward-compat with front-end payload shape.
     expected_total: number;
+    net_total: number;
+    amount_received: number;
     created_at: string | null;
     order_ids: string[];
     customer_names: string[];
@@ -60,6 +64,8 @@ const toNumber = (value: unknown) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
 };
+
+const round2 = (value: unknown) => Math.round(toNumber(value) * 100) / 100;
 
 const settleOrNetBalanceAdjustments = async (created: DriverBalanceAdjustment, t: any) => {
     const driverId = String(created.driver_id || '').trim();
@@ -116,7 +122,7 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         include: [{
             model: Invoice,
             required: true,
-            attributes: ['id', 'invoice_number', 'courier_id', 'payment_method', 'payment_status', 'createdAt'],
+            attributes: ['id', 'invoice_number', 'courier_id', 'payment_method', 'payment_status', 'amount_received', 'createdAt'],
             where: {
                 payment_method: 'cod',
                 payment_status: 'cod_pending',
@@ -221,12 +227,16 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         const meta = invoiceMetaById.get(invId);
         const driverId = String(meta?.courier_id || invoiceDriverId.get(invId) || '').trim();
         if (!driverId) return;
-        const expected = toNumber(netTotalsByInvoiceId.get(invId)?.net_total);
+        const expected = round2(netTotalsByInvoiceId.get(invId)?.net_total);
+        const alreadyReceived = Math.max(0, round2(meta?.amount_received));
+        const outstanding = Math.max(0, round2(expected - alreadyReceived));
         const pendingHandover = pendingHandoverByInvoiceId.get(invId);
         const row: DriverDepositCodInvoiceRow = {
             invoice_id: invId,
             invoice_number: String(meta?.invoice_number || '').trim(),
-            expected_total: Math.round(expected * 100) / 100,
+            expected_total: outstanding,
+            net_total: expected,
+            amount_received: alreadyReceived,
             created_at: meta?.createdAt ? new Date(String(meta.createdAt)).toISOString() : null,
             order_ids: Array.from(invoiceOrderIds.get(invId) || []),
             customer_names: Array.from(invoiceCustomerNames.get(invId) || []),
@@ -742,7 +752,23 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             });
 
             const netTotals = await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t });
-            totalExpected = Math.round(invoiceIds.reduce((sum, id) => sum + toNumber(netTotals.get(id)?.net_total), 0) * 100) / 100;
+            const invoiceById = new Map<string, any>();
+            invoices.forEach((inv: any) => invoiceById.set(String(inv.id), inv));
+
+            const expectedByInvoiceId = new Map<string, number>();
+            const alreadyReceivedByInvoiceId = new Map<string, number>();
+            const outstandingByInvoiceId = new Map<string, number>();
+            for (const id of invoiceIds) {
+                const expected = Math.max(0, round2(netTotals.get(id)?.net_total));
+                const alreadyReceived = Math.max(0, round2(invoiceById.get(id)?.amount_received));
+                const outstanding = Math.max(0, round2(expected - alreadyReceived));
+                expectedByInvoiceId.set(id, expected);
+                alreadyReceivedByInvoiceId.set(id, alreadyReceived);
+                outstandingByInvoiceId.set(id, outstanding);
+            }
+
+            // totalExpected is the outstanding amount for selected invoices (supports partial settlements)
+            totalExpected = round2(invoiceIds.reduce((sum, id) => sum + (outstandingByInvoiceId.get(id) || 0), 0));
             codDiff = Math.round((amountReceived - totalExpected) * 100) / 100;
 
             // Determine affected orders for status updates + driver ownership
@@ -797,6 +823,35 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     created_by: actor.id,
                 }, { transaction: t });
                 createdAdjustment = adjustment;
+            }
+
+            // Allocate received amount to invoices (supports partial payments per invoice)
+            // Deterministic allocation: in the same order as request invoice_ids.
+            const allocationsByInvoiceId = new Map<string, number>();
+            let remainingPool = Math.max(0, round2(amountReceived));
+            for (const invId of invoiceIds) {
+                if (remainingPool <= 0) break;
+                const outstanding = Math.max(0, round2(outstandingByInvoiceId.get(invId) || 0));
+                if (outstanding <= 0) continue;
+                const pay = Math.min(outstanding, remainingPool);
+                const paid = round2(pay);
+                if (paid <= 0) continue;
+                allocationsByInvoiceId.set(invId, paid);
+                remainingPool = round2(remainingPool - paid);
+            }
+
+            // Record per-invoice settlement allocations (audit trail)
+            if (allocationsByInvoiceId.size > 0) {
+                await CodCollection.bulkCreate(
+                    Array.from(allocationsByInvoiceId.entries()).map(([invoice_id, amount]) => ({
+                        invoice_id,
+                        driver_id: driverId,
+                        settlement_id: Number(settlement.id),
+                        amount: round2(amount),
+                        status: 'settled',
+                    })),
+                    { transaction: t }
+                );
             }
 
             // Mark collections settled (if any)
@@ -894,11 +949,25 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                 }
             }
 
-            await Invoice.update({
-                payment_status: 'paid',
-                verified_at: new Date(),
-                verified_by: actor.id
-            }, { where: { id: { [Op.in]: invoiceIds } }, transaction: t });
+            // Update invoice settlement progress:
+            // - Increase invoice.amount_received by allocated amount for this settlement
+            // - Mark invoice as paid only when fully settled (amount_received >= expected net total)
+            for (const invId of invoiceIds) {
+                const inv = invoiceById.get(invId);
+                if (!inv) continue;
+                const prevReceived = Math.max(0, round2(alreadyReceivedByInvoiceId.get(invId) || inv.amount_received));
+                const allocated = Math.max(0, round2(allocationsByInvoiceId.get(invId) || 0));
+                const expected = Math.max(0, round2(expectedByInvoiceId.get(invId) || netTotals.get(invId)?.net_total));
+                const nextReceived = round2(prevReceived + allocated);
+
+                const isFullySettled = expected <= 0 ? true : nextReceived >= round2(expected - 0.005);
+                await inv.update({
+                    amount_received: nextReceived,
+                    payment_status: isFullySettled ? 'paid' : 'cod_pending',
+                    verified_at: isFullySettled ? new Date() : (inv.verified_at || null),
+                    verified_by: isFullySettled ? actor.id : (inv.verified_by || null),
+                }, { transaction: t });
+            }
 
             const previousStatusByOrderId: Record<string, string> = {};
             orders.forEach((o: any) => { previousStatusByOrderId[String(o.id)] = String(o.status || ''); });
