@@ -1555,14 +1555,29 @@ export const commitNormalizedRows = async (
                     reference_id: batchReference
                 }, { transaction });
 
-                await InventoryCostService.recordAdjustment({
-                    product_id: String(existingProduct.id),
-                    qty_diff: stockDelta,
-                    reference_type: 'inventory_import',
-                    reference_id: batchReference,
-                    note: `Stock adjusted by import (${previousStock} -> ${nextStock})`,
-                    transaction
-                });
+                if (stockDelta > 0) {
+                    // IMPORTANT: stock increases from import should create an inbound cost layer (batch) using the
+                    // imported unit cost, so a SKU can have multiple purchase prices over time.
+                    await InventoryCostService.recordInbound({
+                        product_id: String(existingProduct.id),
+                        qty: stockDelta,
+                        unit_cost: row.basePrice,
+                        reference_type: 'inventory_import',
+                        reference_id: batchReference,
+                        note: `Stock inbound by import (${previousStock} -> ${nextStock})`,
+                        merge_same_unit_cost: true,
+                        transaction
+                    });
+                } else {
+                    await InventoryCostService.recordAdjustment({
+                        product_id: String(existingProduct.id),
+                        qty_diff: stockDelta,
+                        reference_type: 'inventory_import',
+                        reference_id: batchReference,
+                        note: `Stock adjusted by import (${previousStock} -> ${nextStock})`,
+                        transaction
+                    });
+                }
             }
 
             summary.updated_count += 1;

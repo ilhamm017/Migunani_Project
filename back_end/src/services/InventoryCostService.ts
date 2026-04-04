@@ -116,6 +116,7 @@ export class InventoryCostService {
         reference_type?: string;
         reference_id?: string;
         note?: string;
+        merge_same_unit_cost?: boolean;
         transaction?: Transaction;
     }) {
         const t = params.transaction;
@@ -123,21 +124,53 @@ export class InventoryCostService {
         const unitCostIn = Math.max(0, Number(params.unit_cost || 0));
         if (qtyIn <= 0) return null;
 
-        await InventoryBatch.create({
-            product_id: params.product_id,
-            unit_cost: round4(unitCostIn),
-            qty_on_hand: qtyIn,
-            source_type: params.reference_type || null,
-            source_id: params.reference_id || null,
-            note: params.note || null
-        }, { transaction: t });
+        const roundedUnitCost = round4(unitCostIn);
+        const sourceType = params.reference_type || null;
+
+        if (params.merge_same_unit_cost) {
+            const existing = await InventoryBatch.findOne({
+                where: {
+                    product_id: params.product_id,
+                    unit_cost: roundedUnitCost,
+                    qty_on_hand: { [Op.gt]: 0 },
+                    ...(sourceType ? { source_type: sourceType } : {})
+                } as any,
+                order: [['createdAt', 'DESC'], ['id', 'DESC']],
+                transaction: t,
+                ...(t ? { lock: t.LOCK.UPDATE } : {})
+            });
+
+            if (existing) {
+                await existing.update({
+                    qty_on_hand: toQtyInt(Number((existing as any).qty_on_hand || 0) + qtyIn),
+                }, { transaction: t });
+            } else {
+                await InventoryBatch.create({
+                    product_id: params.product_id,
+                    unit_cost: roundedUnitCost,
+                    qty_on_hand: qtyIn,
+                    source_type: sourceType,
+                    source_id: params.reference_id || null,
+                    note: params.note || null
+                }, { transaction: t });
+            }
+        } else {
+            await InventoryBatch.create({
+                product_id: params.product_id,
+                unit_cost: roundedUnitCost,
+                qty_on_hand: qtyIn,
+                source_type: sourceType,
+                source_id: params.reference_id || null,
+                note: params.note || null
+            }, { transaction: t });
+        }
 
         const totalCost = round4(qtyIn * unitCostIn);
         await InventoryCostLedger.create({
             product_id: params.product_id,
             movement_type: 'in',
             qty: qtyIn,
-            unit_cost: round4(unitCostIn),
+            unit_cost: roundedUnitCost,
             total_cost: totalCost,
             reference_type: params.reference_type || null,
             reference_id: params.reference_id || null,
