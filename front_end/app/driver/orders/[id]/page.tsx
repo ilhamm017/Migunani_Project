@@ -40,6 +40,9 @@ const getInvoiceItems = (invoiceData?: InvoiceDetailResponse | null): any[] => {
   return [];
 };
 
+const CURRENCY_FORMATTER = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
+const formatCurrency = (value: number) => CURRENCY_FORMATTER.format(Math.round(value));
+
 type ShortageDraftRow = {
   key: string;
   invoiceId: string;
@@ -50,6 +53,26 @@ type ShortageDraftRow = {
   invoiceQty: number;
   missingQty: number;
 };
+
+type ReturnRow = {
+  key: string;
+  invoiceId: string;
+  orderId: string;
+  productId: string;
+  sku: string;
+  name: string;
+  availableQty: number;
+  unitPrice: number;
+  returnQty: number;
+};
+
+type ReturnModalState = {
+  rows: ReturnRow[];
+  returType: 'delivery_refusal' | 'delivery_damage';
+  saving: boolean;
+  error: string;
+};
+
 
 export default function DriverCustomerOrdersPage() {
   const allowed = useRequireRoles(['driver', 'super_admin', 'admin_gudang'], '/driver');
@@ -72,6 +95,7 @@ export default function DriverCustomerOrdersPage() {
     saving: boolean;
     error: string;
   } | null>(null);
+  const [returnModal, setReturnModal] = useState<ReturnModalState | null>(null);
   const [orders, setOrders] = useState<DriverAssignedOrderRow[]>([]);
   const [invoiceDetailsById, setInvoiceDetailsById] = useState<Record<string, InvoiceDetailResponse | null | undefined>>({});
 
@@ -391,6 +415,46 @@ export default function DriverCustomerOrdersPage() {
 
     return Array.from(itemMap.values()).sort((a, b) => b.qty - a.qty);
   }, [invoiceCards, invoiceDetailsById]);
+  const returnCandidates = useMemo(() => {
+    const map = new Map<string, ReturnRow>();
+    customerOrders.forEach((order) => {
+      const invoiceId = normalizeId((order as any)?.invoice_id || '');
+      const orderId = normalizeId((order as any)?.real_order_id || (order as any)?.id || '');
+      if (!invoiceId || !orderId) return;
+      const items = Array.isArray((order as any)?.OrderItems) ? (order as any).OrderItems : [];
+      items.forEach((item: any) => {
+        const productId = normalizeId(item?.product_id || (item?.Product?.id || ''));
+        const qty = Math.max(0, Math.trunc(Number(item?.qty || 0)));
+        if (!productId || qty <= 0) return;
+        const key = `${invoiceId}:${orderId}:${productId}`;
+        const existing = map.get(key);
+        if (existing) {
+          existing.availableQty += qty;
+          return;
+        }
+        map.set(key, {
+          key,
+          invoiceId,
+          orderId,
+          productId,
+          sku: String(item?.Product?.sku || item?.sku || '-'),
+          name: String(item?.Product?.name || item?.name || 'Produk'),
+          availableQty: qty,
+          unitPrice: Math.max(0, Number(item?.price_at_purchase || item?.unit_price || 0)),
+          returnQty: 0,
+        });
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name) || a.sku.localeCompare(b.sku));
+  }, [customerOrders]);
+
+  const returnCandidatesSummary = useMemo(() => {
+    const totalQty = returnCandidates.reduce((sum, row) => sum + row.availableQty, 0);
+    const totalValue = returnCandidates.reduce((sum, row) => sum + row.availableQty * row.unitPrice, 0);
+    return { totalQty, totalValue };
+  }, [returnCandidates]);
+
+
 
   const startBatchComplete = useCallback(() => {
     const ids = allInvoiceIds;
@@ -476,6 +540,99 @@ export default function DriverCustomerOrdersPage() {
       setPaymentLoading(false);
     }
   }, [codInvoiceIds, codTotalEstimate, load, paymentLoading]);
+  const returnModalSummary = useMemo(() => {
+    if (!returnModal) return { totalQty: 0, totalValue: 0 };
+    return {
+      totalQty: returnModal.rows.reduce((sum, row) => sum + row.returnQty, 0),
+      totalValue: returnModal.rows.reduce((sum, row) => sum + row.returnQty * row.unitPrice, 0),
+    };
+  }, [returnModal]);
+
+  const openReturnModal = useCallback(() => {
+    if (returnCandidates.length === 0) {
+      notifyOpen({ variant: 'warning', title: 'Perhatian', message: 'Tidak ada barang tertugaskan untuk customer ini.' });
+      return;
+    }
+    setReturnModal({
+      rows: returnCandidates.map((row) => ({ ...row, returnQty: 0 })),
+      returType: 'delivery_refusal',
+      saving: false,
+      error: '',
+    });
+  }, [returnCandidates]);
+
+  const closeReturnModal = useCallback(() => {
+    if (returnModal?.saving) return;
+    setReturnModal(null);
+  }, [returnModal]);
+
+  const updateReturnQty = useCallback((key: string, qty: number) => {
+    setReturnModal((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map((row) => (row.key === key ? { ...row, returnQty: Math.max(0, Math.min(qty, row.availableQty)) } : row)),
+      };
+    });
+  }, []);
+
+  const handleReturnSubmit = useCallback(async () => {
+    if (!returnModal || returnModal.saving) return;
+    const selected = returnModal.rows.filter((row) => row.returnQty > 0);
+    if (selected.length === 0) {
+      setReturnModal((prev) => prev ? { ...prev, error: 'Pilih minimal 1 barang untuk diretur.' } : prev);
+      return;
+    }
+    const totalQty = selected.reduce((sum, row) => sum + row.returnQty, 0);
+    const totalValue = selected.reduce((sum, row) => sum + row.returnQty * row.unitPrice, 0);
+    const confirmed = await notifyConfirm({
+      title: 'Kirim Retur Barang',
+      message: `Kirim retur untuk ${totalQty} item (potongan Rp ${Math.round(totalValue).toLocaleString('id-ID')})?`,
+      confirmLabel: 'Kirim Retur',
+      cancelLabel: 'Batal',
+      variant: 'warning',
+    });
+    if (!confirmed) return;
+
+    setReturnModal((prev) => prev ? { ...prev, saving: true, error: '' } : prev);
+    try {
+      const groups = new Map<string, ReturnRow[]>();
+      selected.forEach((row) => {
+        const invoiceId = normalizeId(row.invoiceId);
+        if (!invoiceId) return;
+        const bucket = groups.get(invoiceId) || [];
+        bucket.push(row);
+        groups.set(invoiceId, bucket);
+      });
+      for (const [invoiceId, rows] of groups.entries()) {
+        if (!invoiceId) continue;
+        const payload = {
+          retur_type: returnModal.returType,
+          items: rows.map((row) => ({
+            product_id: row.productId,
+            order_id: row.orderId,
+            qty: row.returnQty,
+            reason: returnModal.returType === 'delivery_damage'
+              ? 'Retur saat pengiriman (barang rusak)'
+              : 'Retur saat pengiriman (tidak jadi beli)',
+          })),
+        };
+        await api.driver.createDeliveryReturTicket(invoiceId, payload);
+        const res = await api.invoices.getById(invoiceId);
+        setInvoiceDetailsById((prev) => ({ ...prev, [invoiceId]: res.data || null }));
+      }
+      notifySuccess('Retur tercatat. Driver tercatat membawa barang retur sampai admin verifikasi serah gudang.');
+      await load();
+      clearSelectedInvoice();
+      setReturnModal(null);
+    } catch (error: any) {
+      const message = String((error?.response?.data as any)?.message || error?.message || 'Gagal mencatat retur.');
+      setReturnModal((prev) => prev ? { ...prev, saving: false, error: message } : prev);
+      notifyFromAlertMessage(message);
+    }
+  }, [clearSelectedInvoice, load, returnModal, setInvoiceDetailsById]);
+
+
 
   const updateInvoicePaymentMethod = useCallback(async (nextMethod: 'cod' | 'transfer_manual') => {
     const invoiceId = normalizeId(activeInvoiceId);
@@ -937,6 +1094,24 @@ export default function DriverCustomerOrdersPage() {
             )}
           </div>
 
+          <div className="rounded-[24px] border border-slate-200 bg-white p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pengembalian Barang</p>
+                <p className="text-sm font-black text-slate-900 truncate">Laporkan retur kepada gudang</p>
+              </div>
+              <button
+                type="button"
+                onClick={openReturnModal}
+                disabled={returnCandidatesSummary.totalQty === 0 || Boolean(returnModal?.saving)}
+                className="btn-3d px-3 py-2 rounded-xl text-[10px] font-black uppercase border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-60"
+              >
+                Laporkan Retur
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500">Setelah retur disimpan, driver tercatat membawa barang retur (status picked_up) hingga admin verifikasi serah gudang.</p>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bukti Foto Pengiriman</p>
@@ -1065,6 +1240,128 @@ export default function DriverCustomerOrdersPage() {
                       </div>
                     );
                   })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {returnModal && (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/60"
+            aria-label="Tutup popup"
+            onClick={closeReturnModal}
+          />
+          <div className="absolute inset-x-0 top-6 mx-auto w-[min(720px,calc(100%-2rem))]">
+            <div className="bg-white rounded-[28px] shadow-2xl border border-slate-200 overflow-hidden">
+              <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Retur Barang</p>
+                  <p className="text-lg font-black text-slate-900 truncate">{returnModal.rows.length} item tersedia</p>
+                  <p className="text-[11px] font-bold text-slate-500 mt-1">Total pilihan: {returnModalSummary.totalQty} item • {formatCurrency(returnModalSummary.totalValue)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeReturnModal}
+                  className="btn-3d h-10 w-10 rounded-2xl bg-white border border-slate-200 inline-flex items-center justify-center text-slate-700"
+                  disabled={returnModal.saving}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 max-h-[70vh] overflow-auto">
+                {returnModal.error ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-700">
+                    {returnModal.error}
+                  </div>
+                ) : null}
+
+                <div className="space-y-3">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Jenis Retur</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReturnModal((prev) => prev ? { ...prev, returType: 'delivery_refusal' } : prev)}
+                      className={`btn-3d px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest ${returnModal.returType === 'delivery_refusal' ? 'border-emerald-200 bg-emerald-600 text-white hover:bg-emerald-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
+                    >
+                      Tidak jadi beli
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReturnModal((prev) => prev ? { ...prev, returType: 'delivery_damage' } : prev)}
+                      className={`btn-3d px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest ${returnModal.returType === 'delivery_damage' ? 'border-amber-200 bg-amber-600 text-white hover:bg-amber-700' : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'}`}
+                    >
+                      Barang rusak
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {returnModal.rows.map((row) => {
+                    const currentQty = Math.max(0, Math.min(row.availableQty, Math.trunc(Number(row.returnQty || 0))));
+                    return (
+                      <div key={row.key} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-black text-slate-900 truncate">{row.name}</p>
+                            <p className="text-[10px] text-slate-500">Invoice {row.invoiceId} • Order {row.orderId}</p>
+                            <p className="text-[10px] text-slate-500">SKU {row.sku} • Max {row.availableQty} • Harga {formatCurrency(row.unitPrice)}</p>
+                          </div>
+                          <div className="min-w-[180px] text-right space-y-1">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Qty retur</p>
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => updateReturnQty(row.key, Math.max(0, currentQty - 1))}
+                                disabled={returnModal.saving || currentQty <= 0}
+                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-700 disabled:opacity-50"
+                              >
+                                <Minus size={14} />
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={row.availableQty}
+                                value={currentQty}
+                                disabled={returnModal.saving}
+                                onChange={(e) => updateReturnQty(row.key, Math.max(0, Math.min(row.availableQty, Math.trunc(Number(e.target.value || 0)))))}
+                                className="w-16 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-black text-slate-900 text-right outline-none focus:bg-white focus:border-rose-300"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => updateReturnQty(row.key, Math.min(row.availableQty, currentQty + 1))}
+                                disabled={returnModal.saving || currentQty >= row.availableQty}
+                                className="btn-3d inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-700 disabled:opacity-50"
+                              >
+                                <Plus size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 bg-white px-5 py-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Potongan total</p>
+                    <p className="text-lg font-black text-emerald-700">{formatCurrency(returnModalSummary.totalValue)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleReturnSubmit}
+                    disabled={returnModal.saving || returnModalSummary.totalQty === 0}
+                    className="btn-3d rounded-xl bg-rose-600 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-white disabled:opacity-50"
+                  >
+                    {returnModal.saving ? 'Mengirim...' : 'Kirim Retur'}
+                  </button>
                 </div>
               </div>
             </div>
