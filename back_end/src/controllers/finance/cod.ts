@@ -20,8 +20,9 @@ import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
 import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
-import { CustomerBalanceService } from '../../services/CustomerBalanceService';
 import { parseMoneyInput } from '../../utils/money';
+import { round2 } from '../../utils/codAllocation';
+import { resolveSingleCustomerIdForInvoice, syncCustomerCodInvoiceDelta, toCodResolutionStatus } from '../../utils/codCustomerDelta';
 
 // --- Driver COD Deposit ---
 
@@ -246,7 +247,11 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
         }
 
         let invoices: any[] = [];
+        let invoiceIds: string[] = [];
+        let netTotals: Map<string, any> = new Map<string, any>();
         let totalExpected = 0;
+        const collectedByInvoiceId = new Map<string, number>();
+        const outstandingDepositByInvoiceId = new Map<string, number>();
         const previousOrderStatusById: Record<string, string> = {};
         const orderToInvoiceMap = new Map<string, any>();
         const orderById = new Map<string, any>();
@@ -361,17 +366,23 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             }
 
             invoices = Array.from(invoiceMap.values());
-            const invoiceIds = invoices.map((inv: any) => String(inv?.id || '').trim()).filter(Boolean);
-            const netTotals = invoiceIds.length > 0 ? await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t }) : new Map<string, any>();
-            totalExpected = invoices.reduce((sum, invoice: any) => {
+            invoiceIds = invoices.map((inv: any) => String(inv?.id || '').trim()).filter(Boolean);
+            netTotals = invoiceIds.length > 0 ? await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t }) : new Map<string, any>();
+            collectedByInvoiceId.clear();
+            outstandingDepositByInvoiceId.clear();
+            totalExpected = 0;
+            invoices.forEach((invoice: any) => {
                 const invId = String(invoice?.id || '').trim();
-                const amountPaid = Number(invoice?.amount_paid || 0);
-                if (Number.isFinite(amountPaid) && amountPaid > 0) return sum + amountPaid;
-                const computedNet = Number(netTotals.get(invId)?.net_total);
-                if (Number.isFinite(computedNet) && computedNet >= 0) return sum + computedNet;
-                const invoiceGross = Number(invoice?.total);
-                return sum + (Number.isFinite(invoiceGross) ? invoiceGross : 0);
-            }, 0);
+                if (!invId) return;
+                const expectedNet = Math.max(0, round2(netTotals.get(invId)?.net_total || 0));
+                const collectedRaw = Math.max(0, round2(invoice?.amount_paid || 0));
+                const collected = collectedRaw > 0 ? collectedRaw : expectedNet;
+                const alreadyReceived = Math.max(0, round2(invoice?.amount_received || 0));
+                const outstandingDeposit = Math.max(0, round2(collected - alreadyReceived));
+                collectedByInvoiceId.set(invId, collected);
+                outstandingDepositByInvoiceId.set(invId, outstandingDeposit);
+                totalExpected = round2(totalExpected + outstandingDeposit);
+            });
 
             affectedOrderIds = allOrderIds;
             allOrders.forEach((order: any) => {
@@ -387,7 +398,7 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             });
         }
 
-        const diff = received - totalExpected;
+        const diff = round2(received - totalExpected);
         // Driver debt already includes COD collected by the driver.
         // Settlement must reduce existing debt by the cash handed to finance,
         // not add the invoice total a second time.
@@ -442,104 +453,57 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                 });
             }
 
-            // Allocate settlement diff to customer balances (pro-rata by expected total per invoice)
-            if (diff !== 0) {
-                const invoiceItemsForCustomer = await InvoiceItem.findAll({
-                    where: { invoice_id: { [Op.in]: invoiceIds } },
-                    attributes: ['invoice_id'],
-                    include: [{
-                        model: OrderItem,
-                        required: true,
-                        attributes: ['order_id']
-                    }],
-                    transaction: t,
-                    lock: t.LOCK.UPDATE
+            // Allocate received cash to invoices by outstanding deposit (collected - already_deposited).
+            // Any (received - expected_deposit) becomes driver diff (credit/debt) and should not be applied to invoices.
+            const invoiceById = new Map<string, any>();
+            invoices.forEach((inv: any) => invoiceById.set(String(inv?.id || '').trim(), inv));
+
+            const allocationsByInvoiceId = new Map<string, number>();
+            let remainingPool = Math.max(0, round2(received));
+            for (const invId of invoiceIds) {
+                if (remainingPool <= 0) break;
+                const outstanding = Math.max(0, round2(outstandingDepositByInvoiceId.get(invId) || 0));
+                if (outstanding <= 0) continue;
+                const pay = Math.min(outstanding, remainingPool);
+                const paid = round2(pay);
+                if (paid <= 0) continue;
+                allocationsByInvoiceId.set(invId, paid);
+                remainingPool = round2(remainingPool - paid);
+            }
+
+            for (const invId of invoiceIds) {
+                const inv = invoiceById.get(invId);
+                if (!inv) continue;
+                const prevReceived = Math.max(0, round2(inv.amount_received || 0));
+                const allocated = Math.max(0, round2(allocationsByInvoiceId.get(invId) || 0));
+                const nextReceived = round2(prevReceived + allocated);
+                const collected = Math.max(0, round2(collectedByInvoiceId.get(invId) || inv.amount_paid || 0));
+                const isFullyDeposited = collected <= 0 ? true : nextReceived >= round2(collected - 0.005);
+                await inv.update({
+                    amount_received: nextReceived,
+                    payment_status: isFullyDeposited ? 'paid' : 'cod_pending',
+                    verified_at: isFullyDeposited ? new Date() : (inv.verified_at || null),
+                    verified_by: isFullyDeposited ? verifierId : (inv.verified_by || null),
+                }, { transaction: t });
+            }
+
+            // Sync per-invoice customer delta (collected - expected net)
+            for (const invId of invoiceIds) {
+                const collected = Math.max(0, round2(collectedByInvoiceId.get(invId) || 0));
+                const expectedFinal = Math.max(0, round2(netTotals.get(invId)?.net_total || 0));
+                const desiredCustomerDelta = round2(collected - expectedFinal);
+                const customerId = await resolveSingleCustomerIdForInvoice(invId, { transaction: t });
+                await syncCustomerCodInvoiceDelta({
+                    invoiceId: invId,
+                    customerId,
+                    desiredDelta: desiredCustomerDelta,
+                    createdBy: verifierId,
+                    note: `COD invoice delta (finance verify): expected=${expectedFinal}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    transaction: t
                 });
-
-                const orderIdsForCustomer = Array.from(new Set(invoiceItemsForCustomer
-                    .map((row: any) => String(row?.OrderItem?.order_id || '').trim())
-                    .filter(Boolean)));
-                const ordersForCustomer = orderIdsForCustomer.length > 0
-                    ? await Order.findAll({
-                        where: { id: { [Op.in]: orderIdsForCustomer } },
-                        attributes: ['id', 'customer_id'],
-                        transaction: t,
-                        lock: t.LOCK.UPDATE
-                    })
-                    : [];
-
-                const orderCustomerById = new Map<string, string>();
-                ordersForCustomer.forEach((o: any) => {
-                    const orderId = String(o?.id || '').trim();
-                    const customerId = String(o?.customer_id || '').trim();
-                    if (orderId && customerId) orderCustomerById.set(orderId, customerId);
-                });
-
-                const orderIdsByInvoiceId = new Map<string, Set<string>>();
-                invoiceItemsForCustomer.forEach((row: any) => {
-                    const invId = String(row?.invoice_id || '').trim();
-                    const orderId = String(row?.OrderItem?.order_id || '').trim();
-                    if (!invId || !orderId) return;
-                    if (!orderIdsByInvoiceId.has(invId)) orderIdsByInvoiceId.set(invId, new Set());
-                    orderIdsByInvoiceId.get(invId)!.add(orderId);
-                });
-
-                const customerByInvoiceId = new Map<string, string>();
-                const missingCustomerInvoices: string[] = [];
-                const multiCustomerInvoices: string[] = [];
-                for (const invId of invoiceIds) {
-                    const orderIds = Array.from(orderIdsByInvoiceId.get(invId) || []);
-                    const customerIds = Array.from(new Set(orderIds.map((oid) => orderCustomerById.get(oid)).filter(Boolean) as string[]));
-                    if (customerIds.length === 0) {
-                        missingCustomerInvoices.push(invId);
-                        continue;
-                    }
-                    if (customerIds.length > 1) {
-                        multiCustomerInvoices.push(invId);
-                        continue;
-                    }
-                    customerByInvoiceId.set(invId, customerIds[0]!);
-                }
-                if (missingCustomerInvoices.length > 0) {
-                    await t.rollback();
-                    throw new CustomError(`COD settlement gagal: tidak bisa resolve customer untuk invoice: ${missingCustomerInvoices.join(', ')}`, 409);
-                }
-                if (multiCustomerInvoices.length > 0) {
-                    await t.rollback();
-                    throw new CustomError(`COD settlement gagal: 1 invoice berisi lebih dari 1 customer: ${multiCustomerInvoices.join(', ')}`, 409);
-                }
-
-                const netTotals = invoiceIds.length > 0
-                    ? await computeInvoiceNetTotalsBulk(invoiceIds, { transaction: t })
-                    : new Map<string, any>();
-                const weightsByCustomerId = new Map<string, number>();
-                invoices.forEach((invoice: any) => {
-                    const invId = String(invoice?.id || '').trim();
-                    if (!invId) return;
-                    const customerId = customerByInvoiceId.get(invId);
-                    if (!customerId) return;
-                    const amountPaid = Number(invoice?.amount_paid || 0);
-                    const computedNet = Number(netTotals.get(invId)?.net_total);
-                    const invoiceGross = Number(invoice?.total);
-                    const expected = (Number.isFinite(amountPaid) && amountPaid > 0)
-                        ? amountPaid
-                        : (Number.isFinite(computedNet) && computedNet >= 0 ? computedNet : (Number.isFinite(invoiceGross) ? invoiceGross : 0));
-                    weightsByCustomerId.set(customerId, (weightsByCustomerId.get(customerId) || 0) + Math.max(0, expected));
-                });
-
-                const allocations = CustomerBalanceService.allocateDiffProRata(diff, weightsByCustomerId);
-                for (const [customerId, amount] of allocations.entries()) {
-                    if (!amount) continue;
-                    await CustomerBalanceService.createEntry({
-                        customer_id: customerId,
-                        amount,
-                        entry_type: 'cod_settlement_delta',
-                        reference_type: 'cod_settlement',
-                        reference_id: String(settlement.id),
-                        created_by: verifierId,
-                        note: `Selisih COD settlement #${settlement.id}: expected=${totalExpected}, received=${received}, diff=${diff}.`,
-                        idempotency_key: `balance_cod_settlement_${settlement.id}_${customerId}`,
-                    }, { transaction: t });
+                const inv = invoiceById.get(invId);
+                if (inv) {
+                    await inv.update({ cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) }, { transaction: t });
                 }
             }
 
@@ -645,14 +609,6 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                     nextStatus
                 });
             }
-            await Invoice.update({
-                payment_status: 'paid',
-                verified_at: new Date(),
-                verified_by: verifierId
-            }, {
-                where: { id: { [Op.in]: invoiceIds } },
-                transaction: t
-            });
 
             for (const result of finalizedOrderResults) {
                 await Order.update({
@@ -667,31 +623,19 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
             if (totalExpected > 0 || received > 0) {
                 const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
                 const piutangDriverAcc = await Account.findOne({ where: { code: '1104' }, transaction: t });
-                const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
-                const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
-
-                const expected = Math.max(0, Math.round(Number(totalExpected || 0) * 100) / 100);
-                const recv = Math.max(0, Math.round(Number(received || 0) * 100) / 100);
-                const shortage = Math.max(0, Math.round((expected - recv) * 100) / 100);
-                const surplus = Math.max(0, Math.round((recv - expected) * 100) / 100);
-
-                if (cashAcc && piutangDriverAcc && expected > 0) {
-                    const lines: any[] = [];
-                    if (recv > 0) lines.push({ account_id: cashAcc.id, debit: recv, credit: 0 });
-                    if (shortage > 0 && arAcc) lines.push({ account_id: arAcc.id, debit: shortage, credit: 0 });
-                    lines.push({ account_id: piutangDriverAcc.id, debit: 0, credit: expected });
-                    if (surplus > 0 && customerSaldoAcc) lines.push({ account_id: customerSaldoAcc.id, debit: 0, credit: surplus });
-
-                    if (lines.length >= 2) {
-                        await JournalService.createEntry({
-                            description: `Setoran COD Settlement #${settlement.id} (Driver: ${driver.name})`,
-                            reference_type: 'cod_settlement',
-                            reference_id: String(settlement.id),
-                            created_by: verifierId,
-                            idempotency_key: `cod_settlement_balance_${settlement.id}`,
-                            lines
-                        }, t);
-                    }
+                const recv = Math.max(0, round2(received || 0));
+                if (cashAcc && piutangDriverAcc && recv > 0) {
+                    await JournalService.createEntry({
+                        description: `Setoran COD Settlement #${settlement.id} (Driver: ${driver.name})`,
+                        reference_type: 'cod_settlement',
+                        reference_id: String(settlement.id),
+                        created_by: verifierId,
+                        idempotency_key: `cod_settlement_balance_${settlement.id}`,
+                        lines: [
+                            { account_id: cashAcc.id, debit: recv, credit: 0 },
+                            { account_id: piutangDriverAcc.id, debit: 0, credit: recv },
+                        ]
+                    }, t);
                 }
             }
         }

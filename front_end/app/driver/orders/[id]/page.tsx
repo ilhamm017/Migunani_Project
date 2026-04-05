@@ -9,7 +9,7 @@ import type { ChangeEvent } from 'react';
 import { ArrowLeft, ChevronRight, MapPin, Package, Phone, User, Wallet, X, Minus, Plus } from 'lucide-react';
 import { useRequireRoles } from '@/lib/guards';
 import { api } from '@/lib/api';
-import { notifyConfirm, notifyFromAlertMessage, notifyOpen, notifySuccess } from '@/lib/notify';
+import { notifyConfirm, notifyFromAlertMessage, notifyOpen, notifyPrompt, notifySuccess } from '@/lib/notify';
 import type { DriverAssignedOrderRow, InvoiceDetailResponse } from '@/lib/apiTypes';
 import { collectInvoiceRefs } from '@/lib/invoiceRefs';
 
@@ -534,7 +534,7 @@ export default function DriverCustomerOrdersPage() {
     const totalLabel = `Rp ${Math.round(codTotalEstimate).toLocaleString('id-ID')}`;
     const confirmed = await notifyConfirm({
       title: 'Catat Pembayaran COD',
-      message: `Catat pembayaran COD untuk ${codInvoiceIds.length} invoice (total ${totalLabel})?`,
+      message: `Catat pembayaran COD untuk ${codInvoiceIds.length} invoice (estimasi total ${totalLabel})?`,
       confirmLabel: 'Catat COD',
       cancelLabel: 'Batal',
       variant: 'warning',
@@ -543,7 +543,28 @@ export default function DriverCustomerOrdersPage() {
 
     try {
       setPaymentLoading(true);
-      await api.driver.recordPaymentBatch({ invoice_ids: codInvoiceIds });
+      const input = await notifyPrompt({
+        title: 'Uang Diterima',
+        message: 'Masukkan uang yang diterima dari customer (boleh kurang). Kosong = sesuai tagihan.',
+        inputLabel: 'amount_received',
+        placeholder: 'Kosongkan = sesuai tagihan',
+        initialValue: codTotalEstimate > 0 ? String(Math.round(codTotalEstimate)) : '',
+        confirmLabel: 'OK',
+        cancelLabel: 'Batal',
+        variant: 'info',
+      });
+      if (input === null) return;
+      const trimmed = input.trim();
+      let amountReceived: number | undefined = undefined;
+      if (trimmed) {
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          notifyOpen({ variant: 'error', title: 'Input tidak valid', message: 'Nominal harus angka >= 0.' });
+          return;
+        }
+        amountReceived = parsed;
+      }
+      await api.driver.recordPaymentBatch({ invoice_ids: codInvoiceIds, ...(amountReceived !== undefined ? { amount_received: amountReceived } : {}) });
       notifySuccess(`Pembayaran COD berhasil dicatat untuk ${codInvoiceIds.length} invoice.`);
       await load();
     } catch (error: any) {
@@ -738,7 +759,28 @@ export default function DriverCustomerOrdersPage() {
     if (!confirmed) return;
     try {
       setActiveInvoiceLoading(true);
-      await api.driver.recordPaymentBatch({ invoice_ids: [invoiceId] });
+      const input = await notifyPrompt({
+        title: 'Uang Diterima',
+        message: 'Masukkan uang yang diterima dari customer (boleh kurang). Kosong = sesuai tagihan.',
+        inputLabel: 'amount_received',
+        placeholder: 'Kosongkan = sesuai tagihan',
+        initialValue: '',
+        confirmLabel: 'OK',
+        cancelLabel: 'Batal',
+        variant: 'info',
+      });
+      if (input === null) return;
+      const trimmed = input.trim();
+      let amountReceived: number | undefined = undefined;
+      if (trimmed) {
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          notifyOpen({ variant: 'error', title: 'Input tidak valid', message: 'Nominal harus angka >= 0.' });
+          return;
+        }
+        amountReceived = parsed;
+      }
+      await api.driver.recordPaymentBatch({ invoice_ids: [invoiceId], ...(amountReceived !== undefined ? { amount_received: amountReceived } : {}) });
       const res = await api.invoices.getById(invoiceId);
       setInvoiceDetailsById((prev) => ({ ...prev, [invoiceId]: res.data || null }));
       notifySuccess('Pembayaran COD berhasil dicatat.');

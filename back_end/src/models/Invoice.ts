@@ -10,6 +10,7 @@ interface InvoiceAttributes {
     invoice_number: string;
     payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
+    cod_resolution_status?: 'ok' | 'customer_underpay' | 'customer_overpay' | 'needs_recalc' | null;
     amount_paid: number;
     amount_received?: number | null;
     change_amount: number;
@@ -45,6 +46,7 @@ class Invoice extends Model<InvoiceAttributes, InvoiceCreationAttributes> implem
     declare invoice_number: string;
     declare payment_method: 'pending' | 'transfer_manual' | 'cod' | 'cash_store';
     declare payment_status: 'unpaid' | 'paid' | 'cod_pending' | 'draft';
+    declare cod_resolution_status: 'ok' | 'customer_underpay' | 'customer_overpay' | 'needs_recalc' | null;
     declare amount_paid: number;
     declare amount_received: number | null;
     declare change_amount: number;
@@ -109,6 +111,10 @@ Invoice.init(
         payment_status: {
             type: DataTypes.ENUM('unpaid', 'paid', 'cod_pending', 'draft'),
             defaultValue: 'unpaid',
+        },
+        cod_resolution_status: {
+            type: DataTypes.STRING(32),
+            allowNull: true,
         },
         amount_paid: {
             type: DataTypes.DECIMAL(15, 2),

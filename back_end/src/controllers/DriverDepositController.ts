@@ -27,14 +27,14 @@ import { JournalService } from '../services/JournalService';
 import { ReturService } from '../services/ReturService';
 import { bulkUpdateReturHandoversSafe, findAllReturHandoversSafe, findReturHandoverByPkSafe, updateReturHandoverSafe } from '../utils/returHandoverSchemaCompat';
 import { recordOrderStatusChanged } from '../utils/orderEvent';
-import { CustomerBalanceService } from '../services/CustomerBalanceService';
 import { parseMoneyInput } from '../utils/money';
+import { resolveSingleCustomerIdForInvoice, syncCustomerCodInvoiceDelta, toCodResolutionStatus } from '../utils/codCustomerDelta';
 
 type DriverDepositCodInvoiceRow = {
     invoice_id: string;
     invoice_number: string;
-    // `expected_total` here means the outstanding amount to be settled (net_total - amount_received).
-    // Kept for backward-compat with front-end payload shape.
+    // `expected_total` here means the outstanding deposit amount to be settled (collected_snapshot - amount_received).
+    // `collected_snapshot` uses invoice.amount_paid when available, otherwise falls back to computed net_total (legacy).
     expected_total: number;
     net_total: number;
     amount_received: number;
@@ -122,7 +122,7 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         include: [{
             model: Invoice,
             required: true,
-            attributes: ['id', 'invoice_number', 'courier_id', 'payment_method', 'payment_status', 'amount_received', 'createdAt'],
+            attributes: ['id', 'invoice_number', 'courier_id', 'payment_method', 'payment_status', 'amount_paid', 'amount_received', 'createdAt'],
             where: {
                 payment_method: 'cod',
                 payment_status: 'cod_pending',
@@ -227,15 +227,16 @@ export const getDriverDepositList = asyncWrapper(async (req: Request, res: Respo
         const meta = invoiceMetaById.get(invId);
         const driverId = String(meta?.courier_id || invoiceDriverId.get(invId) || '').trim();
         if (!driverId) return;
-        const expected = round2(netTotalsByInvoiceId.get(invId)?.net_total);
+        const expectedNet = round2(netTotalsByInvoiceId.get(invId)?.net_total);
+        const collectedSnapshot = Math.max(0, round2(meta?.amount_paid)) > 0 ? Math.max(0, round2(meta?.amount_paid)) : Math.max(0, expectedNet);
         const alreadyReceived = Math.max(0, round2(meta?.amount_received));
-        const outstanding = Math.max(0, round2(expected - alreadyReceived));
+        const outstandingDeposit = Math.max(0, round2(collectedSnapshot - alreadyReceived));
         const pendingHandover = pendingHandoverByInvoiceId.get(invId);
         const row: DriverDepositCodInvoiceRow = {
             invoice_id: invId,
             invoice_number: String(meta?.invoice_number || '').trim(),
-            expected_total: outstanding,
-            net_total: expected,
+            expected_total: outstandingDeposit,
+            net_total: expectedNet,
             amount_received: alreadyReceived,
             created_at: meta?.createdAt ? new Date(String(meta.createdAt)).toISOString() : null,
             order_ids: Array.from(invoiceOrderIds.get(invId) || []),
@@ -765,21 +766,23 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             const invoiceById = new Map<string, any>();
             invoices.forEach((inv: any) => invoiceById.set(String(inv.id), inv));
 
-            const expectedByInvoiceId = new Map<string, number>();
+            const collectedByInvoiceId = new Map<string, number>();
             const alreadyReceivedByInvoiceId = new Map<string, number>();
-            const outstandingByInvoiceId = new Map<string, number>();
+            const outstandingDepositByInvoiceId = new Map<string, number>();
             for (const id of invoiceIds) {
-                const expected = Math.max(0, round2(netTotals.get(id)?.net_total));
+                const expectedNet = Math.max(0, round2(netTotals.get(id)?.net_total));
+                const collectedRaw = Math.max(0, round2(invoiceById.get(id)?.amount_paid));
+                const collected = collectedRaw > 0 ? collectedRaw : expectedNet; // backward-compat fallback
                 const alreadyReceived = Math.max(0, round2(invoiceById.get(id)?.amount_received));
-                const outstanding = Math.max(0, round2(expected - alreadyReceived));
-                expectedByInvoiceId.set(id, expected);
+                const outstandingDeposit = Math.max(0, round2(collected - alreadyReceived));
+                collectedByInvoiceId.set(id, collected);
                 alreadyReceivedByInvoiceId.set(id, alreadyReceived);
-                outstandingByInvoiceId.set(id, outstanding);
+                outstandingDepositByInvoiceId.set(id, outstandingDeposit);
             }
 
-            // totalExpected is the outstanding amount for selected invoices (supports partial settlements)
-            totalExpected = round2(invoiceIds.reduce((sum, id) => sum + (outstandingByInvoiceId.get(id) || 0), 0));
-            codDiff = Math.round((amountReceived - totalExpected) * 100) / 100;
+            // totalExpected is the outstanding deposit amount for selected invoices (supports partial settlements)
+            totalExpected = round2(invoiceIds.reduce((sum, id) => sum + (outstandingDepositByInvoiceId.get(id) || 0), 0));
+            codDiff = round2(amountReceived - totalExpected);
 
             // Determine affected orders for status updates + driver ownership
             const invoiceItems = await InvoiceItem.findAll({
@@ -842,7 +845,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             let remainingPool = Math.max(0, round2(amountReceived));
             for (const invId of invoiceIds) {
                 if (remainingPool <= 0) break;
-                const outstanding = Math.max(0, round2(outstandingByInvoiceId.get(invId) || 0));
+                const outstanding = Math.max(0, round2(outstandingDepositByInvoiceId.get(invId) || 0));
                 if (outstanding <= 0) continue;
                 const pay = Math.min(outstanding, remainingPool);
                 const paid = round2(pay);
@@ -881,103 +884,46 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                 });
             }
 
-            // Allocate COD diff to customer balance entries (pro-rata by expected net total per invoice)
-            if (codDiff !== 0) {
-                const invoiceItemsForCustomer = await InvoiceItem.findAll({
-                    where: { invoice_id: { [Op.in]: invoiceIds } },
-                    attributes: ['invoice_id'],
-                    include: [{
-                        model: OrderItem,
-                        required: true,
-                        attributes: ['order_id'],
-                    }],
-                    transaction: t,
-                    lock: t.LOCK.UPDATE
-                });
-
-                const orderCustomerById = new Map<string, string>();
-                orders.forEach((o: any) => {
-                    const orderId = String(o?.id || '').trim();
-                    const customerId = String(o?.customer_id || '').trim();
-                    if (orderId && customerId) orderCustomerById.set(orderId, customerId);
-                });
-
-                const orderIdsByInvoiceId = new Map<string, Set<string>>();
-                invoiceItemsForCustomer.forEach((row: any) => {
-                    const invoiceId = String(row?.invoice_id || '').trim();
-                    const orderId = String(row?.OrderItem?.order_id || '').trim();
-                    if (!invoiceId || !orderId) return;
-                    if (!orderIdsByInvoiceId.has(invoiceId)) orderIdsByInvoiceId.set(invoiceId, new Set());
-                    orderIdsByInvoiceId.get(invoiceId)!.add(orderId);
-                });
-
-                const customerByInvoiceId = new Map<string, string>();
-                const missingCustomerInvoices: string[] = [];
-                const multiCustomerInvoices: string[] = [];
-                for (const invoiceId of invoiceIds) {
-                    const orderIdsForInvoice = Array.from(orderIdsByInvoiceId.get(invoiceId) || []);
-                    const customerIds = Array.from(new Set(orderIdsForInvoice.map((oid) => orderCustomerById.get(oid)).filter(Boolean) as string[]));
-                    if (customerIds.length === 0) {
-                        missingCustomerInvoices.push(invoiceId);
-                        continue;
-                    }
-                    if (customerIds.length > 1) {
-                        multiCustomerInvoices.push(invoiceId);
-                        continue;
-                    }
-                    customerByInvoiceId.set(invoiceId, customerIds[0]!);
-                }
-                if (missingCustomerInvoices.length > 0) {
-                    await t.rollback();
-                    throw new CustomError(`COD settlement gagal: tidak bisa resolve customer untuk invoice: ${missingCustomerInvoices.join(', ')}`, 409);
-                }
-                if (multiCustomerInvoices.length > 0) {
-                    await t.rollback();
-                    throw new CustomError(`COD settlement gagal: 1 invoice berisi lebih dari 1 customer: ${multiCustomerInvoices.join(', ')}`, 409);
-                }
-
-                const weightsByCustomerId = new Map<string, number>();
-                for (const invoiceId of invoiceIds) {
-                    const customerId = customerByInvoiceId.get(invoiceId);
-                    if (!customerId) continue;
-                    const expectedNet = Math.max(0, toNumber(netTotals.get(invoiceId)?.net_total));
-                    weightsByCustomerId.set(customerId, (weightsByCustomerId.get(customerId) || 0) + expectedNet);
-                }
-
-                const allocations = CustomerBalanceService.allocateDiffProRata(codDiff, weightsByCustomerId);
-                for (const [customerId, amount] of allocations.entries()) {
-                    if (!amount) continue;
-                    await CustomerBalanceService.createEntry({
-                        customer_id: customerId,
-                        amount,
-                        entry_type: 'cod_settlement_delta',
-                        reference_type: 'cod_settlement',
-                        reference_id: String(settlement.id),
-                        created_by: actor.id,
-                        note: `Selisih COD settlement #${settlement.id}: expected=${totalExpected}, received=${amountReceived}, diff=${codDiff}.`,
-                        idempotency_key: `balance_cod_settlement_${settlement.id}_${customerId}`,
-                    }, { transaction: t });
-                }
-            }
+            // Customer delta is tracked per invoice (collected - expected net), not from driver deposit diff.
+            // We recompute & sync it after settlement below.
 
             // Update invoice settlement progress:
             // - Increase invoice.amount_received by allocated amount for this settlement
-            // - Mark invoice as paid only when fully settled (amount_received >= expected net total)
+            // - Mark invoice as paid only when fully deposited (amount_received >= collected snapshot)
             for (const invId of invoiceIds) {
                 const inv = invoiceById.get(invId);
                 if (!inv) continue;
                 const prevReceived = Math.max(0, round2(alreadyReceivedByInvoiceId.get(invId) || inv.amount_received));
                 const allocated = Math.max(0, round2(allocationsByInvoiceId.get(invId) || 0));
-                const expected = Math.max(0, round2(expectedByInvoiceId.get(invId) || netTotals.get(invId)?.net_total));
+                const collected = Math.max(0, round2(collectedByInvoiceId.get(invId) || inv.amount_paid));
                 const nextReceived = round2(prevReceived + allocated);
 
-                const isFullySettled = expected <= 0 ? true : nextReceived >= round2(expected - 0.005);
+                const isFullyDeposited = collected <= 0 ? true : nextReceived >= round2(collected - 0.005);
                 await inv.update({
                     amount_received: nextReceived,
-                    payment_status: isFullySettled ? 'paid' : 'cod_pending',
-                    verified_at: isFullySettled ? new Date() : (inv.verified_at || null),
-                    verified_by: isFullySettled ? actor.id : (inv.verified_by || null),
+                    payment_status: isFullyDeposited ? 'paid' : 'cod_pending',
+                    verified_at: isFullyDeposited ? new Date() : (inv.verified_at || null),
+                    verified_by: isFullyDeposited ? actor.id : (inv.verified_by || null),
                 }, { transaction: t });
+            }
+
+            // Sync per-invoice customer delta after settlement (handles expected changes due to retur).
+            for (const invId of invoiceIds) {
+                const inv = invoiceById.get(invId);
+                if (!inv) continue;
+                const collected = Math.max(0, round2(collectedByInvoiceId.get(invId) || inv.amount_paid));
+                const expectedFinal = Math.max(0, round2(netTotals.get(invId)?.net_total));
+                const desiredCustomerDelta = round2(collected - expectedFinal);
+                const customerId = await resolveSingleCustomerIdForInvoice(invId, { transaction: t });
+                await syncCustomerCodInvoiceDelta({
+                    invoiceId: invId,
+                    customerId,
+                    desiredDelta: desiredCustomerDelta,
+                    createdBy: actor.id,
+                    note: `COD invoice delta (driver deposit): expected=${expectedFinal}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    transaction: t
+                });
+                await inv.update({ cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) }, { transaction: t });
             }
 
             const previousStatusByOrderId: Record<string, string> = {};
@@ -1088,35 +1034,23 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                 await Order.update({ status: row.nextStatus }, { where: { id: row.orderId }, transaction: t });
             }
 
-            // Journal Entry for Settlement (Cash vs Piutang Driver, diff goes to customer balances)
+            // Journal Entry for Settlement (Cash vs Piutang Driver, based on actual cash received)
             {
                 const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
                 const piutangDriverAcc = await Account.findOne({ where: { code: '1104' }, transaction: t });
-                const arAcc = await Account.findOne({ where: { code: '1103' }, transaction: t });
-                const customerSaldoAcc = await Account.findOne({ where: { code: '2105' }, transaction: t });
-
-                const expected = Math.max(0, Math.round(totalExpected * 100) / 100);
                 const received = Math.max(0, Math.round(amountReceived * 100) / 100);
-                const shortage = Math.max(0, Math.round((expected - received) * 100) / 100);
-                const surplus = Math.max(0, Math.round((received - expected) * 100) / 100);
-
-                if (cashAcc && piutangDriverAcc && expected > 0) {
-                    const lines: any[] = [];
-                    if (received > 0) lines.push({ account_id: cashAcc.id, debit: received, credit: 0 });
-                    if (shortage > 0 && arAcc) lines.push({ account_id: arAcc.id, debit: shortage, credit: 0 });
-                    lines.push({ account_id: piutangDriverAcc.id, debit: 0, credit: expected });
-                    if (surplus > 0 && customerSaldoAcc) lines.push({ account_id: customerSaldoAcc.id, debit: 0, credit: surplus });
-
-                    if (lines.length >= 2) {
-                        await JournalService.createEntry({
-                            description: `COD Settlement #${settlement.id} (Driver: ${String(driver.name || '')})`,
-                            reference_type: 'cod_settlement',
-                            reference_id: String(settlement.id),
-                            created_by: actor.id,
-                            idempotency_key: `cod_settlement_balance_${settlement.id}`,
-                            lines
-                        }, t);
-                    }
+                if (cashAcc && piutangDriverAcc && received > 0) {
+                    await JournalService.createEntry({
+                        description: `COD Settlement #${settlement.id} (Driver: ${String(driver.name || '')})`,
+                        reference_type: 'cod_settlement',
+                        reference_id: String(settlement.id),
+                        created_by: actor.id,
+                        idempotency_key: `cod_settlement_balance_${settlement.id}`,
+                        lines: [
+                            { account_id: cashAcc.id, debit: received, credit: 0 },
+                            { account_id: piutangDriverAcc.id, debit: 0, credit: received },
+                        ]
+                    }, t);
                 }
             }
 

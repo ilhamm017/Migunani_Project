@@ -12,9 +12,11 @@ import { ensureSingleInvoiceOrRequireInvoiceId } from '../../utils/invoiceAmbigu
 import { beginIdempotentRequest, clearIdempotentRequest, commitIdempotentRequest, getIdempotencyKey } from '../../utils/idempotency';
 import { isOrderTransitionAllowed } from '../../utils/orderTransitions';
 import { calculateDriverCodExposure } from '../../utils/codExposure';
-import { computeInvoiceNetTotals } from '../../utils/invoiceNetTotals';
+import { computeInvoiceNetTotals, computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 import { recordOrderStatusChanged } from '../../utils/orderEvent';
 import { parseMoneyInput } from '../../utils/money';
+import { allocatePoolByOutstanding, round2 } from '../../utils/codAllocation';
+import { resolveSingleCustomerIdForInvoice, syncCustomerCodInvoiceDelta, toCodResolutionStatus } from '../../utils/codCustomerDelta';
 
 export const recordPayment = asyncWrapper(async (req: Request, res: Response) => {
     const idempotencyKey = getIdempotencyKey(req);
@@ -63,15 +65,15 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
 
             const netTotalsByInvoiceId = new Map<string, number>();
             let totalToPay = 0;
-            for (const inv of unpaidCodInvoices as any[]) {
-                const invId = String(inv?.id || '').trim();
-                if (!invId) continue;
-                const computed = await computeInvoiceNetTotals(invId, { transaction: t });
-                const net = Number(computed?.net_total || 0);
+            const unpaidInvoiceIds = unpaidCodInvoices.map((inv: any) => String(inv?.id || '').trim()).filter(Boolean);
+            const netTotalsBulk = unpaidInvoiceIds.length > 0
+                ? await computeInvoiceNetTotalsBulk(unpaidInvoiceIds, { transaction: t })
+                : new Map<string, any>();
+            for (const invId of unpaidInvoiceIds) {
+                const net = round2(netTotalsBulk.get(invId)?.net_total || 0);
                 netTotalsByInvoiceId.set(invId, net);
-                totalToPay += net;
+                totalToPay = round2(totalToPay + net);
             }
-            totalToPay = Math.round(totalToPay * 100) / 100;
             const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
                 ? totalToPay
                 : parseMoneyInput(rawAmount);
@@ -81,16 +83,25 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 throw new CustomError('Jumlah pembayaran tidak valid.', 400);
             }
 
-            const amountReceived = parsedAmount;
-            if (Math.abs(amountReceived - totalToPay) > 0.01) {
-                await t.rollback();
-                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD setelah retur (${totalToPay.toLocaleString()}).`, 400);
+            const amountReceived = round2(parsedAmount);
+
+            const expectedByInvoiceId = new Map<string, number>();
+            const outstandingByInvoiceId = new Map<string, number>();
+            for (const invId of unpaidInvoiceIds) {
+                const expected = Math.max(0, round2(netTotalsByInvoiceId.get(invId) || 0));
+                expectedByInvoiceId.set(invId, expected);
+                outstandingByInvoiceId.set(invId, expected);
             }
+            const allocations = allocatePoolByOutstanding({
+                invoiceIds: unpaidInvoiceIds,
+                outstandingByInvoiceId,
+                pool: amountReceived,
+            });
 
             let totalDelta = 0;
             for (const invoice of unpaidCodInvoices) {
                 const invoiceId = String(invoice?.id || '').trim();
-                const invoiceAmount = Number(netTotalsByInvoiceId.get(invoiceId) || 0);
+                const collected = round2(allocations.get(invoiceId) || 0);
 
                 const existingCollection = await CodCollection.findOne({
                     where: { invoice_id: invoiceId, driver_id: userId, status: 'collected' },
@@ -98,29 +109,45 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                     lock: t.LOCK.UPDATE
                 });
                 const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
-                const delta = invoiceAmount - previousAmount;
-                totalDelta += delta;
+                const delta = round2(collected - previousAmount);
+                totalDelta = round2(totalDelta + delta);
 
                 if (existingCollection) {
-                    await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
+                    await existingCollection.update({ amount: collected }, { transaction: t });
                 } else {
                     await CodCollection.create({
                         invoice_id: invoiceId,
                         driver_id: userId,
-                        amount: invoiceAmount,
+                        amount: collected,
                         status: 'collected'
                     }, { transaction: t });
                 }
 
                 const invoiceUpdate: any = {
                     payment_status: 'cod_pending',
-                    amount_paid: invoiceAmount,
+                    amount_paid: collected,
                     courier_id: userId
                 };
                 if (file) {
                     invoiceUpdate.payment_proof_url = file.path;
                 }
                 await invoice.update(invoiceUpdate, { transaction: t });
+
+                const expected = round2(expectedByInvoiceId.get(invoiceId) || 0);
+                const desiredCustomerDelta = round2(collected - expected);
+                const customerId = await resolveSingleCustomerIdForInvoice(invoiceId, { transaction: t });
+                await syncCustomerCodInvoiceDelta({
+                    invoiceId,
+                    customerId,
+                    desiredDelta: desiredCustomerDelta,
+                    createdBy: String(userId),
+                    note: `COD invoice delta (driver record payment): expected=${expected}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    transaction: t
+                });
+                await invoice.update(
+                    { cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) },
+                    { transaction: t }
+                );
             }
 
             if (totalDelta !== 0) {
@@ -217,7 +244,9 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
             const responsePayload = {
                 message: 'Pembayaran COD berhasil dicatat.',
                 invoice_ids: unpaidCodInvoices.map((inv: any) => inv.id),
-                amount_received: amountReceived
+                amount_received: amountReceived,
+                total_expected: totalToPay,
+                diff: round2(amountReceived - totalToPay),
             };
             if (idempotencyKey) {
                 await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
@@ -341,15 +370,15 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
 
             const netTotalsByInvoiceId = new Map<string, number>();
             let totalToPay = 0;
-            for (const inv of unpaidCodInvoices as any[]) {
-                const invId = String(inv?.id || '').trim();
-                if (!invId) continue;
-                const computed = await computeInvoiceNetTotals(invId, { transaction: t });
-                const net = Number(computed?.net_total || 0);
+            const unpaidInvoiceIds = unpaidCodInvoices.map((inv: any) => String(inv?.id || '').trim()).filter(Boolean);
+            const netTotalsBulk = unpaidInvoiceIds.length > 0
+                ? await computeInvoiceNetTotalsBulk(unpaidInvoiceIds, { transaction: t })
+                : new Map<string, any>();
+            for (const invId of unpaidInvoiceIds) {
+                const net = round2(netTotalsBulk.get(invId)?.net_total || 0);
                 netTotalsByInvoiceId.set(invId, net);
-                totalToPay += net;
+                totalToPay = round2(totalToPay + net);
             }
-            totalToPay = Math.round(totalToPay * 100) / 100;
 
             const parsedAmount = rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === ''
                 ? totalToPay
@@ -360,16 +389,29 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
                 throw new CustomError('Jumlah pembayaran tidak valid.', 400);
             }
 
-            const amountReceived = parsedAmount;
-            if (Math.abs(amountReceived - totalToPay) > 0.01) {
-                await t.rollback();
-                throw new CustomError(`Nominal pembayaran (${amountReceived.toLocaleString()}) harus sesuai total tagihan COD setelah retur (${totalToPay.toLocaleString()}).`, 400);
+            const amountReceived = round2(parsedAmount);
+
+            const expectedByInvoiceId = new Map<string, number>();
+            const outstandingByInvoiceId = new Map<string, number>();
+            for (const invId of unpaidInvoiceIds) {
+                const expected = Math.max(0, round2(netTotalsByInvoiceId.get(invId) || 0));
+                expectedByInvoiceId.set(invId, expected);
+                outstandingByInvoiceId.set(invId, expected);
             }
+            const allocationOrder = [
+                ...invoiceIds.filter((id) => unpaidInvoiceIds.includes(id)),
+                ...unpaidInvoiceIds.filter((id) => !invoiceIds.includes(id)),
+            ];
+            const allocations = allocatePoolByOutstanding({
+                invoiceIds: allocationOrder,
+                outstandingByInvoiceId,
+                pool: amountReceived,
+            });
 
             let totalDelta = 0;
             for (const invoice of unpaidCodInvoices as any[]) {
                 const invoiceId = String(invoice?.id || '').trim();
-                const invoiceAmount = Number(netTotalsByInvoiceId.get(invoiceId) || 0);
+                const collected = round2(allocations.get(invoiceId) || 0);
 
                 const existingCollection = await CodCollection.findOne({
                     where: { invoice_id: invoiceId, driver_id: driverId, status: 'collected' },
@@ -377,25 +419,41 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
                     lock: t.LOCK.UPDATE
                 });
                 const previousAmount = existingCollection ? Number(existingCollection.amount || 0) : 0;
-                const delta = invoiceAmount - previousAmount;
-                totalDelta += delta;
+                const delta = round2(collected - previousAmount);
+                totalDelta = round2(totalDelta + delta);
 
                 if (existingCollection) {
-                    await existingCollection.update({ amount: invoiceAmount }, { transaction: t });
+                    await existingCollection.update({ amount: collected }, { transaction: t });
                 } else {
                     await CodCollection.create({
                         invoice_id: invoiceId,
                         driver_id: driverId,
-                        amount: invoiceAmount,
+                        amount: collected,
                         status: 'collected'
                     }, { transaction: t });
                 }
 
                 await invoice.update({
                     payment_status: 'cod_pending',
-                    amount_paid: invoiceAmount,
+                    amount_paid: collected,
                     courier_id: driverId
                 }, { transaction: t });
+
+                const expected = round2(expectedByInvoiceId.get(invoiceId) || 0);
+                const desiredCustomerDelta = round2(collected - expected);
+                const customerId = await resolveSingleCustomerIdForInvoice(invoiceId, { transaction: t });
+                await syncCustomerCodInvoiceDelta({
+                    invoiceId,
+                    customerId,
+                    desiredDelta: desiredCustomerDelta,
+                    createdBy: String(driverId),
+                    note: `COD invoice delta (driver record payment batch): expected=${expected}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    transaction: t
+                });
+                await invoice.update(
+                    { cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) },
+                    { transaction: t }
+                );
             }
 
             if (totalDelta !== 0) {
@@ -485,7 +543,9 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
             const responsePayload = {
                 message: 'Pembayaran COD berhasil dicatat.',
                 invoice_ids: unpaidCodInvoices.map((inv: any) => inv.id),
-                amount_received: amountReceived
+                amount_received: amountReceived,
+                total_expected: totalToPay,
+                diff: round2(amountReceived - totalToPay),
             };
             if (idempotencyKey) {
                 await commitIdempotentRequest(idempotencyKey, idempotencyScope, 200, responsePayload);
