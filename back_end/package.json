@@ -16,6 +16,7 @@
     "reconcile:reservations:prod": "node dist/scripts/reconcile_inventory_reservations.js",
     "reconcile:payment-verify-to-deferred": "ts-node src/scripts/reconcile_payment_verify_to_deferred.ts",
     "reconcile:payment-verify-to-deferred:prod": "node dist/scripts/reconcile_payment_verify_to_deferred.js",
+    "reconcile:cod-partial-paid": "ts-node src/scripts/reconcile_cod_partial_paid_invoices.ts --dry-run",
     "reconcile:shipped-allocations": "ts-node src/scripts/reconcile_shipped_allocations.ts",
     "reconcile:shipped-allocations:prod": "node dist/scripts/reconcile_shipped_allocations.js",
     "audit:order-integrity": "ts-node src/scripts/audit_order_integrity.ts",

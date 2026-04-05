@@ -41,6 +41,17 @@ type DriverDepositRow = {
   driver: { id: string; name: string; whatsapp_number?: string; debt: number };
   cod_invoices_pending: CodInvoiceRow[];
   retur_handovers_pending: HandoverRow[];
+  balance_adjustments?: {
+    total_outstanding: number;
+    entries: Array<{
+      id: string;
+      direction: 'debt' | 'credit' | string;
+      reason: string;
+      amount: number;
+      note: string | null;
+      created_at: string | null;
+    }>;
+  } | null;
   totals: { cod_invoice_count: number; cod_expected_total: number; handover_count: number; retur_item_count: number };
 };
 
@@ -319,6 +330,43 @@ export default function AdminSetoranDriverPage() {
                     <p className="text-xs text-slate-500 mt-1">{selectedDriver.driver.whatsapp_number || '-'}</p>
                   </div>
                 </div>
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Debt Exposure</p>
+                    <p className="text-lg font-black text-slate-900 mt-1">{new Intl.NumberFormat('id-ID').format(Number(selectedDriver.driver.debt || 0))}</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Snapshot dari perhitungan exposure driver.</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Utang Belum Lunas</p>
+                    <p className="text-lg font-black text-slate-900 mt-1">{new Intl.NumberFormat('id-ID').format(Number(selectedDriver.balance_adjustments?.total_outstanding || 0))}</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Dari selisih shortage COD (open).</p>
+                  </div>
+                </div>
+
+                {Array.isArray(selectedDriver.balance_adjustments?.entries) && selectedDriver.balance_adjustments!.entries.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Detail Penyesuaian</p>
+                    <div className="mt-2 space-y-2">
+                      {selectedDriver.balance_adjustments!.entries.slice(0, 5).map((e) => (
+                        <div key={e.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-900 truncate">{e.reason}</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 truncate">{e.note || '-'}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{e.direction}</p>
+                            <p className={`text-xs font-black ${e.direction === 'debt' ? 'text-rose-700' : e.direction === 'credit' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                              {new Intl.NumberFormat('id-ID').format(Number(e.amount || 0))}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                      {selectedDriver.balance_adjustments!.entries.length > 5 && (
+                        <p className="text-[11px] text-slate-500">+{selectedDriver.balance_adjustments!.entries.length - 5} item lagi (lihat Riwayat untuk lengkap).</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">

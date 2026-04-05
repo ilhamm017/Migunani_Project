@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { Op } from 'sequelize';
 import { ReportService } from '../services/ReportService';
 import { CustomerBalanceService } from '../services/CustomerBalanceService';
-import { Invoice, InvoiceItem, OrderItem, PosSale, PosSaleItem, Product, User, sequelize } from '../models';
+import { Invoice, InvoiceItem, Order, OrderItem, PosSale, PosSaleItem, Product, User, sequelize } from '../models';
 import { asyncWrapper } from '../utils/asyncWrapper';
 import { CustomError } from '../utils/CustomError';
 
@@ -21,12 +21,50 @@ const formatLocalYmdHm = (d: Date) => {
 
 export const getProfitAndLoss = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, limit } = req.query;
         if (!startDate || !endDate) {
             throw new CustomError('StartDate dan EndDate wajib diisi', 400);
         }
         const result = await ReportService.calculateProfitAndLoss(String(startDate), String(endDate));
-        res.json(result);
+
+        const rowLimit = Math.min(Math.max(Number(limit || 200), 1), 2000);
+        const start = new Date(`${String(startDate)}T00:00:00`);
+        const end = new Date(`${String(endDate)}T23:59:59.999`);
+
+        const paidInvoices = await Invoice.findAll({
+            where: {
+                payment_status: 'paid',
+                verified_at: { [Op.between]: [start, end] },
+            },
+            attributes: ['id', 'invoice_number', 'subtotal', 'verified_at'],
+            include: [
+                { model: InvoiceItem, as: 'Items', attributes: ['qty', 'unit_cost'] },
+                {
+                    model: Order,
+                    attributes: ['id'],
+                    include: [{ model: User, as: 'Customer', attributes: ['id', 'name'] }],
+                },
+            ],
+            order: [['verified_at', 'DESC']],
+            limit: rowLimit,
+        });
+
+        const invoices = paidInvoices.map((inv: any) => {
+            const items = Array.isArray(inv?.Items) ? inv.Items : [];
+            const modal = items.reduce((sum: number, it: any) => sum + (Number(it?.unit_cost || 0) * Number(it?.qty || 0)), 0);
+            const subtotal = Number(inv?.subtotal || 0);
+            const customerName = String(inv?.Order?.Customer?.name || '').trim() || '-';
+            return {
+                invoice_id: String(inv?.id),
+                invoice_number: String(inv?.invoice_number || ''),
+                customer_name: customerName,
+                subtotal,
+                modal,
+                laba: subtotal - modal,
+            };
+        });
+
+        res.json({ ...result, invoices });
     } catch (error) {
         if (error instanceof CustomError) {
             throw error;
