@@ -499,6 +499,7 @@ export const verifyDriverCod = asyncWrapper(async (req: Request, res: Response) 
                     desiredDelta: desiredCustomerDelta,
                     createdBy: verifierId,
                     note: `COD invoice delta (finance verify): expected=${expectedFinal}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    idempotencyKey: `balance_cod_invoice_delta_adj_${invId}_finance_verify_${String(settlement.id)}`,
                     transaction: t
                 });
                 const inv = invoiceById.get(invId);

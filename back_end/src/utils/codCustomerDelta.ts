@@ -2,6 +2,7 @@ import { Op, Transaction } from 'sequelize';
 import { CustomerBalanceEntry, Invoice, InvoiceItem, Order, OrderItem, User } from '../models';
 import { computeInvoiceNetTotalsBulk } from './invoiceNetTotals';
 import { round2 } from './codAllocation';
+import { CustomerBalanceService } from '../services/CustomerBalanceService';
 
 const normalizeId = (value: unknown) => {
     const s = String(value || '').trim();
@@ -86,6 +87,7 @@ export const syncCustomerCodInvoiceDelta = async (params: {
     desiredDelta: number;
     createdBy?: string | null;
     note?: string | null;
+    idempotencyKey?: string | null;
     transaction?: Transaction;
 }): Promise<{ postedBefore: number; postedAfter: number; appliedAdjustment: number }> => {
     const invoiceId = normalizeId(params.invoiceId);
@@ -106,16 +108,25 @@ export const syncCustomerCodInvoiceDelta = async (params: {
     const postedBefore = round2(postedBeforeRaw || 0);
     const adjustment = round2(desired - postedBefore);
     if (adjustment !== 0) {
-        await CustomerBalanceEntry.create({
-            customer_id: customerId,
-            amount: adjustment,
-            entry_type: 'cod_invoice_delta',
-            reference_type: 'invoice',
-            reference_id: invoiceId,
-            note: params.note ?? null,
-            created_by: params.createdBy ?? null,
-            idempotency_key: null,
-        } as any, { transaction: params.transaction });
+        const idempotencyKey = params.idempotencyKey ? String(params.idempotencyKey).trim() : '';
+        try {
+            await CustomerBalanceService.createEntry({
+                customer_id: customerId,
+                amount: adjustment,
+                entry_type: 'cod_invoice_delta',
+                reference_type: 'invoice',
+                reference_id: invoiceId,
+                note: params.note ?? null,
+                created_by: params.createdBy ?? null,
+                idempotency_key: idempotencyKey || null,
+            }, { transaction: params.transaction });
+        } catch (error: any) {
+            const name = String(error?.name || '');
+            const msg = String(error?.message || '');
+            const sqlMsg = String(error?.original?.sqlMessage || error?.parent?.sqlMessage || '');
+            const isUnique = name.includes('Unique') || /duplicate/i.test(msg) || /duplicate/i.test(sqlMsg);
+            if (!isUnique) throw error;
+        }
     }
 
     const postedAfter = round2(postedBefore + adjustment);
@@ -129,3 +140,27 @@ export const toCodResolutionStatus = (delta: number): 'ok' | 'customer_underpay'
     return 'ok';
 };
 
+export const getCodInvoiceDeltaTotal = async (
+    invoiceId: string,
+    options?: { transaction?: Transaction }
+): Promise<number> => {
+    const invId = normalizeId(invoiceId);
+    if (!invId) return 0;
+    const sum = await CustomerBalanceEntry.sum('amount', {
+        where: {
+            entry_type: 'cod_invoice_delta',
+            reference_type: 'invoice',
+            reference_id: invId,
+        },
+        transaction: options?.transaction,
+    });
+    return round2(sum || 0);
+};
+
+export const getCodCustomerDue = async (
+    invoiceId: string,
+    options?: { transaction?: Transaction }
+): Promise<number> => {
+    const delta = await getCodInvoiceDeltaTotal(invoiceId, options);
+    return Math.max(0, round2(-delta));
+};

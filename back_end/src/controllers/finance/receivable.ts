@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, PosSale, PosSaleItem } from '../../models';
-import { Op } from 'sequelize';
+import { Expense, ExpenseLabel, Invoice, InvoiceItem, Order, OrderItem, Product, User, sequelize, Account, Journal, JournalLine, CodCollection, CodSettlement, OrderAllocation, AccountingPeriod, CreditNote, CreditNoteLine, Setting, PosSale, PosSaleItem, CustomerBalanceEntry } from '../../models';
+import { Op, QueryTypes } from 'sequelize';
 import { JournalService } from '../../services/JournalService';
 import { TaxConfigService, computeInvoiceTax } from '../../services/TaxConfigService';
 import { AccountingPostingService } from '../../services/AccountingPostingService';
@@ -20,7 +20,7 @@ import { computeInvoiceNetTotalsBulk } from '../../utils/invoiceNetTotals';
 // --- Reports ---
 export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Response) => {
     try {
-        // 1. Get AR from Invoices (payment_status != 'paid')
+        // 1. Get AR from Invoices (non-paid invoices)
         const ar = await Invoice.findAll({
             where: {
                 payment_status: { [Op.ne]: 'paid' }, // unpaid, cod_pending
@@ -30,13 +30,60 @@ export const getAccountsReceivable = asyncWrapper(async (req: Request, res: Resp
             order: [['createdAt', 'ASC']] // Oldest first
         });
 
-        const context = await buildAccountsReceivableContext(ar);
-        const invoiceIds = ar.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+        // 2. Include COD customer underpay invoices even when invoice.payment_status = 'paid'.
+        // Source of truth: customer_balance_entries (cod_invoice_delta) per invoice reference.
+        const codDeltaRows = await sequelize.query(
+            `SELECT reference_id AS invoice_id, SUM(amount) AS delta
+             FROM customer_balance_entries
+             WHERE entry_type = 'cod_invoice_delta'
+               AND reference_type = 'invoice'
+             GROUP BY reference_id
+             HAVING SUM(amount) < 0`,
+            { type: QueryTypes.SELECT }
+        ) as Array<{ invoice_id: string; delta: number }>;
+        const codUnderpayInvoiceIds = Array.from(new Set(
+            (Array.isArray(codDeltaRows) ? codDeltaRows : [])
+                .map((row) => String((row as any)?.invoice_id || '').trim())
+                .filter(Boolean)
+        ));
+        const codUnderpayInvoices = codUnderpayInvoiceIds.length > 0
+            ? await Invoice.findAll({
+                where: {
+                    id: { [Op.in]: codUnderpayInvoiceIds },
+                    sales_channel: 'app',
+                    payment_method: 'cod',
+                },
+                include: buildAccountsReceivableInclude(),
+                order: [['createdAt', 'ASC']]
+            })
+            : [];
+
+        const byId = new Map<string, Invoice>();
+        (ar as any[]).forEach((inv: any) => {
+            const id = String(inv?.id || '').trim();
+            if (id) byId.set(id, inv);
+        });
+        (codUnderpayInvoices as any[]).forEach((inv: any) => {
+            const id = String(inv?.id || '').trim();
+            if (id && !byId.has(id)) byId.set(id, inv);
+        });
+        const combined = Array.from(byId.values());
+
+        const context = await buildAccountsReceivableContext(combined);
+        const invoiceIds = combined.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
         const netTotals = await computeInvoiceNetTotalsBulk(invoiceIds);
         const collectibleByInvoiceId = new Map<string, number>();
         netTotals.forEach((row, id) => collectibleByInvoiceId.set(id, Number(row.net_total || 0)));
-        const invoiceRows = mapAccountsReceivableRows(ar, context, {
+        const invoiceRows = mapAccountsReceivableRows(combined, context, {
             collectible_total_by_invoice_id: collectibleByInvoiceId
+        });
+        // For COD rows with amount_due > 0, mark as unpaid in AR report so UI doesn't show "Lunas".
+        (invoiceRows as any[]).forEach((row: any) => {
+            const method = String(row?.payment_method || '').trim().toLowerCase();
+            const due = Number(row?.amount_due || 0);
+            if (method === 'cod' && Number.isFinite(due) && due > 0) {
+                row.payment_status = 'unpaid';
+            }
         });
 
         // 2. Get Driver Debts (User.debt > 0)
@@ -283,7 +330,6 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
         const invoice = await Invoice.findOne({
             where: {
                 id: invoiceId,
-                payment_status: { [Op.ne]: 'paid' },
                 sales_channel: 'app'
             },
             include: buildAccountsReceivableInclude()
@@ -302,6 +348,19 @@ export const getAccountsReceivableDetail = asyncWrapper(async (req: Request, res
         });
         if (!row) {
             throw new CustomError('Data piutang tidak ditemukan', 404);
+        }
+        const method = String((row as any)?.payment_method || '').trim().toLowerCase();
+        const status = String((row as any)?.payment_status || '').trim().toLowerCase();
+        const due = Number((row as any)?.amount_due || 0);
+        const isCod = method === 'cod';
+        const isArEligible = isCod
+            ? (Number.isFinite(due) && due > 0) || status !== 'paid'
+            : status !== 'paid';
+        if (!isArEligible) {
+            throw new CustomError('Data piutang tidak ditemukan', 404);
+        }
+        if (isCod && Number.isFinite(due) && due > 0) {
+            (row as any).payment_status = 'unpaid';
         }
         return res.json(row);
     } catch (error) {

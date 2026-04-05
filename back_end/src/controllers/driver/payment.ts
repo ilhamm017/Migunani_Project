@@ -142,6 +142,7 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                     desiredDelta: desiredCustomerDelta,
                     createdBy: String(userId),
                     note: `COD invoice delta (driver record payment): expected=${expected}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    idempotencyKey: `balance_cod_invoice_delta_${invoiceId}`,
                     transaction: t
                 });
                 await invoice.update(
@@ -448,6 +449,7 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
                     desiredDelta: desiredCustomerDelta,
                     createdBy: String(driverId),
                     note: `COD invoice delta (driver record payment batch): expected=${expected}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    idempotencyKey: `balance_cod_invoice_delta_${invoiceId}`,
                     transaction: t
                 });
                 await invoice.update(

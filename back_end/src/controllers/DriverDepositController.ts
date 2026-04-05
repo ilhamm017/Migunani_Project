@@ -921,6 +921,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     desiredDelta: desiredCustomerDelta,
                     createdBy: actor.id,
                     note: `COD invoice delta (driver deposit): expected=${expectedFinal}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                    idempotencyKey: `balance_cod_invoice_delta_adj_${invId}_driver_deposit_${String(settlement.id)}`,
                     transaction: t
                 });
                 await inv.update({ cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) }, { transaction: t });

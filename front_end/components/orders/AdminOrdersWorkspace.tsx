@@ -457,19 +457,32 @@ const isSettlementCompleted = (order: AdminOrderListRow, detail?: OrderDetailRes
   if (paymentMethod === 'cash_store') return paymentStatus === 'paid';
   return false;
 };
-const paymentStatusLabel = (raw: unknown) => {
+const resolveCodResolutionStatus = (invoiceLike: any) => String(invoiceLike?.cod_resolution_status || '').trim().toLowerCase();
+const paymentStatusLabel = (raw: unknown, invoiceLike?: any) => {
   const status = String(raw || '').trim().toLowerCase();
+  const method = String(invoiceLike?.payment_method || '').trim().toLowerCase();
+  const codResolution = resolveCodResolutionStatus(invoiceLike);
   if (status === 'mixed') return 'Gabungan';
   if (status === 'draft') return 'Draft';
   if (status === 'unpaid') return 'Belum Bayar';
   if (status === 'cod_pending') return 'COD Pending';
-  if (status === 'paid') return 'Lunas';
+  if (status === 'paid') {
+    if (method === 'cod' && codResolution === 'customer_underpay') return 'Lunas (Hutang Customer)';
+    if (method === 'cod' && codResolution === 'customer_overpay') return 'Lunas (Kredit Customer)';
+    return 'Lunas';
+  }
   return '-';
 };
-const paymentStatusBadge = (raw: unknown) => {
+const paymentStatusBadge = (raw: unknown, invoiceLike?: any) => {
   const status = String(raw || '').trim().toLowerCase();
+  const method = String(invoiceLike?.payment_method || '').trim().toLowerCase();
+  const codResolution = resolveCodResolutionStatus(invoiceLike);
   if (status === 'mixed') return 'bg-violet-100 text-violet-700 border-violet-200';
-  if (status === 'paid') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  if (status === 'paid') {
+    if (method === 'cod' && codResolution === 'customer_underpay') return 'bg-rose-100 text-rose-700 border-rose-200';
+    if (method === 'cod' && codResolution === 'customer_overpay') return 'bg-sky-100 text-sky-700 border-sky-200';
+    return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  }
   if (status === 'cod_pending') return 'bg-amber-100 text-amber-700 border-amber-200';
   if (status === 'unpaid' || status === 'draft') return 'bg-slate-100 text-slate-700 border-slate-200';
   return 'bg-slate-100 text-slate-500 border-slate-200';
@@ -5699,7 +5712,7 @@ export default function AdminOrdersWorkspace({
 	                        if (raw === 'cash_store') return 'Cash Store';
 		                        return raw.toUpperCase();
 		                      })();
-		                      const paymentStatusText = paymentStatusLabel(invoicePaymentStatus || '-');
+		                      const paymentStatusText = paymentStatusLabel(invoicePaymentStatus || '-', invoiceLike);
 	                      const invoiceTitle = bucket.invoiceNumber
 	                        ? `Invoice ${bucket.invoiceNumber}`
 	                        : bucket.invoiceId
@@ -5992,6 +6005,7 @@ export default function AdminOrdersWorkspace({
 	                        ? `${invoiceRefLabelBase} (+${invoiceRefs.length - 1})`
 	                        : invoiceRefLabelBase;
                       const invoiceDetail = invoiceId ? invoiceDetailByInvoiceId[invoiceId] : null;
+                      const invoiceLike: any = invoiceDetail || order?.Invoice || detail?.Invoice || null;
                       const invoicePaymentStatus = String(
                         invoiceDetail?.payment_status || order?.Invoice?.payment_status || detail?.Invoice?.payment_status || ''
                       ).trim().toLowerCase();
@@ -6177,7 +6191,7 @@ export default function AdminOrdersWorkspace({
                                 </p>
                               )}
                               <p className="text-[10px] text-slate-500">
-                                Invoice: {invoiceRefLabel} | Bayar: {paymentStatusLabel(invoicePaymentStatus)} | Kirim: {shipmentStatusLabel(invoiceShipmentStatus)}
+                                Invoice: {invoiceRefLabel} | Bayar: {paymentStatusLabel(invoicePaymentStatus, invoiceLike)} | Kirim: {shipmentStatusLabel(invoiceShipmentStatus)}
                               </p>
                               {isAllocatedOnlyView && invoiceRefs.length > 1 && (
                                 <div className="mt-1 flex flex-wrap gap-1">

@@ -1,4 +1,4 @@
-import { Retur, Order, Product, User, sequelize, OrderItem, InvoiceItem, Expense, Account, DriverDebtAdjustment } from '../models';
+import { Retur, Order, Product, User, sequelize, OrderItem, InvoiceItem, Expense, Account, DriverDebtAdjustment, Invoice } from '../models';
 import { Op, Transaction } from 'sequelize';
 import { JournalService } from './JournalService';
 import { InventoryCostService } from './InventoryCostService';
@@ -7,6 +7,7 @@ import { computeInvoiceNetTotals } from '../utils/invoiceNetTotals';
 import { calculateDriverCodExposure } from '../utils/codExposure';
 import { ensureSingleInvoiceOrRequireInvoiceId } from '../utils/invoiceAmbiguity';
 import { CustomError } from '../utils/CustomError';
+import { resolveSingleCustomerIdForInvoice, syncCustomerCodInvoiceDelta, toCodResolutionStatus } from '../utils/codCustomerDelta';
 
 export class ReturService {
     private static computeRefundFromOrderItems(params: {
@@ -478,6 +479,52 @@ export class ReturService {
                             }, t);
                         }
                     }
+                }
+
+                // Auto-sync COD customer delta after retur completion (expected invoice net may change).
+                try {
+                    const invoiceSelection = await ensureSingleInvoiceOrRequireInvoiceId({
+                        order_id: String(retur.order_id),
+                        invoice_id: String((retur as any).invoice_id || payload.invoice_id || '').trim() || null,
+                        transaction: t,
+                        lock: t.LOCK.SHARE,
+                        if_none: { statusCode: 404, message: 'Invoice terkait tidak ditemukan untuk retur.' },
+                    });
+                    const invoice = invoiceSelection.invoice as any;
+                    const method = String(invoice?.payment_method || '').trim().toLowerCase();
+                    if (method === 'cod') {
+                        const invoiceId = String(invoice.id);
+                        const totals = await computeInvoiceNetTotals(invoiceId, { transaction: t });
+                        const expectedFinal = Math.max(0, Math.round(Number(totals.net_total || 0) * 100) / 100);
+                        const collected = Math.max(0, Math.round(Number(invoice.amount_paid || 0) * 100) / 100);
+                        const desiredCustomerDelta = Math.round((collected - expectedFinal) * 100) / 100;
+
+                        const customerId = await resolveSingleCustomerIdForInvoice(invoiceId, { transaction: t });
+                        await syncCustomerCodInvoiceDelta({
+                            invoiceId,
+                            customerId,
+                            desiredDelta: desiredCustomerDelta,
+                            createdBy: String(user.id),
+                            note: `COD invoice delta (retur completed): expected=${expectedFinal}, collected=${collected}, delta=${desiredCustomerDelta}.`,
+                            idempotencyKey: `balance_cod_invoice_delta_adj_${invoiceId}_retur_${String(retur.id)}`,
+                            transaction: t
+                        });
+                        await invoice.update(
+                            { cod_resolution_status: toCodResolutionStatus(desiredCustomerDelta) },
+                            { transaction: t }
+                        );
+                    }
+                } catch (error) {
+                    try {
+                        const invoiceId = String((retur as any)?.invoice_id || payload.invoice_id || '').trim();
+                        if (invoiceId) {
+                            const inv = await Invoice.findByPk(invoiceId, { transaction: t, lock: t.LOCK.UPDATE }) as any;
+                            if (inv && String(inv?.payment_method || '').trim().toLowerCase() === 'cod') {
+                                await inv.update({ cod_resolution_status: 'needs_recalc' }, { transaction: t });
+                            }
+                        }
+                    } catch { }
+                    console.warn('[ReturService] failed to auto-sync cod_invoice_delta after retur completed', error);
                 }
             }
 
