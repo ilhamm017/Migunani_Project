@@ -1,5 +1,29 @@
 # Manual SQL Migrations
 
+## TL;DR (recommended)
+
+Mulai Tahap 2, migrasi schema sebaiknya dijalankan lewat runner (idempotent) agar deployment terkontrol:
+
+Dev (ts-node):
+
+```bash
+cd back_end
+npm run migrate:up:with-sql
+```
+
+Production (Node dist / image `runner`):
+
+```bash
+cd back_end
+npm run build
+npm run migrate:up:with-sql:prod
+```
+
+`--with-sql` akan tetap menjalankan seluruh SQL legacy di folder ini (pakai tabel tracker `manual_sql_migrations`) supaya tidak perlu menjalankan file satu per satu.
+
+Catatan:
+- File-file SQL di folder ini masih dipertahankan untuk kompatibilitas, tapi cara pakai yang disarankan adalah lewat runner di atas.
+
 ## Add product columns for legacy inventory import and admin product editing
 
 Run this SQL before deploying import feature:

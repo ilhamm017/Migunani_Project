@@ -864,6 +864,78 @@ const syncDatabaseWithRetry = async () => {
     throw lastError || new Error('Database synchronization failed');
 };
 
+const validateSchemaReadyForOffMode = async () => {
+    const requiredTables = [
+        'users',
+        'orders',
+        'order_items',
+        'invoices',
+        'invoice_items',
+        'returs',
+        'retur_handovers',
+        'retur_handover_items',
+        // Chat threads schema (required by startup backfill)
+        'chat_threads',
+        'chat_thread_members',
+        'messages',
+        // Migration trackers
+        'app_migrations',
+    ];
+
+    const missingTables: string[] = [];
+    for (const t of requiredTables) {
+        const ok = await tableExists(t);
+        if (!ok) missingTables.push(t);
+    }
+    if (missingTables.length > 0) {
+        throw new Error(
+            `Database schema is not ready (DB_SYNC_MODE=off). Missing tables: ${missingTables.join(', ')}. ` +
+            `Run migrations first (e.g. back_end: migrate:up --with-sql).`
+        );
+    }
+
+    const requiredColumns: Array<{ table: string; column: string }> = [
+        // Startup "ensure*" historically created these at runtime.
+        { table: 'purchase_order_items', column: 'expected_unit_cost' },
+        { table: 'purchase_order_items', column: 'cost_note' },
+        { table: 'retur_handovers', column: 'driver_debt_before' },
+        { table: 'retur_handovers', column: 'driver_debt_after' },
+        { table: 'cod_settlements', column: 'audit_created_by' },
+        { table: 'cod_settlements', column: 'audit_received_by' },
+        { table: 'delivery_handover_items', column: 'evidence_url' },
+        { table: 'invoices', column: 'amount_received' },
+        { table: 'clearance_promos', column: 'qty_limit' },
+        { table: 'products', column: 'barcode' },
+        { table: 'orders', column: 'pricing_override_note' },
+        { table: 'order_items', column: 'qty_canceled_manual' },
+    ];
+
+    const missingColumns: Array<{ table: string; column: string }> = [];
+    for (const spec of requiredColumns) {
+        const tableOk = await tableExists(spec.table);
+        if (!tableOk) {
+            missingColumns.push(spec);
+            continue;
+        }
+        const ok = await columnExists(spec.table, spec.column);
+        if (!ok) missingColumns.push(spec);
+    }
+    if (missingColumns.length > 0) {
+        const label = missingColumns.map((m) => `${m.table}.${m.column}`).join(', ');
+        throw new Error(
+            `Database schema is not ready (DB_SYNC_MODE=off). Missing columns: ${label}. ` +
+            `Run migrations first.`
+        );
+    }
+
+    const productsBarcodeIndexed = await indexOnColumnExists('products', 'barcode');
+    if (!productsBarcodeIndexed) {
+        console.warn(
+            "[Startup] DB_SYNC_MODE=off: missing index on products.barcode. It won't break functionality, but may slow lookups."
+        );
+    }
+};
+
 const ensureOrderStatusEnumReady = async () => {
     if (sequelize.getDialect() !== 'mysql') return;
 
@@ -1109,19 +1181,27 @@ const startServer = async () => {
             schemaLock = await acquireSchemaLock(sequelize);
             console.log(`[SchemaLock] Acquired '${schemaLock.lockName}'`);
 
-		            await runStartupStep('Database sync', syncDatabaseWithRetry);
-		            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
-		            await runStartupStep('Ensure orders pricing override columns', ensureOrderPricingOverrideColumnsReady);
-		            await runStartupStep('Ensure users.role enum', ensureUserRoleEnumReady);
-		            await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
-			            await runStartupStep('Ensure invoices.shipment_status enum', ensureInvoiceShipmentStatusEnumReady);
-			            await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
-			            await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
-			            await runStartupStep('Ensure order_items manual cancel column', ensureOrderItemManualCancelColumnReady);
-			            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
-		            await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
-	            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
-	        } catch (error: any) {
+            const syncMode = resolveDbSyncMode();
+            if (syncMode === 'off') {
+                await runStartupStep('Schema readiness check', validateSchemaReadyForOffMode);
+                console.log('[Startup] DB_SYNC_MODE=off: skipping runtime DDL (sync/alter/ensure*).');
+            } else {
+                await runStartupStep('Database sync', syncDatabaseWithRetry);
+                await runStartupStep('Ensure orders pricing override columns', ensureOrderPricingOverrideColumnsReady);
+                await runStartupStep('Ensure users.role enum', ensureUserRoleEnumReady);
+                await runStartupStep('Ensure orders.status enum', ensureOrderStatusEnumReady);
+                await runStartupStep('Ensure invoices.shipment_status enum', ensureInvoiceShipmentStatusEnumReady);
+                await runStartupStep('Ensure returs.status enum', ensureReturStatusEnumReady);
+                await runStartupStep('Ensure order_events.event_type enum', ensureOrderEventTypeEnumReady);
+                await runStartupStep('Ensure order_items manual cancel column', ensureOrderItemManualCancelColumnReady);
+                await runStartupStep('Ensure chat thread schema', ensureChatThreadSchema);
+            }
+
+            // Data maintenance (DML) is still allowed in off mode, but expects schema to already be ready.
+            await runStartupStep('Normalize waiting_payment orders', normalizeWaitingPaymentOrders);
+            await runStartupStep('Ensure default tax config', TaxConfigService.ensureDefaults);
+            await runStartupStep('Backfill legacy chat sessions', backfillLegacyChatSessionsToThreads);
+        } catch (error: any) {
             if (error instanceof SchemaLockError && error.code === 'SCHEMA_LOCK_TIMEOUT') {
                 throw new Error(
                     `Schema lock busy. Another schema operation is running. (${error.message})`

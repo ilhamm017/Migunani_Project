@@ -39,6 +39,12 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Yang terjadi saat `docker compose up`:
+- `mysql` start
+- `migrate` menjalankan migrasi schema (`node dist/scripts/migrate.js up --with-sql`)
+- `seed` mengisi data awal minimal (Chart of Accounts + akun staff)
+- `back_end` start (default `DB_SYNC_MODE=safe`)
+
 Akses:
 
 - Frontend: `http://localhost:3000`
@@ -89,7 +95,7 @@ Akses:
 
 ## Seeder Data
 
-Seeder akan reset database (`sequelize.sync({ force: true })`) dan mengisi data awal.
+Seeder mengisi data awal minimal (Chart of Accounts + akun staff). Seeder **tidak** melakukan drop/reset DB.
 
 ```bash
 # aman: hentikan backend dulu, jalankan seed one-off, lalu nyalakan backend lagi
@@ -161,6 +167,41 @@ npm run dev
 npm run build
 npm run start
 ```
+
+## Database Schema & Migrations (Tahap 2)
+
+Tujuan: schema dikelola lewat migrasi eksplisit (bukan “auto alter” saat startup), dan FK/index bisa ditambah bertahap.
+
+### Audit (read-only)
+
+```bash
+cd back_end
+npm run db:fk-audit
+```
+
+Output detail akan tersimpan di `/tmp/migunani_fk_audit.json`.
+
+### Menjalankan migrasi (recommended)
+
+Local dev (ts-node):
+
+```bash
+cd back_end
+npm run migrate:up:with-sql
+```
+
+Production / container runner (Node dist):
+
+```bash
+cd back_end
+npm run build
+npm run migrate:up:with-sql:prod
+```
+
+### DB_SYNC_MODE=off (freeze runtime DDL)
+
+Jika `DB_SYNC_MODE=off`, backend tidak akan menjalankan `sequelize.sync()` / `alter` / `ensure*` yang melakukan `ALTER TABLE`.
+Backend akan fail-fast bila schema belum siap, dan meminta kamu menjalankan migrasi.
 
 ## Catatan Penting
 

@@ -64,7 +64,7 @@ const loadAppliedMigrations = async (conn: mysql.Connection) => {
   return map;
 };
 
-const main = async () => {
+export const runSqlMigrations = async () => {
   loadEnv();
 
   const host = process.env.DB_HOST || '127.0.0.1';
@@ -122,8 +122,9 @@ const main = async () => {
   }
 };
 
-main().catch((error) => {
-  console.error('[migrate:sql] Failed:', error);
-  process.exitCode = 1;
-});
-
+if (require.main === module) {
+  runSqlMigrations().catch((error) => {
+    console.error('[migrate:sql] Failed:', error);
+    process.exitCode = 1;
+  });
+}

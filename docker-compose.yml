@@ -23,6 +23,36 @@ services:
     networks:
       - migunani_network
 
+  migrate:
+    build:
+      context: ./back_end
+      dockerfile: Dockerfile
+      target: runner
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-migunani}
+      DB_PASS: ${DB_PASS:-password}
+      DB_NAME: ${DB_NAME:-migunani_motor_db}
+      DB_SYNC_MODE: "off"
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:5000}
+      DB_SCHEMA_LOCK_NAME: ${DB_SCHEMA_LOCK_NAME:-migunani_schema_lock}
+      DB_SCHEMA_LOCK_TIMEOUT_SEC: ${DB_SCHEMA_LOCK_TIMEOUT_SEC:-30}
+      WA_AUTO_INIT: "false"
+      WA_AUTO_RECONNECT: "false"
+      TZ: Asia/Jakarta
+    command:
+      - /bin/sh
+      - -c
+      - |
+        node dist/scripts/migrate.js up --with-sql
+    networks:
+      - migunani_network
+
   seed:
     build:
       context: ./back_end
@@ -33,6 +63,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DB_HOST: mysql
       DB_USER: ${DB_USER:-migunani}

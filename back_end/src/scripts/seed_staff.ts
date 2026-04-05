@@ -21,7 +21,12 @@ const STAFF_USERS: SeedStaffUser[] = [
 async function run() {
     try {
         await sequelize.authenticate();
-        await sequelize.sync();
+        const syncMode = String(process.env.DB_SYNC_MODE || 'safe').trim().toLowerCase();
+        if (syncMode !== 'off') {
+            await sequelize.sync();
+        } else {
+            console.log('[seed:staff] DB_SYNC_MODE=off: skipping sequelize.sync() (expects schema from migrations)');
+        }
 
         console.log('🌱 Seeding Staff Users...');
 
@@ -61,4 +66,3 @@ async function run() {
 }
 
 run();
-

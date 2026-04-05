@@ -6,7 +6,12 @@ async function seedAccounts() {
     try {
         console.log('🌱 Seeding Accounts...');
 
-        await Account.sync({ alter: true });
+        const syncMode = String(process.env.DB_SYNC_MODE || 'safe').trim().toLowerCase();
+        if (syncMode !== 'off') {
+            await Account.sync({ alter: true });
+        } else {
+            console.log('[seed:accounts] DB_SYNC_MODE=off: skipping Account.sync({ alter: true }) (expects schema from migrations)');
+        }
 
         const accounts = [
             // ASSET
