@@ -555,11 +555,21 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
     const actor = { id: String(req.user!.id), role: String(req.user!.role) };
     const driverId = String(req.body?.driver_id || '').trim();
     const cod = req.body?.cod;
+    const debtPaymentRaw = req.body?.debt_payment_amount;
     const handovers = Array.isArray(req.body?.handovers) ? req.body.handovers : [];
+    const debtPaymentParsed = debtPaymentRaw === undefined || debtPaymentRaw === null || debtPaymentRaw === ''
+        ? 0
+        : parseMoneyInput(debtPaymentRaw);
+    if (debtPaymentParsed === null || debtPaymentParsed < 0) throw new CustomError('debt_payment_amount tidak valid', 400);
+    const debtPaymentAmount = round2(debtPaymentParsed);
 
     if (!driverId) throw new CustomError('driver_id wajib diisi', 400);
-    if ((!cod || !Array.isArray(cod?.invoice_ids) || cod.invoice_ids.length === 0) && handovers.length === 0) {
+    const hasCodInvoices = Boolean(cod && Array.isArray(cod?.invoice_ids) && cod.invoice_ids.length > 0);
+    if (!hasCodInvoices && handovers.length === 0 && debtPaymentAmount <= 0) {
         throw new CustomError('Tidak ada data COD atau handover yang diproses', 400);
+    }
+    if (hasCodInvoices && debtPaymentAmount > 0) {
+        throw new CustomError('Tidak bisa memproses COD invoice dan pembayaran utang driver sekaligus. Pilih salah satu.', 400);
     }
 
     const t = await sequelize.transaction();
@@ -822,6 +832,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     note: `COD settlement #${settlement.id} diff ${codDiff}`,
                     created_by: actor.id,
                 }, { transaction: t });
+                await settleOrNetBalanceAdjustments(adjustment, t);
                 createdAdjustment = adjustment;
             }
 
@@ -1166,6 +1177,38 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
             settledInvoiceIds = invoiceIds;
             settledOrderIds = orderIds;
         } else {
+            // Pay down outstanding driver debt (from COD shortages), without selecting invoice(s).
+            if (debtPaymentAmount > 0) {
+                const cashAcc = await Account.findOne({ where: { code: '1101' }, transaction: t });
+                const piutangDriverAcc = await Account.findOne({ where: { code: '1104' }, transaction: t });
+
+                const paymentAdj = await DriverBalanceAdjustment.create({
+                    driver_id: driverId,
+                    direction: 'credit',
+                    amount: debtPaymentAmount,
+                    reason: 'cod_surplus',
+                    status: 'open',
+                    note: `Pembayaran utang driver (setoran) sebesar ${debtPaymentAmount}`,
+                    created_by: actor.id,
+                }, { transaction: t });
+
+                await settleOrNetBalanceAdjustments(paymentAdj, t);
+
+                if (cashAcc && piutangDriverAcc && debtPaymentAmount > 0) {
+                    await JournalService.createEntry({
+                        description: `Pembayaran utang Driver: ${String(driver.name || '')}`,
+                        reference_type: 'driver_debt_payment',
+                        reference_id: String((paymentAdj as any).id),
+                        created_by: actor.id,
+                        idempotency_key: `driver_debt_payment_${String((paymentAdj as any).id)}`,
+                        lines: [
+                            { account_id: cashAcc.id, debit: debtPaymentAmount, credit: 0 },
+                            { account_id: piutangDriverAcc.id, debit: 0, credit: debtPaymentAmount },
+                        ]
+                    }, t);
+                }
+            }
+
             // even without COD, handover completion can change debt exposure via adjustments
             const exposure = await calculateDriverCodExposure(driverId, { transaction: t });
             await driver.update({ debt: exposure.exposure }, { transaction: t });
@@ -1200,6 +1243,7 @@ export const confirmDriverDeposit = asyncWrapper(async (req: Request, res: Respo
                     status: String((createdAdjustment as any).status),
                 } : null
             } : null,
+            debt_payment: debtPaymentAmount > 0 ? { amount: debtPaymentAmount } : null,
             handovers: processedHandoverIds.length > 0 ? {
                 handover_ids: processedHandoverIds,
                 retur_ids: processedReturIds

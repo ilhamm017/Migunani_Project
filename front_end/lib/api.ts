@@ -321,6 +321,7 @@ export const api = {
             confirm: (payload: {
                 driver_id: string;
                 cod?: { invoice_ids: string[]; amount_received: number };
+                debt_payment_amount?: number;
                 handovers?: Array<{
                     handover_id: number;
                     note?: string;

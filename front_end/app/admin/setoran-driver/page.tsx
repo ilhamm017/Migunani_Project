@@ -147,12 +147,11 @@ export default function AdminSetoranDriverPage() {
 
   const hasSelectedCod = selectedInvoiceIdList.length > 0;
   const hasSelectedHandover = selectedHandoverIdList.length > 0;
-  const depositKindLabel = useMemo(() => {
-    if (hasSelectedCod && hasSelectedHandover) return 'Uang + Barang';
-    if (hasSelectedCod) return 'Uang saja';
-    if (hasSelectedHandover) return 'Barang saja';
-    return 'Belum dipilih';
-  }, [hasSelectedCod, hasSelectedHandover]);
+  const outstandingDebt = useMemo(() => {
+    const raw = selectedDriver?.balance_adjustments?.total_outstanding;
+    const n = Number(raw || 0);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }, [selectedDriver?.balance_adjustments?.total_outstanding]);
 
   const expectedSelectedTotal = useMemo(() => {
     if (!selectedDriver) return 0;
@@ -165,6 +164,15 @@ export default function AdminSetoranDriverPage() {
     return parsed === null ? 0 : parsed;
   }, [amountReceivedInput]);
   const diff = useMemo(() => Math.round((amountReceived - expectedSelectedTotal) * 100) / 100, [amountReceived, expectedSelectedTotal]);
+
+  const depositKindLabel = useMemo(() => {
+    const payingDebtOnly = !hasSelectedCod && !hasSelectedHandover && outstandingDebt > 0 && amountReceived > 0;
+    if (payingDebtOnly) return 'Bayar utang';
+    if (hasSelectedCod && hasSelectedHandover) return 'Uang + Barang';
+    if (hasSelectedCod) return 'Uang saja';
+    if (hasSelectedHandover) return 'Barang saja';
+    return 'Belum dipilih';
+  }, [amountReceived, hasSelectedCod, hasSelectedHandover, outstandingDebt]);
 
   const canSelectInvoice = useCallback((inv: CodInvoiceRow) => {
     if (!inv.requires_retur_handover) return true;
@@ -179,17 +187,18 @@ export default function AdminSetoranDriverPage() {
 
     const invoiceIds = selectedInvoiceIdList;
     const handoverIds = selectedHandoverIdList.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0);
+    const hasDebtPayment = invoiceIds.length === 0 && amountReceived > 0 && outstandingDebt > 0;
 
-    if (invoiceIds.length === 0 && handoverIds.length === 0) {
+    if (invoiceIds.length === 0 && handoverIds.length === 0 && !hasDebtPayment) {
       setFeedback({ type: 'error', message: 'Pilih minimal 1 invoice COD atau 1 handover retur.' });
-      return;
-    }
-    if (invoiceIds.length === 0 && amountReceived > 0) {
-      setFeedback({ type: 'error', message: 'Nominal uang sudah diisi, tapi belum ada invoice COD yang dipilih. Centang invoice COD dulu atau kosongkan nominal.' });
       return;
     }
     if (invoiceIds.length > 0 && amountReceived <= 0) {
       setFeedback({ type: 'error', message: 'Masukkan nominal uang diterima untuk settlement COD.' });
+      return;
+    }
+    if (invoiceIds.length === 0 && amountReceived > 0 && outstandingDebt <= 0) {
+      setFeedback({ type: 'error', message: 'Nominal uang sudah diisi, tapi tidak ada invoice COD dipilih dan tidak ada utang driver yang bisa dibayarkan.' });
       return;
     }
 
@@ -221,6 +230,7 @@ export default function AdminSetoranDriverPage() {
       await api.admin.driverDeposit.confirm({
         driver_id: selectedDriver.driver.id,
         cod: invoiceIds.length > 0 ? { invoice_ids: invoiceIds, amount_received: amountReceived } : undefined,
+        debt_payment_amount: hasDebtPayment ? amountReceived : undefined,
         handovers: handoversPayload.length > 0 ? handoversPayload : undefined,
       });
       setFeedback({ type: 'success', message: 'Setoran Driver berhasil diproses.' });
@@ -384,7 +394,14 @@ export default function AdminSetoranDriverPage() {
                 </div>
 
                 {selectedDriver.cod_invoices_pending.length === 0 && (
-                  <p className="text-sm font-bold text-slate-500">Tidak ada invoice COD pending.</p>
+                  <p className="text-sm font-bold text-slate-500">
+                    Tidak ada invoice COD pending.
+                    {outstandingDebt > 0 ? (
+                      <span className="block text-[11px] mt-2 text-slate-500">
+                        Driver masih punya utang outstanding <span className="font-black">{new Intl.NumberFormat('id-ID').format(outstandingDebt)}</span>. Isi “Uang Diterima” untuk membayarnya.
+                      </span>
+                    ) : null}
+                  </p>
                 )}
 
                 {selectedDriver.cod_invoices_pending.length > 0 && (
@@ -459,6 +476,8 @@ export default function AdminSetoranDriverPage() {
                     />
                     {hasSelectedCod ? (
                       <p className="text-[11px] text-slate-500 mt-2">Selisih akan dicatat sebagai utang/piutang driver.</p>
+                    ) : outstandingDebt > 0 ? (
+                      <p className="text-[11px] text-slate-500 mt-2">Tidak ada invoice COD dipilih. Nominal ini akan dipakai untuk membayar utang driver (outstanding: <span className="font-black">{new Intl.NumberFormat('id-ID').format(outstandingDebt)}</span>).</p>
                     ) : (
                       <p className="text-[11px] text-slate-500 mt-2">Jika ada penerimaan uang, centang invoice COD dulu. Jika setoran hanya barang retur, nominal uang bisa dikosongkan.</p>
                     )}
@@ -472,6 +491,12 @@ export default function AdminSetoranDriverPage() {
                         <p className={`text-xs font-bold ${diff === 0 ? 'text-slate-700' : (diff < 0 ? 'text-rose-700' : 'text-emerald-700')}`}>
                           Diff: <span className="font-black">{new Intl.NumberFormat('id-ID').format(diff)}</span>
                         </p>
+                      </>
+                    ) : outstandingDebt > 0 ? (
+                      <>
+                        <p className="text-xs font-bold text-slate-700 mt-2">Outstanding debt: <span className="font-black">{new Intl.NumberFormat('id-ID').format(outstandingDebt)}</span></p>
+                        <p className="text-xs font-bold text-slate-700">Paying: <span className="font-black">{new Intl.NumberFormat('id-ID').format(amountReceived)}</span></p>
+                        <p className="text-xs font-bold text-slate-700">Remaining: <span className="font-black">{new Intl.NumberFormat('id-ID').format(Math.max(0, Math.round((outstandingDebt - amountReceived) * 100) / 100))}</span></p>
                       </>
                     ) : (
                       <p className="text-xs font-bold text-slate-600 mt-2">Tidak ada settlement uang pada setoran ini.</p>
