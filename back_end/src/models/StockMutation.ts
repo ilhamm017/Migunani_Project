@@ -36,6 +36,10 @@ StockMutation.init(
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         type: {
             type: DataTypes.ENUM('in', 'out', 'adjustment', 'initial'),
@@ -61,6 +65,9 @@ StockMutation.init(
     {
         sequelize,
         tableName: 'stock_mutations',
+        indexes: [
+            { name: 'idx_stock_mutations_product_id', fields: ['product_id'] },
+        ],
     }
 );
 

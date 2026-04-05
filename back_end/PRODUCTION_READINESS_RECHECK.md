@@ -72,7 +72,24 @@ Yang dicek:
 Catatan operasional:
 - Pastikan folder `uploads/` writable di server produksi (permission + disk space).
 
-## 6) Yang masih wajib dibuktikan (sebelum go-live)
+## 6) Database schema (FK/unique) & “aman” untuk DB kosong
+
+Catatan:
+- Setelah update migrasi Wave A–C, banyak relasi penting sudah dikunci di level DB dengan **foreign key**, **index**, dan beberapa **unique constraint** (contoh: cart, backorder, COD collection, inventory reservations/consumptions, purchasing, delivery handover, chat).
+- Kalau **database benar-benar kosong (fresh)**, maka migrasi Wave A–C biasanya **aman dijalankan** karena tidak ada risiko data “orphan/duplikat” yang menghalangi pembuatan FK/unique index.
+
+Checklist minimum supaya bisa disebut “aman” dari sisi schema:
+- Jalankan migrasi sampai tidak ada yang pending:
+  - `npm -C back_end run migrate:up`
+  - `npm -C back_end run migrate:status`
+- (Opsional, tapi direkomendasikan) Setelah DB benar-benar running, jalankan audit FK/index untuk laporan:
+  - `npm -C back_end run db:fk-audit -- --out=/tmp/migunani_fk_audit.json`
+
+Catatan produksi:
+- Disarankan set `DB_SYNC_MODE=off` di production dan jalankan migrasi lewat pipeline (hindari DDL runtime berulang).
+- Gunakan kredensial DB dengan prinsip **least privilege** (user aplikasi tidak perlu hak `DROP`/`ALTER` jika migrasi dijalankan terpisah).
+
+## 7) Yang masih wajib dibuktikan (sebelum go-live)
 
 Walaupun kode terlihat “cukup aman”, hal berikut tetap harus dilakukan:
 - Jalankan UAT staging end-to-end untuk 2 jalur:
@@ -83,7 +100,7 @@ Walaupun kode terlihat “cukup aman”, hal berikut tetap harus dilakukan:
   - `back_end/src/scripts/regression_ownership_matrix.ts`
   - `back_end/src/scripts/regression_upload_policy.ts`
 
-## 7) Quick “go/no-go” backend (ringkas)
+## 8) Quick “go/no-go” backend (ringkas)
 
 Go lebih aman jika:
 - Tidak ada error di log saat skenario UAT.
@@ -91,7 +108,7 @@ Go lebih aman jika:
 - COD exposure/debt driver konsisten sebelum & sesudah settlement.
 - Upload proof transfer tidak bisa dilakukan untuk invoice “lama” (sudah digantikan).
 
-## 8) WhatsApp testing mode (isolated)
+## 9) WhatsApp testing mode (isolated)
 
 Untuk testing sementara (mis. ambil data grup/chat pribadi) tanpa nyimpen status koneksi ke sistem:
 - Pakai env `WA_SESSION_PATH=./.wwebjs_auth_test` supaya session LocalAuth terpisah.

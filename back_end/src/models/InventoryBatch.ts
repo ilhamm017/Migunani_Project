@@ -38,6 +38,10 @@ InventoryBatch.init(
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         unit_cost: {
             type: DataTypes.DECIMAL(15, 4),
@@ -70,7 +74,7 @@ InventoryBatch.init(
         sequelize,
         tableName: 'inventory_batches',
         indexes: [
-            { fields: ['product_id'] },
+            { name: 'idx_inventory_batches_product_id', fields: ['product_id'] },
             { fields: ['product_id', 'unit_cost'] },
             { fields: ['product_id', 'qty_reserved'] },
         ]

@@ -31,10 +31,18 @@ ChatThreadMember.init(
         thread_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'chat_threads',
+                key: 'id',
+            },
         },
         user_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         member_role: {
             type: DataTypes.ENUM('participant', 'support_agent'),
@@ -53,7 +61,8 @@ ChatThreadMember.init(
         timestamps: false,
         indexes: [
             { unique: true, fields: ['thread_id', 'user_id'] },
-            { fields: ['user_id'] },
+            { name: 'idx_chat_thread_members_user_id', fields: ['user_id'] },
+            { name: 'idx_chat_thread_members_thread_id', fields: ['thread_id'] },
         ]
     }
 );

@@ -34,6 +34,10 @@ ChatSession.init(
         user_id: {
             type: DataTypes.UUID,
             allowNull: true, // Can be anonymous/unregistered initially? Schema says Nullable.
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         whatsapp_number: {
             type: DataTypes.STRING,
@@ -56,6 +60,7 @@ ChatSession.init(
         sequelize,
         tableName: 'chat_sessions',
         indexes: [
+            { name: 'idx_chat_sessions_user_id', fields: ['user_id'] },
             {
                 fields: ['whatsapp_number']
             }

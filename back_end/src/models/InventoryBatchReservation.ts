@@ -34,18 +34,34 @@ InventoryBatchReservation.init(
         order_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'orders',
+                key: 'id',
+            },
         },
         order_item_id: {
             type: DataTypes.BIGINT,
             allowNull: false,
+            references: {
+                model: 'order_items',
+                key: 'id',
+            },
         },
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         batch_id: {
             type: DataTypes.BIGINT,
             allowNull: false,
+            references: {
+                model: 'inventory_batches',
+                key: 'id',
+            },
         },
         qty_reserved: {
             type: DataTypes.INTEGER,
@@ -57,14 +73,13 @@ InventoryBatchReservation.init(
         sequelize,
         tableName: 'inventory_batch_reservations',
         indexes: [
-            { fields: ['order_id'] },
-            { fields: ['order_item_id'] },
-            { fields: ['product_id'] },
-            { fields: ['batch_id'] },
+            { name: 'idx_inventory_batch_reservations_order_id', fields: ['order_id'] },
+            { name: 'idx_inventory_batch_reservations_order_item_id', fields: ['order_item_id'] },
+            { name: 'idx_inventory_batch_reservations_product_id', fields: ['product_id'] },
+            { name: 'idx_inventory_batch_reservations_batch_id', fields: ['batch_id'] },
             { fields: ['order_item_id', 'batch_id'], unique: true, name: 'uq_reservation_item_batch' },
         ]
     }
 );
 
 export default InventoryBatchReservation;
-

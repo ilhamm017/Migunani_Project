@@ -46,14 +46,26 @@ DeliveryHandover.init(
         invoice_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'invoices',
+                key: 'id',
+            },
         },
         courier_id: {
             type: DataTypes.UUID,
             allowNull: true,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         checker_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         status: {
             type: DataTypes.ENUM('checked_passed', 'checked_failed', 'handed_over', 'canceled'),
@@ -82,9 +94,9 @@ DeliveryHandover.init(
         sequelize,
         tableName: 'delivery_handovers',
         indexes: [
-            { fields: ['invoice_id'] },
-            { fields: ['courier_id'] },
-            { fields: ['checker_id'] },
+            { name: 'idx_delivery_handovers_invoice_id', fields: ['invoice_id'] },
+            { name: 'idx_delivery_handovers_courier_id', fields: ['courier_id'] },
+            { name: 'idx_delivery_handovers_checker_id', fields: ['checker_id'] },
             { fields: ['status'] },
             { fields: ['checked_at'] },
         ],
@@ -92,4 +104,3 @@ DeliveryHandover.init(
 );
 
 export default DeliveryHandover;
-

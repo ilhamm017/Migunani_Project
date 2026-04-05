@@ -869,6 +869,8 @@ const validateSchemaReadyForOffMode = async () => {
         'users',
         'orders',
         'order_items',
+        'carts',
+        'cart_items',
         'invoices',
         'invoice_items',
         'returs',

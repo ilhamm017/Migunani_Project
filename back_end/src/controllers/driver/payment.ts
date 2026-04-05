@@ -104,7 +104,7 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 const collected = round2(allocations.get(invoiceId) || 0);
 
                 const existingCollection = await CodCollection.findOne({
-                    where: { invoice_id: invoiceId, driver_id: userId, status: 'collected' },
+                    where: { invoice_id: invoiceId, status: 'collected' },
                     transaction: t,
                     lock: t.LOCK.UPDATE
                 });
@@ -113,7 +113,7 @@ export const recordPayment = asyncWrapper(async (req: Request, res: Response) =>
                 totalDelta = round2(totalDelta + delta);
 
                 if (existingCollection) {
-                    await existingCollection.update({ amount: collected }, { transaction: t });
+                    await existingCollection.update({ amount: collected, driver_id: userId }, { transaction: t });
                 } else {
                     await CodCollection.create({
                         invoice_id: invoiceId,
@@ -415,7 +415,7 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
                 const collected = round2(allocations.get(invoiceId) || 0);
 
                 const existingCollection = await CodCollection.findOne({
-                    where: { invoice_id: invoiceId, driver_id: driverId, status: 'collected' },
+                    where: { invoice_id: invoiceId, status: 'collected' },
                     transaction: t,
                     lock: t.LOCK.UPDATE
                 });
@@ -424,7 +424,7 @@ export const recordPaymentBatch = asyncWrapper(async (req: Request, res: Respons
                 totalDelta = round2(totalDelta + delta);
 
                 if (existingCollection) {
-                    await existingCollection.update({ amount: collected }, { transaction: t });
+                    await existingCollection.update({ amount: collected, driver_id: driverId }, { transaction: t });
                 } else {
                     await CodCollection.create({
                         invoice_id: invoiceId,

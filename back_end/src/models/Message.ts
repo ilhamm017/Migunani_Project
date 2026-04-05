@@ -48,10 +48,18 @@ Message.init(
         session_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'chat_sessions',
+                key: 'id',
+            },
         },
         thread_id: {
             type: DataTypes.UUID,
             allowNull: true,
+            references: {
+                model: 'chat_threads',
+                key: 'id',
+            },
         },
         sender_type: {
             type: DataTypes.ENUM('customer', 'admin', 'bot'),
@@ -60,6 +68,10 @@ Message.init(
         sender_id: {
             type: DataTypes.UUID,
             allowNull: true,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         body: {
             type: DataTypes.TEXT,
@@ -86,6 +98,10 @@ Message.init(
         quoted_message_id: {
             type: DataTypes.BIGINT,
             allowNull: true,
+            references: {
+                model: 'messages',
+                key: 'id',
+            },
         },
         delivery_state: {
             type: DataTypes.ENUM('sent', 'delivered', 'read', 'failed'),
@@ -101,9 +117,12 @@ Message.init(
         sequelize,
         tableName: 'messages',
         indexes: [
+            { name: 'idx_messages_session_id', fields: ['session_id'] },
+            { name: 'idx_messages_thread_id', fields: ['thread_id'] },
+            { name: 'idx_messages_sender_id', fields: ['sender_id'] },
             { fields: ['thread_id', 'createdAt'] },
             { fields: ['read_at'] },
-            { fields: ['quoted_message_id'] },
+            { name: 'idx_messages_quoted_message_id', fields: ['quoted_message_id'] },
         ]
     }
 );

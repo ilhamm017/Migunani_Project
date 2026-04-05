@@ -32,11 +32,18 @@ Cart.init(
         user_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
     },
     {
         sequelize,
         tableName: 'carts',
+        indexes: [
+            { name: 'uq_carts_user_id', unique: true, fields: ['user_id'] },
+        ],
     }
 );
 

@@ -38,20 +38,36 @@ CartItem.init(
         cart_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'carts',
+                key: 'id',
+            },
         },
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         qty: {
             type: DataTypes.INTEGER,
             allowNull: false,
             defaultValue: 1,
+            validate: {
+                min: 1,
+            },
         },
     },
     {
         sequelize,
         tableName: 'cart_items',
+        indexes: [
+            { name: 'idx_cart_items_cart_id', fields: ['cart_id'] },
+            { name: 'idx_cart_items_product_id', fields: ['product_id'] },
+            { name: 'uq_cart_items_cart_id_product_id', unique: true, fields: ['cart_id', 'product_id'] },
+        ],
     }
 );
 

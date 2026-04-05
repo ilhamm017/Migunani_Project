@@ -60,6 +60,10 @@ ChatThread.init(
         customer_user_id: {
             type: DataTypes.UUID,
             allowNull: true,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         external_whatsapp_number: {
             type: DataTypes.STRING(32),
@@ -72,7 +76,7 @@ ChatThread.init(
         indexes: [
             { unique: true, fields: ['thread_key'] },
             { fields: ['thread_type', 'last_message_at'] },
-            { fields: ['customer_user_id'] },
+            { name: 'idx_chat_threads_customer_user_id', fields: ['customer_user_id'] },
             { fields: ['external_whatsapp_number'] },
         ]
     }

@@ -146,13 +146,13 @@ User.hasMany(Shift, { foreignKey: 'user_id' });
 Shift.belongsTo(User, { foreignKey: 'user_id' });
 
 // Cart
-User.hasOne(Cart, { foreignKey: 'user_id' });
-Cart.belongsTo(User, { foreignKey: 'user_id' });
+User.hasOne(Cart, { foreignKey: 'user_id', onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+Cart.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE', onUpdate: 'CASCADE' });
 
-Cart.hasMany(CartItem, { foreignKey: 'cart_id' });
-CartItem.belongsTo(Cart, { foreignKey: 'cart_id' });
+Cart.hasMany(CartItem, { foreignKey: 'cart_id', onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+CartItem.belongsTo(Cart, { foreignKey: 'cart_id', onDelete: 'CASCADE', onUpdate: 'CASCADE' });
 
-CartItem.belongsTo(Product, { foreignKey: 'product_id' });
+CartItem.belongsTo(Product, { foreignKey: 'product_id', onDelete: 'RESTRICT', onUpdate: 'CASCADE' });
 Product.hasMany(CartItem, { foreignKey: 'product_id' });
 
 // Inventory

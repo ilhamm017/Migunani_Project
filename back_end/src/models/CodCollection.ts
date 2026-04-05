@@ -34,6 +34,7 @@ CodCollection.init(
         invoice_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            unique: true,
             references: {
                 model: 'invoices',
                 key: 'id'
@@ -69,6 +70,11 @@ CodCollection.init(
     {
         sequelize,
         tableName: 'cod_collections',
+        indexes: [
+            { name: 'uq_cod_collections_invoice_id', unique: true, fields: ['invoice_id'] },
+            { name: 'idx_cod_collections_driver_status', fields: ['driver_id', 'status'] },
+            { name: 'idx_cod_collections_settlement_id', fields: ['settlement_id'] },
+        ]
     }
 );
 

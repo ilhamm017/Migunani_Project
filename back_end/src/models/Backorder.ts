@@ -34,6 +34,7 @@ Backorder.init(
         order_item_id: {
             type: DataTypes.BIGINT,
             allowNull: false,
+            unique: true,
             references: {
                 model: 'order_items',
                 key: 'id'
@@ -57,6 +58,9 @@ Backorder.init(
     {
         sequelize,
         tableName: 'backorders',
+        indexes: [
+            { name: 'uq_backorders_order_item_id', unique: true, fields: ['order_item_id'] },
+        ]
     }
 );
 

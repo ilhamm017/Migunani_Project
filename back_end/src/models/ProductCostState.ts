@@ -31,6 +31,10 @@ ProductCostState.init(
             type: DataTypes.UUID,
             allowNull: false,
             unique: true,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         on_hand_qty: {
             type: DataTypes.INTEGER,
@@ -46,6 +50,9 @@ ProductCostState.init(
     {
         sequelize,
         tableName: 'product_cost_states',
+        indexes: [
+            { name: 'idx_product_cost_states_product_id', fields: ['product_id'] },
+        ]
     }
 );
 

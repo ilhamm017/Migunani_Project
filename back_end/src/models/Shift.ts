@@ -40,6 +40,10 @@ Shift.init(
         user_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'users',
+                key: 'id',
+            },
         },
         start_time: {
             type: DataTypes.DATE,
@@ -75,6 +79,9 @@ Shift.init(
     {
         sequelize,
         tableName: 'shifts',
+        indexes: [
+            { name: 'idx_shifts_user_id', fields: ['user_id'] },
+        ],
     }
 );
 

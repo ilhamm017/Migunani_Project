@@ -40,10 +40,18 @@ DeliveryHandoverItem.init(
         handover_id: {
             type: DataTypes.BIGINT,
             allowNull: false,
+            references: {
+                model: 'delivery_handovers',
+                key: 'id',
+            },
         },
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         qty_expected: {
             type: DataTypes.INTEGER,
@@ -71,8 +79,8 @@ DeliveryHandoverItem.init(
         sequelize,
         tableName: 'delivery_handover_items',
         indexes: [
-            { fields: ['handover_id'] },
-            { fields: ['product_id'] },
+            { name: 'idx_delivery_handover_items_handover_id', fields: ['handover_id'] },
+            { name: 'idx_delivery_handover_items_product_id', fields: ['product_id'] },
         ],
     }
 );

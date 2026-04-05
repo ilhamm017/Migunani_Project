@@ -40,10 +40,18 @@ PurchaseOrderItem.init(
         purchase_order_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'purchase_orders',
+                key: 'id',
+            },
         },
         product_id: {
             type: DataTypes.UUID,
             allowNull: false,
+            references: {
+                model: 'products',
+                key: 'id',
+            },
         },
         qty: {
             type: DataTypes.INTEGER,
@@ -76,6 +84,10 @@ PurchaseOrderItem.init(
     {
         sequelize,
         tableName: 'purchase_order_items',
+        indexes: [
+            { name: 'idx_purchase_order_items_purchase_order_id', fields: ['purchase_order_id'] },
+            { name: 'idx_purchase_order_items_product_id', fields: ['product_id'] },
+        ],
     }
 );
 
