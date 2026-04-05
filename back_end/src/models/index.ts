@@ -76,6 +76,10 @@ User.hasMany(StockOpname, { foreignKey: 'admin_id' });
 Retur.belongsTo(Order, { foreignKey: 'order_id' });
 Order.hasMany(Retur, { foreignKey: 'order_id' });
 
+// A single invoice may have multiple retur rows (per returned product).
+Retur.belongsTo(Invoice, { foreignKey: 'invoice_id', as: 'Invoice' });
+Invoice.hasMany(Retur, { foreignKey: 'invoice_id', as: 'Returs' });
+
 Retur.belongsTo(Product, { foreignKey: 'product_id' });
 Product.hasMany(Retur, { foreignKey: 'product_id' });
 
@@ -217,6 +221,8 @@ Order.hasOne(Invoice, { foreignKey: 'order_id' });
 Invoice.belongsTo(Order, { foreignKey: 'order_id' });
 // Invoice driver (courier) assignment is stored on `invoices.courier_id`.
 // Expose as an association so frontend can display driver names in invoice views (checker/tracker).
+User.hasMany(Invoice, { foreignKey: 'customer_id', as: 'CustomerInvoices' });
+Invoice.belongsTo(User, { foreignKey: 'customer_id', as: 'Customer' });
 User.hasMany(Invoice, { foreignKey: 'courier_id', as: 'CourierInvoices' });
 Invoice.belongsTo(User, { foreignKey: 'courier_id', as: 'Courier' });
 Invoice.hasMany(InvoiceCostOverride, { foreignKey: 'invoice_id', as: 'CostOverrides' });
