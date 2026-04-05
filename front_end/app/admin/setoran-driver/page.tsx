@@ -7,6 +7,7 @@ import { useRequireRoles } from '@/lib/guards';
 import { AlertCircle, CheckCircle, Wallet, PackageCheck, Receipt } from 'lucide-react';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 import { formatMoneyId, parseMoneyInput } from '@/lib/money';
+import { notifyConfirm } from '@/lib/notify';
 
 type CodInvoiceRow = {
   invoice_id: string;
@@ -245,6 +246,77 @@ export default function AdminSetoranDriverPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleConfirmWithVerification = async () => {
+    if (!selectedDriver) return;
+    if (submitting) return;
+
+    const invoiceIds = selectedInvoiceIdList;
+    const handoverIds = selectedHandoverIdList;
+    const payingDebtOnly = invoiceIds.length === 0 && amountReceived > 0 && outstandingDebt > 0;
+
+    const shouldConfirm = invoiceIds.length > 0 || handoverIds.length > 0 || payingDebtOnly;
+    if (shouldConfirm) {
+      const title = payingDebtOnly
+        ? 'Konfirmasi Pembayaran Utang Driver'
+        : invoiceIds.length > 0 && handoverIds.length > 0
+          ? 'Konfirmasi Terima Setoran Driver'
+          : invoiceIds.length > 0
+            ? 'Konfirmasi Terima Uang Driver'
+            : 'Konfirmasi Terima Retur Driver';
+      const message = (
+        <div className="space-y-2">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Driver</p>
+            <p className="text-sm font-black text-slate-900">{selectedDriver.driver.name}</p>
+          </div>
+          {invoiceIds.length > 0 ? (
+            <div className="space-y-1">
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Settlement COD</p>
+              <p className="text-sm font-black text-slate-900">Invoice dipilih: {invoiceIds.length}</p>
+              <p className="text-sm font-bold text-slate-700">Expected: <span className="font-black">{new Intl.NumberFormat('id-ID').format(expectedSelectedTotal)}</span></p>
+              <p className="text-sm font-bold text-slate-700">Diterima: <span className="font-black">{new Intl.NumberFormat('id-ID').format(amountReceived)}</span></p>
+              <p className={`text-sm font-bold ${diff === 0 ? 'text-slate-700' : diff < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                Selisih: <span className="font-black">{new Intl.NumberFormat('id-ID').format(diff)}</span>
+              </p>
+            </div>
+          ) : payingDebtOnly ? (
+            <div className="space-y-1">
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Pembayaran Utang</p>
+              <p className="text-sm font-bold text-slate-700">Outstanding: <span className="font-black">{new Intl.NumberFormat('id-ID').format(outstandingDebt)}</span></p>
+              <p className="text-sm font-bold text-slate-700">Dibayar: <span className="font-black">{new Intl.NumberFormat('id-ID').format(amountReceived)}</span></p>
+              <p className="text-sm font-bold text-slate-700">Sisa: <span className="font-black">{new Intl.NumberFormat('id-ID').format(Math.max(0, Math.round((outstandingDebt - amountReceived) * 100) / 100))}</span></p>
+            </div>
+          ) : null}
+
+          {handoverIds.length > 0 ? (
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Retur Handover</p>
+              <p className="text-sm font-black text-slate-900">Handover dipilih: {handoverIds.length}</p>
+              <p className="text-[12px] font-bold text-slate-700 mt-1">Barang retur akan ditandai diterima & masuk stok.</p>
+            </div>
+          ) : null}
+
+          {amountReceived > 0 ? (
+            <p className="text-[12px] font-bold text-slate-700">Pastikan nominal sudah benar sebelum melanjutkan.</p>
+          ) : (
+            <p className="text-[12px] font-bold text-slate-700">Pastikan retur yang diterima sudah sesuai sebelum melanjutkan.</p>
+          )}
+        </div>
+      );
+
+      const ok = await notifyConfirm({
+        title,
+        message,
+        variant: 'warning',
+        confirmLabel: 'Konfirmasi',
+        cancelLabel: 'Batal',
+      });
+      if (!ok) return;
+    }
+
+    await handleConfirm();
   };
 
   if (!allowed) return null;
@@ -598,7 +670,7 @@ export default function AdminSetoranDriverPage() {
 
               <button
                 type="button"
-                onClick={() => void handleConfirm()}
+                onClick={() => void handleConfirmWithVerification()}
                 disabled={submitting || (!selectedDriver)}
                 className="w-full rounded-[28px] bg-slate-900 text-white px-5 py-4 font-black text-sm hover:bg-black disabled:opacity-60 disabled:hover:bg-slate-900 flex items-center justify-center gap-2"
               >
